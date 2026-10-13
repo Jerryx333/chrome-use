@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.199
+## 1.5.200
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.45 for this fix. Chrome Web Store publication follows Google review.
+
+### Bug Fixes
+
+- **Every agent's status in Agents & models.** The local service runs at most two CLI checks at once, so with four chat agents two of them showed "status unavailable". The panel now queues the checks.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.199
+
 ### Bug Fixes
 
 - **Pi model menu with OpenRouter aliases.** Model ids such as `openrouter/~anthropic/claude-opus-latest` are accepted, and a Pi model whose id still cannot be used is skipped instead of failing the whole menu.
@@ -10,7 +23,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.198
 

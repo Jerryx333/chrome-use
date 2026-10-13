@@ -400,11 +400,19 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   // The model menu is filled from the CLI's own catalog, read once per agent
   // and program; "Default model" leaves the choice to the CLI configuration.
   const modelCache = new Map();
+  // The native host runs at most two CLI probes at once; Agents & models asks
+  // for every chat agent, so probes wait for a free slot instead of failing.
+  let inspectionsRunning = 0; const inspectionWaiters = [];
+  async function inspectionSlot(task) {
+    if (inspectionsRunning >= 2) await new Promise(resolve => inspectionWaiters.push(resolve));
+    inspectionsRunning++;
+    try { return await task(); } finally { inspectionsRunning--; inspectionWaiters.shift()?.(); }
+  }
   // One CLI probe per agent and program serves both the menu and Agents & models.
   function readInspection(agentId, executable = '', force = false) {
     const key = `${agentId}\n${executable}`;
     if (force || !modelCache.has(key)) {
-      const pending = api('agentInspect', { agentId, ...(executable ? { executable } : {}) }).then(result => result.inspection);
+      const pending = inspectionSlot(() => api('agentInspect', { agentId, ...(executable ? { executable } : {}) })).then(result => result.inspection);
       pending.catch(() => { if (modelCache.get(key) === pending) modelCache.delete(key); });
       modelCache.set(key, pending);
     }
