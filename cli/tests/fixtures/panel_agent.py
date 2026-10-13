@@ -38,6 +38,67 @@ def complete(text, status="completed"):
     turn = None
 
 
+
+def arg(name):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
+
+
+if "--mode" in sys.argv and arg("--mode") == "rpc":
+    # Pi RPC personality: JSONL commands in, responses and session events out.
+    pi_session = arg("--session-id") or "synthetic-pi-session"
+    if "--no-session" not in sys.argv:
+        assert "--approve" in sys.argv, "Pi must trust the conversation folder for this run"
+        mcp = json.load(open(os.path.join(os.getcwd(), ".pi", "mcp.json")))
+        server = mcp["mcpServers"]["chrome_use"]
+        assert server["exposure"] == "direct" and server["env"]["AGENT_BROWSER_SESSION"].startswith("panel-")
+        assert mcp["autoEnableCodemode"] is False
+    tools = arg("--tools") or "all"
+    running = None
+
+    def pi_reply(text, stop="stop", error=None):
+        emit({"type": "message_start", "message": {"role": "assistant"}})
+        emit({"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "contentIndex": 0, "delta": text}})
+        emit({"type": "message_update", "assistantMessageEvent": {"type": "text_end", "contentIndex": 0, "content": text}})
+        message = {"role": "assistant", "stopReason": stop}
+        if error:
+            message["errorMessage"] = error
+        emit({"type": "message_end", "message": message})
+
+    for line in sys.stdin:
+        command = json.loads(line)
+        kind, rid = command.get("type"), command.get("id")
+        if kind == "get_state":
+            emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"sessionId": pi_session, "model": {"provider": "synthetic", "id": "pi-model"}}})
+        elif kind == "get_available_models":
+            emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"models": [{"provider": "synthetic", "id": "pi-model", "name": "Synthetic Pi", "reasoning": True}]}})
+        elif kind == "prompt":
+            text = command["message"]
+            emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"disposition": "started"}})
+            emit({"type": "agent_start"})
+            if text in ("wait", "wait-exit"):
+                running = text
+                continue
+            emit({"type": "tool_execution_start", "toolCallId": "pi-tool", "toolName": "mcp__chrome_use__chrome_use_tabs", "args": {"action": "list"}})
+            emit({"type": "tool_execution_end", "toolCallId": "pi-tool", "toolName": "mcp__chrome_use__chrome_use_tabs", "args": {"action": "list"}, "result": {"content": [{"type": "text", "text": "1 tab"}]}, "isError": False})
+            if text == "fail":
+                pi_reply("", "error", "synthetic pi failure")
+            elif text == "policy":
+                pi_reply("tools: " + tools + " session: " + pi_session)
+            elif text.endswith("echo-input"):
+                pi_reply("input: " + text)
+            else:
+                pi_reply("synthetic reply: " + text)
+            emit({"type": "agent_end", "messages": []})
+            emit({"type": "agent_settled", "aborted": False})
+        elif kind == "abort":
+            time.sleep(0.2)
+            if running == "wait-exit":
+                sys.exit(0)
+            running = None
+            emit({"type": "agent_settled", "aborted": True})
+            emit({"id": rid, "type": "response", "command": kind, "success": True})
+    sys.exit(0)
+
 for line in sys.stdin:
     message = json.loads(line)
     if acp:

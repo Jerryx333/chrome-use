@@ -234,6 +234,18 @@ pub(super) fn remove_session_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Agents the panel can hold a conversation with.
+pub(super) const CHAT_AGENTS: &[&str] = &["codex", "claude", "opencode", "pi"];
+
+/// The program name discovery looks for, for an agent the panel can run.
+pub(super) fn agent_binary(agent_id: &str) -> Result<&'static str, String> {
+    AGENTS
+        .iter()
+        .find(|spec| spec.id == agent_id && CHAT_AGENTS.contains(&spec.id))
+        .map(|spec| spec.binary)
+        .ok_or_else(|| "This agent has no conversational adapter yet".into())
+}
+
 /// PATH for agent CLIs the panel starts. Chrome launches the native host with a
 /// minimal PATH, so a wrapper such as a version-manager shim would resolve a
 /// different, often older, program than the user's terminal does. Use the
@@ -492,7 +504,8 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix),"chatAgents":["codex","claude","opencode"]})
+    let chat_agents: &[&str] = if cfg!(unix) { CHAT_AGENTS } else { &[] };
+    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix),"chatAgents":chat_agents})
 }
 
 fn operation_allowed(operation: &str, read_only: bool) -> bool {

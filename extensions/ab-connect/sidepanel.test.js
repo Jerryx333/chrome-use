@@ -445,3 +445,14 @@ test('OpenCode permission labels describe CLI rules without promising a prompt f
   assert.match(f.nodes.get('access').title,/may allow tools without asking/);
   f.panel.close();
 });
+
+test('Pi is offered when the host runs it, and without full access it is labelled browser only', async () => {
+  const support = {...fullSupport, fullAccess: true, chatAgents: ['codex', 'claude', 'opencode', 'pi']};
+  const f = await fixture({ status: () => ({connected:true, agentPanel:support}) }, { ab_panel_full_access: false });
+  assert.deepEqual(f.nodes.get('agent').children.map(o => o.value), ['codex', 'claude', 'opencode', 'pi']);
+  f.nodes.get('agent').value = 'pi'; f.nodes.get('agent').fire('change'); await settle();
+  assert.equal(f.nodes.get('accessLabel').textContent, 'Browser only');
+  f.nodes.get('agent').value = 'opencode'; f.nodes.get('agent').fire('change'); await settle();
+  assert.equal(f.nodes.get('accessLabel').textContent, 'CLI permissions');
+  f.panel.close();
+});
