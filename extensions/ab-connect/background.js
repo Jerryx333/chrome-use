@@ -28,6 +28,7 @@ import {
   migratePopupRecord,
 } from './agent-window.js';
 import { attachTabById } from './attach-by-id.js';
+import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
 import { removeAgentTab } from './remove-agent-tab.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
@@ -126,6 +127,9 @@ function rememberSessionTarget(sessionId, targetId) {
 }
 /** tab-group name -> chrome tabGroups id (best-effort cache) */
 const groupIdByName = new Map();
+// A new target's requested group is known before its command reply. Keep the
+// hint until attach is announced, even if Chrome's visual grouping fails.
+const creatingTabGroups = new Map();
 /** Source tabId -> native duplicate API promises awaiting exact tab classification. */
 const pendingNativeDuplicates = new Map();
 /** Native duplicate tabs owned by an explicit duplicate transaction. */
@@ -461,7 +465,7 @@ async function groupTabInto(tabId, name) {
 // Best-effort: any failure yields empty strings, which the relay ignores.
 async function tabScopeHints(tabId) {
   let openerTargetId = '';
-  let abGroup = '';
+  let abGroup = creatingTabGroups.get(tabId) || '';
   try {
     const t = await chrome.tabs.get(tabId);
     if (t) {
@@ -471,7 +475,7 @@ async function tabScopeHints(tabId) {
       }
       if (t.groupId != null && t.groupId >= 0 && chrome.tabGroups) {
         const g = await chrome.tabGroups.get(t.groupId).catch(() => null);
-        if (g && g.title) abGroup = g.title;
+        if (!abGroup && g && g.title) abGroup = g.title;
       }
     }
   } catch {}
@@ -759,6 +763,9 @@ async function onHostMessage(msg) {
     return;
   }
   if (typeof msg.id !== 'undefined' && msg.method === 'forwardCDPCommand') {
+    // Request ids belong to the host connection that issued them. A new host
+    // may reuse those ids, so a late result must never be replayed onto it.
+    const commandPort = port;
     // A pending update never reloads under a running command, tab-bound or
     // not (Target.createTarget, ABExt.*), nor right after one (#524). A state
     // read (`status`, `doctor`) is not a session working and does not count.
@@ -770,9 +777,10 @@ async function onHostMessage(msg) {
     const method = String(msg?.params?.method || '');
     try {
       const result = await handleForwardCdpCommand(msg);
-      postToHost({ id: msg.id, result }, method);
+      if (port === commandPort) postToHost({ id: msg.id, result }, method);
     } catch (err) {
-      postToHost({ id: msg.id, error: err instanceof Error ? err.message : String(err) }, method);
+      if (port === commandPort)
+        postToHost({ id: msg.id, error: err instanceof Error ? err.message : String(err) }, method);
     } finally {
       if (counts) {
         hostCommandsInFlight = Math.max(0, hostCommandsInFlight - 1);
@@ -1382,27 +1390,24 @@ async function handleForwardCdpCommand(msg) {
       ? await createAgentTab(url)
       : await chrome.tabs.create({ url, active: false });
     if (!tab || !tab.id) throw new Error('createTarget: no tab id');
-    await markOwned(tab.id); // agent-created → ours to attach (and re-attach after SW restart)
-    // Per-session tab grouping (non-CDP hint from the daemon). Best-effort.
-    // Group before attaching so tabScopeHints reads the assigned group on initial attach announcement.
     const group = typeof params?.agentGroup === 'string' ? params.agentGroup.trim() : '';
-    if (group) {
-      try {
-        await groupTabInto(tab.id, group);
-      } catch {}
-    }
-    // Attach at once — usually the new tab is ready — and only if that fails
-    // wait out the 100ms every attach used to pay unconditionally. #342 made
-    // the first attempt immediate (a real saving) but cut the fallback wait to
-    // 30ms, less patience than before for the slow case; the wait is restored.
-    let t;
+    if (group) creatingTabGroups.set(tab.id, group);
     try {
-      t = await attachTab(tab.id);
-    } catch {
-      await new Promise((r) => setTimeout(r, 100));
-      t = await attachTab(tab.id);
+      await markOwned(tab.id); // agent-created, ours to attach after worker restart
+      if (group) {
+        try { await groupTabInto(tab.id, group); } catch {}
+      }
+      // Most targets attach immediately. Transient failures get bounded, growing
+      // delays rather than one fixed sleep; permanent refusals never retry.
+      const t = await attachCreatedTab(tab.id, {
+        attach: attachTab,
+        wait: ms => new Promise(r => setTimeout(r, ms)),
+        permanent: isPermanentAttachError,
+      });
+      return { targetId: t.targetId };
+    } finally {
+      creatingTabGroups.delete(tab.id);
     }
-    return { targetId: t.targetId };
   }
   if (method === 'Target.closeTarget') {
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';
@@ -1541,7 +1546,11 @@ async function dispatchToTab(tabId, method, params, childSid) {
 
 // ---- attach / detach ------------------------------------------------------
 
-async function attachTab(tabId, transactionIsActive) {
+// Include target discovery and announcement in the shared attachment, so a
+// second caller cannot replace an entry whose commands are already in flight.
+const attachTab = createTabAttachmentQueue(attachTabOnce);
+
+async function attachTabOnce(tabId, transactionIsActive) {
   const existing = tabs.get(tabId);
   if (existing && existing.attached !== false) return existing;
   if (existing) return await reattachTab(tabId, existing);
@@ -1729,9 +1738,17 @@ function softDetachTab(tabId, entry, reason) {
   if (reason !== 'user') chrome.debugger.detach({ tabId }).catch(() => {});
 }
 
-function sweepIdleTabs() {
+async function sweepIdleTabs() {
   for (const tabId of selectIdleTabs(tabs.entries(), Date.now(), idleDetachMs)) {
-    softDetachTab(tabId, tabs.get(tabId), 'idle');
+    // Chrome reports an active tab in each window. Preserve all of them,
+    // including a page the user is reading without producing CDP traffic.
+    // An unavailable status is not evidence that a tab is safe to release.
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || tab.active) continue;
+    // Commands or a reattachment can start while tabs.get is outstanding.
+    const entry = tabs.get(tabId);
+    if (selectIdleTabs([[tabId, entry]], Date.now(), idleDetachMs).length)
+      softDetachTab(tabId, entry, 'idle');
   }
 }
 
@@ -1981,13 +1998,15 @@ chrome.debugger.onDetach.addListener(
       if (reason === 'canceled_by_user' || reason === 'replaced_with_devtools') return;
       if (!port) return;
       if (nativeDuplicateTabs.has(tabId)) return;
+      const detached = await chrome.tabs.get(tabId).catch(() => null);
+      if (!detached || !eligible(detached) || detached.discarded) return;
       // The swapped-in process needs a moment to settle; retry with backoff.
       for (let i = 0; i < 6; i++) {
         await new Promise((r) => setTimeout(r, 250 + i * 200));
         if (tabs.get(tabId)?.attached) return; // already re-attached (e.g. via onUpdated)
         if (nativeDuplicateTabs.has(tabId)) return;
         const tab = await chrome.tabs.get(tabId).catch(() => null);
-        if (!tab || !eligible(tab)) return; // tab gone or now a restricted page
+        if (!tab || !eligible(tab) || tab.discarded) return; // gone, restricted or discarded
         try {
           await attachTab(tabId);
           return;
