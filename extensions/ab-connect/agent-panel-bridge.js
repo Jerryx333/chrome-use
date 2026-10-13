@@ -1,6 +1,10 @@
 // Correlate extension-page requests with the native host, separately from CDP.
 // The bridge neither attaches tabs nor executes page JavaScript. Native-host
 // replies must match the request's connection generation; no request is replayed.
+// Slow operations outlast the native host's own budget for them (32 s and 47 s),
+// so the host's answer arrives before this page gives up.
+const operationTimeouts = { agentInspect: 35000, conversationDelete: 50000 };
+
 export class AgentPanelBridge {
   constructor({ send, schedule = (callback, delay) => globalThis.setTimeout(callback, delay), cancel = timer => globalThis.clearTimeout(timer), timeoutMs = 15000, maxPending = 16 }) {
     this.send = send;
@@ -26,7 +30,7 @@ export class AgentPanelBridge {
           : ['configApply', 'configRestore'].includes(operation)
           ? 'The configuration outcome could not be confirmed. Read its current values before retrying; the request was not replayed.'
           : 'The native host did not answer the agent panel request. Check the host version and connection; the request was not replayed.'));
-      }, this.timeoutMs);
+      }, operationTimeouts[operation] ?? this.timeoutMs);
       this.pending.set(requestId, { resolve, reject, timeout, operation, agentId: params?.agentId, planId: params?.planId, conversationId: params?.conversationId, messageId: params?.messageId, replacementId: params?.replacementId });
       try { this.send({ method: 'agentPanel', requestId, operation, params }); }
       catch (error) {

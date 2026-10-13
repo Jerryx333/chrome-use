@@ -63,7 +63,8 @@ fn panel_reply(
         host,
         json!({"method":"agentPanel","requestId":request_id,"operation":operation,"params":params}),
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    // Generous: a slow CLI model check legitimately takes over 10 s on CI.
+    let deadline = std::time::Instant::now() + Duration::from_secs(40);
     loop {
         let reply = rx
             .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
@@ -1784,4 +1785,51 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
     );
     assert!(deleted.get("error").is_none(), "{}", deleted["error"]);
     assert!(deleted["result"]["deleted"]["cliHistory"]["error"].is_null());
+}
+
+#[test]
+#[cfg(unix)]
+fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
+    let registry = tempfile::tempdir().unwrap();
+    let profile = "native-slow-inspection-fixture";
+    let _cleanup = ServiceFixture {
+        root: registry.path().into(),
+        profile: profile.into(),
+        chats: vec![],
+    };
+    let mut host = Host(
+        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+            .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
+            .env("CHROME_USE_RELAY_DIR", registry.path())
+            .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+            .env("PANEL_FIXTURE_SLOW_ACP", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let rx = frames(&mut host);
+    send(
+        &mut host,
+        json!({"method":"hello","version":"fixture","profileId":profile}),
+    );
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let inspected = panel_reply(
+        &mut host,
+        &rx,
+        "inspect-slow",
+        "agentInspect",
+        json!({"agentId":"opencode","executable":fixture}),
+    );
+    assert!(
+        inspected.get("error").is_none(),
+        "slow inspection failed: {}",
+        inspected["error"]
+    );
+    assert!(!inspected["result"]["inspection"]["models"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }

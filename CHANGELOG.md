@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.200
+## 1.5.201
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.46 for the longer panel waits. Chrome Web Store publication follows Google review.
+
+### Bug Fixes
+
+- **Slow panel operations.** The local panel service limited every request to 10 seconds and dropped the connection without an answer when one ran over. A cold OpenCode model check takes longer, so the OpenCode model menu could fail on first load, and a delete that waits for the agent to exit and then closes its browser tabs could run over too. Model checks now get 30 seconds and deletes 45 seconds, an overrun returns an error, and the layers above wait longer than the ones below.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.200
+
 Requires extension ab-connect 0.5.45 for this fix. Chrome Web Store publication follows Google review.
 
 ### Bug Fixes
@@ -12,7 +25,6 @@ Requires extension ab-connect 0.5.45 for this fix. Chrome Web Store publication 
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.199
 
