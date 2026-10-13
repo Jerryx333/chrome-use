@@ -23,8 +23,9 @@ export class HostConnectionState {
     if (!recognized) return false
     const reported = message.params?.agentPanel
     const valid = reported?.schemaVersion === 1 && ['full','readOnly'].includes(reported.mode) && typeof reported.modelInspection === 'boolean'
-    const changed = !this.confirmed || (valid && (reported.mode !== this.agentPanel?.mode || reported.modelInspection !== this.agentPanel?.modelInspection))
-    if (valid) this.agentPanel = {schemaVersion:1,mode:reported.mode,modelInspection:reported.modelInspection}
+    const conversationDelete = reported?.conversationDelete === true
+    const changed = !this.confirmed || (valid && (reported.mode !== this.agentPanel?.mode || reported.modelInspection !== this.agentPanel?.modelInspection || conversationDelete !== this.agentPanel?.conversationDelete))
+    if (valid) this.agentPanel = {schemaVersion:1,mode:reported.mode,modelInspection:reported.modelInspection,conversationDelete}
     this.confirmed = true
     this.error = null
     return changed

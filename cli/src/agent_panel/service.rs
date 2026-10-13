@@ -778,6 +778,73 @@ async fn dispatch(
                 json!({"schemaVersion":1,"conversation":summary,"message":{"id":p.message_id,"accepted":added,"replayed":false}}),
             )
         }
+        "conversationDelete" => {
+            let p: Identify = serde_json::from_value(params.clone())
+                .map_err(|_| "conversationDelete requires only conversationId")?;
+            let id = p.conversation_id;
+            let mut e = engine.lock().await;
+            if e.chat(&id)?.phase.busy() {
+                return Err("Stop the response before deleting this conversation".into());
+            }
+            // Files are removed only after the agent process is confirmed gone.
+            if let Some(job) = e.jobs.get(&id) {
+                job.sender
+                    .try_send(BackendCommand::Shutdown)
+                    .map_err(|_| "Agent shutdown was not dispatched; nothing was deleted")?;
+                drop(e);
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                loop {
+                    let locked = engine.lock().await;
+                    if !locked.jobs.contains_key(&id) {
+                        e = locked;
+                        break;
+                    }
+                    drop(locked);
+                    if tokio::time::Instant::now() > deadline {
+                        return Err("The agent process has not exited yet; nothing was deleted. Try again shortly.".into());
+                    }
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                }
+            }
+            // Real deletion also removes the CLI's own session history and the
+            // conversation's browser session. Both run without the engine lock.
+            let (agent_id, session_id) = {
+                let chat = e.chat(&id)?;
+                (chat.agent_id.clone(), chat.session_id.clone())
+            };
+            let profile = e.profile.clone();
+            drop(e);
+            let mut removed = Vec::new();
+            let mut failed = Vec::new();
+            let mut history_error = None;
+            if let Some(session_id) = &session_id {
+                match super::cli_session_files(&agent_id, session_id) {
+                    Ok(paths) => {
+                        for path in paths {
+                            match super::remove_session_path(&path) {
+                                Ok(()) => removed.push(path),
+                                Err(_) => failed.push(path),
+                            }
+                        }
+                    }
+                    Err(error) => history_error = Some(error),
+                }
+            }
+            let browser = close_browser_session(&profile, &format!("panel-{id}")).await;
+            let mut e = engine.lock().await;
+            if e.jobs.contains_key(&id) {
+                return Err(
+                    "The conversation started again while it was being deleted; delete it again"
+                        .into(),
+                );
+            }
+            e.chats.remove(&id);
+            e.requests.retain(|(chat, _), _| chat != &id);
+            e.store.delete(&id)?;
+            Ok(
+                json!({"schemaVersion":1,"deleted":{"id":id,"cliHistory":{"agentId":agent_id,"sessionId":session_id,"removed":removed,"failed":failed,"error":history_error},"browserSession":browser}}),
+            )
+        }
         "conversationStop" | "conversationResumeQueue" => {
             let p: Identify = serde_json::from_value(params.clone())
                 .map_err(|_| "Conversation control requires only conversationId")?;
@@ -1161,5 +1228,35 @@ mod approval_tests {
         let mut needed = original;
         needed["requestedSchema"]["properties"] = json!({"answer":{"type":"string"}});
         assert!(validate_reply(method, &needed, &json!({"action":"accept","content":{}})).is_err());
+    }
+}
+
+/// Close a deleted conversation's own chrome-use browser session (its tabs).
+/// A session with no daemon and no tabs returns at once without starting one.
+async fn close_browser_session(profile: &str, session: &str) -> Value {
+    let Ok(executable) = std::env::current_exe() else {
+        return json!({"session":session,"closed":false,"error":"Cannot locate chrome-use"});
+    };
+    let mut command = tokio::process::Command::new(executable);
+    command
+        .arg("close")
+        .env("AGENT_BROWSER_BROWSER", profile)
+        .env("AGENT_BROWSER_SESSION", session)
+        .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(20), command.status()).await {
+        Ok(Ok(status)) if status.success() => json!({"session":session,"closed":true}),
+        Ok(Ok(_)) => {
+            json!({"session":session,"closed":false,"error":"chrome-use close reported a failure"})
+        }
+        Ok(Err(_)) => {
+            json!({"session":session,"closed":false,"error":"chrome-use close could not start"})
+        }
+        Err(_) => {
+            json!({"session":session,"closed":false,"error":"chrome-use close did not finish in 20 s"})
+        }
     }
 }

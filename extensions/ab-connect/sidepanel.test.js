@@ -302,3 +302,32 @@ test('a failure on the CLI-configured model offers its configuration instead of 
   assert.ok(f.calls.some(call => call.operation === 'configRead' && call.params.agentId === 'codex'));
   f.panel.close();
 });
+
+test('deleting asks first, then forgets the conversation and its unsent draft', async () => {
+  const support = {...fullSupport, conversationDelete: true};
+  const f = await fixture({
+    status: () => ({connected:true, agentPanel:support}),
+    conversationDelete: params => ({ success: true, result: { deleted: { id: params.conversationId, cliHistory: { removed: [], failed: [] }, browserSession: { closed: true } } } }),
+  }, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('deleteChat').hidden, false);
+  f.nodes.get('message').value = 'unsent';
+  f.nodes.get('deleteChat').fire('click');
+  assert.equal(f.nodes.get('deleteConfirm').hidden, false);
+  assert.ok(!f.calls.some(call => call.operation === 'conversationDelete'));
+  f.chats.splice(1, 1);
+  f.nodes.get('confirmDelete').fire('click'); await settle(); await settle();
+  assert.deepEqual(f.calls.filter(call => call.operation === 'conversationDelete').map(call => call.params), [{ conversationId: 'b' }]);
+  assert.equal(f.nodes.get('conversation').value, '');
+  assert.equal(f.nodes.get('message').value, '');
+  assert.equal(f.nodes.get('deleteConfirm').hidden, true);
+  assert.equal(f.nodes.get('deleteChat').hidden, true);
+  f.panel.close();
+});
+
+test('hosts that do not report deletion never show the delete control', async () => {
+  const f = await fixture({}, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('deleteChat').hidden, true);
+  f.panel.close();
+});

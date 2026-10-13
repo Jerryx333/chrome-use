@@ -10,7 +10,7 @@ if "--version" in sys.argv:
 
 codex = "app-server" in sys.argv
 inspection = "--no-session-persistence" in sys.argv
-session = "synthetic-codex-thread" if codex else "synthetic-claude-session"
+session = str(__import__("uuid").uuid4()) if os.environ.get("PANEL_FIXTURE_UUID_SESSION") else ("synthetic-codex-thread" if codex else "synthetic-claude-session")
 turn = None
 pending = None
 
