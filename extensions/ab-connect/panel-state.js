@@ -8,7 +8,7 @@ export class PanelTimeline {
       if (event.sequence <= this.cursor) continue;
       if (event.sequence !== this.cursor + 1) throw new Error('Conversation history has a gap. Refresh before relying on this view.');
       const data = event.data || {};
-      if (event.kind === 'user') this.rows.push({ key: `user:${data.messageId}`, type: 'user', messageId: data.messageId, text: data.text || '', at: event.at });
+      if (event.kind === 'user') this.rows.push({ key: `user:${data.messageId}`, type: 'user', messageId: data.messageId, text: data.text || '', page: data.page || null, at: event.at });
       else if (event.kind === 'queueEdited' || event.kind === 'queueRemoved') {
         const row = this.rows.find(row => row.type === 'user' && row.messageId === data.messageId);
         if (row) { row.queueStatus = event.kind === 'queueRemoved' ? 'Removed from queue' : 'Edited before sending';
@@ -25,12 +25,14 @@ export class PanelTimeline {
           row.finalPart = data.part;
         }
         row.text += data.text || '';
+      } else if (event.kind === 'tool' && !shownTool(data.item || {})) {
+        // Reasoning and untyped items are not tool calls; keep them out of view.
       } else if (event.kind === 'tool') {
         const item = data.item || {};
         const key = `tool:${data.messageId || 'legacy'}:${item.id || item.tool_use_id || event.sequence}`;
         let row = this.items.get(key);
         if (!row) { row = { key, type: 'tool', text: '', at: event.at }; this.items.set(key, row); this.rows.push(row); }
-        row.name = item.tool || item.name || item.type || 'Tool';
+        row.name = toolName(item);
         row.failed = item.is_error === true || item.status === 'failed' || Boolean(item.error);
         row.completed = data.completed === true;
         row.text = describeTool(item);
@@ -62,10 +64,36 @@ export function readableError(text) {
   return { text: raw };
 }
 
+const hiddenItems = new Set(['reasoning', 'userMessage', 'agentMessage', 'plan', 'contextCompaction']);
+function shownTool(item) {
+  if (item.truncated) return true;
+  if (hiddenItems.has(item.type)) return false;
+  return Boolean(item.tool || item.name || item.type);
+}
+function toolName(item) {
+  if (item.type === 'commandExecution') return 'Ran a command';
+  if (item.type === 'fileChange') return 'Changed files';
+  if (item.type === 'webSearch') return 'Searched the web';
+  if (item.type === 'tool_result') return 'Tool result';
+  return item.tool || item.name || item.type || 'Tool';
+}
+function resultText(result) {
+  if (typeof result === 'string') return result;
+  const blocks = Array.isArray(result?.content) ? result.content : Array.isArray(result) ? result : null;
+  if (blocks) return blocks.map(block => typeof block?.text === 'string' ? block.text : JSON.stringify(block)).join('\n');
+  return result == null ? '' : JSON.stringify(result, null, 2);
+}
 function describeTool(item) {
   if (item.truncated) return `${item.preview || ''}\n[The tool preview was shortened]`;
-  const detail = item.arguments ?? item.input ?? item.content ?? item.result ?? item.output ?? '';
-  const text = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
+  let text;
+  if (item.type === 'commandExecution') text = [item.command && `$ ${item.command}`, item.aggregatedOutput].filter(Boolean).join('\n\n');
+  else if (item.type === 'fileChange') text = (item.changes || []).map(change => `${change.kind?.type || change.kind || 'change'} ${change.path || ''}`).join('\n');
+  else if (item.type === 'mcpToolCall') text = [JSON.stringify(item.arguments ?? {}, null, 2), item.result != null ? resultText(item.result) : item.error ? resultText(item.error) : ''].filter(Boolean).join('\n\n');
+  else if (item.type === 'tool_result') text = resultText(item.content);
+  else {
+    const detail = item.arguments ?? item.input ?? item.content ?? item.result ?? item.output ?? '';
+    text = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
+  }
   return text.length > 6000 ? `${text.slice(0, 6000)}\n[The tool preview was shortened]` : text;
 }
 

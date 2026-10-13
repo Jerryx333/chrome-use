@@ -48,6 +48,40 @@ impl Phase {
 pub(super) struct Message {
     pub id: String,
     pub text: String,
+    /// The tab the user was looking at when they sent the message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<PageContext>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PageContext {
+    pub tab_id: i64,
+    pub url: String,
+    pub title: String,
+}
+
+impl PageContext {
+    pub(super) fn validate(&self) -> Result<(), String> {
+        if self.tab_id < 0
+            || self.url.len() > 8192
+            || self.title.len() > 1024
+            || self.url.contains(['\r', '\n', '\0'])
+            || self.title.contains('\0')
+        {
+            return Err("Invalid page context".into());
+        }
+        Ok(())
+    }
+    /// The line that tells the agent which tab "this page" means.
+    pub(super) fn preface(&self) -> String {
+        let title = self.title.replace(['\r', '\n'], " ");
+        format!(
+            "[The user is looking at their own tab \"{title}\" ({url}). When they refer to \"this page\" or \"the current page\", read or act on it with the chrome_use tools using tabId \"chrome-tab:{id}\" and force: true.]",
+            url = self.url,
+            id = self.tab_id
+        )
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -256,6 +290,8 @@ impl Conversation {
         if self.direct_message_id.as_deref() == Some(id) {
             self.direct_message_id = Some(replacement.id.clone());
         }
+        let mut replacement = replacement;
+        replacement.page = self.queue[index].page.take();
         self.queue[index] = replacement;
         self.updated = now();
         Ok(())
@@ -702,6 +738,7 @@ mod tests {
         Message {
             id: uuid::Uuid::new_v4().to_string(),
             text: text.into(),
+            page: None,
         }
     }
     #[test]

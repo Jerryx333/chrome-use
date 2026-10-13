@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.195
+## 1.5.196
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.43 for the page chip. Chrome Web Store publication follows Google review.
+
+### Improvements
+
+- **"This page" means the tab you are looking at.** The panel sends the active web tab in its window with each message, shown as a removable chip above the input. The agent is told to read or act on that tab directly instead of listing every tab and guessing.
+- **Less detour through the shell.** Panel agents are told the chrome_use tools are already connected, so they no longer read skill files, memories or documentation before acting.
+- **Readable tool rows.** A command row shows the command and its output, and an MCP row its arguments and result. Model reasoning and untyped items are no longer listed as tool calls.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.195
+
 Requires extension ab-connect 0.5.42 for the model menu. Chrome Web Store publication follows Google review.
 
 ### Improvements
@@ -14,7 +29,6 @@ Requires extension ab-connect 0.5.42 for the model menu. Chrome Web Store public
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.194
 

@@ -48,7 +48,7 @@ async function fixture(overrides = {}, saved = {}) {
     },
   };
   const document = { createElement: tag => new Node(tag), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); } };
-  const panel = createPanel({ document, runtime, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
+  const panel = createPanel({ document, runtime, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
   return { panel, nodes, calls, chats, writes, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
@@ -381,4 +381,31 @@ test('hosts without full-access support hide the control and never send the opti
   const f = await fixture();
   assert.equal(f.nodes.get('access').hidden, true);
   f.panel.close();
+});
+
+test('the tab beside the panel is sent with the next message unless the user removes it', async () => {
+  const support = {...fullSupport, pageContext: true};
+  const sends = [];
+  const tabs = { async query() { return [{ id: 7, url: 'https://x.com/post/1', title: 'A post' }]; } };
+  const overrides = {
+    tabs, status: () => ({connected:true, agentPanel:support}),
+    conversationSend: params => { sends.push(params); return { success: true, result: { conversation: chat('b', 'running') } }; },
+  };
+  const f = await fixture(overrides, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('pageChip').hidden, false);
+  assert.equal(f.nodes.get('pageTitle').textContent, 'A post');
+  f.nodes.get('message').value = 'what did he reply to'; await f.panel.send(); await settle();
+  assert.deepEqual(sends[0].page, { tabId: 7, url: 'https://x.com/post/1', title: 'A post' });
+  f.nodes.get('pageDetach').fire('click');
+  assert.equal(f.nodes.get('pageChip').hidden, true);
+  f.nodes.get('message').value = 'second'; await f.panel.send(); await settle();
+  assert.equal(sends[1].page, undefined);
+  f.panel.close();
+  const g = await fixture({ ...overrides, status: () => ({connected:true, agentPanel:fullSupport}) }, { ab_panel_conversation: 'b' });
+  await settle();
+  g.nodes.get('message').value = 'old host'; await g.panel.send(); await settle();
+  assert.equal(sends[2].page, undefined);
+  assert.equal(g.nodes.get('pageChip').hidden, true);
+  g.panel.close();
 });

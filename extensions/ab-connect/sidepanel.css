@@ -90,6 +90,13 @@ details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .queued-message textarea { margin-top:6px; font-size:12px; }
 .queued-message .actions { display:flex; gap:8px; margin-top:4px; }
 
+/* Current page attached to the next message. */
+.page-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; margin:0 0 4px; padding:2px 4px 2px 8px; border-radius:10px; background:var(--surface); color:var(--muted); font-size:12px; }
+.page-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.page-chip button { border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
+.page-ref { font-size:11px; color:var(--muted); margin-top:3px; max-width:88%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.page-ref::before { content:"↳ "; }
+
 /* Composer: one rounded box; agent, access and model sit in its bottom row. */
 .composer { padding:8px 12px 12px; position:relative; }
 .input-box { border:1px solid var(--line); border-radius:16px; padding:8px 8px 6px 12px; background:var(--bg); box-shadow:0 1px 3px rgb(0 0 0 / .05); }

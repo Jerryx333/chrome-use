@@ -54,3 +54,16 @@ test('raw API error JSON becomes a readable note with the original kept as detai
   assert.equal(timeline.rows[0].text,"The 'x' model is not supported."); assert.equal(timeline.rows[0].detail,raw);
   assert.equal(timeline.rows[1].text,'plain failure'); assert.equal(timeline.rows[1].detail,undefined);
 });
+
+test('commands show their command line and output; reasoning is not a tool row', () => {
+  const timeline = new PanelTimeline();
+  timeline.apply([
+    event(1,'tool',{messageId:'m',completed:true,item:{id:'r',type:'reasoning',summary:[]}}),
+    event(2,'tool',{messageId:'m',completed:true,item:{id:'c',type:'commandExecution',command:'ls',aggregatedOutput:'a.txt'}}),
+    event(3,'tool',{messageId:'m',completed:true,item:{id:'t',type:'mcpToolCall',tool:'chrome_use_read',arguments:{tabId:'chrome-tab:7'},result:{content:[{type:'text',text:'page text'}]}}}),
+    event(4,'tool',{messageId:'m',completed:true,item:{}}),
+  ],4);
+  assert.deepEqual(timeline.rows.map(r=>r.name),['Ran a command','chrome_use_read']);
+  assert.equal(timeline.rows[0].text,'$ ls\n\na.txt');
+  assert.match(timeline.rows[1].text,/chrome-tab:7[\s\S]*page text/);
+});
