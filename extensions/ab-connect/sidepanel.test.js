@@ -257,3 +257,15 @@ test('explicit recovery preserves a lost direct-send intent', async () => {
   assert.equal(sends.length,2);assert.deepEqual(sends[0].params,sends[1].params);
   assert.equal(f.calls.some(c=>c.operation==='conversationSend'),false);f.panel.close();
 });
+
+test('agent list reports CLI version, account and model count without claiming model access', async () => {
+  const f = await fixture({
+    discover: () => ({ success: true, result: { agents: [{ id: 'codex', name: 'Codex', executable: '/x/codex' }, { id: 'claude', name: 'Claude Code', configFiles: ['/c'] }] } }),
+    agentInspect: () => ({ success: true, result: { inspection: { versionReported: '0.50.0', account: { status: 'reportedSignedIn', kind: 'chatgpt' }, models: [{}, {}], complete: true } } }),
+  });
+  await settle();
+  const lines = f.nodes.get('agentList').children.map(row => row.children[0].children[1].textContent);
+  assert.deepEqual(lines, ['v0.50.0 · Signed in (chatgpt) · 2 models', 'Configuration found; program not installed']);
+  assert.equal(f.calls.filter(call => call.operation === 'agentInspect').length, 1);
+  f.panel.close();
+});
