@@ -81,7 +81,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
-        <li><strong>v1.5.201</strong>（未发布）：扩展 0.5.46 修复侧栏慢操作被直接断开：本地面板服务给每个请求限时 10 秒，超时后不回任何内容就关掉连接；OpenCode 冷启动时的模型检查会超过这个时间，首次打开时模型菜单可能读不出来，删除会话时等 agent 退出再关浏览器标签页也可能超时。现在模型检查限时 30 秒、删除 45 秒，超时会返回错误，上一层的等待时间都比下一层长。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
+        <li><strong>v1.5.201</strong>（2026-10-13）：扩展 0.5.46 修复侧栏慢操作被直接断开：本地面板服务给每个请求限时 10 秒，超时后不回任何内容就关掉连接；OpenCode 冷启动时的模型检查会超过这个时间，首次打开时模型菜单可能读不出来，删除会话时等 agent 退出再关浏览器标签页也可能超时。现在模型检查限时 30 秒、删除 45 秒，超时会返回错误，上一层的等待时间都比下一层长。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.200</strong>（2026-10-13）：扩展 0.5.45 修复 Agents &amp; models 里部分 agent 显示“状态不可用”：本地服务同时最多跑两个 CLI 检查，四个可对话 agent 同时检查时有两个会失败；现在侧栏让检查排队。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.199</strong>（2026-10-13）：侧栏的 Pi 模型菜单接受 <code>openrouter/~anthropic/claude-opus-latest</code> 这类 OpenRouter 别名；个别仍无法使用的模型 id 会被跳过，不再让整个菜单失败。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.198</strong>（2026-10-13）：Pi 会列出所有已配置的模型，超过 256 个时侧栏的模型检查会失败；现在菜单保留前 256 个并标明列表不完整。OpenCode 拒绝消息时，侧栏显示 OpenCode 给出的原因（例如默认模型已停用），不再只显示“OpenCode refused the prompt”。贡献者：@leeguooooo。</li>
