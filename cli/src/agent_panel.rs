@@ -166,6 +166,21 @@ struct AgentInstallation {
     warnings: Vec<String>,
 }
 
+/// PATH for agent CLIs the panel starts. Chrome launches the native host with a
+/// minimal PATH, so a wrapper such as a version-manager shim would resolve a
+/// different, often older, program than the user's terminal does. Use the
+/// directories discovery searched, in the same order.
+pub(super) fn agent_search_path() -> Option<OsString> {
+    let context = DiscoveryContext::current().ok()?;
+    let mut seen = std::collections::HashSet::new();
+    let directories: Vec<_> = context
+        .directories
+        .into_iter()
+        .filter(|d| seen.insert(d.clone()))
+        .collect();
+    std::env::join_paths(directories).ok()
+}
+
 struct DiscoveryContext {
     home: PathBuf,
     cwd: PathBuf,
@@ -456,6 +471,18 @@ pub fn handle_for_profile(
 
 #[cfg(test)]
 mod tests {
+
+    #[cfg(not(windows))]
+    #[test]
+    fn agent_path_includes_user_and_homebrew_directories_without_duplicates() {
+        let path = agent_search_path().expect("agent PATH");
+        let entries: Vec<_> = std::env::split_paths(&path).collect();
+        let home = dirs::home_dir().unwrap();
+        assert!(entries.contains(&home.join(".local/bin")));
+        assert!(entries.contains(&PathBuf::from("/opt/homebrew/bin")));
+        let unique: std::collections::HashSet<_> = entries.iter().collect();
+        assert_eq!(unique.len(), entries.len());
+    }
     use super::*;
     use tempfile::TempDir;
     #[test]

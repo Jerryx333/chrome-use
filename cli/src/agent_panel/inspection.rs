@@ -50,6 +50,9 @@ impl OwnedProbe {
             .env_remove("CLAUDECODE")
             .env_remove("CLAUDE_CODE_ENTRYPOINT")
             .env_remove("CLAUDE_CODE_SSE_PORT");
+        if let Some(path) = super::agent_search_path() {
+            command.env("PATH", path);
+        }
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;

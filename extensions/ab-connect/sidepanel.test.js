@@ -286,3 +286,19 @@ test('a failed explicit-model conversation offers a retry that starts a default-
   assert.equal(f.calls.find(call => call.operation === 'conversationSend').params.text, 'ping');
   f.panel.close();
 });
+
+test('a failure on the CLI-configured model offers its configuration instead of a retry that would repeat it', async () => {
+  const failed = { ...chat('a', 'failed'), agentId: 'codex', model: 'configured-model', requestedModel: null };
+  const f = await fixture({
+    conversationList: () => ({ success: true, result: { conversations: [failed] } }),
+    conversationRead: () => ({ success: true, result: { conversation: failed, journal: { events: [{ sequence: 1, kind: 'user', data: { messageId: 'm', text: 'ping' } }, { sequence: 2, kind: 'terminal', data: { status: 'failed', error: 'model not supported' } }], cursor: 2, more: false } } }),
+    configRead: params => ({ success: true, result: { configuration: { agentId: params.agentId, path: '/c', fields: [] } } }),
+  }, { ab_panel_conversation: 'a' });
+  await settle();
+  const labels = f.nodes.get('transcript').querySelectorAll('button').map(node => node.textContent);
+  assert.deepEqual(labels, ['Change default model']);
+  f.nodes.get('transcript').querySelectorAll('button')[0].fire('click'); await settle();
+  assert.equal(f.nodes.get('agentsView').hidden, false);
+  assert.ok(f.calls.some(call => call.operation === 'configRead' && call.params.agentId === 'codex'));
+  f.panel.close();
+});
