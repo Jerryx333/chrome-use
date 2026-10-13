@@ -269,3 +269,20 @@ test('agent list reports CLI version, account and model count without claiming m
   assert.equal(f.calls.filter(call => call.operation === 'agentInspect').length, 1);
   f.panel.close();
 });
+
+test('a failed explicit-model conversation offers a retry that starts a default-model conversation with the same prompt', async () => {
+  const failed = { ...chat('a', 'failed'), agentId: 'codex', model: 'bad-model', requestedModel: 'bad-model' };
+  const created = [];
+  const f = await fixture({
+    conversationList: () => ({ success: true, result: { conversations: [failed] } }),
+    conversationRead: params => ({ success: true, result: { conversation: params.conversationId === 'a' ? failed : chat(params.conversationId), journal: params.conversationId === 'a' ? { events: [{ sequence: 1, kind: 'user', data: { messageId: 'm', text: 'ping' } }, { sequence: 2, kind: 'terminal', data: { status: 'failed', error: 'model not supported' } }], cursor: 2, more: false } : { events: [], cursor: 0, more: false } } }),
+    conversationCreate: params => { created.push(params); return { success: true, result: { conversation: chat('new') } }; },
+    conversationSend: params => ({ success: true, result: { conversation: chat('new', 'running'), echo: params } }),
+  }, { ab_panel_conversation: 'a' });
+  await settle();
+  const retry = f.nodes.get('transcript').querySelectorAll('button').find(node => node.textContent === 'Retry with default model');
+  assert.ok(retry); retry.fire('click'); await settle(); await settle();
+  assert.deepEqual(created, [{ agentId: 'codex' }]);
+  assert.equal(f.calls.find(call => call.operation === 'conversationSend').params.text, 'ping');
+  f.panel.close();
+});

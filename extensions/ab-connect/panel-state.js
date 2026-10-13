@@ -39,7 +39,7 @@ export class PanelTimeline {
       else if (event.kind === 'requestResolved') this.requests.delete(JSON.stringify(data.requestId));
       else if (event.kind === 'terminal') {
         this.requests.clear();
-        if (data.status !== 'completed') this.rows.push({ key: `note:${event.sequence}`, type: 'note', ...readableError(data.error || (data.status === 'interrupted' ? 'Response interrupted. Queued messages are paused.' : 'Response failed. Queued messages are paused.')), at: event.at });
+        if (data.status !== 'completed') this.rows.push({ key: `note:${event.sequence}`, type: 'note', failed: data.status === 'failed', ...readableError(data.error || (data.status === 'interrupted' ? 'Response interrupted. Queued messages are paused.' : 'Response failed. Queued messages are paused.')), at: event.at });
       } else if (event.kind === 'exited' || event.kind === 'processUnconfirmed') {
         this.requests.clear();
         if (data.error) this.rows.push({ key: `note:${event.sequence}`, type: 'note', ...readableError(data.error), at: event.at });

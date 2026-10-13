@@ -112,6 +112,11 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
           const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
           const content = element('div', undefined, 'content'); container.append(content, speaker); view = { container, content, speaker };
           if (row.detail) { const raw = element('details'); raw.append(element('summary', 'Details'), element('pre', row.detail)); container.append(raw); }
+          const failedModel = conversation?.requestedModel || conversation?.model;
+          if (row.type === 'note' && row.failed && failedModel && conversation?.agentId) {
+            const prompt = [...timeline.rows].reverse().find(r => r.type === 'user' && !r.queueStatus)?.text;
+            if (prompt) container.append(button('Retry with default model', () => retryWithDefaultModel(conversation.agentId, prompt), 'retry'));
+          }
         }
         rendered.set(row.key, view); nodes.transcript.append(view.container);
       }
@@ -301,6 +306,13 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
       if (selected === id) { conversation = result.conversation; if (nodes.message.value === text) nodes.message.value = ''; }
       pendingMessages.delete(id); drafts.delete(id); await savePending(); await list(); await poll();
     } finally { sending = false; controls(); }
+  }
+  // A conversation keeps the model it was created with, so a model the account
+  // cannot use is fixed by starting a new conversation on the CLI default.
+  async function retryWithDefaultModel(agentId, prompt) {
+    if (sending) return;
+    select(''); nodes.agent.value = agentId; nodes.model.value = ''; clearModels(); nodes.message.value = prompt;
+    await send();
   }
   function view(agents) { nodes.chatView.hidden = agents; nodes.agentsView.hidden = !agents; nodes.chatTab.classList.toggle('selected', !agents); nodes.agentsTab.classList.toggle('selected', agents); nodes.chatTab.setAttribute('aria-pressed', String(!agents)); nodes.agentsTab.setAttribute('aria-pressed', String(agents)); }
   function clearModels() { modelEpoch++; nodes.modelList.replaceChildren(); nodes.modelStatus.textContent = 'CLI model access has not been checked.'; nodes.inspectAgent.disabled = !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection; }
