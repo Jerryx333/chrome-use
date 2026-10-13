@@ -1419,3 +1419,215 @@ fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request
     let done = turn(&mut host, &ask, "policy", "idle");
     assert!(replies(&done).ends_with("policy: never/danger-full-access"));
 }
+
+#[cfg(unix)]
+#[test]
+fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
+    let registry = tempfile::tempdir().unwrap();
+    let profile = "native-opencode-fixture";
+    let mut cleanup = ServiceFixture {
+        root: registry.path().into(),
+        profile: profile.into(),
+        chats: vec![],
+    };
+    let mut host = Host(
+        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+            .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
+            .env("CHROME_USE_RELAY_DIR", registry.path())
+            .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let rx = frames(&mut host);
+    send(
+        &mut host,
+        json!({"method":"hello","version":"fixture","profileId":profile}),
+    );
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let inspection = panel_reply(
+        &mut host,
+        &rx,
+        "inspect",
+        "agentInspect",
+        json!({"agentId":"opencode","executable":fixture}),
+    );
+    assert!(inspection.get("error").is_none(), "{inspection}");
+    assert_eq!(
+        inspection["result"]["inspection"]["models"][0]["id"],
+        "synthetic/opencode-model"
+    );
+    assert_eq!(
+        inspection["result"]["inspection"]["processExitConfirmed"],
+        true
+    );
+    let created = panel_reply(
+        &mut host,
+        &rx,
+        "create",
+        "conversationCreate",
+        json!({"agentId":"opencode","executable":fixture,"model":"synthetic/opencode-model"}),
+    );
+    assert!(created.get("error").is_none(), "{created}");
+    let id = created["result"]["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    cleanup.chats.push(id.clone());
+    let send_message = |host: &mut Host, text: &str| {
+        let mut params =
+            json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":text});
+        if text == "hello" {
+            params["page"] = json!({"tabId":74,"title":"Synthetic ACP page","url":"https://fixture.invalid/page"});
+        }
+        let reply = panel_reply(host, &rx, "send", "conversationSend", params);
+        assert!(reply.get("error").is_none(), "{reply}");
+    };
+    send_message(&mut host, "hello");
+    let completed = conversation_poll(&mut host, &rx, &id, "idle");
+    let events = completed["journal"]["events"].as_array().unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event["kind"] == "textDelta"
+            && event["data"]["text"] == "synthetic reply: hello"));
+    assert!(events
+        .iter()
+        .any(|event| event["kind"] == "tool" && event["data"]["completed"] == true));
+    let tool = &events
+        .iter()
+        .rev()
+        .find(|event| event["kind"] == "tool")
+        .unwrap()["data"]["item"];
+    assert_eq!(tool["name"], "Synthetic tool");
+    assert_eq!(tool["input"]["command"], "synthetic");
+    assert_eq!(
+        completed["conversation"]["model"],
+        "synthetic/opencode-model"
+    );
+    send_message(&mut host, "approval");
+    let waiting = conversation_poll(&mut host, &rx, &id, "waitingInput");
+    let request = &waiting["journal"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|event| event["kind"] == "request")
+        .unwrap()["data"];
+    assert_eq!(request["method"], "session/request_permission");
+    let bad = panel_reply(
+        &mut host,
+        &rx,
+        "bad-option",
+        "conversationRespond",
+        json!({"conversationId":id,"requestId":request["requestId"],"result":{"outcome":{"outcome":"selected","optionId":"unknown"}}}),
+    );
+    assert!(bad.get("error").is_some());
+    let approved = panel_reply(
+        &mut host,
+        &rx,
+        "approve",
+        "conversationRespond",
+        json!({"conversationId":id,"requestId":request["requestId"],"result":{"outcome":{"outcome":"selected","optionId":"once"}}}),
+    );
+    assert!(approved.get("error").is_none(), "{approved}");
+    conversation_poll(&mut host, &rx, &id, "idle");
+    // Switching access restarts an idle process. The restored ACP session must
+    // discard pre-response replay and retain only the panel's durable history.
+    let access = panel_reply(
+        &mut host,
+        &rx,
+        "access",
+        "conversationSetAccess",
+        json!({"conversationId":id,"fullAccess":true}),
+    );
+    assert!(access.get("error").is_none());
+    send_message(&mut host, "approval");
+    let automatic = conversation_poll(&mut host, &rx, &id, "idle");
+    assert!(automatic["journal"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["kind"] == "replySent"));
+    assert!(!automatic.to_string().contains("REPLAY MUST NOT APPEAR"));
+    assert!(automatic["conversation"]["generation"].as_u64().unwrap() >= 2);
+    send_message(&mut host, "wait");
+    conversation_poll(&mut host, &rx, &id, "running");
+    send_message(&mut host, "queued");
+    let stop = panel_reply(
+        &mut host,
+        &rx,
+        "stop",
+        "conversationStop",
+        json!({"conversationId":id}),
+    );
+    assert!(stop.get("error").is_none());
+    let stopped = conversation_poll(&mut host, &rx, &id, "interrupted");
+    assert_eq!(stopped["conversation"]["queued"], 1);
+    let resume = panel_reply(
+        &mut host,
+        &rx,
+        "queue",
+        "conversationResumeQueue",
+        json!({"conversationId":id}),
+    );
+    assert!(resume.get("error").is_none());
+    let done = conversation_poll(&mut host, &rx, &id, "idle");
+    assert!(done.to_string().contains("synthetic reply: queued"));
+    assert_eq!(done["conversation"]["queued"], 0);
+    let access = panel_reply(
+        &mut host,
+        &rx,
+        "ask",
+        "conversationSetAccess",
+        json!({"conversationId":id,"fullAccess":false}),
+    );
+    assert!(access.get("error").is_none());
+    send_message(&mut host, "approval");
+    conversation_poll(&mut host, &rx, &id, "waitingInput");
+    let stop = panel_reply(
+        &mut host,
+        &rx,
+        "cancel-permission",
+        "conversationStop",
+        json!({"conversationId":id}),
+    );
+    assert!(stop.get("error").is_none());
+    conversation_poll(&mut host, &rx, &id, "interrupted");
+    let resume = panel_reply(
+        &mut host,
+        &rx,
+        "unpause",
+        "conversationResumeQueue",
+        json!({"conversationId":id}),
+    );
+    assert!(resume.get("error").is_none());
+    send_message(&mut host, "fail");
+    conversation_poll(&mut host, &rx, &id, "failed");
+    let deleted = panel_reply(
+        &mut host,
+        &rx,
+        "delete",
+        "conversationDelete",
+        json!({"conversationId":id}),
+    );
+    assert!(deleted.get("error").is_none(), "{deleted}");
+    let history = &deleted["result"]["deleted"]["cliHistory"];
+    assert!(history["error"].is_null(), "{deleted}");
+    assert_eq!(history["removed"].as_array().unwrap().len(), 1);
+    assert!(history["removed"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("opencode session "));
+    let proof = std::fs::read_to_string(registry.path().join("acp-deletions.log")).unwrap();
+    assert!(
+        proof.lines().count() >= 2,
+        "Metadata and conversation sessions must both be deleted"
+    );
+    assert!(!registry
+        .path()
+        .join(format!("agent-panel/profiles/{profile}/conversations/{id}"))
+        .exists());
+}

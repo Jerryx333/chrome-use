@@ -70,3 +70,15 @@ test('conversation deletion is advertised only when the host reports it', () => 
  assert.equal(state.receive(port,{method:'pong',params:{agentPanel:{schemaVersion:1,mode:'full',modelInspection:true,conversationDelete:true}}}),true);
  assert.equal(state.snapshot().agentPanel.conversationDelete,true);
 });
+
+test('chat adapters are validated and capability-only changes are observable', () => {
+  const state = new HostConnectionState();
+  const port = {};
+  state.begin(port);
+  const message = chatAgents => ({method:'pong',params:{agentPanel:{schemaVersion:1,mode:'full',modelInspection:true,chatAgents}}});
+  assert.equal(state.receive(port,message(['codex','claude'])),true);
+  assert.equal(state.receive(port,message(['codex','claude','opencode'])),true);
+  assert.deepEqual(state.snapshot().agentPanel.chatAgents,['codex','claude','opencode']);
+  assert.equal(state.receive(port,message(['codex',null])),true);
+  assert.deepEqual(state.snapshot().agentPanel.chatAgents,['codex','claude']);
+});

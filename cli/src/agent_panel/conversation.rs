@@ -132,7 +132,7 @@ impl Conversation {
         model: Option<String>,
         executable: Option<PathBuf>,
     ) -> Result<Self, String> {
-        if !["codex", "claude"].contains(&agent_id) {
+        if !["codex", "claude", "opencode"].contains(&agent_id) {
             return Err("This agent has no conversational adapter yet".into());
         }
         if model

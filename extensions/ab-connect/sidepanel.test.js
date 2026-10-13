@@ -409,3 +409,39 @@ test('the tab beside the panel is sent with the next message unless the user rem
   assert.equal(g.nodes.get('pageChip').hidden, true);
   g.panel.close();
 });
+
+test('OpenCode is selectable only when the confirmed host advertises its adapter', async () => {
+  const f = await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,chatAgents:['codex','claude','opencode']}})});
+  assert.deepEqual(f.nodes.get('agent').children.map(option=>option.value),['codex','claude','opencode']);
+  f.hostUpdate({connected:true,agentPanel:fullSupport});
+  assert.deepEqual(f.nodes.get('agent').children.map(option=>option.value),['codex','claude']);
+  f.panel.close();
+});
+
+test('ACP permissions show the command and return the exact selected option', async () => {
+  const params={toolCall:{title:'Run a command',rawInput:{command:'ls'}},options:[{optionId:'once',kind:'allow_once',name:'Allow once'},{optionId:'deny',kind:'reject_once',name:'Reject'}]};
+  const f=await fixture({conversationRead:async()=>({success:true,result:{conversation:chat('a','waitingInput'),journal:{events:[{sequence:1,kind:'request',data:{requestId:'permission',method:'session/request_permission',params}}],cursor:1,more:false}}}),conversationRespond:async()=>({success:true,result:{}})});
+  f.panel.select('a');await settle();
+  assert.match(f.nodes.get('requests').querySelectorAll('pre')[0].textContent,/ls/);
+  const allow=f.nodes.get('requests').querySelectorAll('button').find(button=>button.textContent==='Allow once');
+  allow.fire('click');await settle();
+  assert.deepEqual(f.calls.find(call=>call.operation==='conversationRespond').params.result,{outcome:{outcome:'selected',optionId:'once'}});
+  f.panel.close();
+});
+
+test('every controller node exists exactly once in the shipped sidepanel markup', async () => {
+  const {readFile} = await import('node:fs/promises');
+  const source=await readFile(new URL('./sidepanel.js',import.meta.url),'utf8');
+  const markup=await readFile(new URL('./sidepanel.html',import.meta.url),'utf8');
+  const ids=[...source.match(/const ids = \[([^\]]+)\]/)[1].matchAll(/'([^']+)'/g)].map(match=>match[1]);
+  for (const id of ids) assert.equal([...markup.matchAll(/\bid="([^"]+)"/g)].filter(match=>match[1]===id).length,1,`Missing or duplicate controller node ${id}`);
+});
+
+test('OpenCode permission labels describe CLI rules without promising a prompt for every tool', async () => {
+  const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,fullAccess:true,chatAgents:['codex','claude','opencode']}})});
+  f.chats[1].agentId='opencode';f.chats[1].fullAccess=false;
+  f.panel.select('b');await settle();
+  assert.equal(f.nodes.get('accessLabel').textContent,'CLI permissions');
+  assert.match(f.nodes.get('access').title,/may allow tools without asking/);
+  f.panel.close();
+});

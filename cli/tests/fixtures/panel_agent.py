@@ -8,11 +8,16 @@ import time
 if "--version" in sys.argv:
     print("0.0.1 (Claude Code)"); sys.exit(0)
 
+if "models" in sys.argv:
+    print("synthetic/opencode-model"); sys.exit(0)
+acp = "acp" in sys.argv
 codex = "app-server" in sys.argv
 inspection = "--no-session-persistence" in sys.argv
 session = str(__import__("uuid").uuid4()) if os.environ.get("PANEL_FIXTURE_UUID_SESSION") else ("synthetic-codex-thread" if codex else "synthetic-claude-session")
 turn = None
 pending = None
+prompt_id = None
+acp_stopping = False
 
 
 def emit(value):
@@ -21,7 +26,10 @@ def emit(value):
 
 def complete(text, status="completed"):
     global turn
-    if codex:
+    if acp:
+        emit({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}}})
+        emit({"jsonrpc":"2.0","id":prompt_id,"result":{"stopReason":{"completed":"end_turn","interrupted":"cancelled","failed":"max_tokens"}[status]}})
+    elif codex:
         emit({"method": "item/agentMessage/delta", "params": {"threadId": session, "turnId": turn, "itemId": "fixture-output", "delta": text}})
         emit({"method": "turn/completed", "params": {"threadId": session, "turn": {"id": turn, "status": status, "error": {"message": "synthetic failure"} if status == "failed" else None}}})
     else:
@@ -32,7 +40,64 @@ def complete(text, status="completed"):
 
 for line in sys.stdin:
     message = json.loads(line)
-    if codex:
+    if acp:
+        method = message.get("method")
+        params = message.get("params", {})
+        if method == "initialize":
+            assert params["protocolVersion"] == 1
+            assert params["clientCapabilities"]["terminal"] is False
+            emit({"jsonrpc":"2.0","id":message["id"],"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":True,"sessionCapabilities":{"resume":{},"delete":{}}}}})
+        elif method in ("session/new", "session/resume", "session/load"):
+            inspection = not params["mcpServers"]
+            env = {row["name"]:row["value"] for row in params["mcpServers"][0]["env"]} if not inspection else {"AGENT_BROWSER_BROWSER":"fixture","AGENT_BROWSER_SESSION":"panel-fixture","CHROME_USE_RELAY_DIR":os.environ["CHROME_USE_RELAY_DIR"]}
+            assert env["AGENT_BROWSER_BROWSER"]
+            assert env["AGENT_BROWSER_SESSION"].startswith("panel-")
+            assert env["CHROME_USE_RELAY_DIR"] == os.environ["CHROME_USE_RELAY_DIR"]
+            if method != "session/new":
+                session = params["sessionId"]
+                # A noisy backend must not duplicate retained history on resume.
+                emit({"method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"REPLAY MUST NOT APPEAR"}}}})
+            emit({"jsonrpc":"2.0","id":message["id"],"result":{"sessionId":session,"configOptions":[{"id":"model","type":"select","currentValue":"synthetic/opencode-model","options":[{"value":"synthetic/opencode-model","name":"Synthetic OpenCode"}]}]}})
+        elif method == "session/set_config_option":
+            assert params["configId"] == "model"
+            emit({"jsonrpc":"2.0","id":message["id"],"result":{"configOptions":[{"id":"model","currentValue":params["value"]}]}})
+        elif method == "session/delete":
+            assert params["sessionId"]
+            with open(os.path.join(os.environ["CHROME_USE_RELAY_DIR"],"acp-deletions.log"),"a") as proof: proof.write(params["sessionId"]+"\n")
+            emit({"jsonrpc":"2.0","id":message["id"],"result":{}})
+        elif method == "session/prompt":
+            prompt_id = message["id"]
+            turn = str(prompt_id)
+            text = params["prompt"][0]["text"].split("\n\n")[-1]
+            if text == "hello":
+                assert 'chrome-tab:74' in params["prompt"][0]["text"]
+                assert 'Synthetic ACP page' in params["prompt"][0]["text"]
+            update = {"sessionUpdate":"tool_call","toolCallId":"fixture-acp-tool","title":"Synthetic tool","status":"in_progress","rawInput":{"command":"synthetic"}}
+            emit({"method":"session/update","params":{"sessionId":session,"update":update}})
+            update = {"toolCallId":"fixture-acp-tool","status":"completed","sessionUpdate":"tool_call_update"}
+            emit({"method":"session/update","params":{"sessionId":session,"update":update}})
+            if text in ("wait","wait-exit"): continue
+            if text == "approval":
+                pending = "fixture-acp-permission"
+                emit({"jsonrpc":"2.0","id":pending,"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"title":"Synthetic command","rawInput":{"command":"synthetic"}},"options":[{"optionId":"once","name":"Allow once","kind":"allow_once"},{"optionId":"deny","name":"Reject","kind":"reject_once"}]}})
+                continue
+            complete("synthetic reply: " + text,"failed" if text == "fail" else "completed")
+        elif method == "session/cancel":
+            if text == "wait-exit": sys.exit(0)
+            if pending is not None:
+                acp_stopping = True
+                continue
+            complete("synthetic stop","interrupted")
+        elif method is None and message.get("id") == pending:
+            assert message["result"]["outcome"]["outcome"] in ("selected","cancelled")
+            if acp_stopping:
+                assert message["result"]["outcome"]["outcome"] == "cancelled"
+                complete("synthetic stop","interrupted")
+                acp_stopping = False
+            else:
+                complete("synthetic approval handled")
+            pending = None
+    elif codex:
         method = message.get("method")
         if method == "initialize":
             inspection = message["params"]["clientInfo"]["name"] == "chrome_use_inspection"

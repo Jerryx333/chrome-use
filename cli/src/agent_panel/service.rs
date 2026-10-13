@@ -868,9 +868,14 @@ async fn dispatch(
             }
             // Real deletion also removes the CLI's own session history and the
             // conversation's browser session. Both run without the engine lock.
-            let (agent_id, session_id) = {
+            let (agent_id, session_id, executable, workspace) = {
                 let chat = e.chat(&id)?;
-                (chat.agent_id.clone(), chat.session_id.clone())
+                (
+                    chat.agent_id.clone(),
+                    chat.session_id.clone(),
+                    chat.executable.clone(),
+                    e.store.directory.join(&id).join("workspace"),
+                )
             };
             let profile = e.profile.clone();
             drop(e);
@@ -878,6 +883,27 @@ async fn dispatch(
             let mut failed = Vec::new();
             let mut history_error = None;
             if let Some(session_id) = &session_id {
+                if agent_id == "opencode" {
+                    let executable = executable
+                        .or_else(|| DiscoveryContext::current().ok()?.executable("opencode"));
+                    match executable {
+                        Some(executable) => {
+                            match super::acp::delete_session(&executable, &workspace, session_id)
+                                .await
+                            {
+                                Ok(()) => removed
+                                    .push(PathBuf::from(format!("opencode session {session_id}"))),
+                                Err(error) => history_error = Some(error),
+                            }
+                        }
+                        None => {
+                            history_error = Some(
+                                "OpenCode executable unavailable; CLI history deletion unconfirmed"
+                                    .into(),
+                            )
+                        }
+                    }
+                }
                 match super::cli_session_files(&agent_id, session_id) {
                     Ok(paths) => {
                         for path in paths {
@@ -987,6 +1013,11 @@ async fn dispatch(
 
 fn automatic_approval(method: &str, params: &Value) -> Option<Value> {
     match method {
+        "session/request_permission" => params["options"]
+            .as_array()?
+            .iter()
+            .find(|option| option["kind"] == "allow_once")
+            .map(|option| json!({"outcome":{"outcome":"selected","optionId":option["optionId"]}})),
         "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
             Some(json!({"decision":"accept"}))
         }
@@ -1006,6 +1037,20 @@ fn validate_reply(method: &str, original: &Value, result: &Value) -> Result<(), 
         return Err("The request is too large to review through this surface".into());
     }
     let valid = match method {
+        "session/request_permission" => {
+            result.as_object().is_some_and(|o| o.len() == 1)
+                && result["outcome"].as_object().is_some_and(|o| {
+                    (o.len() == 1 && result["outcome"]["outcome"] == "cancelled")
+                        || (o.len() == 2
+                            && result["outcome"]["outcome"] == "selected"
+                            && result["outcome"]["optionId"].is_string()
+                            && original["options"].as_array().is_some_and(|options| {
+                                options.iter().any(|option| {
+                                    option["optionId"] == result["outcome"]["optionId"]
+                                })
+                            }))
+                })
+        }
         "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
             result.as_object().is_some_and(|o| {
                 o.len() == 1
@@ -1145,13 +1190,7 @@ fn start<'a>(
         let executable = chat
             .executable
             .clone()
-            .or_else(|| {
-                context.executable(if chat.agent_id == "codex" {
-                    "codex"
-                } else {
-                    "claude"
-                })
-            })
+            .or_else(|| context.executable(&chat.agent_id))
             .ok_or("The selected local agent CLI is not installed")?;
         if !super::is_executable(&executable, cfg!(windows)) {
             return Err("Selected agent program is not an executable file".into());
@@ -1347,5 +1386,38 @@ async fn close_browser_session(profile: &str, session: &str) -> Value {
         Err(_) => {
             json!({"session":session,"closed":false,"error":"chrome-use close did not finish in 20 s"})
         }
+    }
+}
+
+#[cfg(test)]
+mod acp_approval_tests {
+    use super::*;
+    #[test]
+    fn acp_only_accepts_advertised_options_and_auto_allows_once() {
+        let options = json!({"options":[{"optionId":"reject","kind":"reject_once"},{"optionId":"once","kind":"allow_once"},{"optionId":"always","kind":"allow_always"}]});
+        let once = automatic_approval("session/request_permission", &options).unwrap();
+        assert_eq!(
+            once,
+            json!({"outcome":{"outcome":"selected","optionId":"once"}})
+        );
+        assert!(validate_reply("session/request_permission", &options, &once).is_ok());
+        for result in [
+            json!({"outcome":{"outcome":"selected","optionId":"forged"}}),
+            json!({"outcome":{"outcome":"selected","optionId":null}}),
+            json!({"outcome":{"outcome":"cancelled","optionId":"once"}}),
+        ] {
+            assert!(validate_reply("session/request_permission", &options, &result).is_err());
+        }
+        assert!(validate_reply(
+            "session/request_permission",
+            &options,
+            &json!({"outcome":{"outcome":"cancelled"}})
+        )
+        .is_ok());
+        assert!(automatic_approval(
+            "session/request_permission",
+            &json!({"options":[{"optionId":"always","kind":"allow_always"}]})
+        )
+        .is_none());
     }
 }
