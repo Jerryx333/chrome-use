@@ -203,19 +203,23 @@ test('direct sending is acknowledged as waiting for stop, and cannot replace a p
 
 test('late model metadata cannot populate another agent selection', async () => {
   const probe=deferred();const f=await fixture({agentInspect:()=>probe.promise});
-  f.nodes.get('agent').value='codex';f.nodes.get('inspectAgent').fire('click');
   f.nodes.get('agent').value='claude';f.nodes.get('agent').fire('change');
   probe.resolve({success:true,result:{inspection:{agentId:'codex',models:[{id:'wrong-model',label:'Wrong agent model',efforts:[]}],account:{status:'unverified'},complete:true}}});await settle();
-  assert.equal(f.nodes.get('modelList').children.length,0);assert.equal(f.nodes.get('model').value,'');f.panel.close();
+  assert.deepEqual(f.nodes.get('model').children.map(o=>o.value),['']);assert.equal(f.nodes.get('model').value,'');f.panel.close();
 });
 
-test('model metadata does not overwrite the typed model or claim execution access', async () => {
-  const f=await fixture({agentInspect:async()=>({success:true,result:{inspection:{agentId:'codex',versionReported:'0.0.1',models:[{id:'suggestion',label:'Suggestion',efforts:['high']}],account:{status:'reportedSignedIn'},complete:false}}})});
-  f.nodes.get('agent').value='codex';f.nodes.get('model').value='manual-model';f.nodes.get('inspectAgent').fire('click');await settle();
-  assert.equal(f.nodes.get('model').value,'manual-model');assert.equal(f.nodes.get('modelList').children[0].value,'suggestion');
-  assert.match(f.nodes.get('modelStatus').textContent,/partial catalog/);assert.match(f.nodes.get('modelStatus').textContent,/execution access is unverified/);f.panel.close();
+test('the model menu comes from the CLI catalog, keeps Default first, and a custom ID overrides it', async () => {
+  const created=[];
+  const f=await fixture({agentInspect:async()=>({success:true,result:{inspection:{agentId:'codex',versionReported:'0.0.1',models:[{id:'suggestion',label:'Suggestion',efforts:['high']}],account:{status:'reportedSignedIn'},complete:false}}}),
+    conversationCreate:params=>{created.push(params);return{success:true,result:{conversation:chat('n')}};},conversationSend:()=>({success:true,result:{conversation:chat('n','running')}})});
+  f.nodes.get('agent').value='codex';f.nodes.get('agent').fire('change');await settle();
+  assert.deepEqual(f.nodes.get('model').children.map(o=>o.value),['','suggestion']);
+  assert.equal(f.calls.filter(call=>call.operation==='agentInspect').length,1);
+  assert.match(f.nodes.get('modelStatus').textContent,/partial catalog/);assert.match(f.nodes.get('modelStatus').textContent,/execution access is unverified/);
+  f.nodes.get('model').value='suggestion';f.nodes.get('customModel').value='manual-model';f.nodes.get('message').value='go';
+  await f.panel.send();await settle();
+  assert.equal(created[0].model,'manual-model');f.panel.close();
 });
-
 
 test('uncertain sends can be retried explicitly with the same ID and text', async () => {
   let attempts=0;

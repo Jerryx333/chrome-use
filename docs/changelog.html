@@ -81,6 +81,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.195</strong>（未发布）：扩展 0.5.42 把侧栏的模型输入框改成下拉菜单，自动读取 agent CLI 自己的模型列表，第一项是“默认模型”（CLI 配置里的模型）；＋ 菜单里可以填自定义模型 ID 覆盖。菜单和 Agents &amp; models 共用一次 CLI 查询。Pi、Gemini CLI、OpenCode 等还没有对话适配器的 agent 显示“暂不支持在侧栏对话”，不再显示“状态不可用”。删除会话时如果无法确认浏览器标签页已关闭，提示 AI 窗口里可能留下一个标签页（根因见 #583）。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.194</strong>（2026-10-13）：扩展 0.5.41 新增完整权限模式：侧栏会话可以不再逐次确认。Codex 以 <code>approvalPolicy=never</code> 和完全访问沙箱启动，Claude Code 以 <code>bypassPermissions</code> 启动并开放全部工具；仍然到来的审批按“允许一次”自动回复，agent 提问仍交给用户。新会话默认开启并记住上次选择；已有会话可直接切换，审批卡片上的“本会话都允许”会放行正在等待的请求，下一轮用新参数重启 agent。输入框底部一行放 agent、权限开关和模型，参考 Codex 与 Claude 应用。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.193</strong>（2026-10-13）：扩展 0.5.40 侧栏可以删除会话。点标题栏的删除按钮并确认后，先停掉该会话的 agent 并等它退出，再删除面板历史、CLI 自己的会话记录和这个会话的浏览器标签页。CLI 记录按会话 id 精确匹配：Codex 的 <code>sessions/</code> 与 <code>archived_sessions/</code> 下的 rollout 文件，Claude Code 的 <code>projects/*/&lt;session&gt;.jsonl</code> 及同名目录，遵循 <code>CODEX_HOME</code> / <code>CLAUDE_CONFIG_DIR</code>。删除失败的项会在侧栏列出。Codex 0.162 另在自己的 SQLite 库里缓存会话索引和内容，这部分不改动；rollout 删除后 Codex 不再列出或打开该会话。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.192</strong>（2026-10-13）：侧栏启动的 agent 现在和终端用同一个 CLI。Chrome 给本地服务的 PATH 只有系统目录，版本管理器的转发脚本会因此启动旧版本（例如 Codex 0.145.0 而不是 0.162.1），旧版本把配置里的模型报成不支持；现在会话和 Agents &amp; models 检查都使用发现阶段搜索的目录。“用默认模型重试”只在会话手动指定过模型时出现；模型来自 CLI 配置时改为“修改默认模型”，直接打开该 agent 的配置。贡献者：@leeguooooo。</li>

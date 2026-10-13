@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.194
+## 1.5.195
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.42 for the model menu. Chrome Web Store publication follows Google review.
+
+### Improvements
+
+- **Model menu.** The panel's model field is a menu filled automatically from the agent CLI's own catalog, with "Default model" (the CLI's configured model) first. A custom model ID in the + menu overrides it. One CLI probe per agent serves both the menu and Agents & models.
+- **Clearer agent list.** Agents without a panel chat adapter (Pi, Gemini CLI, OpenCode and others) read "chat not supported in the panel yet" instead of "status unavailable".
+- **Delete wording.** When chrome-use cannot confirm that a deleted conversation's browser tabs closed, the panel says a leftover tab may remain in the AI window (#583 tracks the underlying close issue).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.194
+
 Requires extension ab-connect 0.5.41 for the access control. Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -13,7 +28,6 @@ Requires extension ab-connect 0.5.41 for the access control. Chrome Web Store pu
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.193
 
