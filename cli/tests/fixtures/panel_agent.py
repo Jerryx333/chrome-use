@@ -70,7 +70,8 @@ if "--mode" in sys.argv and arg("--mode") == "rpc":
         if kind == "get_state":
             emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"sessionId": pi_session, "model": {"provider": "synthetic", "id": "pi-model"}}})
         elif kind == "get_available_models":
-            emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"models": [{"provider": "synthetic", "id": "pi-model", "name": "Synthetic Pi", "reasoning": True}]}})
+            extra = [{"provider": "bulk", "id": f"model-{n}", "name": f"Bulk {n}"} for n in range(int(os.environ.get("PANEL_FIXTURE_PI_EXTRA_MODELS", "0")))]
+            emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"models": [{"provider": "synthetic", "id": "pi-model", "name": "Synthetic Pi", "reasoning": True}] + extra}})
         elif kind == "prompt":
             text = command["message"]
             emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"disposition": "started"}})
@@ -130,6 +131,9 @@ for line in sys.stdin:
             prompt_id = message["id"]
             turn = str(prompt_id)
             text = params["prompt"][0]["text"].split("\n\n")[-1]
+            if text == "refuse":
+                emit({"jsonrpc":"2.0","id":prompt_id,"error":{"code":-32603,"message":"Internal error","data":{"message":"Model opencode/exo-free is no longer available"}}})
+                continue
             if text == "hello":
                 assert 'chrome-tab:74' in params["prompt"][0]["text"]
                 assert 'Synthetic ACP page' in params["prompt"][0]["text"]

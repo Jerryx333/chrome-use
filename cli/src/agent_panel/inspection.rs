@@ -236,11 +236,12 @@ async fn pi_catalog(probe: &mut OwnedProbe) -> Result<Value, String> {
         let entries = value["data"]["models"]
             .as_array()
             .ok_or("Pi did not return a model array")?;
-        if entries.len() > 256 {
-            return Err("Pi returned too many models".into());
-        }
+        // Pi lists every configured model; the menu keeps the first 256 and
+        // says the catalog is partial.
+        let complete = entries.len() <= 256;
         let models = entries
             .iter()
+            .take(256)
             .map(|entry| {
                 let provider = entry["provider"].as_str().unwrap_or("");
                 let raw = entry["id"].as_str().unwrap_or("");
@@ -263,7 +264,7 @@ async fn pi_catalog(probe: &mut OwnedProbe) -> Result<Value, String> {
             })
             .collect::<Result<Vec<_>, String>>()?;
         drop(input);
-        return Ok(json!({"models":models,"complete":true,"account":{"status":"unverified"}}));
+        return Ok(json!({"models":models,"complete":complete,"account":{"status":"unverified"}}));
     }
     Err("Pi metadata reply limit exceeded".into())
 }

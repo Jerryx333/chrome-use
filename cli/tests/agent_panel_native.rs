@@ -1606,6 +1606,23 @@ fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
     assert!(resume.get("error").is_none());
     send_message(&mut host, "fail");
     conversation_poll(&mut host, &rx, &id, "failed");
+    let resume = panel_reply(
+        &mut host,
+        &rx,
+        "unpause-after-fail",
+        "conversationResumeQueue",
+        json!({"conversationId":id}),
+    );
+    assert!(resume.get("error").is_none(), "{resume}");
+    send_message(&mut host, "refuse");
+    let refused = conversation_poll(&mut host, &rx, &id, "failed");
+    assert!(
+        refused["conversation"]["lastError"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Model opencode/exo-free is no longer available"),
+        "{refused}"
+    );
     let deleted = panel_reply(
         &mut host,
         &rx,
@@ -1648,6 +1665,7 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
             .env("PI_CODING_AGENT_DIR", registry.path().join("pi-home"))
+            .env("PANEL_FIXTURE_PI_EXTRA_MODELS", "300")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -1673,6 +1691,15 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
         inspected["result"]["inspection"]["models"][0]["id"],
         "synthetic/pi-model"
     );
+    // Pi lists every configured model; the menu keeps 256 and says so.
+    assert_eq!(
+        inspected["result"]["inspection"]["models"]
+            .as_array()
+            .unwrap()
+            .len(),
+        256
+    );
+    assert_eq!(inspected["result"]["inspection"]["complete"], false);
     let replies = |result: &Value| -> String {
         result["journal"]["events"]
             .as_array()

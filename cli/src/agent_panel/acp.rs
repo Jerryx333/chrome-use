@@ -156,7 +156,10 @@ pub(super) async fn protocol(
                         if method == "session/prompt" {
                             active = None; stopping_at = None;
                             for (_, (id, _, _)) in permissions.drain() { emit(events,"requestResolved",json!({"requestId":id})).await?; }
-                            emit(events,"terminal",json!({"status":"failed","error":"OpenCode refused the prompt"})).await?;
+                            let error = &value["error"];
+                            let detail = error["data"]["message"].as_str().or_else(|| error["message"].as_str()).filter(|m| !m.trim().is_empty()).map(|m| m.chars().take(2000).collect::<String>());
+                            let message = match detail { Some(detail) => format!("OpenCode refused the prompt: {detail}"), None => "OpenCode refused the prompt".into() };
+                            emit(events,"terminal",json!({"status":"failed","error":message})).await?;
                             continue;
                         }
                         return Err(format!("OpenCode refused {method}; no successful outcome was assumed"));
