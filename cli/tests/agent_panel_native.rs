@@ -63,7 +63,8 @@ fn panel_reply(
         host,
         json!({"method":"agentPanel","requestId":request_id,"operation":operation,"params":params}),
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    // Generous: a slow CLI model check legitimately takes over 10 s on CI.
+    let deadline = std::time::Instant::now() + Duration::from_secs(40);
     loop {
         let reply = rx
             .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
