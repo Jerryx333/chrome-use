@@ -143,7 +143,7 @@ fn model_id(raw: &Value) -> Result<String, String> {
         || id.len() > 256
         || !id
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._:/()-[]".contains(&b))
+            .all(|b| b.is_ascii_alphanumeric() || b"._:/()-[]~".contains(&b))
         || id.starts_with("sk-")
         || id.starts_with("eyJ")
     {
@@ -238,18 +238,18 @@ async fn pi_catalog(probe: &mut OwnedProbe) -> Result<Value, String> {
             .ok_or("Pi did not return a model array")?;
         // Pi lists every configured model; the menu keeps the first 256 and
         // says the catalog is partial.
-        let complete = entries.len() <= 256;
+        let mut complete = entries.len() <= 256;
         let models = entries
             .iter()
-            .take(256)
-            .map(|entry| {
+            .filter_map(|entry| {
                 let provider = entry["provider"].as_str().unwrap_or("");
                 let raw = entry["id"].as_str().unwrap_or("");
                 let id = model_id(&json!(if provider.is_empty() {
                     raw.to_string()
                 } else {
                     format!("{provider}/{raw}")
-                }))?;
+                }))
+                .ok()?;
                 let label = entry["name"]
                     .as_str()
                     .filter(|s| s.chars().count() <= 128 && !s.chars().any(char::is_control))
@@ -260,9 +260,15 @@ async fn pi_catalog(probe: &mut OwnedProbe) -> Result<Value, String> {
                 } else {
                     vec![]
                 };
-                Ok(json!({"id":id,"label":label,"efforts":efforts,"isDefault":false,"supportsFastMode":false}))
+                Some(json!({"id":id,"label":label,"efforts":efforts,"isDefault":false,"supportsFastMode":false}))
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Vec<_>>();
+        // An entry whose id the panel cannot carry is left out; the menu keeps
+        // the first 256 of the rest and says when the catalog is partial.
+        if models.len() != entries.len() {
+            complete = false;
+        }
+        let models: Vec<_> = models.into_iter().take(256).collect();
         drop(input);
         return Ok(json!({"models":models,"complete":complete,"account":{"status":"unverified"}}));
     }

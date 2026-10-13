@@ -71,6 +71,8 @@ if "--mode" in sys.argv and arg("--mode") == "rpc":
             emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"sessionId": pi_session, "model": {"provider": "synthetic", "id": "pi-model"}}})
         elif kind == "get_available_models":
             extra = [{"provider": "bulk", "id": f"model-{n}", "name": f"Bulk {n}"} for n in range(int(os.environ.get("PANEL_FIXTURE_PI_EXTRA_MODELS", "0")))]
+            if extra:
+                extra[:0] = [{"provider": "openrouter", "id": "~anthropic/claude-opus-latest", "name": "Alias"}, {"provider": "odd", "id": "has space", "name": "Unsupported"}]
             emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"models": [{"provider": "synthetic", "id": "pi-model", "name": "Synthetic Pi", "reasoning": True}] + extra}})
         elif kind == "prompt":
             text = command["message"]

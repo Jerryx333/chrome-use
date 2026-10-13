@@ -1700,6 +1700,10 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
         256
     );
     assert_eq!(inspected["result"]["inspection"]["complete"], false);
+    assert_eq!(
+        inspected["result"]["inspection"]["models"][1]["id"],
+        "openrouter/~anthropic/claude-opus-latest"
+    );
     let replies = |result: &Value| -> String {
         result["journal"]["events"]
             .as_array()
