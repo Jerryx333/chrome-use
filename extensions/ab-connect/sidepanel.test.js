@@ -456,3 +456,19 @@ test('Pi is offered when the host runs it, and without full access it is labelle
   assert.equal(f.nodes.get('accessLabel').textContent, 'CLI permissions');
   f.panel.close();
 });
+
+test('Agents & models never runs more than two CLI probes at once', async () => {
+  const support = {...fullSupport, chatAgents: ['codex', 'claude', 'opencode', 'pi']};
+  let running = 0, peak = 0; const release = [];
+  const f = await fixture({
+    status: () => ({connected:true, agentPanel:support}),
+    discover: () => ({ success: true, result: { agents: ['codex','claude','opencode','pi'].map(id => ({ id, name: id, executable: `/x/${id}` })) } }),
+    agentInspect: params => { running++; peak = Math.max(peak, running); return new Promise(resolve => release.push(() => { running--; resolve({ success: true, result: { inspection: { agentId: params.agentId, versionReported: '1.0.0', account: { status: 'unverified' }, models: [], complete: true } } }); })); },
+  });
+  f.nodes.get('agentsTab').fire('click');
+  for (let i = 0; i < 20 && (release.length || running); i++) { await settle(); release.shift()?.(); await settle(); }
+  assert.ok(peak <= 2, `peak ${peak}`);
+  const lines = f.nodes.get('agentList').children.map(row => row.children[0].children[1].textContent);
+  assert.ok(lines.every(line => line.startsWith('v1.0.0')), lines.join(' | '));
+  f.panel.close();
+});
