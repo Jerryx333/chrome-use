@@ -318,12 +318,33 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     } catch (failure) { if (epoch === modelEpoch) nodes.modelStatus.textContent = 'Model metadata unavailable. No fallback list was substituted; you can still enter a model ID.'; throw failure; }
     finally { if (epoch === modelEpoch) nodes.inspectAgent.disabled = false; }
   }
+  let discoverEpoch = 0;
+  const accountLabels = { reportedSignedIn: 'Signed in', reportedSignedOut: 'Signed out', reportedMetadata: 'Account reported', unverified: 'Login unknown' };
+  // One line per agent that answers "can I use this?" from the CLI's own report.
+  // The report is not proof of model access; that is settled by the first turn.
+  async function agentStatus(agent, line, epoch) {
+    if (!agent.executable) { line.textContent = agent.configFiles?.length ? 'Configuration found; program not installed' : 'Not installed'; return; }
+    if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) { line.textContent = 'Installed'; return; }
+    line.textContent = 'Installed · checking…';
+    try {
+      const { inspection } = await api('agentInspect', { agentId: agent.id });
+      if (epoch !== discoverEpoch) return;
+      const account = inspection.account || {};
+      const parts = [inspection.versionReported ? `v${String(inspection.versionReported).replace(/^v/, '')}` : 'Installed', `${accountLabels[account.status] || 'Login unknown'}${account.status === 'reportedSignedIn' && typeof account.kind === 'string' ? ` (${account.kind})` : ''}`];
+      if (inspection.models?.length) parts.push(`${inspection.models.length} models`);
+      line.textContent = parts.join(' · ');
+      line.classList.toggle('signed-out', account.status === 'reportedSignedOut');
+      line.title = 'Reported by the CLI. Model access is confirmed when a conversation runs.';
+    } catch { if (epoch === discoverEpoch) line.textContent = 'Installed · status unavailable'; }
+  }
   async function discover() {
-    const result = await api('discover'); nodes.agentList.replaceChildren();
+    const epoch = ++discoverEpoch;
+    const result = await api('discover'); if (epoch !== discoverEpoch) return; nodes.agentList.replaceChildren();
     for (const agent of result.agents) {
-      const row = element('div', undefined, 'agent-row'), info = element('div', undefined, 'agent-info');
-      info.append(element('div', agent.name, 'agent-name'), element('div', agent.executable ? 'Program found; login not verified' : agent.configFiles?.length ? 'Configuration found; program not found' : 'Not found', 'agent-evidence'));
+      const row = element('div', undefined, 'agent-row'), info = element('div', undefined, 'agent-info'), line = element('div', undefined, 'agent-evidence');
+      info.append(element('div', agent.name, 'agent-name'), line);
       row.append(info, button('Configure', () => loadConfig(agent.id, agent.name))); nodes.agentList.append(row);
+      if (nodes.agentsView.hidden) line.textContent = agent.executable ? 'Installed' : 'Not installed'; else void agentStatus(agent, line, epoch);
     }
   }
   async function loadConfig(agentId, name) {
@@ -383,7 +404,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
   nodes.executable.addEventListener('input', clearModels);
   nodes.discover.addEventListener('click', () => void discover().catch(error));
   nodes.settings.addEventListener('click', () => runtime?.openOptionsPage?.());
-  nodes.chatTab.addEventListener('click', () => view(false)); nodes.agentsTab.addEventListener('click', () => view(true));
+  nodes.chatTab.addEventListener('click', () => view(false)); nodes.agentsTab.addEventListener('click', () => { view(true); if (connected && panelSupport) void discover().catch(error); });
   async function controlConversation(operation) {
     const id = selected, epoch = selectionEpoch; if (!id || !connected) return;
     const result = await api(operation, { conversationId: id });
@@ -413,7 +434,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
       }
       await refresh();
     } catch (failure) { error(failure); }
-  }, refresh, select, send, timeline: () => timeline, close() { closed = true; modelEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
+  }, refresh, select, send, timeline: () => timeline, close() { closed = true; modelEpoch++; discoverEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
 if (typeof document !== 'undefined') {

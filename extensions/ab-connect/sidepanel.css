@@ -113,6 +113,7 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 .agent-info { flex:1; min-width:0; }
 .agent-name { font-weight:600; }
 .agent-evidence { color:var(--muted); font-size:12px; }
+.agent-evidence.signed-out { color:var(--error); }
 .configuration { margin-top:18px; padding-top:10px; border-top:1px solid var(--line); }
 .configuration label { display:block; font-size:12px; color:var(--muted); margin:12px 0; }
 .configuration .path { color:var(--muted); font-size:11px; overflow-wrap:anywhere; margin:6px 0; }
