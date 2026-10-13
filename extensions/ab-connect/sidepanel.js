@@ -5,7 +5,7 @@ const agentNames = { codex: 'Codex', claude: 'Claude Code' };
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
 export function createPanel({ document, runtime, storage, schedule = setTimeout, cancel = clearTimeout }) {
-  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'agent', 'model', 'modelList', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'agent', 'model', 'modelList', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -61,6 +61,10 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     nodes.message.disabled = !writable; nodes.inspectAgent.disabled = !connected || !writable || !panelSupport?.modelInspection;
     nodes.agent.disabled = !writable; nodes.model.disabled = !writable; nodes.executable.disabled = !writable;
     nodes.newOptions.hidden = Boolean(selected);
+    nodes.deleteChat.hidden = !selected || !writable || !panelSupport?.conversationDelete;
+    nodes.deleteChat.disabled = sending || !connected || busyPhases.has(conversation?.phase);
+    if (nodes.deleteChat.hidden) nodes.deleteConfirm.hidden = true;
+    nodes.confirmDelete.disabled = nodes.deleteChat.disabled;
     nodes.phase.textContent = panelSupport?.mode === 'readOnly' ? 'Read-only discovery' : conversation ? phaseLabels[conversation.phase] || 'Unknown response state' : 'Ready';
     nodes.effectiveModel.textContent = conversation?.model || '';
     const busy = busyPhases.has(conversation?.phase);
@@ -89,6 +93,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     drafts.set(selected, nodes.message.value);
     nodes.message.value = drafts.get(id) || '';
     nodes.conversation.value = id;
+    nodes.deleteConfirm.hidden = true;
     selected = id; selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
     timeline = new PanelTimeline(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls();
@@ -319,6 +324,25 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     await send();
   }
   function showAgents() { view(true); }
+  // Deletion is permanent: the native service stops the agent first, then
+  // removes panel history, the CLI's session files and the browser session.
+  async function deleteConversation() {
+    const id = selected; if (!id || sending || !panelSupport?.conversationDelete) return;
+    nodes.confirmDelete.disabled = true;
+    try {
+      const { deleted } = await api('conversationDelete', { conversationId: id });
+      pendingMessages.delete(id); drafts.delete(id); await savePending();
+      conversations = conversations.filter(chat => chat.id !== id);
+      if (selected === id) { drafts.delete(''); select(''); nodes.message.value = ''; }
+      conversationChoices();
+      const problems = [];
+      if (deleted.cliHistory.failed.length) problems.push(`Could not remove: ${deleted.cliHistory.failed.join(', ')}`);
+      if (deleted.cliHistory.error) problems.push(`Agent session files were not removed: ${deleted.cliHistory.error}`);
+      if (!deleted.browserSession.closed) problems.push(`Browser tabs were not closed: ${deleted.browserSession.error || 'unconfirmed'}`);
+      if (problems.length) error(`Conversation deleted. ${problems.join(' ')}`);
+      await list();
+    } finally { nodes.deleteConfirm.hidden = true; controls(); }
+  }
   function view(agents) { nodes.chatView.hidden = agents; nodes.agentsView.hidden = !agents; nodes.chatTab.classList.toggle('selected', !agents); nodes.agentsTab.classList.toggle('selected', agents); nodes.chatTab.setAttribute('aria-pressed', String(!agents)); nodes.agentsTab.setAttribute('aria-pressed', String(agents)); }
   function clearModels() { modelEpoch++; nodes.modelList.replaceChildren(); nodes.modelStatus.textContent = 'CLI model access has not been checked.'; nodes.inspectAgent.disabled = !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection; }
   async function inspectModels() {
@@ -416,6 +440,9 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
   nodes.conversation.addEventListener('change', () => select(nodes.conversation.value));
   nodes.newChat.addEventListener('click', () => { nodes.conversation.value = ''; select(''); });
   nodes.refresh.addEventListener('click', () => void refresh().catch(error));
+  nodes.deleteChat.addEventListener('click', () => { nodes.deleteConfirm.hidden = false; });
+  nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
+  nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
   nodes.inspectAgent.addEventListener('click', () => void inspectModels().catch(error));
   nodes.agent.addEventListener('change', () => { clearModels(); nodes.model.value = ''; });
   nodes.executable.addEventListener('input', clearModels);

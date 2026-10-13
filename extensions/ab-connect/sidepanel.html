@@ -13,11 +13,17 @@
       <label class="sr-only" for="conversation">Conversation</label>
       <select id="conversation" class="conversation-picker"><option value="">New conversation</option></select>
       <button id="newChat" class="icon" type="button" title="New conversation" aria-label="New conversation">＋</button>
+      <button id="deleteChat" class="icon" type="button" title="Delete conversation" aria-label="Delete conversation" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>
       <button id="refresh" class="icon" type="button" title="Refresh" aria-label="Refresh">↻</button>
       <button id="agentsTab" class="icon" type="button" title="Agents &amp; models" aria-label="Agents and models" aria-pressed="false">⚙</button>
     </header>
     <p id="connection" class="connection" role="status">Checking local connection…</p>
     <div id="notice" class="notice" role="alert" hidden></div>
+    <section id="deleteConfirm" class="delete-confirm" role="alertdialog" aria-label="Delete conversation" hidden>
+      <p><strong>Delete this conversation?</strong></p>
+      <p class="hint">Removes its panel history, the agent CLI's own session files and its browser tabs from this computer. This cannot be undone.</p>
+      <div class="actions"><button id="confirmDelete" class="danger" type="button">Delete</button><button id="cancelDelete" class="quiet" type="button">Keep</button></div>
+    </section>
     <div id="status" class="conversation-status"><span id="phase">Ready</span><span id="effectiveModel"></span></div>
     <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript">
       <div id="empty" class="empty">

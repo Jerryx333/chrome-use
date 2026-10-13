@@ -365,6 +365,29 @@ impl Store {
         private_tree(&folder)?;
         self.save(chat)
     }
+    /// Remove one conversation's index entry, then its own folder. The index is
+    /// written first, so an interrupted delete leaves an unlisted folder rather
+    /// than a listed conversation without history. Only `<store>/<uuid>` is
+    /// ever removed.
+    pub(super) fn delete(&mut self, id: &str) -> Result<(), String> {
+        let folder = self.folder(id)?;
+        if self.index.remove(id).is_none() {
+            return Err("Conversation was not found in this profile".into());
+        }
+        atomic_write(
+            &self.directory.join("index.json"),
+            &serde_json::to_vec(&self.index).map_err(|_| "Cannot encode conversation index")?,
+            None,
+        )?;
+        if let Ok(mut cursors) = self.cursors.lock() {
+            cursors.remove(id);
+        }
+        match fs::remove_dir_all(&folder) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("The conversation was removed from the list, but its local folder could not be deleted".into()),
+        }
+    }
     pub(super) fn load(&mut self, id: &str) -> Result<Conversation, String> {
         if !self.index.contains_key(id) {
             return Err("Conversation was not found in this profile".into());
