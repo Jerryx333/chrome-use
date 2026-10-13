@@ -1284,3 +1284,104 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
     let sibling = conversation_poll(&mut host, &rx, &ids[1], "idle");
     assert!(sibling["journal"]["events"].as_array().unwrap().len() > 2);
 }
+
+#[test]
+#[cfg(unix)]
+fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request() {
+    let registry = tempfile::tempdir().unwrap();
+    let profile = "native-full-access-fixture";
+    let mut cleanup = ServiceFixture {
+        root: registry.path().into(),
+        profile: profile.into(),
+        chats: vec![],
+    };
+    let mut host = Host(
+        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+            .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
+            .env("CHROME_USE_RELAY_DIR", registry.path())
+            .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let rx = frames(&mut host);
+    send(
+        &mut host,
+        json!({"method":"hello","version":"fixture","profileId":profile}),
+    );
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let turn = |host: &mut Host, id: &str, text: &str, phase: &str| -> Value {
+        let sent = panel_reply(
+            host,
+            &rx,
+            "send",
+            "conversationSend",
+            json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":text}),
+        );
+        assert!(
+            sent.get("error").is_none(),
+            "send failed: {}",
+            sent["error"]
+        );
+        conversation_poll(host, &rx, id, phase)
+    };
+    let replies = |result: &Value| -> String {
+        result["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "textDelta" || e["kind"] == "textFinal")
+            .map(|e| e["data"]["text"].as_str().unwrap_or(""))
+            .collect()
+    };
+    let created = panel_reply(
+        &mut host,
+        &rx,
+        "create-full",
+        "conversationCreate",
+        json!({"agentId":"codex","executable":fixture,"fullAccess":true}),
+    );
+    assert_eq!(created["result"]["conversation"]["fullAccess"], true);
+    let full = created["result"]["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    cleanup.chats.push(full.clone());
+    let done = turn(&mut host, &full, "approval", "idle");
+    assert!(replies(&done).contains("synthetic approval handled"));
+    let done = turn(&mut host, &full, "policy", "idle");
+    assert!(replies(&done).contains("policy: never/danger-full-access"));
+
+    let created = panel_reply(
+        &mut host,
+        &rx,
+        "create-ask",
+        "conversationCreate",
+        json!({"agentId":"codex","executable":fixture}),
+    );
+    assert_eq!(created["result"]["conversation"]["fullAccess"], false);
+    let ask = created["result"]["conversation"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    cleanup.chats.push(ask.clone());
+    let done = turn(&mut host, &ask, "policy", "idle");
+    assert!(replies(&done).contains("policy: on-request/read-only"));
+    turn(&mut host, &ask, "approval", "waitingInput");
+    let switched = panel_reply(
+        &mut host,
+        &rx,
+        "set-access",
+        "conversationSetAccess",
+        json!({"conversationId":ask,"fullAccess":true}),
+    );
+    assert_eq!(switched["result"]["conversation"]["fullAccess"], true);
+    let done = conversation_poll(&mut host, &rx, &ask, "idle");
+    assert!(replies(&done).contains("synthetic approval handled"));
+    // The next turn restarts the idle agent with full-access flags.
+    let done = turn(&mut host, &ask, "policy", "idle");
+    assert!(replies(&done).ends_with("policy: never/danger-full-access"));
+}

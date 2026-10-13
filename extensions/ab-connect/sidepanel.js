@@ -5,12 +5,12 @@ const agentNames = { codex: 'Codex', claude: 'Claude Code' };
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
 export function createPanel({ document, runtime, storage, schedule = setTimeout, cancel = clearTimeout }) {
-  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'agent', 'model', 'modelList', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'modelList', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
   const pendingMessages = new Map(), drafts = new Map();
-  let modelEpoch = 0;
+  let modelEpoch = 0, newFullAccess = true;
   let sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
   const rendered = new Map(), requestNodes = new Map(), queuedNodes = new Map();
 
@@ -60,7 +60,13 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     nodes.conversation.disabled = sending || !writable; nodes.newChat.disabled = sending || !writable;
     nodes.message.disabled = !writable; nodes.inspectAgent.disabled = !connected || !writable || !panelSupport?.modelInspection;
     nodes.agent.disabled = !writable; nodes.model.disabled = !writable; nodes.executable.disabled = !writable;
-    nodes.newOptions.hidden = Boolean(selected);
+    nodes.newOptions.hidden = Boolean(selected); nodes.modelChip.hidden = Boolean(selected);
+    const full = selected ? conversation?.fullAccess === true : newFullAccess;
+    nodes.access.hidden = !writable || !panelSupport?.fullAccess;
+    nodes.access.disabled = !connected || sending || (Boolean(selected) && !conversation);
+    nodes.accessLabel.textContent = full ? 'Full access' : 'Ask first';
+    nodes.access.setAttribute('aria-pressed', String(full));
+    nodes.access.title = full ? 'Runs browser tools, commands and file changes without asking. Click to ask first.' : 'Asks before each tool, command or file change. Click for full access.';
     nodes.deleteChat.hidden = !selected || !writable || !panelSupport?.conversationDelete;
     nodes.deleteChat.disabled = sending || !connected || busyPhases.has(conversation?.phase);
     if (nodes.deleteChat.hidden) nodes.deleteConfirm.hidden = true;
@@ -199,6 +205,8 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
       container.append(element('p', params.reason || 'Review the requested access for this turn.')); container.append(element('pre', JSON.stringify(params.permissions || {}, null, 2)));
       actions.append(button('Allow for this turn', () => respond(key, { permissions: params.permissions || {}, scope: 'turn' }), 'primary'));
     } else { container.append(element('p', 'This request needs a response format this view cannot present. Stop the response and inspect the CLI request.')); }
+    const question = method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion';
+    if (!question && !params.truncated && panelSupport?.fullAccess && actions.querySelectorAll('button').length) actions.append(button('Allow all in this conversation', () => setAccess(true)));
     container.append(actions, status); return { container, status };
   }
   function renderRequests() {
@@ -307,6 +315,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
         const options = { agentId: nodes.agent.value };
         if (nodes.model.value.trim()) options.model = nodes.model.value.trim();
         if (nodes.executable.value.trim()) options.executable = nodes.executable.value.trim();
+        if (panelSupport?.fullAccess) options.fullAccess = newFullAccess;
         const result = await api('conversationCreate', options); conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
       }
       const id = selected, pending = { id: crypto.randomUUID(), text, direct }; pendingMessages.set(id, pending); controls();
@@ -324,6 +333,14 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     await send();
   }
   function showAgents() { view(true); }
+  // New conversations use the remembered choice; an existing one switches in
+  // place, and the service answers requests that are already waiting.
+  async function setAccess(full) {
+    if (!selected) { newFullAccess = full; storage?.local?.set({ ab_panel_full_access: full }).catch(() => {}); controls(); return; }
+    const id = selected, epoch = selectionEpoch;
+    const result = await api('conversationSetAccess', { conversationId: id, fullAccess: full });
+    if (selected === id && epoch === selectionEpoch) { conversation = result.conversation; controls(); await poll(); }
+  }
   // Deletion is permanent: the native service stops the agent first, then
   // removes panel history, the CLI's session files and the browser session.
   async function deleteConversation() {
@@ -440,6 +457,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
   nodes.conversation.addEventListener('change', () => select(nodes.conversation.value));
   nodes.newChat.addEventListener('click', () => { nodes.conversation.value = ''; select(''); });
   nodes.refresh.addEventListener('click', () => void refresh().catch(error));
+  nodes.access.addEventListener('click', () => void setAccess(!(selected ? conversation?.fullAccess === true : newFullAccess)).catch(error));
   nodes.deleteChat.addEventListener('click', () => { nodes.deleteConfirm.hidden = false; });
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
   nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
@@ -471,8 +489,9 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
   controls();
   return { async start() {
     try {
-      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending']);
+      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access']);
       selected = saved?.ab_panel_conversation || '';
+      if (saved?.ab_panel_full_access === false) newFullAccess = false;
       for (const [id, messageId] of Object.entries(saved?.ab_panel_pending || {}).slice(0, 64)) {
         if (typeof messageId === 'string' && messageId.length <= 80) pendingMessages.set(id, { id: messageId });
       }

@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.193
+## 1.5.194
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.41 for the access control. Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Full access mode.** A panel conversation can run without permission prompts. Codex starts with `approvalPolicy=never` and the full-access sandbox; Claude Code starts with `bypassPermissions` and its full tool set. Any approval request that still arrives is answered as "Allow once"; questions still go to the user. New conversations default to full access and remember the last choice. An existing conversation can switch in place, and the approval card's "Allow all in this conversation" releases requests that are already waiting. The next turn restarts the agent with matching flags.
+- **Composer layout.** Agent, the access toggle and the model now sit in the input box's bottom row, following the Codex and Claude apps.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.193
+
 Requires extension ab-connect 0.5.40 for the delete control. Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -12,7 +26,6 @@ Requires extension ab-connect 0.5.40 for the delete control. Chrome Web Store pu
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.192
 
