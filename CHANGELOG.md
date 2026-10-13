@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.196
+## 1.5.197
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.44 for the new agents in the panel menu. Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **OpenCode in the panel.** Conversations run over OpenCode's Agent Client Protocol (`opencode acp`): streamed replies, tool rows, stop, queue, resume without replaying history, and its permission requests shown as cards. Full access allows those requests automatically. Without it the toggle reads "CLI permissions": OpenCode applies its own rules and may run tools without asking. Deleting a conversation calls OpenCode's own `session/delete`. The model menu comes from OpenCode's session options. Other MCP servers in the user's OpenCode configuration stay enabled (#590).
+- **Pi in the panel.** Conversations run over Pi's RPC mode, with the conversation id as Pi's session id and its session file kept in the conversation folder, so resume is exact and deletion removes it. Pi never asks before a tool runs, so without full access it gets only the browser tools ("Browser only"); with full access it keeps all its tools. The user's other Pi MCP servers are turned off for panel conversations, and Pi extension dialogs are cancelled rather than left blocking a turn.
+- **Host-reported agents.** The panel lists the agents the installed CLI can run; older CLIs keep Codex and Claude Code.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.196
+
 Requires extension ab-connect 0.5.43 for the page chip. Chrome Web Store publication follows Google review.
 
 ### Improvements
@@ -14,7 +29,6 @@ Requires extension ab-connect 0.5.43 for the page chip. Chrome Web Store publica
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.195
 
