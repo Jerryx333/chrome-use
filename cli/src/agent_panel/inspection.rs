@@ -1,5 +1,6 @@
 //! Explicit, bounded CLI metadata probes. Discovery itself never runs a CLI.
-//! The panel sends no prompt/thread/tool request and opens no credential files.
+//! The panel sends no prompts or tools and opens no credential files. ACP
+//! metadata uses a transient session that is deleted before reporting success.
 //! Authentication lookup remains inside the selected CLI.
 
 use super::{config_transaction::private_tree, DiscoveryContext};
@@ -33,12 +34,16 @@ impl Drop for Scratch {
     }
 }
 
-struct OwnedProbe {
-    child: Child,
+pub(super) struct OwnedProbe {
+    pub(super) child: Child,
     pid: u32,
 }
 impl OwnedProbe {
-    fn spawn(executable: &Path, args: &[&str], workspace: &Path) -> Result<Self, String> {
+    pub(super) fn spawn(
+        executable: &Path,
+        args: &[&str],
+        workspace: &Path,
+    ) -> Result<Self, String> {
         let mut command = Command::new(executable);
         command
             .args(args)
@@ -64,7 +69,7 @@ impl OwnedProbe {
         let pid = child.id().ok_or("CLI probe has no process identity")?;
         Ok(Self { child, pid })
     }
-    async fn finish(&mut self) -> Result<std::process::ExitStatus, String> {
+    pub(super) async fn finish(&mut self) -> Result<std::process::ExitStatus, String> {
         if self
             .child
             .try_wait()
@@ -117,6 +122,7 @@ impl Drop for OwnedProbe {
 
 fn version(raw: &str) -> Option<String> {
     let text = raw.trim();
+    let text = text.strip_prefix("opencode v").unwrap_or(text);
     let text = text.strip_prefix("codex-cli ").unwrap_or(text);
     let text = text.strip_suffix(" (Claude Code)").unwrap_or(text);
     if text.len() > 64
@@ -302,6 +308,79 @@ async fn protocol(probe: &mut OwnedProbe, codex: bool) -> Result<Value, String> 
     Err("Codex metadata reply limit exceeded".into())
 }
 
+async fn opencode_catalog(probe: &mut OwnedProbe, workspace: &Path) -> Result<Vec<Value>, String> {
+    let mut input = probe
+        .child
+        .stdin
+        .take()
+        .ok_or("OpenCode metadata input unavailable")?;
+    let mut reader = BufReader::new(
+        probe
+            .child
+            .stdout
+            .take()
+            .ok_or("OpenCode metadata output unavailable")?,
+    );
+    let mut total = 0;
+    async fn reply(
+        reader: &mut BufReader<tokio::process::ChildStdout>,
+        total: &mut usize,
+        id: u64,
+    ) -> Result<Value, String> {
+        for _ in 0..128 {
+            let value = read(reader, total).await?;
+            if value["id"] == id && value.get("method").is_none() {
+                if value.get("error").is_some() || !value["result"].is_object() {
+                    return Err("OpenCode refused metadata inspection".into());
+                }
+                return Ok(value["result"].clone());
+            }
+        }
+        Err("OpenCode metadata reply limit exceeded".into())
+    }
+    write(&mut input,json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}})).await?;
+    let capabilities = reply(&mut reader, &mut total, 1).await?;
+    if capabilities["protocolVersion"] != 1
+        || !capabilities["agentCapabilities"]["sessionCapabilities"]
+            .get("delete")
+            .is_some_and(Value::is_object)
+    {
+        return Err("OpenCode metadata requires ACP v1 and session deletion support".into());
+    }
+    write(&mut input,json!({"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":workspace,"mcpServers":[]}})).await?;
+    let result = reply(&mut reader, &mut total, 2).await?;
+    let session = result["sessionId"]
+        .as_str()
+        .ok_or("OpenCode metadata session has no identity")?;
+    // Delete even when the returned catalog is malformed. No prompts or tools
+    // are sent, and the transient inspection session must not become history.
+    write(
+        &mut input,
+        json!({"jsonrpc":"2.0","id":3,"method":"session/delete","params":{"sessionId":session}}),
+    )
+    .await?;
+    reply(&mut reader, &mut total, 3).await?;
+    let option = result["configOptions"]
+        .as_array()
+        .and_then(|options| {
+            options
+                .iter()
+                .find(|o| o["id"] == "model" && o["type"] == "select")
+        })
+        .ok_or("OpenCode has no selectable model catalog")?;
+    let entries = option["options"]
+        .as_array()
+        .ok_or("OpenCode model options are not an array")?;
+    if entries.is_empty() || entries.len() > 256 {
+        return Err("OpenCode returned an empty or oversized catalog".into());
+    }
+    entries.iter().map(|entry| {
+        let id = model_id(&entry["value"])?;
+        let label = entry["name"].as_str().filter(|s| s.chars().count() <= 128 && !s.chars().any(char::is_control)).unwrap_or(&id);
+        Ok(json!({"id":id,"label":label,"efforts":[],"isDefault":entry["value"] == option["currentValue"]}))
+    }).collect()
+}
+
 pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String> {
     #[cfg(not(unix))]
     {
@@ -317,7 +396,7 @@ pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String
             .map_err(|_| "Two CLI inspections are already running")?;
         let request: Inspect = serde_json::from_value(params.clone())
             .map_err(|_| "Inspection requires agentId and optional executable")?;
-        if !["codex", "claude"].contains(&request.agent_id.as_str()) {
+        if !["codex", "claude", "opencode"].contains(&request.agent_id.as_str()) {
             return Err("This agent has no metadata protocol adapter yet".into());
         }
         let context = DiscoveryContext::current()?;
@@ -340,6 +419,13 @@ pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String
             let version_result=tokio::time::timeout(Duration::from_secs(2),async {let mut bytes=Vec::new();(&mut output).take(1025).read_to_end(&mut bytes).await.ok()?;version(std::str::from_utf8(&bytes).ok()?)}).await.ok().flatten();
             let version_exit=probe.finish().await?;
             let version_result=if version_exit.success() {version_result} else {None};
+            if request.agent_id == "opencode" {
+                let mut probe = OwnedProbe::spawn(&executable, &["acp"], &workspace)?;
+                let catalog = tokio::time::timeout(Duration::from_secs(15), opencode_catalog(&mut probe, &workspace)).await.map_err(|_| "OpenCode model inspection timed out");
+                probe.finish().await?;
+                let catalog = catalog??;
+                return Ok(json!({"schemaVersion":1,"inspection":{"agentId":request.agent_id,"executable":executable,"versionReported":version_result,"source":"cliProtocol","observedAt":super::conversation::now(),"models":catalog,"complete":true,"account":{"status":"unverified"},"modelAccessVerified":false,"processExitConfirmed":true}}));
+            }
             let codex=request.agent_id=="codex";
             let args=if codex {vec!["app-server","--listen","stdio://"]} else {vec!["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--tools","","--no-session-persistence","--setting-sources","user","--settings","{\"disableAllHooks\":true}"]};
             let mut probe=OwnedProbe::spawn(&executable,&args,&workspace)?;

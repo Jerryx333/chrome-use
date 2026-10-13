@@ -32,7 +32,10 @@ pub(super) struct Notice {
     pub data: Value,
 }
 
-async fn write(stdin: &mut tokio::process::ChildStdin, value: Value) -> Result<(), String> {
+pub(super) async fn write(
+    stdin: &mut tokio::process::ChildStdin,
+    value: Value,
+) -> Result<(), String> {
     let mut bytes = serde_json::to_vec(&value).map_err(|_| "Cannot encode backend request")?;
     bytes.push(b'\n');
     stdin
@@ -40,10 +43,10 @@ async fn write(stdin: &mut tokio::process::ChildStdin, value: Value) -> Result<(
         .await
         .map_err(|_| "The backend closed its input; turn outcome is unconfirmed".into())
 }
-fn notice(kind: &'static str, data: Value) -> Notice {
+pub(super) fn notice(kind: &'static str, data: Value) -> Notice {
     Notice { kind, data }
 }
-fn short(value: &Value) -> Value {
+pub(super) fn short(value: &Value) -> Value {
     let raw = value.to_string();
     if raw.len() > 24000 {
         json!({"preview":raw.chars().take(6000).collect::<String>(),"truncated":true})
@@ -114,46 +117,56 @@ async fn drive(
     if let Some(path) = super::agent_search_path() {
         command.env("PATH", path);
     }
-    if setup.agent_id == "codex" {
-        command.args(["app-server", "--listen", "stdio://"]);
-    } else {
-        command
-            .args([
-                "-p",
-                "--input-format",
-                "stream-json",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--include-partial-messages",
-                "--strict-mcp-config",
-                "--mcp-config",
-            ])
-            .arg(&mcp_path)
-            .args([
-                "--append-system-prompt",
-                prompt,
-                "--permission-mode",
-                if setup.full_access {
-                    "bypassPermissions"
-                } else {
-                    "default"
-                },
-                "--permission-prompts",
-                "host",
-                "--permission-prompt-tool",
-                "stdio",
-            ]);
-        // Without full access only the question tool is available besides MCP.
-        if !setup.full_access {
-            command.args(["--tools", "AskUserQuestion"]);
+    match setup.agent_id.as_str() {
+        "codex" => {
+            command.args(["app-server", "--listen", "stdio://"]);
         }
-        if let Some(session) = &setup.backend_session {
-            command.arg("--resume").arg(session);
+        "opencode" => {
+            // OpenCode 2.0.25 acp rejects --standalone, but its handler
+            // unconditionally starts a private server with an stdin lease.
+            command.args(["acp"]);
         }
-        if let Some(model) = &setup.model {
-            command.arg("--model").arg(model);
+        "claude" => {
+            command
+                .args([
+                    "-p",
+                    "--input-format",
+                    "stream-json",
+                    "--output-format",
+                    "stream-json",
+                    "--verbose",
+                    "--include-partial-messages",
+                    "--strict-mcp-config",
+                    "--mcp-config",
+                ])
+                .arg(&mcp_path)
+                .args([
+                    "--append-system-prompt",
+                    prompt,
+                    "--permission-mode",
+                    if setup.full_access {
+                        "bypassPermissions"
+                    } else {
+                        "default"
+                    },
+                    "--permission-prompts",
+                    "host",
+                    "--permission-prompt-tool",
+                    "stdio",
+                ]);
+            // Without full access only the question tool is available besides MCP.
+            if !setup.full_access {
+                command.args(["--tools", "AskUserQuestion"]);
+            }
+            if let Some(session) = &setup.backend_session {
+                command.arg("--resume").arg(session);
+            }
+            if let Some(model) = &setup.model {
+                command.arg("--model").arg(model);
+            }
         }
+        // Future adapters (including Pi) must declare their own launch protocol.
+        _ => return Err("This agent has no conversational adapter yet".into()),
     }
     #[cfg(unix)]
     {
@@ -172,19 +185,37 @@ async fn drive(
     let pid = child.id().ok_or("Backend process has no identity")?;
     let mut stdin = child.stdin.take().ok_or("Backend input is unavailable")?;
     let mut reader = BufReader::new(child.stdout.take().ok_or("Backend output is unavailable")?);
-    let result = protocol(
-        setup,
-        commands,
-        events,
-        &mut stdin,
-        &mut reader,
-        ProtocolContext {
-            pid,
-            prompt,
-            browser_env,
-        },
-    )
-    .await;
+    let result = match setup.agent_id.as_str() {
+        "opencode" => {
+            super::acp::protocol(
+                setup,
+                commands,
+                events,
+                &mut stdin,
+                &mut reader,
+                pid,
+                browser_env,
+                prompt,
+            )
+            .await
+        }
+        "codex" | "claude" => {
+            protocol(
+                setup,
+                commands,
+                events,
+                &mut stdin,
+                &mut reader,
+                ProtocolContext {
+                    pid,
+                    prompt,
+                    browser_env,
+                },
+            )
+            .await
+        }
+        _ => Err("This agent has no conversational adapter yet".into()),
+    };
     // Kill only the still-live owned process group, before reaping its PID.
     if child
         .try_wait()
@@ -382,7 +413,7 @@ async fn send_turn(
         write(stdin,json!({"type":"user","uuid":message.id,"session_id":session.as_deref().unwrap_or(""),"message":{"role":"user","content":message.text},"parent_tool_use_id":null})).await
     }
 }
-async fn emit_text(
+pub(super) async fn emit_text(
     events: &mpsc::Sender<Notice>,
     kind: &'static str,
     item: &str,

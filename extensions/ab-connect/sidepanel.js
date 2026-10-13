@@ -1,7 +1,7 @@
 import { PanelTimeline, phaseLabels } from './panel-state.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
-const agentNames = { codex: 'Codex', claude: 'Claude Code' };
+const agentNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode' };
 const chatAgents = new Set(Object.keys(agentNames));
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
@@ -44,6 +44,11 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.connection.textContent = connected ? 'Local bridge connected' : state?.connectionState === 'connecting' ? 'Waiting for local bridge…' : state?.connectionError || 'Local bridge unavailable. Run chrome-use extension install, then refresh.';
     if (connected && !panelSupport) nodes.connection.textContent = 'Bridge connected. Update the chrome-use CLI, then refresh to enable the agent panel.';
     if (connected && panelSupport?.mode === 'readOnly') nodes.connection.textContent = 'Connected. This Windows panel is read-only; browser CLI automation remains available.';
+    const previousAgent = nodes.agent.value;
+    const supported = panelSupport?.chatAgents || ['codex', 'claude'];
+    nodes.agent.replaceChildren(...supported.filter(id => chatAgents.has(id)).map(id => { const option = element('option', agentNames[id]); option.value = id; return option; }));
+    nodes.agent.value = supported.includes(previousAgent) ? previousAgent : supported[0] || '';
+    if (nodes.agent.value !== previousAgent) clearModels();
     controls();
   }
   async function connectionStatus() {
@@ -65,9 +70,10 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     const full = selected ? conversation?.fullAccess === true : newFullAccess;
     nodes.access.hidden = !writable || !panelSupport?.fullAccess;
     nodes.access.disabled = !connected || sending || (Boolean(selected) && !conversation);
-    nodes.accessLabel.textContent = full ? 'Full access' : 'Ask first';
+    const cliPermissions = (conversation?.agentId || nodes.agent.value) === 'opencode';
+    nodes.accessLabel.textContent = full ? 'Full access' : cliPermissions ? 'CLI permissions' : 'Ask first';
     nodes.access.setAttribute('aria-pressed', String(full));
-    nodes.access.title = full ? 'Runs browser tools, commands and file changes without asking. Click to ask first.' : 'Asks before each tool, command or file change. Click for full access.';
+    nodes.access.title = full ? 'Automatically allows permission requests in this conversation. Click to use CLI permissions.' : cliPermissions ? 'OpenCode uses its own permission rules and may allow tools without asking. Requests it does send appear here. Click to automatically allow those requests.' : 'Asks before each tool, command or file change. Click for full access.';
     nodes.deleteChat.hidden = !selected || !writable || !panelSupport?.conversationDelete;
     nodes.deleteChat.disabled = sending || !connected || busyPhases.has(conversation?.phase);
     if (nodes.deleteChat.hidden) nodes.deleteConfirm.hidden = true;
@@ -200,6 +206,11 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         actions.append(button('Allow once', () => respond(key, {action:'accept',content:{}}), 'primary'));
       } else container.append(element('p', 'This form cannot be safely completed here. Decline or cancel this request.'));
       actions.append(button('Decline', () => respond(key, {action:'decline',content:null})), button('Cancel request', () => respond(key, {action:'cancel',content:null})));
+    } else if (method === 'session/request_permission') {
+      container.append(element('p', params.toolCall?.title || 'OpenCode tool request'));
+      container.append(element('pre', JSON.stringify(params.toolCall?.rawInput || {}, null, 2)));
+      for (const option of params.options || []) actions.append(button(option.name || option.optionId, () => respond(key, { outcome: { outcome: 'selected', optionId: option.optionId } }), option.kind === 'allow_once' ? 'primary' : 'quiet'));
+      actions.append(button('Cancel request', () => respond(key, { outcome: { outcome: 'cancelled' } })));
     } else if (method === 'can_use_tool') {
       container.append(element('p', params.tool_name || 'Tool request')); container.append(element('pre', JSON.stringify(params.input || {}, null, 2)));
       actions.append(button('Allow once', () => respond(key, { behavior: 'allow', updatedInput: params.input || {} }), 'primary'), button('Decline', () => respond(key, { behavior: 'deny', message: 'User declined' })));
@@ -433,7 +444,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   // The report is not proof of model access; that is settled by the first turn.
   async function agentStatus(agent, line, epoch) {
     if (!agent.executable) { line.textContent = agent.configFiles?.length ? 'Configuration found; program not installed' : 'Not installed'; return; }
-    if (!chatAgents.has(agent.id)) { line.textContent = 'Installed · chat not supported in the panel yet'; return; }
+    if (!(panelSupport?.chatAgents || ['codex', 'claude']).includes(agent.id)) { line.textContent = 'Installed · chat not supported in the panel yet'; return; }
     if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) { line.textContent = 'Installed'; return; }
     line.textContent = 'Installed · checking…';
     try {
@@ -517,7 +528,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
   nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
   nodes.inspectAgent.addEventListener('click', () => void inspectModels(true).catch(error));
-  nodes.agent.addEventListener('change', () => { clearModels(); loadModels(); });
+  nodes.agent.addEventListener('change', () => { clearModels(); loadModels(); controls(); });
   nodes.executable.addEventListener('change', () => { clearModels(); loadModels(); });
   nodes.discover.addEventListener('click', () => void discover().catch(error));
   nodes.settings.addEventListener('click', () => runtime?.openOptionsPage?.());

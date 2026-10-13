@@ -11,6 +11,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod acp;
 mod backend;
 mod config_edit;
 mod config_transaction;
@@ -171,6 +172,9 @@ struct AgentInstallation {
 /// honored). Matching the id rather than a working directory keeps every other
 /// session out of reach. Symlinks are reported as links, never followed.
 pub(super) fn cli_session_files(agent_id: &str, session_id: &str) -> Result<Vec<PathBuf>, String> {
+    if !["codex", "claude"].contains(&agent_id) {
+        return Ok(vec![]);
+    }
     uuid::Uuid::parse_str(session_id).map_err(|_| "The agent session id is not a UUID")?;
     let spec = AGENTS
         .iter()
@@ -488,7 +492,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix)})
+    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix),"chatAgents":["codex","claude","opencode"]})
 }
 
 fn operation_allowed(operation: &str, read_only: bool) -> bool {

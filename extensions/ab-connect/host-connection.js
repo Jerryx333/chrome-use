@@ -26,8 +26,9 @@ export class HostConnectionState {
     const conversationDelete = reported?.conversationDelete === true
     const fullAccess = reported?.fullAccess === true
     const pageContext = reported?.pageContext === true
-    const changed = !this.confirmed || (valid && (reported.mode !== this.agentPanel?.mode || reported.modelInspection !== this.agentPanel?.modelInspection || conversationDelete !== this.agentPanel?.conversationDelete || fullAccess !== this.agentPanel?.fullAccess || pageContext !== this.agentPanel?.pageContext))
-    if (valid) this.agentPanel = {schemaVersion:1,mode:reported.mode,modelInspection:reported.modelInspection,conversationDelete,fullAccess,pageContext}
+    const chatAgents = Array.isArray(reported?.chatAgents) && reported.chatAgents.every(id => typeof id === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(id)) ? [...new Set(reported.chatAgents)] : ['codex', 'claude']
+    const changed = !this.confirmed || (valid && (reported.mode !== this.agentPanel?.mode || reported.modelInspection !== this.agentPanel?.modelInspection || conversationDelete !== this.agentPanel?.conversationDelete || fullAccess !== this.agentPanel?.fullAccess || pageContext !== this.agentPanel?.pageContext || JSON.stringify(chatAgents) !== JSON.stringify(this.agentPanel?.chatAgents)))
+    if (valid) this.agentPanel = {schemaVersion:1,mode:reported.mode,modelInspection:reported.modelInspection,conversationDelete,fullAccess,pageContext,chatAgents}
     this.confirmed = true
     this.error = null
     return changed
