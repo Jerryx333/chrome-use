@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.190
+## 1.5.191
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.39 for the panel changes. Chrome Web Store publication follows Google review; CLI browser automation remains compatible with 0.5.35.
+
+### Improvements
+
+- **Simpler agent side panel.** The header is one row: a conversation picker plus new, refresh and settings buttons. The connection line appears only when something is wrong. Agent and model are compact chips above a single composer, with the rest behind a menu. Stop appears only while a response runs. Your messages show as bubbles and tool calls as one-line rows that expand for details (#576).
+- **Readable agent errors.** Raw API error JSON from the agent CLI is shown as its message, with the original text kept under Details. When a turn fails on an explicitly chosen model, a "Retry with default model" button starts a new conversation for the same agent on the CLI default and resends the last prompt (#576, #577).
+- **Agent status at a glance.** Agents & models shows each installed agent's reported version, login state and model count on one line. The check runs only when that view opens (#576).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.190
+
 Requires extension ab-connect 0.5.38 for the shared-window fixes. Chrome Web Store publication follows Google review; CLI browser automation remains compatible with 0.5.35.
 
 ### Bug Fixes
@@ -14,7 +29,6 @@ Requires extension ab-connect 0.5.38 for the shared-window fixes. Chrome Web Sto
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.189
 
