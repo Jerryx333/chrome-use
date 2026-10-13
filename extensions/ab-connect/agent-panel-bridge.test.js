@@ -215,3 +215,12 @@ test('delete replies must name the requested conversation and report what was re
     if (valid) assert.equal((await pending).deleted.id,'chat'); else await assert.rejects(pending,/Malformed/);
   }
 });
+
+test('slow operations wait longer than the native host does before giving up', () => {
+  const delays = {};
+  const bridge = new AgentPanelBridge({ send() {}, schedule: (callback, delay) => { delays[Object.keys(delays).length] = delay; return 1; }, cancel() {} });
+  bridge.request('agentInspect', { agentId: 'opencode' }).catch(() => {});
+  bridge.request('conversationDelete', { conversationId: 'c' }).catch(() => {});
+  bridge.request('conversationList').catch(() => {});
+  assert.deepEqual(Object.values(delays), [35000, 50000, 15000]);
+});

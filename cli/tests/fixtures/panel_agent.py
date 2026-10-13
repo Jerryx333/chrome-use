@@ -108,6 +108,8 @@ for line in sys.stdin:
         method = message.get("method")
         params = message.get("params", {})
         if method == "initialize":
+            if os.environ.get("PANEL_FIXTURE_SLOW_ACP"):
+                time.sleep(11)  # a cold OpenCode start, past the old 10 s budget
             assert params["protocolVersion"] == 1
             assert params["clientCapabilities"]["terminal"] is False
             emit({"jsonrpc":"2.0","id":message["id"],"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":True,"sessionCapabilities":{"resume":{},"delete":{}}}}})

@@ -123,15 +123,22 @@ fn endpoint(directory: &Path, profile: &str) -> Result<Endpoint, String> {
     Ok(endpoint)
 }
 
+/// How long one service operation may take. A CLI model check can need a cold
+/// start (OpenCode starts a private server); a delete waits for the agent to
+/// exit and then closes the conversation's browser session.
+fn operation_seconds(operation: &str) -> u64 {
+    match operation {
+        "agentInspect" => 30,
+        "conversationDelete" => 45,
+        _ => 10,
+    }
+}
+
 fn exchange(endpoint: &Endpoint, operation: &str, params: Value) -> Result<Value, String> {
     let mut stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_millis(750))
         .map_err(|_| "Agent service did not answer")?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(if operation == "agentInspect" {
-            12
-        } else {
-            8
-        })))
+        .set_read_timeout(Some(Duration::from_secs(operation_seconds(operation) + 2)))
         .map_err(|_| "Cannot set agent service timeout")?;
     stream
         .set_write_timeout(Some(Duration::from_secs(3)))
@@ -1309,13 +1316,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     tokio::spawn(async move {
                         let Ok(_permit)=permit else{return;};
                         let task=async {
-                            let mut length=[0u8;4];stream.read_exact(&mut length).await.map_err(|_|())?;let length=u32::from_le_bytes(length) as usize;if length>MAX_FRAME {return Err(());}
-                            let mut bytes=vec![0u8;length];stream.read_exact(&mut bytes).await.map_err(|_|())?;let request:Request=serde_json::from_slice(&bytes).map_err(|_|())?;
+                            let read=async {
+                                let mut length=[0u8;4];stream.read_exact(&mut length).await.map_err(|_|())?;let length=u32::from_le_bytes(length) as usize;if length>MAX_FRAME {return Err(());}
+                                let mut bytes=vec![0u8;length];stream.read_exact(&mut bytes).await.map_err(|_|())?;serde_json::from_slice::<Request>(&bytes).map_err(|_|())
+                            };
+                            let request=tokio::time::timeout(Duration::from_secs(10),read).await.map_err(|_|())??;
                             if request.capability!=capability || request.request_id.len()>100 {return Err(());}
-                            let result=dispatch(&engine,&request.operation,&request.params).await;
+                            // A slow operation gets its own budget; a timeout answers with an
+                            // error instead of closing the connection without a reply.
+                            let result=match tokio::time::timeout(Duration::from_secs(operation_seconds(&request.operation)),dispatch(&engine,&request.operation,&request.params)).await {Ok(result)=>result,Err(_)=>Err(format!("{} did not finish in time; its outcome is unconfirmed",request.operation))};
                             let reply=match result {Ok(result)=>json!({"requestId":request.request_id,"result":result}),Err(error)=>json!({"requestId":request.request_id,"error":error})};let bytes=reply.to_string().into_bytes();if bytes.len()>MAX_FRAME{return Err(());}
                             stream.write_all(&(bytes.len() as u32).to_le_bytes()).await.map_err(|_|())?;stream.write_all(&bytes).await.map_err(|_|())?;Ok::<(),()>(())
-                        };let _=tokio::time::timeout(Duration::from_secs(10),task).await;
+                        };let _=task.await;
                     });
                 }
                 _=tokio::time::sleep(Duration::from_millis(100))=>{let e=engine.lock().await;if e.stop && e.jobs.is_empty() && slots.available_permits()==16 {break;}}
