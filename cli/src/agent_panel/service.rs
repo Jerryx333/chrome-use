@@ -4,7 +4,7 @@
 
 use super::backend::{self, Command as BackendCommand, Notice, Setup};
 use super::config_transaction::{atomic_write, private_open, private_tree};
-use super::conversation::{Conversation, Message, Phase, Store};
+use super::conversation::{Conversation, Message, PageContext, Phase, Store};
 use super::DiscoveryContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -562,6 +562,8 @@ struct Send {
     conversation_id: String,
     message_id: String,
     text: String,
+    #[serde(default)]
+    page: Option<PageContext>,
 }
 
 #[derive(Deserialize)]
@@ -701,6 +703,7 @@ async fn dispatch(
                 Message {
                     id: p.replacement_id.clone(),
                     text: p.text.clone(),
+                    page: None,
                 },
             )?;
             e.record(
@@ -762,9 +765,13 @@ async fn dispatch(
             } else {
                 None
             };
+            if let Some(page) = &p.page {
+                page.validate()?;
+            }
             let message = Message {
                 id: p.message_id.clone(),
                 text: p.text.clone(),
+                page: p.page.clone(),
             };
             let added = if direct {
                 e.chat(&p.conversation_id)?.accept_direct(message)?
@@ -776,7 +783,7 @@ async fn dispatch(
                 e.record(
                     &p.conversation_id,
                     "user",
-                    json!({"messageId":p.message_id,"text":p.text,"direct":direct}),
+                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":p.page}),
                 )?;
             }
             if added {

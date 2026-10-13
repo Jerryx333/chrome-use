@@ -70,6 +70,9 @@ for line in sys.stdin:
                 pending = 17
                 emit({"id": pending, "method": "item/commandExecution/requestApproval", "params": {"threadId": session, "turnId": turn, "itemId": "fixture-tool", "command": "synthetic command, never executed"}})
                 continue
+            if text.endswith("echo-input"):
+                complete("input: " + text, "completed")
+                continue
             if text == "policy":
                 complete("policy: " + policy, "completed")
                 continue

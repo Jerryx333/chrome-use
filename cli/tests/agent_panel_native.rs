@@ -1352,6 +1352,40 @@ fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request
     cleanup.chats.push(full.clone());
     let done = turn(&mut host, &full, "approval", "idle");
     assert!(replies(&done).contains("synthetic approval handled"));
+    let sent = panel_reply(
+        &mut host,
+        &rx,
+        "send-page",
+        "conversationSend",
+        json!({"conversationId":full,"messageId":uuid::Uuid::new_v4().to_string(),"text":"echo-input","page":{"tabId":42,"url":"https://example.test/post","title":"A post"}}),
+    );
+    assert!(
+        sent.get("error").is_none(),
+        "send failed: {}",
+        sent["error"]
+    );
+    let done = conversation_poll(&mut host, &rx, &full, "idle");
+    let echoed = replies(&done);
+    assert!(echoed.contains("tabId \"chrome-tab:42\""), "{echoed}");
+    assert!(echoed.contains("https://example.test/post"));
+    let user = done["journal"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|e| e["kind"] == "user")
+        .unwrap()
+        .clone();
+    assert_eq!(user["data"]["text"], "echo-input");
+    assert_eq!(user["data"]["page"]["tabId"], 42);
+    let bad = panel_reply(
+        &mut host,
+        &rx,
+        "send-bad-page",
+        "conversationSend",
+        json!({"conversationId":full,"messageId":uuid::Uuid::new_v4().to_string(),"text":"x","page":{"tabId":-1,"url":"u","title":"t"}}),
+    );
+    assert!(bad.get("error").is_some());
     let done = turn(&mut host, &full, "policy", "idle");
     assert!(replies(&done).contains("policy: never/danger-full-access"));
 

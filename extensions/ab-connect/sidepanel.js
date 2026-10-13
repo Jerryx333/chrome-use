@@ -5,13 +5,13 @@ const agentNames = { codex: 'Codex', claude: 'Claude Code' };
 const chatAgents = new Set(Object.keys(agentNames));
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
-export function createPanel({ document, runtime, storage, schedule = setTimeout, cancel = clearTimeout }) {
-  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+export function createPanel({ document, runtime, storage, tabs, schedule = setTimeout, cancel = clearTimeout }) {
+  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
   const pendingMessages = new Map(), drafts = new Map();
-  let modelEpoch = 0, newFullAccess = true;
+  let modelEpoch = 0, newFullAccess = true, page = null, pageDetached = false;
   let sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
   const rendered = new Map(), requestNodes = new Map(), queuedNodes = new Map();
 
@@ -124,6 +124,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
           const container = element('article', undefined, `message-row ${row.type}`);
           const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
           const content = element('div', undefined, 'content'); container.append(content, speaker); view = { container, content, speaker };
+          if (row.page?.title) container.append(element('div', row.page.title, 'page-ref'));
           if (row.detail) { const raw = element('details'); raw.append(element('summary', 'Details'), element('pre', row.detail)); container.append(raw); }
           if (row.type === 'note' && row.failed && conversation?.agentId) {
             const agentId = conversation.agentId;
@@ -322,7 +323,10 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
       }
       const id = selected, pending = { id: crypto.randomUUID(), text, direct }; pendingMessages.set(id, pending); controls();
       try { await savePending(); } catch (failure) { pendingMessages.delete(id); throw failure; }
-      const result = await api(direct ? 'conversationSendDirect' : 'conversationSend', { conversationId: id, messageId: pending.id, text });
+      const params = { conversationId: id, messageId: pending.id, text };
+      const attached = attachedPage(); if (attached) params.page = attached;
+      const result = await api(direct ? 'conversationSendDirect' : 'conversationSend', params);
+      pageDetached = false; renderPage();
       if (selected === id) { conversation = result.conversation; if (nodes.message.value === text) nodes.message.value = ''; }
       pendingMessages.delete(id); drafts.delete(id); await savePending(); await list(); await poll();
     } finally { sending = false; controls(); }
@@ -335,6 +339,24 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     await send();
   }
   function showAgents() { view(true); }
+  // The tab beside the panel is what "this page" means. It is attached to the
+  // next message unless the user removes it; only web pages are offered.
+  function attachedPage() {
+    if (!page || pageDetached || !panelSupport?.pageContext) return null;
+    return { tabId: page.tabId, url: page.url.slice(0, 8192), title: page.title.slice(0, 1024) };
+  }
+  function renderPage() {
+    nodes.pageChip.hidden = !page || pageDetached || !panelSupport?.pageContext || panelSupport?.mode !== 'full';
+    nodes.pageTitle.textContent = page?.title || '';
+    nodes.pageChip.title = page ? `Sent with your message: ${page.url}` : '';
+  }
+  async function refreshPage() {
+    if (!tabs?.query) return;
+    const [tab] = await tabs.query({ active: true, currentWindow: true });
+    const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
+    if (next?.tabId !== page?.tabId) pageDetached = false;
+    page = next; renderPage();
+  }
   // New conversations use the remembered choice; an existing one switches in
   // place, and the service answers requests that are already waiting.
   async function setAccess(full) {
@@ -479,7 +501,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
       if (!conversations.some(chat => chat.id === selected)) select('');
       else if (!conversation || conversation.id !== selected) select(selected);
     }
-    await poll(); loop(); loadModels();
+    await poll(); loop(); loadModels(); void refreshPage().catch(() => {});
   }
   nodes.composer.addEventListener('submit', event => { event.preventDefault(); void send().catch(error); });
   nodes.message.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(event.ctrlKey || event.metaKey).catch(error); } });
@@ -487,6 +509,9 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
   nodes.conversation.addEventListener('change', () => select(nodes.conversation.value));
   nodes.newChat.addEventListener('click', () => { nodes.conversation.value = ''; select(''); loadModels(); });
   nodes.refresh.addEventListener('click', () => void refresh().catch(error));
+  nodes.pageDetach.addEventListener('click', () => { pageDetached = true; renderPage(); });
+  if (tabs?.onActivated) tabs.onActivated.addListener(() => void refreshPage().catch(() => {}));
+  if (tabs?.onUpdated) tabs.onUpdated.addListener((id, change) => { if (change.title || change.url || change.status === 'complete') void refreshPage().catch(() => {}); });
   nodes.access.addEventListener('click', () => void setAccess(!(selected ? conversation?.fullAccess === true : newFullAccess)).catch(error));
   nodes.deleteChat.addEventListener('click', () => { nodes.deleteConfirm.hidden = false; });
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
@@ -531,7 +556,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
 }
 
 if (typeof document !== 'undefined') {
-  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage });
+  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs });
   void panel.start();
   globalThis.addEventListener('pagehide', () => panel.close());
 }
