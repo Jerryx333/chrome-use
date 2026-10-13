@@ -81,7 +81,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
-        <li><strong>v1.5.200</strong>（未发布）：扩展 0.5.45 修复 Agents &amp; models 里部分 agent 显示“状态不可用”：本地服务同时最多跑两个 CLI 检查，四个可对话 agent 同时检查时有两个会失败；现在侧栏让检查排队。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
+        <li><strong>v1.5.200</strong>（2026-10-13）：扩展 0.5.45 修复 Agents &amp; models 里部分 agent 显示“状态不可用”：本地服务同时最多跑两个 CLI 检查，四个可对话 agent 同时检查时有两个会失败；现在侧栏让检查排队。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.199</strong>（2026-10-13）：侧栏的 Pi 模型菜单接受 <code>openrouter/~anthropic/claude-opus-latest</code> 这类 OpenRouter 别名；个别仍无法使用的模型 id 会被跳过，不再让整个菜单失败。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.198</strong>（2026-10-13）：Pi 会列出所有已配置的模型，超过 256 个时侧栏的模型检查会失败；现在菜单保留前 256 个并标明列表不完整。OpenCode 拒绝消息时，侧栏显示 OpenCode 给出的原因（例如默认模型已停用），不再只显示“OpenCode refused the prompt”。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.197</strong>（2026-10-13）：扩展 0.5.44 在侧栏里加入 OpenCode 和 Pi。OpenCode 走它的 Agent Client Protocol（<code>opencode acp</code>）：流式回复、工具行、停止、排队、恢复会话不重放历史，权限请求显示为卡片；完整权限下自动允许，关闭时开关显示“CLI permissions”，按 OpenCode 自己的规则执行，可能不询问；删除会话调用 OpenCode 自己的 <code>session/delete</code>；用户 OpenCode 配置里的其他 MCP 服务器保持启用（#590）。Pi 走 RPC 模式，会话 id 即 Pi 的 session id，会话文件放在会话文件夹里，恢复准确、删除时一并删掉；Pi 不会在执行工具前询问，所以关闭完整权限时只开放浏览器工具（“Browser only”），打开时保留全部工具；面板会话里关闭用户的其他 Pi MCP 服务器，Pi 扩展弹出的对话框会被取消而不是卡住。侧栏只列出已安装 CLI 能运行的 agent，旧版 CLI 仍是 Codex 和 Claude Code。扩展商店需等待 Google 审核。贡献者：@leeguooooo。</li>
