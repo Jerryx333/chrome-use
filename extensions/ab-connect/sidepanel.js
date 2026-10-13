@@ -1,6 +1,7 @@
 import { PanelTimeline, phaseLabels } from './panel-state.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
+const agentNames = { codex: 'Codex', claude: 'Claude Code' };
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
 export function createPanel({ document, runtime, storage, schedule = setTimeout, cancel = clearTimeout }) {
@@ -112,10 +113,13 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
           const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
           const content = element('div', undefined, 'content'); container.append(content, speaker); view = { container, content, speaker };
           if (row.detail) { const raw = element('details'); raw.append(element('summary', 'Details'), element('pre', row.detail)); container.append(raw); }
-          const failedModel = conversation?.requestedModel || conversation?.model;
-          if (row.type === 'note' && row.failed && failedModel && conversation?.agentId) {
+          if (row.type === 'note' && row.failed && conversation?.agentId) {
+            const agentId = conversation.agentId;
             const prompt = [...timeline.rows].reverse().find(r => r.type === 'user' && !r.queueStatus)?.text;
-            if (prompt) container.append(button('Retry with default model', () => retryWithDefaultModel(conversation.agentId, prompt), 'retry'));
+            // Only an explicitly chosen model can be dropped; a model from the
+            // CLI's own configuration has to be changed there.
+            if (conversation.requestedModel && prompt) container.append(button('Retry with default model', () => retryWithDefaultModel(agentId, prompt), 'retry'));
+            else if (conversation.model) container.append(button('Change default model', async () => { showAgents(); await loadConfig(agentId, agentNames[agentId] || agentId); }, 'retry'));
           }
         }
         rendered.set(row.key, view); nodes.transcript.append(view.container);
@@ -314,6 +318,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     select(''); nodes.agent.value = agentId; nodes.model.value = ''; clearModels(); nodes.message.value = prompt;
     await send();
   }
+  function showAgents() { view(true); }
   function view(agents) { nodes.chatView.hidden = agents; nodes.agentsView.hidden = !agents; nodes.chatTab.classList.toggle('selected', !agents); nodes.agentsTab.classList.toggle('selected', agents); nodes.chatTab.setAttribute('aria-pressed', String(!agents)); nodes.agentsTab.setAttribute('aria-pressed', String(agents)); }
   function clearModels() { modelEpoch++; nodes.modelList.replaceChildren(); nodes.modelStatus.textContent = 'CLI model access has not been checked.'; nodes.inspectAgent.disabled = !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection; }
   async function inspectModels() {

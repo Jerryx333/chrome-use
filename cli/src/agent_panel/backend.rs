@@ -110,6 +110,9 @@ async fn drive(
         .env_remove("CLAUDECODE")
         .env_remove("CLAUDE_CODE_ENTRYPOINT")
         .env_remove("CLAUDE_CODE_SSE_PORT");
+    if let Some(path) = super::agent_search_path() {
+        command.env("PATH", path);
+    }
     if setup.agent_id == "codex" {
         command.args(["app-server", "--listen", "stdio://"]);
     } else {

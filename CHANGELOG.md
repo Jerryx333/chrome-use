@@ -1,8 +1,20 @@
 # Changelog
 
-## 1.5.191
+## 1.5.192
 
 <!-- release:start -->
+### Bug Fixes
+
+- **Panel agents run the same CLI as your terminal.** Chrome starts the native host with a minimal PATH, so a wrapper such as a version-manager shim could launch an older agent build than the terminal does. Codex 0.145.0 started instead of 0.162.1, and that older build rejected the configured model as "not supported". Agent conversations and the Agents & models check now run with the directories discovery searches, in the same order.
+- **Model-failure action.** "Retry with default model" appears only when the conversation used an explicitly chosen model. When the failing model comes from the CLI's own configuration, the error offers "Change default model", which opens that agent's configuration.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.191
+
 Requires extension ab-connect 0.5.39 for the panel changes. Chrome Web Store publication follows Google review; CLI browser automation remains compatible with 0.5.35.
 
 ### Improvements
@@ -14,7 +26,6 @@ Requires extension ab-connect 0.5.39 for the panel changes. Chrome Web Store pub
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.190
 
