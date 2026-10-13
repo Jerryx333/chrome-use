@@ -46,3 +46,11 @@ test('a reused backend item id in another turn remains a separate response', () 
   timeline.apply([event(1, 'textDelta', { messageId: 'one', itemId: 'same', text: 'first' }), event(2, 'textDelta', { messageId: 'two', itemId: 'same', text: 'second' })], 2);
   assert.equal(timeline.rows.length, 2); assert.equal(timeline.rows[0].text, 'first'); assert.equal(timeline.rows[1].text, 'second');
 });
+
+test('raw API error JSON becomes a readable note with the original kept as detail', () => {
+  const timeline = new PanelTimeline();
+  const raw = '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'x\' model is not supported."}}';
+  timeline.apply([event(1,'terminal',{status:'failed',error:raw}),event(2,'exited',{error:'plain failure'})],2);
+  assert.equal(timeline.rows[0].text,"The 'x' model is not supported."); assert.equal(timeline.rows[0].detail,raw);
+  assert.equal(timeline.rows[1].text,'plain failure'); assert.equal(timeline.rows[1].detail,undefined);
+});

@@ -7,76 +7,85 @@
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
-  <header class="toolbar">
-    <img src="icons/icon32.png" width="24" height="24" alt="">
-    <h1>chrome-use</h1>
-    <button id="refresh" class="quiet" type="button">Refresh</button>
-    <button id="settings" class="quiet" type="button">Settings</button>
-  </header>
-  <p id="connection" class="connection" role="status">Checking local connection…</p>
-  <nav class="views" aria-label="Assistant views">
-    <button id="chatTab" class="selected" type="button" aria-pressed="true">Conversations</button>
-    <button id="agentsTab" type="button" aria-pressed="false">Agents &amp; models</button>
-  </nav>
-  <div id="notice" class="notice" role="alert" hidden></div>
   <main id="chatView" class="chat-view">
-    <div class="conversation-toolbar">
+    <header class="toolbar">
+      <img src="icons/icon32.png" width="20" height="20" alt="">
       <label class="sr-only" for="conversation">Conversation</label>
-      <select id="conversation"><option value="">New conversation</option></select>
-      <button id="newChat" class="quiet" type="button">New</button>
-    </div>
-    <section id="newOptions" class="new-options" aria-label="New conversation options">
-      <label>Agent<select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
-      <label>Model<input id="model" list="modelList" placeholder="CLI default" autocomplete="off"></label>
-      <datalist id="modelList"></datalist>
-      <button id="inspectAgent" class="quiet" type="button">Read CLI models</button>
-      <p id="modelStatus" class="hint">CLI model access has not been checked.</p>
-      <details><summary>Custom program</summary><label>Executable path<input id="executable" placeholder="Use the discovered program" autocomplete="off"></label></details>
-      <p class="hint">Uses the local CLI's login and an independent browser session. Your CLI may send tasks and page observations to its configured model service. Conversation history stays on this computer.</p>
-    </section>
-    <div class="conversation-status"><span id="phase">Ready</span><span id="effectiveModel"></span></div>
+      <select id="conversation" class="conversation-picker"><option value="">New conversation</option></select>
+      <button id="newChat" class="icon" type="button" title="New conversation" aria-label="New conversation">＋</button>
+      <button id="refresh" class="icon" type="button" title="Refresh" aria-label="Refresh">↻</button>
+      <button id="agentsTab" class="icon" type="button" title="Agents &amp; models" aria-label="Agents and models" aria-pressed="false">⚙</button>
+    </header>
+    <p id="connection" class="connection" role="status">Checking local connection…</p>
+    <div id="notice" class="notice" role="alert" hidden></div>
+    <div id="status" class="conversation-status"><span id="phase">Ready</span><span id="effectiveModel"></span></div>
     <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript">
-      <div id="empty" class="empty"><h2>What should the browser do?</h2><p>Describe the page or task. You can stop the response and review tool results as it works.</p></div>
+      <div id="empty" class="empty">
+        <h2>What should the browser do?</h2>
+        <p>Describe a page or a task. The agent works in its own browser session with your local CLI login.</p>
+      </div>
     </div>
-    <button id="latest" class="latest" type="button" hidden>Latest response</button>
+    <button id="latest" class="latest" type="button" hidden>↓ Latest</button>
     <section id="requests" class="requests" aria-label="Agent requests"></section>
     <section id="queuedMessages" class="queued-messages" aria-label="Queued messages" hidden></section>
-    <section id="pendingRecovery" class="requests" hidden>
+    <section id="pendingRecovery" class="requests recovery" hidden>
       <p class="hint">Delivery is unconfirmed. Retry uses the same message ID. Clearing this warning does not cancel a task that may have reached the agent.</p>
       <button id="retryPending" class="quiet" type="button">Retry same message</button>
       <button id="clearPending" class="quiet" type="button">Clear send warning</button>
     </section>
     <form id="composer" class="composer">
-      <label class="sr-only" for="message">Message</label>
-      <textarea id="message" rows="3" placeholder="Describe a browser task…" maxlength="32768"></textarea>
-      <div class="composer-controls">
-        <span id="queue" class="hint"></span>
-        <button id="resume" class="quiet" type="button" hidden>Resume queue</button>
-        <button id="stop" class="quiet" type="button" disabled>Stop</button>
-        <button id="sendDirect" class="quiet" type="button" hidden>Stop &amp; send</button>
-        <button id="send" class="primary" type="submit">Send</button>
+      <section id="newOptions" class="new-options" aria-label="New conversation options">
+        <label class="chip"><span class="sr-only">Agent</span><select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
+        <label class="chip model"><span class="sr-only">Model</span><input id="model" list="modelList" placeholder="Default model" autocomplete="off"></label>
+        <datalist id="modelList"></datalist>
+        <details class="more">
+          <summary title="More options" aria-label="More options">⋯</summary>
+          <div class="more-body">
+            <button id="inspectAgent" class="quiet" type="button">Read models from CLI</button>
+            <p id="modelStatus" class="hint">CLI model access has not been checked.</p>
+            <label>Custom program<input id="executable" placeholder="Use the discovered program" autocomplete="off"></label>
+            <p class="hint">Your CLI may send tasks and page observations to its configured model service. Conversation history stays on this computer.</p>
+          </div>
+        </details>
+      </section>
+      <div class="input-box">
+        <label class="sr-only" for="message">Message</label>
+        <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line"></textarea>
+        <div class="composer-controls">
+          <span id="queue" class="hint"></span>
+          <button id="resume" class="quiet" type="button" hidden>Resume queue</button>
+          <button id="sendDirect" class="quiet" type="button" hidden>Stop &amp; send</button>
+          <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop">■</button>
+          <button id="send" class="primary send" type="submit" title="Send" aria-label="Send message">↑</button>
+        </div>
       </div>
-      <p class="hint shortcut">Enter to send · Ctrl/⌘+Enter to stop &amp; send · Shift+Enter for a new line</p>
     </form>
   </main>
   <main id="agentsView" class="agents-view" hidden>
-    <header class="section-heading"><h2>Local agents</h2><button id="discover" class="quiet" type="button">Find again</button></header>
-    <p class="hint">Finding a program or configuration does not verify its login or model access.</p>
-    <div id="agentList"></div>
-    <section id="configuration" class="configuration" hidden>
-      <h2 id="configTitle">Agent configuration</h2>
-      <p id="configPath" class="path"></p>
-      <p id="configWarnings" class="hint"></p>
-      <form id="configForm"><div id="configFields"></div><button class="primary" type="submit">Preview changes</button></form>
-      <section id="configPreview" class="config-preview" hidden>
-        <h3>Changes to apply</h3><div id="configDiff"></div>
-        <p class="hint">Updates this agent's settings on the machine. Running conversations keep their current configuration.</p>
-        <button id="applyConfig" class="primary" type="button">Apply configuration</button>
-        <button id="discardConfig" class="quiet" type="button">Discard preview</button>
+    <header class="toolbar">
+      <button id="chatTab" class="quiet back" type="button" aria-pressed="true">← Back</button>
+      <h1>Agents &amp; models</h1>
+      <button id="settings" class="quiet" type="button">Extension settings</button>
+    </header>
+    <div class="agents-body">
+      <header class="section-heading"><h2>Local agents</h2><button id="discover" class="quiet" type="button">Find again</button></header>
+      <p class="hint">Finding a program or configuration does not verify its login or model access.</p>
+      <div id="agentList"></div>
+      <section id="configuration" class="configuration" hidden>
+        <h2 id="configTitle">Agent configuration</h2>
+        <p id="configPath" class="path"></p>
+        <p id="configWarnings" class="hint"></p>
+        <form id="configForm"><div id="configFields"></div><button class="primary" type="submit">Preview changes</button></form>
+        <section id="configPreview" class="config-preview" hidden>
+          <h3>Changes to apply</h3><div id="configDiff"></div>
+          <p class="hint">Updates this agent's settings on the machine. Running conversations keep their current configuration.</p>
+          <button id="applyConfig" class="primary" type="button">Apply configuration</button>
+          <button id="discardConfig" class="quiet" type="button">Discard preview</button>
+        </section>
+        <button id="restoreConfig" class="quiet restore" type="button" hidden>Restore this change</button>
+        <p id="configResult" role="status"></p>
       </section>
-      <button id="restoreConfig" class="quiet restore" type="button" hidden>Restore this change</button>
-      <p id="configResult" role="status"></p>
-    </section>
+    </div>
   </main>
   <script type="module" src="sidepanel.js"></script>
 </body>

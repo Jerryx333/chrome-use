@@ -4,7 +4,7 @@ const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
 export function createPanel({ document, runtime, storage, schedule = setTimeout, cancel = clearTimeout }) {
-  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'agent', 'model', 'modelList', 'modelStatus', 'inspectAgent', 'executable', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'agent', 'model', 'modelList', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -38,6 +38,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     connected = state?.connected === true;
     panelSupport = state?.agentPanel?.schemaVersion === 1 ? state.agentPanel : null;
     nodes.connection.classList.toggle('disconnected', !connected);
+    nodes.connection.classList.toggle('ok', connected && panelSupport?.mode === 'full');
     nodes.connection.textContent = connected ? 'Local bridge connected' : state?.connectionState === 'connecting' ? 'Waiting for local bridge…' : state?.connectionError || 'Local bridge unavailable. Run chrome-use extension install, then refresh.';
     if (connected && !panelSupport) nodes.connection.textContent = 'Bridge connected. Update the chrome-use CLI, then refresh to enable the agent panel.';
     if (connected && panelSupport?.mode === 'readOnly') nodes.connection.textContent = 'Connected. This Windows panel is read-only; browser CLI automation remains available.';
@@ -61,16 +62,20 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     nodes.newOptions.hidden = Boolean(selected);
     nodes.phase.textContent = panelSupport?.mode === 'readOnly' ? 'Read-only discovery' : conversation ? phaseLabels[conversation.phase] || 'Unknown response state' : 'Ready';
     nodes.effectiveModel.textContent = conversation?.model || '';
+    const busy = busyPhases.has(conversation?.phase);
+    nodes.status.classList.toggle('idle', !conversation || (conversation.phase === 'idle' && !conversation.model));
+    nodes.status.classList.toggle('busy', busy);
     nodes.queue.textContent = pending ? 'Send unconfirmed; checking stored message' : conversation?.queued ? `${conversation.queued} queued${conversation.queuePaused ? ', paused' : ''}` : '';
     nodes.resume.hidden = !conversation?.queuePaused || !conversation?.queued;
     nodes.resume.disabled = !connected || !writable || conversation?.phase === 'recoveryRequired';
-    nodes.stop.disabled = !connected || !writable || !busyPhases.has(conversation?.phase) || conversation?.phase === 'stopping';
+    nodes.stop.disabled = !connected || !writable || !busy || conversation?.phase === 'stopping';
+    nodes.stop.hidden = !busy;
     nodes.send.disabled = !connected || !writable || sending || Boolean(pending) || conversation?.phase === 'recoveryRequired';
     nodes.sendDirect.hidden = !busyPhases.has(conversation?.phase) && !conversation?.queuePaused;
     nodes.sendDirect.disabled = nodes.send.disabled || Boolean(conversation?.directMessageId);
     nodes.sendDirect.textContent = busyPhases.has(conversation?.phase) ? 'Stop & send' : 'Send now';
-    nodes.send.textContent = busyPhases.has(conversation?.phase) ? 'Queue' : 'Send';
-    nodes.send.setAttribute('aria-label', busyPhases.has(conversation?.phase) ? 'Queue message' : 'Send message');
+    nodes.send.title = busy ? 'Queue — sends after the current response' : 'Send';
+    nodes.send.setAttribute('aria-label', busy ? 'Queue message' : 'Send message');
   }
   function conversationChoices() {
     nodes.conversation.replaceChildren(element('option', 'New conversation'));
@@ -105,13 +110,14 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
         } else {
           const container = element('article', undefined, `message-row ${row.type}`);
           const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
-          const content = element('div', undefined, 'content'); container.append(speaker, content); view = { container, content, speaker };
+          const content = element('div', undefined, 'content'); container.append(content, speaker); view = { container, content, speaker };
+          if (row.detail) { const raw = element('details'); raw.append(element('summary', 'Details'), element('pre', row.detail)); container.append(raw); }
         }
         rendered.set(row.key, view); nodes.transcript.append(view.container);
       }
       if (view.content.textContent !== row.text) view.content.textContent = row.text;
-      if (row.type === 'user') view.speaker.textContent = row.queueStatus ? `You · ${row.queueStatus}` : 'You';
-      if (row.type === 'tool') { view.name.textContent = row.name; view.state.textContent = row.failed ? 'Error returned' : row.completed ? 'Returned' : 'Running'; view.container.classList.toggle('failed', row.failed); }
+      if (row.type === 'user') view.speaker.textContent = row.queueStatus || '';
+      if (row.type === 'tool') { view.name.textContent = row.name; view.state.textContent = row.failed ? 'Error' : row.completed ? '' : 'Running…'; view.container.classList.toggle('failed', row.failed); }
     }
     if (follow) nodes.transcript.scrollTop = nodes.transcript.scrollHeight;
     nodes.latest.hidden = follow || timeline.rows.length === 0;

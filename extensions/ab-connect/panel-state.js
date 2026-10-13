@@ -39,15 +39,27 @@ export class PanelTimeline {
       else if (event.kind === 'requestResolved') this.requests.delete(JSON.stringify(data.requestId));
       else if (event.kind === 'terminal') {
         this.requests.clear();
-        if (data.status !== 'completed') this.rows.push({ key: `note:${event.sequence}`, type: 'note', text: data.error || (data.status === 'interrupted' ? 'Response interrupted. Queued messages are paused.' : 'Response failed. Queued messages are paused.'), at: event.at });
+        if (data.status !== 'completed') this.rows.push({ key: `note:${event.sequence}`, type: 'note', ...readableError(data.error || (data.status === 'interrupted' ? 'Response interrupted. Queued messages are paused.' : 'Response failed. Queued messages are paused.')), at: event.at });
       } else if (event.kind === 'exited' || event.kind === 'processUnconfirmed') {
         this.requests.clear();
-        if (data.error) this.rows.push({ key: `note:${event.sequence}`, type: 'note', text: data.error, at: event.at });
+        if (data.error) this.rows.push({ key: `note:${event.sequence}`, type: 'note', ...readableError(data.error), at: event.at });
       }
       this.cursor = event.sequence;
     }
     if (cursor !== this.cursor) throw new Error('Conversation cursor did not match the received events.');
   }
+}
+
+// Agent CLIs often report failures as raw API JSON. Show its message as the
+// note and keep the original text available as a collapsed detail.
+export function readableError(text) {
+  const raw = String(text);
+  try {
+    const parsed = JSON.parse(raw.slice(raw.indexOf('{')));
+    const message = parsed?.error?.message || parsed?.message || (typeof parsed?.error === 'string' ? parsed.error : '');
+    if (typeof message === 'string' && message.trim()) return { text: message.trim(), detail: raw };
+  } catch {}
+  return { text: raw };
 }
 
 function describeTool(item) {
