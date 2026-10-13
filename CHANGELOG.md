@@ -1,8 +1,19 @@
 # Changelog
 
-## 1.5.198
+## 1.5.199
 
 <!-- release:start -->
+### Bug Fixes
+
+- **Pi model menu with OpenRouter aliases.** Model ids such as `openrouter/~anthropic/claude-opus-latest` are accepted, and a Pi model whose id still cannot be used is skipped instead of failing the whole menu.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.198
+
 ### Bug Fixes
 
 - **Pi model menu with many models.** Pi lists every configured model; with more than 256 the model check failed. The menu now keeps the first 256 and marks the list as partial.
@@ -11,7 +22,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.197
 
