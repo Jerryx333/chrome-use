@@ -1,8 +1,20 @@
 # Changelog
 
-## 1.5.197
+## 1.5.198
 
 <!-- release:start -->
+### Bug Fixes
+
+- **Pi model menu with many models.** Pi lists every configured model; with more than 256 the model check failed. The menu now keeps the first 256 and marks the list as partial.
+- **OpenCode refusal reason.** When OpenCode refuses a prompt, the panel shows OpenCode's reason, such as a retired default model, instead of only "OpenCode refused the prompt".
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.197
+
 Requires extension ab-connect 0.5.44 for the new agents in the panel menu. Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -14,7 +26,6 @@ Requires extension ab-connect 0.5.44 for the new agents in the panel menu. Chrom
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.196
 
