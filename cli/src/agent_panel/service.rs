@@ -1187,10 +1187,11 @@ fn start<'a>(
         }
         let context = DiscoveryContext::current()?;
         let chat = e.chat(id)?.clone();
+        let binary = super::agent_binary(&chat.agent_id)?;
         let executable = chat
             .executable
             .clone()
-            .or_else(|| context.executable(&chat.agent_id))
+            .or_else(|| context.executable(binary))
             .ok_or("The selected local agent CLI is not installed")?;
         if !super::is_executable(&executable, cfg!(windows)) {
             return Err("Selected agent program is not an executable file".into());

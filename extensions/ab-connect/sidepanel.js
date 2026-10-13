@@ -1,7 +1,7 @@
 import { PanelTimeline, phaseLabels } from './panel-state.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
-const agentNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode' };
+const agentNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', pi: 'Pi' };
 const chatAgents = new Set(Object.keys(agentNames));
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
@@ -70,10 +70,11 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     const full = selected ? conversation?.fullAccess === true : newFullAccess;
     nodes.access.hidden = !writable || !panelSupport?.fullAccess;
     nodes.access.disabled = !connected || sending || (Boolean(selected) && !conversation);
-    const cliPermissions = (conversation?.agentId || nodes.agent.value) === 'opencode';
-    nodes.accessLabel.textContent = full ? 'Full access' : cliPermissions ? 'CLI permissions' : 'Ask first';
+    const accessAgent = conversation?.agentId || nodes.agent.value;
+    const cliPermissions = accessAgent === 'opencode', browserOnly = accessAgent === 'pi';
+    nodes.accessLabel.textContent = full ? 'Full access' : cliPermissions ? 'CLI permissions' : browserOnly ? 'Browser only' : 'Ask first';
     nodes.access.setAttribute('aria-pressed', String(full));
-    nodes.access.title = full ? 'Automatically allows permission requests in this conversation. Click to use CLI permissions.' : cliPermissions ? 'OpenCode uses its own permission rules and may allow tools without asking. Requests it does send appear here. Click to automatically allow those requests.' : 'Asks before each tool, command or file change. Click for full access.';
+    nodes.access.title = full ? (browserOnly ? 'Pi runs browser tools, commands and file changes. Click for browser tools only.' : 'Automatically allows permission requests in this conversation. Click to turn this off.') : cliPermissions ? 'OpenCode uses its own permission rules and may allow tools without asking. Requests it does send appear here. Click to automatically allow those requests.' : browserOnly ? 'Pi never asks before a tool runs, so it gets only the browser tools: no shell or file changes. Click for full access.' : 'Asks before each tool, command or file change. Click for full access.';
     nodes.deleteChat.hidden = !selected || !writable || !panelSupport?.conversationDelete;
     nodes.deleteChat.disabled = sending || !connected || busyPhases.has(conversation?.phase);
     if (nodes.deleteChat.hidden) nodes.deleteConfirm.hidden = true;

@@ -1631,3 +1631,126 @@ fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
         .join(format!("agent-panel/profiles/{profile}/conversations/{id}"))
         .exists());
 }
+
+#[test]
+#[cfg(unix)]
+fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
+    let registry = tempfile::tempdir().unwrap();
+    let profile = "native-pi-fixture";
+    let mut cleanup = ServiceFixture {
+        root: registry.path().into(),
+        profile: profile.into(),
+        chats: vec![],
+    };
+    let mut host = Host(
+        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+            .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
+            .env("CHROME_USE_RELAY_DIR", registry.path())
+            .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+            .env("PI_CODING_AGENT_DIR", registry.path().join("pi-home"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let rx = frames(&mut host);
+    send(
+        &mut host,
+        json!({"method":"hello","version":"fixture","profileId":profile}),
+    );
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let inspected = panel_reply(
+        &mut host,
+        &rx,
+        "inspect-pi",
+        "agentInspect",
+        json!({"agentId":"pi","executable":fixture}),
+    );
+    assert!(inspected.get("error").is_none(), "{}", inspected["error"]);
+    assert_eq!(
+        inspected["result"]["inspection"]["models"][0]["id"],
+        "synthetic/pi-model"
+    );
+    let replies = |result: &Value| -> String {
+        result["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "textFinal")
+            .map(|e| e["data"]["text"].as_str().unwrap_or(""))
+            .collect()
+    };
+    let turn = |host: &mut Host, id: &str, text: &str| {
+        let sent = panel_reply(
+            host,
+            &rx,
+            "send",
+            "conversationSend",
+            json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":text}),
+        );
+        assert!(
+            sent.get("error").is_none(),
+            "send failed: {}",
+            sent["error"]
+        );
+    };
+    let mut create = |host: &mut Host, full: bool| -> String {
+        let created = panel_reply(
+            host,
+            &rx,
+            "create-pi",
+            "conversationCreate",
+            json!({"agentId":"pi","executable":fixture,"fullAccess":full}),
+        );
+        assert!(created.get("error").is_none(), "{}", created["error"]);
+        let id = created["result"]["conversation"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        cleanup.chats.push(id.clone());
+        id
+    };
+    let ask = create(&mut host, false);
+    turn(&mut host, &ask, "policy");
+    let done = conversation_poll(&mut host, &rx, &ask, "idle");
+    let text = replies(&done);
+    assert!(text.contains("tools: mcp__chrome_use__*"), "{text}");
+    assert!(text.contains(&format!("session: {ask}")), "{text}");
+    assert!(done["journal"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "tool" && e["data"]["completed"] == true));
+    turn(&mut host, &ask, "fail");
+    let failed = conversation_poll(&mut host, &rx, &ask, "failed");
+    assert!(failed["conversation"]["lastError"]
+        .as_str()
+        .unwrap_or("")
+        .contains("synthetic pi failure"));
+    let full = create(&mut host, true);
+    turn(&mut host, &full, "policy");
+    let done = conversation_poll(&mut host, &rx, &full, "idle");
+    assert!(replies(&done).contains("tools: all"));
+    turn(&mut host, &full, "wait");
+    conversation_poll(&mut host, &rx, &full, "running");
+    let stopped = panel_reply(
+        &mut host,
+        &rx,
+        "stop",
+        "conversationStop",
+        json!({"conversationId":full}),
+    );
+    assert!(stopped.get("error").is_none(), "{}", stopped["error"]);
+    conversation_poll(&mut host, &rx, &full, "interrupted");
+    let deleted = panel_reply(
+        &mut host,
+        &rx,
+        "delete-pi",
+        "conversationDelete",
+        json!({"conversationId":full}),
+    );
+    assert!(deleted.get("error").is_none(), "{}", deleted["error"]);
+    assert!(deleted["result"]["deleted"]["cliHistory"]["error"].is_null());
+}

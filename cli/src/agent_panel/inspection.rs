@@ -203,6 +203,71 @@ async fn read(
     }
     serde_json::from_slice(&bytes).map_err(|_| "CLI metadata was not a JSON protocol reply".into())
 }
+/// Pi's RPC mode answers `get_available_models` with full model records; the
+/// menu value is `provider/id`, which `pi --model` accepts. Pi keeps provider
+/// credentials per provider, so no account state is claimed.
+async fn pi_catalog(probe: &mut OwnedProbe) -> Result<Value, String> {
+    let mut input = probe
+        .child
+        .stdin
+        .take()
+        .ok_or("CLI metadata input unavailable")?;
+    let mut reader = BufReader::new(
+        probe
+            .child
+            .stdout
+            .take()
+            .ok_or("CLI metadata output unavailable")?,
+    );
+    let mut total = 0;
+    write(
+        &mut input,
+        json!({"id":"panel-models","type":"get_available_models"}),
+    )
+    .await?;
+    for _ in 0..200 {
+        let value = read(&mut reader, &mut total).await?;
+        if value["type"] != "response" || value["id"] != "panel-models" {
+            continue;
+        }
+        if value["success"] != true {
+            return Err("Pi refused the model catalog request".into());
+        }
+        let entries = value["data"]["models"]
+            .as_array()
+            .ok_or("Pi did not return a model array")?;
+        if entries.len() > 256 {
+            return Err("Pi returned too many models".into());
+        }
+        let models = entries
+            .iter()
+            .map(|entry| {
+                let provider = entry["provider"].as_str().unwrap_or("");
+                let raw = entry["id"].as_str().unwrap_or("");
+                let id = model_id(&json!(if provider.is_empty() {
+                    raw.to_string()
+                } else {
+                    format!("{provider}/{raw}")
+                }))?;
+                let label = entry["name"]
+                    .as_str()
+                    .filter(|s| s.chars().count() <= 128 && !s.chars().any(char::is_control))
+                    .map(|name| if provider.is_empty() { name.to_string() } else { format!("{provider}/{name}") })
+                    .unwrap_or_else(|| id.clone());
+                let efforts: Vec<&str> = if entry["reasoning"] == true {
+                    vec!["low", "medium", "high"]
+                } else {
+                    vec![]
+                };
+                Ok(json!({"id":id,"label":label,"efforts":efforts,"isDefault":false,"supportsFastMode":false}))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        drop(input);
+        return Ok(json!({"models":models,"complete":true,"account":{"status":"unverified"}}));
+    }
+    Err("Pi metadata reply limit exceeded".into())
+}
+
 async fn protocol(probe: &mut OwnedProbe, codex: bool) -> Result<Value, String> {
     let mut input = probe
         .child
@@ -396,7 +461,7 @@ pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String
             .map_err(|_| "Two CLI inspections are already running")?;
         let request: Inspect = serde_json::from_value(params.clone())
             .map_err(|_| "Inspection requires agentId and optional executable")?;
-        if !["codex", "claude", "opencode"].contains(&request.agent_id.as_str()) {
+        if !["codex", "claude", "opencode", "pi"].contains(&request.agent_id.as_str()) {
             return Err("This agent has no metadata protocol adapter yet".into());
         }
         let context = DiscoveryContext::current()?;
@@ -427,9 +492,10 @@ pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String
                 return Ok(json!({"schemaVersion":1,"inspection":{"agentId":request.agent_id,"executable":executable,"versionReported":version_result,"source":"cliProtocol","observedAt":super::conversation::now(),"models":catalog,"complete":true,"account":{"status":"unverified"},"modelAccessVerified":false,"processExitConfirmed":true}}));
             }
             let codex=request.agent_id=="codex";
-            let args=if codex {vec!["app-server","--listen","stdio://"]} else {vec!["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--tools","","--no-session-persistence","--setting-sources","user","--settings","{\"disableAllHooks\":true}"]};
+            let pi=request.agent_id=="pi";
+            let args=if pi {vec!["--mode","rpc","--no-session","--no-mcp","--no-tools","--no-approve"]} else if codex {vec!["app-server","--listen","stdio://"]} else {vec!["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--tools","","--no-session-persistence","--setting-sources","user","--settings","{\"disableAllHooks\":true}"]};
             let mut probe=OwnedProbe::spawn(&executable,&args,&workspace)?;
-            let catalog=match tokio::time::timeout(Duration::from_secs(4),protocol(&mut probe,codex)).await {Ok(result)=>result,Err(_)=>Err("CLI metadata inspection timed out".into())};
+            let catalog=match tokio::time::timeout(Duration::from_secs(if pi {10} else {4}),async { if pi {pi_catalog(&mut probe).await} else {protocol(&mut probe,codex).await} }).await {Ok(result)=>result,Err(_)=>Err("CLI metadata inspection timed out".into())};
             let cleanup=probe.finish().await;
             let _=cleanup?;let catalog=catalog?;
             Ok(json!({"schemaVersion":1,"inspection":{"agentId":request.agent_id,"executable":executable,"versionReported":version_result,"source":"cliProtocol","observedAt":super::conversation::now(),"models":catalog["models"],"complete":catalog["complete"],"account":catalog["account"],"modelAccessVerified":false,"processExitConfirmed":true}}))

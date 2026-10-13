@@ -118,6 +118,33 @@ async fn drive(
         command.env("PATH", path);
     }
     match setup.agent_id.as_str() {
+        "pi" => {
+            pi_workspace(setup, &browser_env)?;
+            // The conversation id is Pi's session id; its file lives in the
+            // conversation folder, so resume is exact and deletion removes it.
+            let session = setup
+                .backend_session
+                .clone()
+                .or_else(|| {
+                    setup
+                        .browser_session
+                        .strip_prefix("panel-")
+                        .map(String::from)
+                })
+                .ok_or("Pi conversation has no session identity")?;
+            command
+                .args(["--mode", "rpc", "--approve", "--session-dir"])
+                .arg(setup.workspace.join("sessions"))
+                .args(["--session-id", &session, "--append-system-prompt", prompt]);
+            // Pi never asks before a tool runs, so without full access it gets
+            // the browser tools only: no shell, file edits or other built-ins.
+            if !setup.full_access {
+                command.args(["--tools", "mcp__chrome_use__*"]);
+            }
+            if let Some(model) = &setup.model {
+                command.arg("--model").arg(model);
+            }
+        }
         "codex" => {
             command.args(["app-server", "--listen", "stdio://"]);
         }
@@ -186,6 +213,21 @@ async fn drive(
     let mut stdin = child.stdin.take().ok_or("Backend input is unavailable")?;
     let mut reader = BufReader::new(child.stdout.take().ok_or("Backend output is unavailable")?);
     let result = match setup.agent_id.as_str() {
+        "pi" => {
+            pi_protocol(
+                setup,
+                commands,
+                events,
+                &mut stdin,
+                &mut reader,
+                ProtocolContext {
+                    pid,
+                    prompt,
+                    browser_env,
+                },
+            )
+            .await
+        }
         "opencode" => {
             super::acp::protocol(
                 setup,
@@ -445,4 +487,183 @@ pub(super) async fn emit_text(
         part += 1;
     }
     Ok(())
+}
+
+/// Pi reads project MCP servers from `<cwd>/.pi/mcp.json` once `--approve`
+/// trusts the folder for this run. chrome_use is declared directly to the
+/// model (the default codemode exposure would hide it), and every user-level
+/// server is turned off for the conversation, as for Codex.
+fn pi_workspace(setup: &Setup, browser_env: &Value) -> Result<(), String> {
+    let mut servers = serde_json::Map::new();
+    let user_root = std::env::var_os("PI_CODING_AGENT_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|h| h.join(".pi/agent")));
+    if let Some(raw) = user_root.and_then(|root| std::fs::read(root.join("mcp.json")).ok()) {
+        if let Ok(config) = serde_json::from_slice::<Value>(&raw) {
+            for name in config["mcpServers"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(k, _)| k)
+            {
+                servers.insert(name.clone(), json!({"enabled":false}));
+            }
+        }
+    }
+    servers.insert(
+        "chrome_use".into(),
+        json!({"command":setup.mcp_executable,"args":["mcp","--tools","all"],"env":browser_env,"exposure":"direct","timeout":120}),
+    );
+    let directory = setup.workspace.join(".pi");
+    super::config_transaction::private_tree(&directory)?;
+    super::config_transaction::atomic_write(
+        &directory.join("mcp.json"),
+        &serde_json::to_vec(&json!({"autoEnableCodemode":false,"mcpServers":servers}))
+            .map_err(|_| "Cannot encode Pi browser tools")?,
+        None,
+    )
+}
+
+/// Pi RPC: JSONL commands on stdin, responses and session events on stdout.
+/// A prompt's response only means it was accepted; `agent_settled` ends the
+/// turn, and an assistant message that stopped with `error` makes it failed.
+async fn pi_protocol(
+    setup: &Setup,
+    commands: &mut mpsc::Receiver<Command>,
+    events: &mpsc::Sender<Notice>,
+    stdin: &mut tokio::process::ChildStdin,
+    reader: &mut BufReader<tokio::process::ChildStdout>,
+    context: ProtocolContext<'_>,
+) -> Result<(), String> {
+    let pid = context.pid;
+    let mut ready = false;
+    let mut busy = false;
+    let mut stopping = false;
+    let mut stopping_at = None;
+    let mut queued: Option<Message> = None;
+    let mut message_index = 0u64;
+    let mut failure: Option<String> = None;
+    let started = tokio::time::Instant::now();
+    let send = |kind: &'static str, data: Value| events.send(notice(kind, data));
+    write(stdin, json!({"id":"panel-state","type":"get_state"})).await?;
+    let mut bytes = Vec::new();
+    loop {
+        let mut bounded = (&mut *reader).take(16 * 1024 * 1024 + 1 - bytes.len() as u64);
+        tokio::select! {
+            command = commands.recv() => match command {
+                Some(Command::Start(message)) => {
+                    if busy || queued.is_some() { return Err("Backend received overlapping turns".into()); }
+                    queued = Some(message);
+                    if ready { pi_turn(stdin, &mut queued).await?; busy = true; failure = None; }
+                }
+                Some(Command::Interrupt) => {
+                    stopping = true; stopping_at = Some(tokio::time::Instant::now());
+                    if queued.take().is_some() {
+                        send("terminal", json!({"status":"interrupted","error":null})).await.map_err(|_| "Event consumer closed")?;
+                        stopping = false; stopping_at = None;
+                    } else if busy {
+                        write(stdin, json!({"id":"panel-abort","type":"abort"})).await?;
+                    } else { stopping = false; stopping_at = None; }
+                }
+                Some(Command::Reply { .. }) => return Err("Pi has no permission requests to answer".into()),
+                Some(Command::Shutdown) | None => return Ok(()),
+            },
+            read = bounded.read_until(b'\n', &mut bytes) => {
+                let count = read.map_err(|_| "Cannot read backend output")?;
+                if count == 0 { return Err("Backend output closed; an unfinished turn is unconfirmed".into()); }
+                if bytes.len() > 16 * 1024 * 1024 || !bytes.ends_with(b"\n") { return Err("Backend emitted an oversized or incomplete protocol line".into()); }
+                let value: Value = serde_json::from_slice(&bytes).map_err(|_| "Backend emitted non-protocol output")?;
+                bytes.clear();
+                match value["type"].as_str().unwrap_or("") {
+                    "response" => {
+                        let ok = value["success"] == true;
+                        match value["id"].as_str() {
+                            Some("panel-state") => {
+                                if !ok { return Err("Pi refused its initial state request".into()); }
+                                let data = &value["data"];
+                                let model = data["model"]["provider"].as_str().zip(data["model"]["id"].as_str()).map(|(p, m)| format!("{p}/{m}"));
+                                let session = data["sessionId"].as_str().map(String::from)
+                                    .or_else(|| setup.backend_session.clone())
+                                    .or_else(|| setup.browser_session.strip_prefix("panel-").map(String::from));
+                                ready = true;
+                                send("ready", json!({"sessionId":session,"model":model,"pid":pid})).await.map_err(|_| "Event consumer closed")?;
+                                if queued.is_some() { pi_turn(stdin, &mut queued).await?; busy = true; failure = None; }
+                            }
+                            Some(id) if id.starts_with("panel-turn-") && !ok => {
+                                busy = false; stopping = false; stopping_at = None;
+                                let error = value["error"].as_str().unwrap_or("Pi refused the prompt").to_string();
+                                send("terminal", json!({"status":"failed","error":error})).await.map_err(|_| "Event consumer closed")?;
+                            }
+                            _ => {}
+                        }
+                    }
+                    "agent_start" if busy => {
+                        send("running", json!({"turnId":null})).await.map_err(|_| "Event consumer closed")?;
+                    }
+                    "message_start" if value["message"]["role"] == "assistant" => { message_index += 1; }
+                    "message_update" => {
+                        let update = &value["assistantMessageEvent"];
+                        let item = format!("pi-{message_index}-{}", update["contentIndex"].as_u64().unwrap_or(0));
+                        match update["type"].as_str() {
+                            Some("text_delta") => if let Some(text) = update["delta"].as_str() { emit_text(events, "textDelta", &item, text).await?; },
+                            Some("text_end") => if let Some(text) = update["content"].as_str() { emit_text(events, "textFinal", &item, text).await?; },
+                            _ => {}
+                        }
+                    }
+                    "message_end" if value["message"]["role"] == "assistant" => {
+                        if value["message"]["stopReason"] == "error" {
+                            failure = Some(value["message"]["errorMessage"].as_str().unwrap_or("Pi reported a model error").to_string());
+                        }
+                    }
+                    "tool_execution_start" => {
+                        send("tool", json!({"completed":false,"item":short(&json!({"id":value["toolCallId"],"name":value["toolName"],"input":value["args"]}))})).await.map_err(|_| "Event consumer closed")?;
+                    }
+                    "tool_execution_end" => {
+                        send("tool", json!({"completed":true,"item":short(&json!({"id":value["toolCallId"],"name":value["toolName"],"input":value["args"],"result":value["result"],"is_error":value["isError"]==true}))})).await.map_err(|_| "Event consumer closed")?;
+                    }
+                    "session_info_changed" => if let Some(name) = value["name"].as_str() {
+                        send("title", json!({"title":name})).await.map_err(|_| "Event consumer closed")?;
+                    },
+                    "extension_ui_request" => {
+                        // Dialogs from Pi extensions cannot be shown here; they are
+                        // cancelled rather than left blocking the turn.
+                        if let Some(id) = value.get("id") {
+                            if ["select", "confirm", "input", "editor"].contains(&value["method"].as_str().unwrap_or("")) {
+                                write(stdin, json!({"type":"extension_ui_response","id":id,"cancelled":true})).await?;
+                            }
+                        }
+                    }
+                    "agent_settled" if busy => {
+                        busy = false;
+                        let aborted = value["aborted"] == true;
+                        let (status, error) = if aborted || stopping { ("interrupted", Value::Null) } else if let Some(error) = failure.take() { ("failed", json!(error)) } else { ("completed", Value::Null) };
+                        stopping = false; stopping_at = None;
+                        send("terminal", json!({"status":status,"error":error})).await.map_err(|_| "Event consumer closed")?;
+                    }
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                if !ready && started.elapsed() > Duration::from_secs(60) { return Err("Backend protocol initialization timed out".into()); }
+                if stopping_at.is_some_and(|at: tokio::time::Instant| at.elapsed() > Duration::from_secs(10)) { return Err("Backend did not confirm interruption; its owned process was terminated".into()); }
+            }
+        }
+    }
+}
+
+async fn pi_turn(
+    stdin: &mut tokio::process::ChildStdin,
+    queued: &mut Option<Message>,
+) -> Result<(), String> {
+    let message = queued.take().ok_or("No queued backend turn")?;
+    let text = match &message.page {
+        Some(page) => format!("{}\n\n{}", page.preface(), message.text),
+        None => message.text.clone(),
+    };
+    write(
+        stdin,
+        json!({"id":format!("panel-turn-{}", message.id),"type":"prompt","message":text}),
+    )
+    .await
 }
