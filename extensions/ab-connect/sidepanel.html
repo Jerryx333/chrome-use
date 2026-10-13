@@ -48,7 +48,8 @@
             <details class="more">
               <summary title="More options" aria-label="More options">＋</summary>
               <div class="more-body">
-                <button id="inspectAgent" class="quiet" type="button">Read models from CLI</button>
+                <label>Custom model ID<input id="customModel" placeholder="Overrides the model menu" autocomplete="off"></label>
+                <button id="inspectAgent" class="quiet" type="button">Reload models from CLI</button>
                 <p id="modelStatus" class="hint">CLI model access has not been checked.</p>
                 <label>Custom program<input id="executable" placeholder="Use the discovered program" autocomplete="off"></label>
                 <p class="hint">Your CLI may send tasks and page observations to its configured model service. Conversation history stays on this computer.</p>
@@ -58,8 +59,7 @@
           </span>
           <button id="access" class="access" type="button" hidden aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg><span id="accessLabel">Full access</span></button>
           <span id="queue" class="hint"></span>
-          <label id="modelChip" class="chip model"><span class="sr-only">Model</span><input id="model" list="modelList" placeholder="Default model" autocomplete="off"></label>
-          <datalist id="modelList"></datalist>
+          <label id="modelChip" class="chip model"><span class="sr-only">Model</span><select id="model"><option value="">Default model</option></select></label>
           <button id="resume" class="quiet" type="button" hidden>Resume queue</button>
           <button id="sendDirect" class="quiet" type="button" hidden>Stop &amp; send</button>
           <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop">■</button>

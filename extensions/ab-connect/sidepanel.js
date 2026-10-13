@@ -2,10 +2,11 @@ import { PanelTimeline, phaseLabels } from './panel-state.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 const agentNames = { codex: 'Codex', claude: 'Claude Code' };
+const chatAgents = new Set(Object.keys(agentNames));
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
 export function createPanel({ document, runtime, storage, schedule = setTimeout, cancel = clearTimeout }) {
-  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'modelList', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'newChat', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -59,7 +60,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     const writable = panelSupport?.mode === 'full';
     nodes.conversation.disabled = sending || !writable; nodes.newChat.disabled = sending || !writable;
     nodes.message.disabled = !writable; nodes.inspectAgent.disabled = !connected || !writable || !panelSupport?.modelInspection;
-    nodes.agent.disabled = !writable; nodes.model.disabled = !writable; nodes.executable.disabled = !writable;
+    nodes.agent.disabled = !writable; nodes.model.disabled = !writable; nodes.customModel.disabled = !writable; nodes.executable.disabled = !writable;
     nodes.newOptions.hidden = Boolean(selected); nodes.modelChip.hidden = Boolean(selected);
     const full = selected ? conversation?.fullAccess === true : newFullAccess;
     nodes.access.hidden = !writable || !panelSupport?.fullAccess;
@@ -313,7 +314,8 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
     try {
       if (!selected) {
         const options = { agentId: nodes.agent.value };
-        if (nodes.model.value.trim()) options.model = nodes.model.value.trim();
+        const model = nodes.customModel.value.trim() || nodes.model.value;
+        if (model) options.model = model;
         if (nodes.executable.value.trim()) options.executable = nodes.executable.value.trim();
         if (panelSupport?.fullAccess) options.fullAccess = newFullAccess;
         const result = await api('conversationCreate', options); conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
@@ -329,7 +331,7 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
   // cannot use is fixed by starting a new conversation on the CLI default.
   async function retryWithDefaultModel(agentId, prompt) {
     if (sending) return;
-    select(''); nodes.agent.value = agentId; nodes.model.value = ''; clearModels(); nodes.message.value = prompt;
+    select(''); nodes.agent.value = agentId; nodes.model.value = ''; nodes.customModel.value = ''; clearModels(); nodes.message.value = prompt;
     await send();
   }
   function showAgents() { view(true); }
@@ -355,26 +357,53 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
       const problems = [];
       if (deleted.cliHistory.failed.length) problems.push(`Could not remove: ${deleted.cliHistory.failed.join(', ')}`);
       if (deleted.cliHistory.error) problems.push(`Agent session files were not removed: ${deleted.cliHistory.error}`);
-      if (!deleted.browserSession.closed) problems.push(`Browser tabs were not closed: ${deleted.browserSession.error || 'unconfirmed'}`);
+      if (!deleted.browserSession.closed) problems.push('chrome-use could not confirm that all of its browser tabs closed; a leftover tab may remain in the AI window.');
       if (problems.length) error(`Conversation deleted. ${problems.join(' ')}`);
       await list();
     } finally { nodes.deleteConfirm.hidden = true; controls(); }
   }
   function view(agents) { nodes.chatView.hidden = agents; nodes.agentsView.hidden = !agents; nodes.chatTab.classList.toggle('selected', !agents); nodes.agentsTab.classList.toggle('selected', agents); nodes.chatTab.setAttribute('aria-pressed', String(!agents)); nodes.agentsTab.setAttribute('aria-pressed', String(agents)); }
-  function clearModels() { modelEpoch++; nodes.modelList.replaceChildren(); nodes.modelStatus.textContent = 'CLI model access has not been checked.'; nodes.inspectAgent.disabled = !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection; }
-  async function inspectModels() {
+  // The model menu is filled from the CLI's own catalog, read once per agent
+  // and program; "Default model" leaves the choice to the CLI configuration.
+  const modelCache = new Map();
+  // One CLI probe per agent and program serves both the menu and Agents & models.
+  function readInspection(agentId, executable = '', force = false) {
+    const key = `${agentId}\n${executable}`;
+    if (force || !modelCache.has(key)) {
+      const pending = api('agentInspect', { agentId, ...(executable ? { executable } : {}) }).then(result => result.inspection);
+      pending.catch(() => { if (modelCache.get(key) === pending) modelCache.delete(key); });
+      modelCache.set(key, pending);
+    }
+    return modelCache.get(key);
+  }
+  function modelOptions(models = []) {
+    const keep = nodes.model.value; const first = element('option', 'Default model'); first.value = '';
+    nodes.model.replaceChildren(first);
+    for (const model of models) { const option = element('option', model.label || model.id); option.value = model.id; nodes.model.append(option); }
+    nodes.model.value = models.some(model => model.id === keep) ? keep : '';
+  }
+  function clearModels() { modelEpoch++; modelOptions(); nodes.modelStatus.textContent = 'CLI model access has not been checked.'; nodes.inspectAgent.disabled = !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection; }
+  function showInspection(inspection) {
+    modelOptions(inspection.models);
+    const account = { reportedSignedIn: 'CLI reports signed in', reportedSignedOut: 'CLI reports signed out', reportedMetadata: 'CLI reports account metadata', unverified: 'Account state unverified' }[inspection.account.status];
+    nodes.modelStatus.textContent = `${inspection.versionReported ? `CLI ${inspection.versionReported}. ` : 'CLI version unverified. '}${inspection.models.length} models${inspection.complete ? '' : ' (partial catalog)'}. ${account}. Model execution access is unverified.`;
+  }
+  async function inspectModels(force = true) {
     if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) throw new Error('CLI model inspection is unavailable for this host.');
     const epoch = ++modelEpoch, agentId = nodes.agent.value, executable = nodes.executable.value.trim();
-    nodes.inspectAgent.disabled = true; nodes.modelList.replaceChildren(); nodes.modelStatus.textContent = 'Reading CLI model metadata…';
+    nodes.inspectAgent.disabled = true; nodes.modelStatus.textContent = 'Reading CLI model metadata…';
     try {
-      const result = await api('agentInspect', { agentId, ...(executable ? { executable } : {}) });
-      if (closed || epoch !== modelEpoch || agentId !== nodes.agent.value || executable !== nodes.executable.value.trim()) return;
-      const inspection = result.inspection;
-      for (const model of inspection.models) { const option = element('option', `${model.label}${model.efforts.length ? ` · effort: ${model.efforts.join(', ')}` : ''}`); option.value = model.id; nodes.modelList.append(option); }
-      const account = { reportedSignedIn: 'CLI reports signed in', reportedSignedOut: 'CLI reports signed out', reportedMetadata: 'CLI reports account metadata', unverified: 'Account state unverified' }[inspection.account.status];
-      nodes.modelStatus.textContent = `${inspection.versionReported ? `CLI ${inspection.versionReported}. ` : 'CLI version unverified. '}${inspection.models.length} models${inspection.complete ? '' : ' (partial catalog)'}. ${account}. Model execution access is unverified.`;
-    } catch (failure) { if (epoch === modelEpoch) nodes.modelStatus.textContent = 'Model metadata unavailable. No fallback list was substituted; you can still enter a model ID.'; throw failure; }
+      const inspection = await readInspection(agentId, executable, force);
+      if (closed || epoch !== modelEpoch || agentId !== nodes.agent.value || executable !== nodes.executable.value.trim() || inspection.agentId !== agentId) return;
+      showInspection(inspection);
+    } catch (failure) { if (epoch === modelEpoch) nodes.modelStatus.textContent = 'Model metadata unavailable. No fallback list was substituted; you can still enter a custom model ID.'; throw failure; }
     finally { if (epoch === modelEpoch) nodes.inspectAgent.disabled = false; }
+  }
+  // Read the menu automatically for a new conversation; failures stay in the
+  // status line instead of interrupting the panel.
+  function loadModels() {
+    if (selected || !nodes.agent.value || !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) return;
+    void inspectModels(false).catch(() => {});
   }
   let discoverEpoch = 0;
   const accountLabels = { reportedSignedIn: 'Signed in', reportedSignedOut: 'Signed out', reportedMetadata: 'Account reported', unverified: 'Login unknown' };
@@ -382,10 +411,11 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
   // The report is not proof of model access; that is settled by the first turn.
   async function agentStatus(agent, line, epoch) {
     if (!agent.executable) { line.textContent = agent.configFiles?.length ? 'Configuration found; program not installed' : 'Not installed'; return; }
+    if (!chatAgents.has(agent.id)) { line.textContent = 'Installed · chat not supported in the panel yet'; return; }
     if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) { line.textContent = 'Installed'; return; }
     line.textContent = 'Installed · checking…';
     try {
-      const { inspection } = await api('agentInspect', { agentId: agent.id });
+      const inspection = await readInspection(agent.id);
       if (epoch !== discoverEpoch) return;
       const account = inspection.account || {};
       const parts = [inspection.versionReported ? `v${String(inspection.versionReported).replace(/^v/, '')}` : 'Installed', `${accountLabels[account.status] || 'Login unknown'}${account.status === 'reportedSignedIn' && typeof account.kind === 'string' ? ` (${account.kind})` : ''}`];
@@ -449,21 +479,21 @@ export function createPanel({ document, runtime, storage, schedule = setTimeout,
       if (!conversations.some(chat => chat.id === selected)) select('');
       else if (!conversation || conversation.id !== selected) select(selected);
     }
-    await poll(); loop();
+    await poll(); loop(); loadModels();
   }
   nodes.composer.addEventListener('submit', event => { event.preventDefault(); void send().catch(error); });
   nodes.message.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(event.ctrlKey || event.metaKey).catch(error); } });
   nodes.sendDirect.addEventListener('click', () => void send(true).catch(error));
   nodes.conversation.addEventListener('change', () => select(nodes.conversation.value));
-  nodes.newChat.addEventListener('click', () => { nodes.conversation.value = ''; select(''); });
+  nodes.newChat.addEventListener('click', () => { nodes.conversation.value = ''; select(''); loadModels(); });
   nodes.refresh.addEventListener('click', () => void refresh().catch(error));
   nodes.access.addEventListener('click', () => void setAccess(!(selected ? conversation?.fullAccess === true : newFullAccess)).catch(error));
   nodes.deleteChat.addEventListener('click', () => { nodes.deleteConfirm.hidden = false; });
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
   nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
-  nodes.inspectAgent.addEventListener('click', () => void inspectModels().catch(error));
-  nodes.agent.addEventListener('change', () => { clearModels(); nodes.model.value = ''; });
-  nodes.executable.addEventListener('input', clearModels);
+  nodes.inspectAgent.addEventListener('click', () => void inspectModels(true).catch(error));
+  nodes.agent.addEventListener('change', () => { clearModels(); loadModels(); });
+  nodes.executable.addEventListener('change', () => { clearModels(); loadModels(); });
   nodes.discover.addEventListener('click', () => void discover().catch(error));
   nodes.settings.addEventListener('click', () => runtime?.openOptionsPage?.());
   nodes.chatTab.addEventListener('click', () => view(false)); nodes.agentsTab.addEventListener('click', () => { view(true); if (connected && panelSupport) void discover().catch(error); });

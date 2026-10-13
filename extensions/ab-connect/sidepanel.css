@@ -98,10 +98,11 @@ details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .composer-controls { display:flex; align-items:center; gap:4px; margin-top:4px; }
 .composer-controls #queue { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .new-options { display:flex; align-items:center; gap:2px; }
+.chip select { field-sizing:content; }
 .chip select,.chip input { border-radius:12px; padding:3px 8px; font-size:12px; background:transparent; border-color:transparent; }
 .chip select:hover,.chip input:hover,.chip input:focus { background:var(--surface); }
-.chip.model { width:118px; }
-.chip.model input { text-align:right; }
+.chip.model { max-width:170px; min-width:0; margin-left:auto; }
+.chip.model select { width:100%; text-overflow:ellipsis; color:var(--muted); }
 .more summary { list-style:none; width:28px; height:28px; text-align:center; border-radius:50%; font-size:15px; line-height:28px; color:var(--muted); }
 .more summary::-webkit-details-marker { display:none; }
 .more summary:hover { background:var(--surface); color:var(--ink); }
