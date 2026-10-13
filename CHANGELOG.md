@@ -1,8 +1,19 @@
 # Changelog
 
-## 1.5.201
+## 1.5.202
 
 <!-- release:start -->
+### Bug Fixes
+
+- **Deleting a panel conversation cleans up its browser session.** A session could keep a tab record that `close` can never verify, such as an old target id or a tab opened before Chrome restarted, so the delete left the session daemon running. Delete now tries `close`, then `close --forget-untracked`, then `session stop --force` for that conversation's own session. Only a plain close reports the tabs as closed; otherwise the panel says a tab may remain in the AI window.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.201
+
 Requires extension ab-connect 0.5.46 for the longer panel waits. Chrome Web Store publication follows Google review.
 
 ### Bug Fixes
@@ -12,7 +23,6 @@ Requires extension ab-connect 0.5.46 for the longer panel waits. Chrome Web Stor
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.200
 
