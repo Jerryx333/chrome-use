@@ -3,7 +3,7 @@
 ## 1.5.204
 
 <!-- release:start -->
-Requires extension ab-connect 0.5.48 for the conversation menu. Chrome Web Store publication follows Google review.
+Requires extension ab-connect 0.5.49 for the conversation menu. Chrome Web Store publication follows Google review.
 
 ### New Features
 
