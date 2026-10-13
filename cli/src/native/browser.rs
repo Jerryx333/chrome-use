@@ -1110,33 +1110,33 @@ fn prunable_target_ids(
 /// pruned. >1 so a single churning/partial snapshot (other agents opening/closing
 /// tabs) or a brief cross-process-nav gap can't drop the tab the agent is driving.
 const RELAY_PRUNE_MISSES: u32 = 3;
+const RELAY_PRUNE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Debounced prune for the relay: target ids to drop, mutating per-target miss
 /// counters. A tab in `live_ids` resets to 0; an absent (non-pinned) tab
-/// increments and is pruned only at `RELAY_PRUNE_MISSES`. Counters for
+/// increments and is pruned only after `RELAY_PRUNE_MISSES` and three seconds
+/// of continuous absence. Pinning a target resets its absence. Counters for
 /// no-longer-tracked targets are forgotten. Pure, so the multi-agent churn
 /// tolerance is unit-testable without a live browser.
 fn debounced_prune_ids(
     pages: &[PageInfo],
     live_ids: &HashSet<String>,
     pinned: Option<&str>,
-    misses: &mut HashMap<String, u32>,
+    misses: &mut HashMap<String, (u32, std::time::Instant)>,
+    now: std::time::Instant,
 ) -> Vec<String> {
     let tracked: HashSet<&str> = pages.iter().map(|p| p.target_id.as_str()).collect();
     misses.retain(|tid, _| tracked.contains(tid.as_str()));
     let mut prune = Vec::new();
     for p in pages {
         let tid = p.target_id.as_str();
-        if live_ids.contains(tid) {
+        if live_ids.contains(tid) || pinned == Some(tid) {
             misses.remove(tid);
             continue;
         }
-        if pinned == Some(tid) {
-            continue;
-        }
-        let c = misses.entry(p.target_id.clone()).or_insert(0);
-        *c += 1;
-        if *c >= RELAY_PRUNE_MISSES {
+        let (count, since) = misses.entry(p.target_id.clone()).or_insert((0, now));
+        *count = count.saturating_add(1);
+        if *count >= RELAY_PRUNE_MISSES && now.duration_since(*since) >= RELAY_PRUNE_GRACE {
             prune.push(p.target_id.clone());
         }
     }
@@ -3312,9 +3312,9 @@ pub struct BrowserManager {
     /// snapshot routinely omits live tabs (multi-agent churn, a cross-process nav
     /// briefly dropping the target), so we must not prune on one miss — that lost
     /// the tab the agent was driving. A tab is removed only after it's been absent
-    /// for `RELAY_PRUNE_MISSES` consecutive snapshots; any snapshot that includes
+    /// for `RELAY_PRUNE_MISSES` consecutive snapshots and at least three seconds; any snapshot that includes
     /// it resets the counter. Keyed by stable target_id.
-    relay_target_misses: HashMap<String, u32>,
+    relay_target_misses: HashMap<String, (u32, std::time::Instant)>,
     /// Whether the relay accepted this session's group announcement and is
     /// therefore scoping `Target.getTargets` to our own tab group (issue #40).
     /// When true the daemon can safely adopt new targets again (follow-popup,
@@ -7543,6 +7543,7 @@ impl BrowserManager {
                 &live_ids,
                 self.active_target_id.as_deref(),
                 &mut self.relay_target_misses,
+                std::time::Instant::now(),
             )
         } else {
             prunable_target_ids(&self.pages, &live_ids, self.active_target_id.as_deref())
@@ -7884,20 +7885,46 @@ impl BrowserManager {
         // scratch so the session's tab group isn't left showing a stray blank
         // page beside the work tab (every group otherwise carried one).
         if target_url != "about:blank" {
+            // Subscribe before probing so an event between the read and wait
+            // cannot be lost. A bounded fallback covers a relay missing events.
+            let mut ready_events = self.client.subscribe();
             let ready_check = async {
-                for _ in 0..50 {
+                let mut fallback = Duration::from_millis(100);
+                loop {
                     if let Ok(val) = self.evaluate_simple("document.readyState").await {
-                        if let Some(s) = val.as_str() {
-                            if s == "complete" || s == "interactive" {
-                                break;
-                            }
+                        if val
+                            .as_str()
+                            .is_some_and(|s| s == "complete" || s == "interactive")
+                        {
+                            break;
                         }
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    let signal = async {
+                        loop {
+                            match ready_events.recv().await {
+                                Ok(event)
+                                    if event.session_id.as_deref()
+                                        == Some(attach.session_id.as_str())
+                                        && matches!(
+                                            event.method.as_str(),
+                                            "Page.domContentEventFired" | "Page.loadEventFired"
+                                        ) =>
+                                {
+                                    break
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
+                                _ => {}
+                            }
+                        }
+                    };
+                    tokio::select! {
+                        _ = signal => {},
+                        _ = tokio::time::sleep(fallback) => {},
+                    }
+                    fallback = (fallback * 2).min(Duration::from_secs(1));
                 }
             };
-            let _ =
-                tokio::time::timeout(tokio::time::Duration::from_millis(5000), ready_check).await;
+            let _ = tokio::time::timeout(Duration::from_secs(5), ready_check).await;
 
             let current_url = self
                 .get_url()
@@ -11775,18 +11802,30 @@ mod tests {
     }
 
     #[test]
-    fn debounced_prune_tolerates_transient_churn() {
-        // Multi-agent churn: a single getTargets snapshot omits our owned tab "B"
-        // (another agent opened/closed tabs). It must NOT be pruned on one miss.
+    fn debounced_prune_requires_elapsed_time_not_rapid_calls() {
         let pages = vec![page("A"), page("B")];
         let mut misses = HashMap::new();
-        let empty: HashSet<String> = HashSet::new();
-        // Misses 1 and 2: B absent but under threshold → not pruned.
-        assert!(debounced_prune_ids(&pages, &empty, Some("A"), &mut misses).is_empty());
-        assert!(debounced_prune_ids(&pages, &empty, Some("A"), &mut misses).is_empty());
-        // Miss 3 (== RELAY_PRUNE_MISSES): genuinely gone → pruned.
+        let empty = HashSet::new();
+        let now = std::time::Instant::now();
+        for _ in 0..100 {
+            assert!(debounced_prune_ids(&pages, &empty, Some("A"), &mut misses, now).is_empty());
+        }
+        assert!(debounced_prune_ids(
+            &pages,
+            &empty,
+            Some("A"),
+            &mut misses,
+            now + RELAY_PRUNE_GRACE - std::time::Duration::from_millis(1)
+        )
+        .is_empty());
         assert_eq!(
-            debounced_prune_ids(&pages, &empty, Some("A"), &mut misses),
+            debounced_prune_ids(
+                &pages,
+                &empty,
+                Some("A"),
+                &mut misses,
+                now + RELAY_PRUNE_GRACE
+            ),
             vec!["B".to_string()]
         );
     }
@@ -11795,19 +11834,45 @@ mod tests {
     fn debounced_prune_resets_on_reappearance_and_protects_pin() {
         let pages = vec![page("A"), page("B")];
         let mut misses = HashMap::new();
-        let empty: HashSet<String> = HashSet::new();
-        let mut live_b: HashSet<String> = HashSet::new();
-        live_b.insert("B".to_string());
-        // Two misses for B, then it reappears → counter resets, so it survives
-        // indefinitely under intermittent churn.
-        debounced_prune_ids(&pages, &empty, Some("A"), &mut misses);
-        debounced_prune_ids(&pages, &empty, Some("A"), &mut misses);
-        assert!(debounced_prune_ids(&pages, &live_b, Some("A"), &mut misses).is_empty());
-        assert!(debounced_prune_ids(&pages, &empty, Some("A"), &mut misses).is_empty()); // back to miss 1
-                                                                                         // The pinned active "A" is never pruned no matter how many misses.
+        let empty = HashSet::new();
+        let live_b = HashSet::from(["B".to_string()]);
+        let now = std::time::Instant::now();
+        debounced_prune_ids(&pages, &empty, Some("A"), &mut misses, now);
+        debounced_prune_ids(&pages, &empty, Some("A"), &mut misses, now);
+        assert!(debounced_prune_ids(
+            &pages,
+            &live_b,
+            Some("A"),
+            &mut misses,
+            now + RELAY_PRUNE_GRACE
+        )
+        .is_empty());
+        assert!(debounced_prune_ids(
+            &pages,
+            &empty,
+            Some("A"),
+            &mut misses,
+            now + RELAY_PRUNE_GRACE
+        )
+        .is_empty());
+        // Pinning B forgets its previous absence; unpinning starts a new grace.
+        debounced_prune_ids(
+            &pages,
+            &empty,
+            Some("B"),
+            &mut misses,
+            now + RELAY_PRUNE_GRACE,
+        );
+        assert!(!misses.contains_key("B"));
         for _ in 0..5 {
-            let gone = debounced_prune_ids(&pages, &empty, Some("A"), &mut misses);
-            assert!(!gone.contains(&"A".to_string()));
+            let gone = debounced_prune_ids(
+                &pages,
+                &empty,
+                Some("A"),
+                &mut misses,
+                now + RELAY_PRUNE_GRACE,
+            );
+            assert!(gone.is_empty());
         }
     }
 

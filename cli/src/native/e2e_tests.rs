@@ -6646,7 +6646,7 @@ async fn e2e_snapshot_refs_stable_across_modal_churn() {
         &json!({
             "id": "4",
             "action": "eval",
-            "expression": "document.body.insertAdjacentHTML('afterbegin', '<dialog open id=\"modal\"><button>ModalButton</button></dialog>')"
+            "expression": "document.body.insertAdjacentHTML('afterbegin', '<dialog open id=\"modal\" data-__ab-top=\"site-value\"><button>ModalButton</button></dialog>'); window.topWrites=0; window.topObserver=new MutationObserver(rs=>window.topWrites+=rs.length); window.topObserver.observe(document.body,{attributes:true,subtree:true,attributeFilter:['data-__ab-top']})"
         }),
         &mut state,
     )
@@ -6665,6 +6665,27 @@ async fn e2e_snapshot_refs_stable_across_modal_churn() {
     assert_eq!(
         second, first,
         "modal insertion must not renumber an existing node"
+    );
+
+    let modal_line = get_data(&resp)["snapshot"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find(|line| line.contains("ModalButton"))
+        .unwrap();
+    assert!(
+        modal_line.contains("modal"),
+        "top-layer controls must still be marked: {modal_line}"
+    );
+    let inspected = execute_command(
+        &json!({"id":"5a","action":"eval","expression":"JSON.stringify([window.topWrites,document.querySelector('#modal').getAttribute('data-__ab-top')])"}),
+        &mut state,
+    ).await;
+    assert_success(&inspected);
+    assert_eq!(
+        get_data(&inspected)["result"],
+        json!("[0,\"site-value\"]"),
+        "modal inspection must preserve page attributes and produce no top-layer writes"
     );
 
     let resp = execute_command(
@@ -13565,4 +13586,42 @@ document.getElementById('open').addEventListener('click', () => {{
     close_state(&mut state).await;
     server.abort();
     popup_server.abort();
+}
+
+/// A semantic click must name its blocker and must not click through it (#561).
+#[tokio::test]
+#[ignore]
+async fn e2e_semantic_click_names_covering_overlay() {
+    let mut state = DaemonState::new();
+    let launched = execute_command(
+        &json!({"id":"1","action":"launch","headless":true}),
+        &mut state,
+    )
+    .await;
+    assert_success(&launched);
+    let page = execute_command(&json!({"id":"2","action":"setcontent","html":r##"<html><body>
+        <button style="position:absolute;left:100px;top:100px;width:150px;height:50px" onclick="window.clicked=true">Confirm</button>
+        <div id="cookie-cover" style="position:fixed;inset:0;background:white;z-index:999">Cookie consent</div>
+        <script>window.clicked=false</script></body></html>"##}), &mut state).await;
+    assert_success(&page);
+    let argv: Vec<String> = [
+        "find", "role", "button", "click", "--name", "Confirm", "--exact",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    let flags = crate::flags::parse_flags(&argv);
+    let cmd = crate::commands::parse_command(&argv, &flags).unwrap();
+    let refused = execute_command(&cmd, &mut state).await;
+    assert_eq!(refused["success"], false, "{refused}");
+    assert!(refused.to_string().contains("cookie-cover"), "{refused}");
+    let checked = execute_command(
+        &json!({"id":"4","action":"eval","expression":"window.clicked"}),
+        &mut state,
+    )
+    .await;
+    assert_success(&checked);
+    assert_eq!(get_data(&checked)["result"], false);
+    let closed = execute_command(&json!({"id":"5","action":"close"}), &mut state).await;
+    assert_success(&closed);
 }
