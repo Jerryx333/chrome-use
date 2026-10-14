@@ -96,3 +96,23 @@ chrome-use inspect list [--json]
 Identity from `ocs whoami --json` (id) joined with `ocs who --json` (cwd).
 Exit codes: 0 linked/unlinked, 2 pending claim written (browser confirmation
 needed), 1 refused (reason printed).
+
+## Agreed during implementation
+
+1. `inspectBind` without `fingerprint` is the 0.5.56 shape: origin-level `/`
+   only, `sourceRoots [root]`, refused with `upgradeRequired` when the origin
+   has another scope or a pending claim. `sessionId` stays optional.
+2. `inspectConsent` and `inspectLaunchCommand` take optional `pathScope`
+   (default `/`).
+3. `sourceRoots` in `inspect.json` is file-level (the app root is per file).
+4. `card.pairs` may contain a root with no related live session
+   (`sessionId`/`sessionCwd` null, `""` in the fingerprint); it is shown with a
+   start hint, never preselected and never confirmable.
+5. `needsConfirm` reason `rootMissing` when the bound root is gone or moved.
+6. A tab target's fingerprint is accepted for any scope applying to
+   `pagePath`; `pagePath` must equal the path of `pageUrl`; `sourceRoots` must
+   equal the recomputed pair's.
+7. `inspect link` without `--path-scope` uses the matched config site's
+   `pathScope`, else `/`; `--path-scope` must apply to the URL's path.
+8. Accepting a claim writes `source: "linked"` and re-checks the claimant is
+   live with the same cwd.
