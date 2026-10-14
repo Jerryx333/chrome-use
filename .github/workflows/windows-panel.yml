@@ -31,6 +31,7 @@ jobs:
         with:
           workspaces: cli
           key: x86_64-pc-windows-msvc-ci
+          cache-on-failure: true
       - name: Windows private-state and process-tree tests
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use agent_panel -- --test-threads=1
       - name: Full native-host protocol parity

@@ -308,9 +308,23 @@ pub(super) fn protect_directory(path: &Path) -> Result<(), String> {
     }
     protect(&file)
 }
+/// Canonical parents provide the extended Win32 prefix even for a new leaf.
+/// std filesystem APIs already do this; raw MoveFileExW does not.
+fn extended_file_path(path: &Path) -> Result<std::path::PathBuf, String> {
+    let parent = path.parent().ok_or("Windows state path has no parent")?;
+    let leaf = path
+        .file_name()
+        .ok_or("Windows state path has no filename")?;
+    Ok(std::fs::canonicalize(parent)
+        .map_err(|_| "Cannot resolve Windows state directory")?
+        .join(leaf))
+}
+
 pub(super) fn replace(source: &Path, destination: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
+    let source = extended_file_path(source)?;
     let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination = extended_file_path(destination)?;
     let destination: Vec<u16> = destination
         .as_os_str()
         .encode_wide()
@@ -481,6 +495,20 @@ mod tests {
         drop(file);
         std::fs::hard_link(&path, root.path().join("alias.json")).unwrap();
         assert!(super::super::config_transaction::private_open(&path, false).is_err());
+    }
+    #[test]
+    fn atomic_replacement_supports_long_skill_snapshot_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let mut folder = root.path().to_path_buf();
+        for _ in 0..6 {
+            folder = folder.join("long-private-skill-snapshot-directory");
+            super::super::config_transaction::private_tree(&folder).unwrap();
+        }
+        let path = folder.join("SKILL.md");
+        assert!(path.as_os_str().len() > 260);
+        super::super::config_transaction::atomic_write(&path, b"first", None).unwrap();
+        super::super::config_transaction::atomic_write(&path, b"replacement", None).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
     }
     #[tokio::test]
     async fn job_contains_descendants_before_the_leader_runs_and_confirms_their_exit() {
