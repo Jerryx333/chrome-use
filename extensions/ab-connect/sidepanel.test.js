@@ -48,6 +48,7 @@ async function fixture(overrides = {}, saved = {}) {
     },
   };
   const document = { createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); } };
+  for (const id of overrides.hiddenNodes || []) document.getElementById(id).hidden = true;
   const panel = createPanel({ document, runtime, encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
   return { panel, nodes, calls, chats, writes, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
@@ -564,7 +565,8 @@ test('a failed image upload never sends the text alone or creates an uncertain m
 });
 
 test('opening the panel never starts a CLI the user has not picked', async () => {
-  const f=await fixture({agentInspect:()=>{throw new Error('probe started');}});
+  const installed=[{id:'codex',name:'Codex',executable:'/usr/local/bin/codex'},{id:'claude',name:'Claude Code',executable:'/usr/local/bin/claude'}];
+  const f=await fixture({hiddenNodes:['agentsView'],discover:()=>({success:true,result:{agents:installed}}),agentInspect:()=>{throw new Error('probe started');}});
   assert.equal(f.calls.filter(call=>call.operation==='agentInspect').length,0);
   assert.match(f.nodes.get('modelStatus').textContent,/not been checked/);f.panel.close();
 });
