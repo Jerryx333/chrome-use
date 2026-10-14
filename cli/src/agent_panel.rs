@@ -18,6 +18,7 @@ mod config_edit;
 mod config_transaction;
 mod configuration;
 mod conversation;
+mod inspect;
 mod inspection;
 mod options;
 mod schedules;
@@ -556,11 +557,15 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
     let chat_agents: &[&str] = if cfg!(unix) { CHAT_AGENTS } else { &[] };
-    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix),"conversationOptions":cfg!(unix),"imageAttachments":cfg!(unix),"skillLibrary":cfg!(unix),"schedules":cfg!(unix),"chatAgents":chat_agents})
+    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix),"conversationOptions":cfg!(unix),"imageAttachments":cfg!(unix),"skillLibrary":cfg!(unix),"schedules":cfg!(unix),"inspect":true,"chatAgents":chat_agents})
 }
 
+// Inspect & Ask runs on Windows too: its launch command is PowerShell and its
+// port lookup is skipped there. It writes only its own binding store.
 fn operation_allowed(operation: &str, read_only: bool) -> bool {
-    !read_only || ["discover", "configRead"].contains(&operation)
+    !read_only
+        || ["discover", "configRead"].contains(&operation)
+        || inspect::OPERATIONS.contains(&operation)
 }
 
 pub fn handle_for_profile(
@@ -619,6 +624,7 @@ pub fn handle_for_profile(
         | "agentSkillSave"
         | "serviceHealth"
         | "serviceStop" => service::call(operation, params, profile),
+        operation if inspect::OPERATIONS.contains(&operation) => inspect::handle(operation, params),
         _ => Err(format!("Unsupported agent panel operation: {operation}")),
     }
 }
@@ -643,6 +649,8 @@ mod tests {
     fn windows_read_only_mode_refuses_all_persistence_and_process_operations() {
         assert!(operation_allowed("discover", true));
         assert!(operation_allowed("configRead", true));
+        assert!(operation_allowed("inspectDeliver", true));
+        assert!(!operation_allowed("inspectAnything", true));
         for operation in [
             "configPlan",
             "configApply",

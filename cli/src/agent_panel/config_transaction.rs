@@ -742,9 +742,13 @@ pub(super) fn private_tree(path: &Path) -> Result<(), String> {
             use std::os::unix::fs::DirBuilderExt;
             builder.mode(0o700);
         }
-        builder
-            .create(path)
-            .map_err(|_| "Cannot create private configuration store")?;
+        // A concurrent caller may create it first; the checks below still
+        // decide whether the directory that exists is acceptable.
+        match builder.create(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err("Cannot create private configuration store".into()),
+        }
     }
     let meta =
         fs::symlink_metadata(path).map_err(|_| "Cannot inspect private configuration store")?;
