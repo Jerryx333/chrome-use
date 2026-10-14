@@ -12,7 +12,7 @@
 
 <p align="center"><i>⭐ If it saves you a re-login, a star helps other devs find it.</i></p>
 
-![chrome-use](assets/hero.png)
+![chrome-use](assets/hero.webp)
 
 <p align="center">
   <img src="assets/demo.gif" alt="chrome-use demo: open Hacker News in your real Chrome and pull the top stories as structured JSON in one command" width="820">
@@ -57,7 +57,7 @@ A **new browser context** starts without your existing login sessions. Playwrigh
 
 ## How it works
 
-![how it works](assets/how-it-works.png)
+![how it works](assets/how-it-works.webp)
 
 Your **chrome-use CLI** talks to a tiny **browser extension** over Chrome
 **native messaging**: a local inter-process channel, *no network socket, no
@@ -65,7 +65,7 @@ token, no remote server*. The extension uses `chrome.debugger` to drive the tabs
 you target in **your own, already-logged-in Chrome**, then hands results back to
 the CLI. Everything stays on your machine.
 
-![architecture](assets/architecture.png)
+![architecture](assets/architecture.webp)
 
 Each `--session` gets its **own colored Chrome tab group**, so multiple agents
 can share one real browser concurrently without stepping on each other, or your
@@ -158,6 +158,10 @@ For hosts that speak **MCP but can't run arbitrary shell commands** (Claude Desk
 ```
 
 ### Local agent side panel
+
+<p align="center">
+  <img src="assets/side-panel.webp" alt="chrome-use side panel: the agent compares the plans on a pricing page and answers with a table" width="820">
+</p>
 
 Click the extension toolbar icon to open the side panel; **Settings** opens connection options. On macOS/Linux, choose **Codex**, **Claude Code**, **OpenCode** or **Pi** and use the installed CLI's existing login and provider configuration. The agent menu follows the connected host's capabilities; older hosts need an upgrade to offer newer adapters. Windows currently supports agent discovery and configuration reads only.
 
@@ -420,7 +424,7 @@ anything already typed into the form, so treat the file as sensitive. The run re
 
 ## Anti-detection
 
-<img src="assets/shield.png" alt="stealth shield" width="320" align="right" />
+<img src="assets/shield.webp" alt="stealth shield" width="320" align="right" />
 
 When connected to your real Chrome, we inject **zero** JavaScript patches. Your browser's fingerprint is completely genuine. The guiding rule is **native CDP/Chrome overrides over JS lies**: a re-defined getter is itself detectable; a native override isn't.
 

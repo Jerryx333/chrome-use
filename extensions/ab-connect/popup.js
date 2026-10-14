@@ -90,6 +90,12 @@ document.querySelectorAll('[data-href]').forEach((a) => {
   })
 })
 
+document.querySelectorAll('[data-action="options"]').forEach((button) => {
+  button.addEventListener('click', () => {
+    if (typeof chrome !== 'undefined') chrome.runtime?.openOptionsPage?.()
+  })
+})
+
 // Update an open popup even when the host confirms after the startup queries.
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
   chrome.runtime.onMessage.addListener((message) => {
