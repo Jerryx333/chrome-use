@@ -75,14 +75,14 @@ test('delivery goes out once per id and refuses a replay of a locked batch', asy
   const instance = controller.registry.get(7);
   instance.annotations = [{ element, probe: null, note: '' }];
   const deliveryId = '11111111-2222-3333-4444-555555555555';
-  real.msg[0]({ type: 'deliver', requestId: 1, deliveryId, instruction: 'Round the corners', images: [{ index: 0, dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }, { index: 3, dataUrl: 'data:image/png;base64,AAAA' }] });
+  real.msg[0]({ type: 'deliver', requestId: 1, deliveryId, revision: 0, instruction: 'Round the corners', images: [{ index: 0, dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }, { index: 3, dataUrl: 'data:image/png;base64,AAAA' }] });
   await flush(); await flush(); await flush();
   const deliver = calls.find(c => c[0] === 'inspectDeliver')[1];
   assert.equal(deliver.origin, 'http://localhost:5173');
   assert.equal(deliver.annotations[0].sourcePath, 'src/a.tsx');
   assert.equal(deliver.images.length, 1, 'images for unknown indexes are dropped');
   assert.equal(real.sent.find(m => m.type === 'reply' && m.requestId === 1).result.state, 'sent');
-  real.msg[0]({ type: 'deliver', requestId: 2, deliveryId, instruction: 'Round the corners' });
+  real.msg[0]({ type: 'deliver', requestId: 2, deliveryId, revision: 0, instruction: 'Round the corners' });
   await flush(); await flush();
   assert.match(real.sent.find(m => m.type === 'error' && m.requestId === 2).error, /already sent/);
   assert.equal(calls.filter(c => c[0] === 'inspectDeliver').length, 1);
@@ -97,7 +97,7 @@ test('a host failure leaves the batch unconfirmed, not failed', async () => {
   real.msg[0]({ type: 'auth', secret: hello.secret });
   await flush();
   controller.registry.get(7).annotations = [{ element, probe: null, note: '' }];
-  real.msg[0]({ type: 'deliver', requestId: 1, deliveryId: '11111111-2222-3333-4444-555555555556', instruction: 'x' });
+  real.msg[0]({ type: 'deliver', requestId: 1, deliveryId: '11111111-2222-3333-4444-555555555556', revision: 0, instruction: 'x' });
   await flush(); await flush(); await flush();
   assert.equal(real.sent.find(m => m.requestId === 1).result.state, 'unconfirmed');
   assert.equal(store.inspectDrafts['http://localhost:5173'].state, 'unconfirmed');
@@ -111,4 +111,70 @@ test('pure helpers', () => {
   assert.equal(payload.sourceKind, 'react');
   assert.equal(payload.sourceLine, 9);
   assert.match(payload.markdown, /^### 1\./);
+});
+
+async function authorized() {
+  const ctx = await started();
+  const real = framePort({ id: 'ext', tab: { id: 7 }, frameId: 5, documentId: 'f', url: 'chrome-extension://ext/inspect-frame.html' });
+  ctx.controller.acceptPort(real);
+  real.msg[0]({ type: 'auth', secret: ctx.hello.secret });
+  await flush();
+  return { ...ctx, real, instance: ctx.controller.registry.get(7) };
+}
+
+test('a late probe result never rolls the selection back', async () => {
+  const { controller, chrome, instance } = await authorized();
+  controller.queueCapture = () => {};
+  const gates = [];
+  chrome.scripting.executeScript = () => new Promise(resolve => gates.push(resolve));
+  const a = controller.updateSelection(instance, { elements: [{ ...element, selector: 'a' }], probeAttribute: 'data-cu-probe-0123456789abcdef', selectionSeq: 1 });
+  const b = controller.updateSelection(instance, { elements: [{ ...element, selector: 'b' }], probeAttribute: 'data-cu-probe-0123456789abcdef', selectionSeq: 2 });
+  gates[1]([{ result: [] }]);
+  await b;
+  gates[0]([{ result: [] }]);
+  assert.deepEqual(await a, { ok: true, stale: true });
+  assert.equal(instance.annotations[0].element.selector, 'b');
+  assert.equal(instance.selectionRevision, 2);
+});
+
+test('a capture for an earlier selection is never published', async () => {
+  const { controller, chrome, instance, real } = await authorized();
+  instance.annotations = [{ id: '1:0', element, probe: null, note: '' }];
+  instance.selectionRevision = 1;
+  instance.pickerSeq = 1;
+  let release;
+  chrome.tabs.get = async () => ({ id: 7, windowId: 1, active: true, status: 'complete' });
+  chrome.tabs.captureVisibleTab = () => new Promise(resolve => { release = resolve; });
+  const layout = { innerWidth: 100, innerHeight: 100, scrollX: 0, scrollY: 0, devicePixelRatio: 1, selectionSeq: 1, rects: [{ x: 0, y: 0, width: 10, height: 10 }] };
+  controller.pickerCall = async () => ({ ok: true, layout });
+  const capture = controller.queueCapture(instance);
+  await flush(); await flush();
+  instance.selectionRevision = 2; // the user picked something else meanwhile
+  release('data:image/png;base64,AAAA');
+  await capture;
+  assert.equal(real.sent.filter(m => m.type === 'images').length, 0);
+});
+
+test('a capture whose picker layout belongs to a newer selection is dropped', async () => {
+  const { controller, chrome, instance, real } = await authorized();
+  instance.annotations = [{ id: '1:0', element, probe: null, note: '' }];
+  instance.selectionRevision = 1;
+  instance.pickerSeq = 1;
+  chrome.tabs.get = async () => ({ id: 7, windowId: 1, active: true });
+  chrome.tabs.captureVisibleTab = async () => { throw new Error('must not capture'); };
+  const calls = [];
+  controller.pickerCall = async (_instance, message) => { calls.push(message.type); return { ok: true, layout: { selectionSeq: 2, rects: [{}, {}] } }; };
+  await controller.queueCapture(instance);
+  assert.deepEqual(calls, ['inspect:prepareCapture', 'inspect:finishCapture'], 'picker UI is restored');
+  assert.equal(real.sent.filter(m => m.type === 'images').length, 0);
+});
+
+test('send is refused when the selection changed after review', async () => {
+  const { instance, real, calls } = await authorized();
+  instance.annotations = [{ id: '3:0', element, probe: null, note: '' }];
+  instance.selectionRevision = 3;
+  real.msg[0]({ type: 'deliver', requestId: 9, deliveryId: '11111111-2222-3333-4444-555555555557', revision: 2, instruction: 'x' });
+  await flush(); await flush();
+  assert.match(real.sent.find(m => m.requestId === 9).error, /selection changed/);
+  assert.equal(calls.filter(c => c[0] === 'inspectDeliver').length, 0);
 });

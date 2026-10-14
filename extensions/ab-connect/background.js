@@ -112,7 +112,7 @@ if (chrome.runtime.getManifest().key) {
     inspectCapture: async tabId => {
       const instance = globalThis.__chromeUseInspect.registry.get(tabId);
       if (!instance) throw new Error('no instance');
-      await globalThis.__chromeUseInspect.capture(instance);
+      await globalThis.__chromeUseInspect.queueCapture(instance);
       return { images: instance.images.size };
     },
     inspectState: tabId => {

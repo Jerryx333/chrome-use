@@ -32,6 +32,10 @@
   let observer = null;
   let closed = false;
   let anchorRect = null;
+  // Bumped on every selection change; travels with the selection report and
+  // each screenshot layout so the background can tell which selection a
+  // capture belongs to.
+  let selectionSeq = 0;
 
   const send = message => chrome.runtime.sendMessage({ ...message, instanceId });
 
@@ -105,7 +109,7 @@
   }
 
   function layoutNow() {
-    return { ...X.layout(window), rects: selected.map(node => { const r = node.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; }) };
+    return { ...X.layout(window), selectionSeq, rects: selected.map(node => { const r = node.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height }; }) };
   }
 
   async function report() {
@@ -113,7 +117,7 @@
     selected.forEach((node, i) => node.setAttribute(attribute, String(i)));
     try {
       const revision = document.querySelector('meta[name="chrome-use-revision"]')?.getAttribute('content') || null;
-      await send({ type: 'inspect:selection', elements: selected.map(node => X.describe(node)), probeAttribute: attribute, layout: layoutNow(), revision });
+      await send({ type: 'inspect:selection', selectionSeq, elements: selected.map(node => X.describe(node)), probeAttribute: attribute, layout: layoutNow(), revision });
     } finally {
       for (const node of selected) node.removeAttribute(attribute);
     }
@@ -128,6 +132,7 @@
     }
     next = next.filter(node => node.isConnected).slice(0, MAX);
     selected = next;
+    selectionSeq++;
     drawBadges();
     if (selected.length) openPanel();
     void report().catch(() => {});
@@ -282,16 +287,33 @@
     event.stopImmediatePropagation();
   }
 
+  // A gesture the picker consumed must not reach the page in any form: the
+  // pointer events, the compatibility mouse events, and the click, auxclick or
+  // dblclick that follow mouseup. `consumed` stays set until those trailing
+  // events have passed, independent of whether picking has ended.
+  let consumed = null;
+  const releaseConsumed = () => { consumed = null; };
+
   function onDown(event) {
-    if (closed || !picking || event.button !== 0 || !event.isTrusted) return;
-    if (event.composedPath().includes(host)) return;
+    if (closed || !event.isTrusted || event.composedPath().includes(host)) return;
+    if (!picking) return;
     swallow(event);
-    drag = { x: event.clientX, y: event.clientY, active: false, shift: event.shiftKey };
+    if (event.type === 'pointerdown') {
+      clearTimeout(consumed?.timer);
+      consumed = { timer: null };
+      if (event.button === 0) drag = { x: event.clientX, y: event.clientY, active: false, shift: event.shiftKey };
+    }
   }
 
   function onUp(event) {
-    if (closed || !drag) return;
+    if (closed || event.composedPath().includes(host)) return;
+    if (!consumed && !drag) return;
     swallow(event);
+    if (event.type !== 'pointerup') return;
+    // The click (and a possible dblclick) arrive after pointerup; keep
+    // swallowing them for a short while even though picking may end now.
+    if (consumed) { clearTimeout(consumed.timer); consumed.timer = setTimeout(releaseConsumed, 600); }
+    if (!drag) return;
     const current = drag;
     drag = null;
     marquee.style.display = 'none';
@@ -312,7 +334,7 @@
 
   function onClick(event) {
     if (closed || event.composedPath().includes(host)) return;
-    if (picking || drag) swallow(event);
+    if (consumed || picking || drag) swallow(event);
   }
 
   function onKey(event) {
@@ -337,7 +359,8 @@
   }
 
   const listeners = [
-    ['mousemove', onMove], ['mousedown', onDown], ['mouseup', onUp], ['click', onClick],
+    ['pointermove', onMove], ['pointerdown', onDown], ['mousedown', onDown], ['pointerup', onUp], ['mouseup', onUp],
+    ['click', onClick], ['auxclick', onClick], ['dblclick', onClick], ['contextmenu', onClick],
     ['keydown', onKey], ['scroll', onScroll], ['resize', onScroll],
   ];
 
@@ -359,7 +382,12 @@
     if (sender.id !== chrome.runtime.id || sender.tab || message?.instanceId !== instanceId) return false;
     if (message.type === 'inspect:prepareCapture') {
       host.style.visibility = 'hidden';
-      requestAnimationFrame(() => requestAnimationFrame(() => sendResponse({ ok: true, layout: layoutNow() })));
+      // Two frames so the hidden overlay is off screen; a timer covers pages
+      // that do not run animation frames.
+      let answered = false;
+      const answer = () => { if (answered) return; answered = true; sendResponse({ ok: true, layout: layoutNow() }); };
+      requestAnimationFrame(() => requestAnimationFrame(answer));
+      setTimeout(answer, 250);
       return true;
     }
     if (message.type === 'inspect:finishCapture') {

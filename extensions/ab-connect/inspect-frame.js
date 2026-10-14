@@ -82,13 +82,19 @@ function onBackground(message) {
     }
     case 'annotations':
       state.annotations = message.annotations || [];
-      state.revision = message.revision || null;
+      state.selection = message.revision;
+      state.revision = message.pageRevision || null;
       state.images = [];
+      state.imageReason = null;
       state.edited.clear();
+      state.attach.clear();
+      restoreNotes();
       if (state.settings?.enabled && !state.status && !state.statusError) void refreshStatus();
       render();
       return;
     case 'images':
+      // Screenshots made for an earlier selection never attach to this one.
+      if (message.revision !== state.selection) return;
       state.images = message.images || [];
       state.imageReason = message.reason || null;
       render();
@@ -133,6 +139,7 @@ async function onAuthorized(message) {
   // before anything else is sent.
   const carried = message.draft && ['sending', 'unknown', 'unconfirmed'].includes(message.draft.state);
   if (message.draft && !LOCKED_STATES.includes(message.draft.state)) state.instruction = message.draft.instruction || '';
+  if (message.draft && (carried || !LOCKED_STATES.includes(message.draft.state))) state.draftNotes = message.draft.notes || null;
   if (carried) {
     state.instruction = message.draft.instruction || '';
     state.deliveryId = message.draft.deliveryId;
@@ -144,6 +151,23 @@ async function onAuthorized(message) {
   view.hidden = false;
   if (state.settings?.enabled) await refreshStatus();
   render();
+}
+
+// Drafts keep your words only: the instruction, per-element notes keyed by
+// selector, and the batch id. Page context and screenshots are never stored;
+// picking the same elements again restores their notes.
+function saveDraft(stateOverride) {
+  const notes = {};
+  for (const a of state.annotations) if (a.note?.trim()) notes[a.selector] = a.note;
+  void request('draft', { draft: { instruction: state.instruction, notes, deliveryId: state.deliveryId, state: stateOverride || (locked() ? state.delivery.state : 'editing') } }).catch(() => {});
+}
+
+function restoreNotes() {
+  if (!state.draftNotes) return;
+  for (const a of state.annotations) {
+    const note = state.draftNotes[a.selector];
+    if (note && !a.note) { a.note = note; void request('note', { annotationId: a.id, note }).catch(() => {}); }
+  }
 }
 
 async function refreshStatus() {
@@ -253,7 +277,7 @@ function projectChooser(status) {
         if (!event.isTrusted) return;
         const root = manual.value.trim() || chosen;
         if (!root) return;
-        await guarded(async () => { await request('bind', { root }); state.choosing = false; await refreshStatus(); });
+        await gated('bind', async () => { await request('bind', { root }); state.choosing = false; await refreshStatus(); });
       } }, 'Use this project'),
       state.status?.binding ? h('button', { onclick: () => { state.choosing = false; render(); } }, 'Cancel') : null));
 }
@@ -276,7 +300,7 @@ function sessionChooser(status, binding) {
     h('span', {}, h('strong', { text: s.name || s.id }), ' ', h('span', { class: 'muted small', text: `${s.kind}${s.status ? ' · ' + s.status : ''}` }), h('br'), h('span', { class: 'mono muted', text: s.cwd }))))));
   box.append(h('div', { class: 'actions' }, h('button', { class: 'primary', onclick: async event => {
     if (!event.isTrusted || !chosen) return;
-    await guarded(async () => { await request('bind', { root: binding.root, sessionId: chosen.id, sessionLabel: chosen.name || chosen.id }); await refreshStatus(); });
+    await gated('bind', async () => { await request('bind', { root: binding.root, sessionId: chosen.id, sessionLabel: chosen.name || chosen.id }); await refreshStatus(); });
   } }, 'Use this session'), h('button', { class: 'link', onclick: () => { state.choosing = true; render(); } }, 'Change project')));
   return box;
 }
@@ -298,7 +322,7 @@ function consentCard(kind) {
     h('div', { class: 'actions' },
       h('button', { class: 'primary', onclick: async event => {
         if (!event.isTrusted) return;
-        await guarded(async () => {
+        await gated('setup', async () => {
           await request('consent', { kind, granted: true });
           const deliveryId = newDeliveryId();
           const { result } = await request('setup', { kind: plugin ? 'setupPlugin' : 'setupTestEnv', deliveryId });
@@ -323,7 +347,7 @@ function cardsView() {
         h('div', { class: 'row small' },
           h('span', { class: 'mono ' + (a.sourceKind === 'none' ? 'muted' : ''), text: a.source }),
           link ? h('a', { href: link, onclick: event => { event.preventDefault(); openExternal(link); } }, 'Open in editor') : null),
-        h('input', { type: 'text', placeholder: 'Note for this element (optional)', value: a.note || '', oninput: debounce(event => { a.note = event.target.value; void request('note', { index: i, note: a.note }).catch(() => {}); }, 300) }),
+        h('input', { type: 'text', placeholder: 'Note for this element (optional)', value: a.note || '', oninput: debounce(event => { a.note = event.target.value; refreshSend(); void request('note', { annotationId: a.id, note: a.note }).catch(() => {}); saveDraft(); }, 300) }),
         h('div', { class: 'row small muted' },
           image ? h('label', {}, h('input', { type: 'checkbox', checked: attach, onchange: event => { state.attach.set(i, event.target.checked); } }), ' attach screenshot') : null,
           h('button', { class: 'link', onclick: () => pickerPort?.postMessage({ type: 'remove', index: i }) }, 'remove'))));
@@ -342,8 +366,8 @@ function parseSource(text) {
 function instructionView() {
   const area = h('textarea', { id: 'instruction', rows: '3', placeholder: 'What should change? Enter sends, Shift+Enter for a new line.', disabled: locked() });
   area.value = state.instruction;
-  area.addEventListener('input', debounce(() => { state.instruction = area.value; void request('draft', { draft: { instruction: area.value, deliveryId: state.deliveryId, state: 'editing' } }).catch(() => {}); }, 400));
-  area.addEventListener('input', () => { state.instruction = area.value; });
+  area.addEventListener('input', debounce(() => { state.instruction = area.value; saveDraft(locked() ? undefined : 'editing'); }, 400));
+  area.addEventListener('input', () => { state.instruction = area.value; refreshSend(); });
   area.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
@@ -362,6 +386,18 @@ function targetView() {
     h('button', { class: 'link', onclick: () => { state.choosing = true; render(); } }, 'change'));
 }
 
+// Recomputed on every keystroke without re-rendering, so typing keeps focus.
+function sendable() {
+  const binding = state.status?.binding;
+  const ready = !!(binding?.sessionId && (state.status.sessions || []).some(s => s.id === binding.sessionId) && state.status.ocs?.installed);
+  return ready && !locked() && !state.busy && state.annotations.length > 0 && !!(state.instruction.trim() || state.annotations.some(a => a.note?.trim()));
+}
+
+function refreshSend() {
+  const button = $('send');
+  if (button) button.disabled = !sendable();
+}
+
 function locked() {
   return !!state.delivery && deliveryMessage(state.delivery).locked;
 }
@@ -369,9 +405,9 @@ function locked() {
 function actionsView() {
   const binding = state.status?.binding;
   const ready = !!(binding?.sessionId && (state.status.sessions || []).some(s => s.id === binding.sessionId) && state.status.ocs?.installed);
-  const canSend = ready && !locked() && !state.busy && state.annotations.length > 0 && (state.instruction.trim() || state.annotations.some(a => a.note));
+  const canSend = sendable();
   const row = h('div', { class: 'actions' },
-    h('button', { class: 'primary', disabled: !canSend, onclick: event => { if (event.isTrusted) void submit(); } }, state.busy ? 'Sending…' : 'Send'),
+    h('button', { id: 'send', class: 'primary', disabled: !canSend, onclick: event => { if (event.isTrusted) void submit(); } }, state.busy ? 'Sending…' : 'Send'),
     h('button', { onclick: copyBatch, disabled: !state.annotations.length && !state.instruction.trim() }, 'Copy'),
     h('button', { onclick: () => pickerPort?.postMessage({ type: 'pick' }) }, '+ Add element'));
   if (locked()) {
@@ -401,29 +437,50 @@ function checkVisibility() {
   });
 }
 
+// One gate for every action that sends or changes something on the user's
+// behalf (send, bind, consent + setup): a trusted gesture, no other action in
+// flight, and a fresh visibility check of this panel.
+let verifying = null;
+async function gated(label, fn) {
+  if (state.busy) return;
+  state.busy = true;
+  state.notice = { tone: '', text: 'Checking that the panel is visible…' };
+  render();
+  const check = checkVisibility();
+  verifying = check;
+  const reply = await check;
+  verifying = null;
+  if (reply?.cancelled) { state.busy = false; state.notice = { tone: 'bad', text: 'Cancelled because the panel lost focus. Try again.' }; render(); return; }
+  const verdict = visibilityVerdict(reply);
+  if (!verdict.ok) { state.busy = false; state.notice = { tone: 'bad', text: verdict.message }; render(); return; }
+  state.notice = null;
+  try { await fn(); } catch (error) { state.notice = { tone: 'bad', text: error.message }; }
+  state.busy = false;
+  render();
+}
+
+// Leaving the panel cancels a pending verification instead of letting it
+// complete later.
+addEventListener('blur', () => {
+  for (const [key, p] of pending) if (String(key).startsWith('vis:')) { pending.delete(key); p.resolve({ cancelled: true }); }
+});
+
 async function submit() {
   if (state.busy || locked()) return;
   const instruction = $('instruction')?.value ?? state.instruction;
   state.instruction = instruction;
   if (!state.annotations.length || (!instruction.trim() && !state.annotations.some(a => a.note))) return;
-  state.busy = true;
-  state.notice = { tone: '', text: 'Checking that the panel is visible…' };
-  render();
-  const verdict = visibilityVerdict(await checkVisibility());
-  if (!verdict.ok) { state.busy = false; state.notice = { tone: 'bad', text: verdict.message }; render(); return; }
-  state.deliveryId = state.deliveryId || newDeliveryId();
+  // Freeze the batch as reviewed: the selection revision, screenshots and text.
+  const selection = state.selection;
   const images = state.annotations.map((_, i) => (state.attach.get(i) === false ? null : state.edited.get(i) || state.images[i] || null)).map((dataUrl, index) => (dataUrl ? { index, dataUrl } : null)).filter(Boolean);
-  state.notice = null;
-  try {
-    const { result } = await request('deliver', { deliveryId: state.deliveryId, instruction, images });
+  await gated('send', async () => {
+    if (state.selection !== selection) throw new Error('The selection changed while checking. Review it and send again.');
+    state.deliveryId = state.deliveryId || newDeliveryId();
+    const { result } = await request('deliver', { deliveryId: state.deliveryId, revision: selection, instruction, images });
     state.delivery = result;
     if (!deliveryMessage(result).locked) state.deliveryId = null;
     if (['noBinding', 'sessionChanged', 'noSession'].includes(result?.state)) await refreshStatus();
-  } catch (error) {
-    state.notice = { tone: 'bad', text: error.message };
-  }
-  state.busy = false;
-  render();
+  });
 }
 
 async function checkDelivery() {
@@ -431,7 +488,7 @@ async function checkDelivery() {
   await guarded(async () => {
     const { result } = await request('deliveryStatus', { deliveryId: state.deliveryId });
     if (result?.delivery) state.delivery = { ...result.delivery, state: result.delivery.state === 'started' ? 'unknown' : result.delivery.state };
-    else state.notice = { tone: 'warn', text: 'The native host has no record of this batch, so ocs was never called for it. You can start a new batch.' };
+    else state.notice = { tone: 'warn', text: 'The native host has no record of this batch, so its outcome cannot be confirmed. Check the agent session before starting a new batch.' };
   });
 }
 
@@ -439,7 +496,7 @@ function newBatch() {
   state.delivery = null;
   state.deliveryId = null;
   state.notice = null;
-  void request('draft', { draft: { instruction: state.instruction, deliveryId: null, state: 'editing' } }).catch(() => {});
+  saveDraft('editing');
   render();
 }
 

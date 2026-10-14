@@ -59,14 +59,12 @@ test('frame port needs the secret; wrong secrets do not consume the instance', (
   assert.equal(instance.secret, null, 'secret cleared after use');
 });
 
-test('a flood of wrong secrets is throttled but cannot lock out the real frame', () => {
-  const now = { t: 0 };
-  const { registry, instance } = setup(now);
+test('a flood of wrong secrets never blocks the real frame', () => {
+  const { registry, instance } = setup();
   registry.handSecret(picker());
   const secret = instance.secret;
-  for (let i = 0; i < 20; i++) assert.equal(registry.authenticatePort(framePort({ frameId: 30 + i }), 'bad'), null);
-  assert.equal(registry.authenticatePort(framePort(), secret), 'busy');
-  now.t += 1001;
+  for (let i = 0; i < 500; i++) assert.equal(registry.authenticatePort(framePort({ frameId: 30 + i }), 'bad'), null);
+  assert.equal(instance.failedAuth, 500);
   assert.equal(registry.authenticatePort(framePort(), secret), instance);
 });
 

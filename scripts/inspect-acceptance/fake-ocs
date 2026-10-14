@@ -1,0 +1,33 @@
+#!/Users/leo/.local/bin/node
+// Fake ocs for Inspect & Ask acceptance: emulates `--version`, `who --json`
+// and `dm <id> <text> --as <name> --json`. Mode comes from ./fake-ocs-mode.
+const fs = require('fs');
+const path = require('path');
+const dir = __dirname;
+const args = process.argv.slice(2);
+const log = entry => fs.appendFileSync(path.join(dir, 'fake-ocs.log'), JSON.stringify({ at: Date.now(), ...entry }) + '\n');
+if (args[0] === '--version') { console.log('ocs 0.8.3'); process.exit(0); }
+if (args[0] === 'who') {
+  const react = path.join(dir, 'react-app'), vue = path.join(dir, 'vue-app');
+  console.log(JSON.stringify({ entries: [
+    { kind: 'claude', name: 'react-main', id: 'claude-aaaa1111', cwd: react, status: 'idle', self: false },
+    { kind: 'claude', name: 'react-second', id: 'claude-bbbb2222', cwd: react, status: 'busy', self: false },
+    { kind: 'codex-task', target: 'codex-cccc3333', threadId: 'x', cwd: vue, self: false },
+    { kind: 'cmux', ref: 'surface:1', title: 'claude' },
+  ] }));
+  process.exit(0);
+}
+if (args[0] === 'dm') {
+  let mode = 'sent';
+  try { mode = fs.readFileSync(path.join(dir, 'fake-ocs-mode'), 'utf8').trim() || 'sent'; } catch {}
+  log({ cmd: 'dm', target: args[1], text: args[2], rest: args.slice(3), mode });
+  const seq = fs.readFileSync(path.join(dir, 'fake-ocs.log'), 'utf8').trim().split('\n').length;
+  const out = (o, code) => { console.log(JSON.stringify({ v: 1, channel: 'dm-fake', seq, lines: [], ...o })); process.exit(code); };
+  if (mode === 'sent') out({ stored: true, wake: 'accepted', exit: 0 }, 0);
+  if (mode === 'stored') out({ stored: true, wake: 'parked', exit: 2 }, 2);
+  if (mode === 'unknown') out({ stored: true, wake: 'unknown', exit: 3 }, 3);
+  if (mode === 'hang') { setTimeout(() => out({ stored: true, wake: 'accepted', exit: 0 }, 0), 120000); return; }
+  if (mode === 'fail') { console.error('fake failure'); process.exit(1); }
+}
+console.error('fake-ocs: unsupported ' + args.join(' '));
+process.exit(64);

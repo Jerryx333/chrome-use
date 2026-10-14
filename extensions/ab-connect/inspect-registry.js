@@ -86,8 +86,9 @@ export class InspectRegistry {
 
   // First message on an inspect-frame port. Wrong secrets are refused without
   // consuming the instance, so a page flooding fake inits cannot lock it out.
-  // Returns the instance, null (refused), or 'busy' when too many bad attempts
-  // arrived in the last second; the real frame retries on 'busy'.
+  // First message on an inspect-frame port. The secret is checked first, so
+  // a flood of wrong secrets never delays the real frame; wrong attempts only
+  // count toward a cap after which further ports are refused outright.
   authenticatePort(port, secret) {
     const sender = port?.sender;
     if (port?.name !== INSPECT_PORT_NAME || sender?.id !== this.runtimeId) return null;
@@ -97,21 +98,17 @@ export class InspectRegistry {
     if (!Number.isInteger(sender.frameId) || sender.frameId === 0 || typeof sender.documentId !== 'string') return null;
     const instance = this.live(this.byTab.get(sender.tab?.id));
     if (!instance || instance.used || !instance.secretHanded || !instance.secret) return null;
-    const now = this.now();
-    instance.failures = (instance.failures || []).filter(t => now - t < 1000);
-    if (instance.failures.length >= 20) return 'busy';
-    if (typeof secret !== 'string' || secret !== instance.secret) {
-      instance.failures.push(now);
-      return null;
+    if (typeof secret === 'string' && secret.length === instance.secret.length && secret === instance.secret) {
+      instance.used = true;
+      instance.secret = null;
+      instance.port = port;
+      instance.frameId = sender.frameId;
+      instance.frameDocumentId = sender.documentId;
+      instance.lastActive = this.now();
+      return instance;
     }
-    instance.used = true;
-    instance.secret = null;
-    instance.failures = [];
-    instance.port = port;
-    instance.frameId = sender.frameId;
-    instance.frameDocumentId = sender.documentId;
-    instance.lastActive = this.now();
-    return instance;
+    instance.failedAuth = (instance.failedAuth || 0) + 1;
+    return null;
   }
 
   forPort(port) {
