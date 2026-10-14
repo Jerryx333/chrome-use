@@ -54,9 +54,9 @@
     host = document.createElement(`${letters(5)}-${letters(6)}`);
     host.style.cssText = `all:initial;position:fixed;inset:0;pointer-events:none;z-index:${Z};display:block;`;
     root = host.attachShadow({ mode: 'closed' });
-    box = el('div', 'position:fixed;pointer-events:none;border:2px solid #2563eb;background:rgba(37,99,235,.08);border-radius:3px;display:none;box-sizing:border-box;');
-    tag = el('div', 'position:fixed;pointer-events:none;background:#111827;color:#f9fafb;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;padding:3px 7px;border-radius:4px;display:none;max-width:460px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;');
-    marquee = el('div', 'position:fixed;pointer-events:none;border:1px dashed #2563eb;background:rgba(37,99,235,.06);display:none;');
+    box = el('div', 'position:fixed;z-index:1;pointer-events:none;border:2px solid #2563eb;background:rgba(37,99,235,.08);border-radius:3px;display:none;box-sizing:border-box;');
+    tag = el('div', 'position:fixed;z-index:1;pointer-events:none;background:#111827;color:#f9fafb;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;padding:3px 7px;border-radius:4px;display:none;max-width:460px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;');
+    marquee = el('div', 'position:fixed;z-index:1;pointer-events:none;border:1px dashed #2563eb;background:rgba(37,99,235,.06);display:none;');
     const hint = el('div', 'position:fixed;left:50%;top:12px;margin-left:-230px;width:460px;text-align:center;pointer-events:none;background:#111827;color:#f9fafb;font:12px/1.5 system-ui,sans-serif;padding:6px 10px;border-radius:6px;opacity:.92;',
       'Click an element · Shift+click or drag to select several · ↑/↓ parent/child · P pause animations · Esc exit');
     hint.dataset.role = 'hint';
@@ -104,7 +104,7 @@
     for (const badge of badges) badge.remove();
     badges = selected.map((node, i) => {
       const r = node.getBoundingClientRect();
-      const outline = el('div', `position:fixed;pointer-events:none;border:2px solid #16a34a;border-radius:3px;box-sizing:border-box;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;`);
+      const outline = el('div', `position:fixed;z-index:1;pointer-events:none;border:2px solid #16a34a;border-radius:3px;box-sizing:border-box;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;`);
       const num = el('div', 'position:absolute;left:-2px;top:-20px;background:#16a34a;color:#fff;font:bold 11px/18px system-ui,sans-serif;padding:0 6px;border-radius:9px;', String(i + 1));
       outline.append(num);
       root.append(outline);
@@ -192,7 +192,10 @@
     if (frame) { positionPanel(); return; }
     frame = document.createElement('iframe');
     frame.setAttribute('allow', 'clipboard-write');
-    frame.style.cssText = `position:fixed;width:${PANEL_WIDTH}px;height:${frameHeight}px;border:0;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.28);pointer-events:auto;background:transparent;color-scheme:normal;`;
+    // z-index 2: the picker's own outlines, badges and hover box (z-index 1)
+    // must never cover the panel, or the visibility check counts them as an
+    // occlusion (a full-width selected block would overlap it).
+    frame.style.cssText = `position:fixed;z-index:2;width:${PANEL_WIDTH}px;height:${frameHeight}px;border:0;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.28);pointer-events:auto;background:transparent;color-scheme:normal;`;
     frame.addEventListener('load', handshake, { once: true });
     frame.src = frameUrl;
     root.append(frame);
