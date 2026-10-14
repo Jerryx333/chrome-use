@@ -62,3 +62,12 @@ for local agent browser tasks, approvals and configuration, outside webpage DOM.
 Read back the submitted version/state separately from the currently published
 version; the dashboard's overall Published badge can still refer to an older
 version.
+
+## Listing images
+
+`sh scripts/store-screenshots.sh` renders the four 1280x800 screenshots, the
+440x280 promo tile and the 1400x560 marquee into `extensions/store/`. They use
+the real side panel and settings page against a fake host
+(`extensions/store/screenshots/mock.js`), so rerun it after a visible UI change.
+The Web Store API cannot upload listing images; replace them in the Developer
+Dashboard under Store listing.

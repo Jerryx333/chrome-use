@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<!-- One store image: copy on the left, a browser window on the right holding
+     the stand-in page and the real side panel (or the settings page).
+     Query: h, sub, b (bullets joined by |), panel (url), page (url), dark. -->
+<style>
+  :root { --bg1:#f3f6fc; --bg2:#ffffff; --ink:#1f1f1f; --muted:#5f6670; --accent:#1a5fd0; --win:#ffffff; --chrome:#e9ecf1; --line:#d9dde4; --tab:#ffffff; }
+  :root.dark { --bg1:#121317; --bg2:#1c1f27; --ink:#eef0f3; --muted:#a8acb3; --accent:#8ab4f8; --win:#1f1f1f; --chrome:#2a2c31; --line:#3c3f44; --tab:#1f1f1f; }
+  html, body { margin: 0; width: 1280px; height: 800px; overflow: clip; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif; color: var(--ink);
+    background: radial-gradient(90% 80% at 0% 0%, var(--bg2) 0%, var(--bg1) 70%); position: relative; }
+  .copy { position: absolute; left: 64px; top: 0; bottom: 0; width: 300px; display: flex; flex-direction: column; justify-content: center; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 17px; margin-bottom: 26px; }
+  .brand img { width: 30px; height: 30px; }
+  h1 { font-size: 36px; line-height: 1.15; letter-spacing: -.02em; margin: 0 0 14px; font-weight: 700; }
+  .sub { font-size: 17px; line-height: 1.5; color: var(--muted); margin: 0; }
+  ul { list-style: none; padding: 0; margin: 26px 0 0; display: grid; gap: 12px; font-size: 15px; }
+  li { display: flex; gap: 10px; align-items: flex-start; }
+  li::before { content: ""; flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%;
+    background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M5 9.3l2.6 2.5L13 6.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/18px no-repeat; }
+  :root.dark li::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Cpath d='M5 9.3l2.6 2.5L13 6.5' fill='none' stroke='%231f1f1f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+  .win { position: absolute; left: 420px; top: 44px; width: 820px; height: 800px; background: var(--win); border-radius: 12px 12px 0 0;
+    box-shadow: 0 30px 80px rgb(20 30 60 / .22), 0 0 0 1px var(--line); overflow: clip; display: flex; flex-direction: column; }
+  .tabs { height: 36px; background: var(--chrome); display: flex; align-items: flex-end; padding: 0 12px; gap: 8px; }
+  .lights { display: flex; gap: 7px; align-self: center; margin-right: 10px; }
+  .lights i { width: 11px; height: 11px; border-radius: 50%; background: #ff5f57; } .lights i:nth-child(2) { background: #febc2e; } .lights i:nth-child(3) { background: #28c840; }
+  .tab { background: var(--tab); border-radius: 9px 9px 0 0; padding: 7px 14px; font-size: 12px; display: flex; align-items: center; gap: 7px; width: 190px; white-space: nowrap; overflow: hidden; }
+  .tab i { width: 12px; height: 12px; border-radius: 3px; background: linear-gradient(135deg, #7c5cff, #3aa0ff); flex: none; }
+  .bar { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--tab); }
+  .url { flex: 1; background: var(--chrome); border-radius: 999px; padding: 6px 14px; font-size: 12.5px; color: var(--muted); }
+  .ext { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .ext img { width: 16px; height: 16px; }
+  .body { flex: 1; display: flex; min-height: 0; overflow: clip; }
+  .body iframe { border: 0; display: block; height: 100%; }
+  .page { flex: 1; min-width: 0; }
+  .panel { width: 380px; flex: none; border-left: 1px solid var(--line); }
+</style></head>
+<body>
+  <div class="copy">
+    <div class="brand"><img src="../../ab-connect/icons/icon128.png" alt="">chrome-use</div>
+    <h1 id="h"></h1><p class="sub" id="sub"></p><ul id="b"></ul>
+  </div>
+  <div class="win">
+    <div class="tabs"><span class="lights"><i></i><i></i><i></i></span><span class="tab"><i></i><span id="tabTitle">Pricing — Acme Cloud</span></span></div>
+    <div class="bar"><span class="url" id="url">acme.example/pricing</span><span class="ext"><img src="../../ab-connect/icons/icon32.png" alt=""></span></div>
+    <div class="body" id="body"></div>
+  </div>
+<script>
+  const q = new URLSearchParams(location.search)
+  if (q.has('dark')) document.documentElement.classList.add('dark')
+  document.getElementById('h').textContent = q.get('h') || ''
+  document.getElementById('sub').textContent = q.get('sub') || ''
+  for (const text of (q.get('b') || '').split('|').filter(Boolean)) { const li = document.createElement('li'); li.textContent = text; document.getElementById('b').append(li) }
+  const body = document.getElementById('body')
+  const frame = (src, cls) => { const f = document.createElement('iframe'); f.src = src; f.className = cls; body.append(f) }
+  if (q.get('page')) frame(q.get('page'), 'page')
+  if (q.get('panel')) frame(q.get('panel'), 'panel')
+  if (q.get('tab')) document.getElementById('tabTitle').textContent = q.get('tab')
+  if (q.get('url')) document.getElementById('url').textContent = q.get('url')
+</script>
+</body></html>
