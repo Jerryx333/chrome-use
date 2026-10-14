@@ -53,6 +53,7 @@
 
       <h2>0.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v0.5.53</strong> (Awaiting submission): Adds /skill selection, library editing/imports, image attachments, conversation options and scheduled prompt settings. Run results use the existing notifications permission; no new extension permissions. Requires matching CLI capabilities; public availability follows Google review. Contributors: @leeguooooo.</li>
         <li><strong>0.5.51</strong> (unreleased): A user tab mixed into the agent window no longer refuses new agent tabs. The window becomes the user's, its agent tabs keep working, and new agent tabs go to one fresh agent window that later sessions share. Contributors: @leeguooooo.</li>
         <li><strong>0.5.50</strong> (unreleased): Schedule native-host reconnection after disconnect, starting at 1 second and backing off to at most 30 seconds on repeated failures. Confirmation resets the backoff; cancelled timers cannot trigger duplicate reconnects. Old request replies are not replayed into the replacement host. Contributors: @leeguooooo.</li>
         <li><strong>0.5.48</strong> (October 13, 2026): Adds guarded native tab grouping for Thermo. The extension handles only reviewed background tabs, journals and rechecks each page around the mutation, preserves existing groups plus active, pinned, audible, private, agent and debugger tabs, and never crosses a window or Chrome profile. Undo is idempotent and uncertain outcomes are never replayed. Generic <code>ABExt.call</code> still refuses foreign-tab mutations.</li>

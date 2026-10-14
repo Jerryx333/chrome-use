@@ -1,8 +1,28 @@
 # Changelog
 
-## 1.5.208
+## 1.5.209
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.53. Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Skills in the agent panel.** Type `/` to choose a skill, or manage a profile-shared library with folder, ZIP and HTTPS Git imports. Selected instructions and assets are saved with the message, so queues and retries retain the same revision. (#614)
+- **Image attachments.** Paste, drop or select up to five PNG/JPEG/WebP images. The panel resizes them before transport and sends them through the selected agent's native image protocol. Images stay with queued edits, retries and conversation history. (#614)
+- **Conversation options.** Set tool scope, Codex/Claude reasoning effort and Codex service tier without changing global CLI defaults. Backend processes exit before restarting with changed options. (#614)
+- **Scheduled prompts.** Run interval, daily, weekday or five-field cron prompts in independent background sessions, with history and completion notifications. Missed periods coalesce; active or unconfirmed runs are not replayed. Scheduling preserves the creating conversation's tool and approval limits across adapters. (#614)
+
+### Bug Fixes
+
+- **CLI default effort is restored on resume.** Codex retains a rollout's old effort when the override is omitted. The panel now restores the configured effort or the model catalog's reported default explicitly. Missing run history disables its own schedule without stalling other tasks; wrapped skill archives import correctly and symbolic-link assets are refused. (#614)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.208
+
 ### Bug Fixes
 
 - **macOS no longer blocks an agent's `.bun-…dylib`.** Agents started from the side panel inherited Chrome's file quarantine, so every file they wrote was quarantined. OpenCode, Claude Code and other Bun-built CLIs unpack native libraries to `$TMPDIR/.bun-<uid>-*.dylib` and load them, and macOS refused with "Apple could not verify '.bun-501-….dylib' is free of malware". The panel's agent service now starts through launchd, outside Chrome's process tree, so its agents write ordinary files. On start it also clears the quarantine from `.bun-*` libraries that earlier runs left behind. (#613)
@@ -10,7 +30,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.207
 
