@@ -183,7 +183,7 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 - **源码位置**来自 [code-inspector-plugin](https://github.com/zh-lx/code-inspector) 注入的 `data-insp-path`（Vite、webpack、Rspack、esbuild、Turbopack；React、Vue 等）。React 18 和 Vue 的开发构建不接插件也能读到；都读不到时消息会标明“没有源码位置”，并附上选择器和文本。页面没有标记时，面板会列出要改的地方，征得你同意后再让 agent 接入插件。测试构建需要显式打开，生产构建永远不开。
 - **多选与标注**：Shift+点击或拖框最多选 8 个，↑/↓ 切换父子元素，P 暂停动画，每个元素可写备注，截图上可以画笔标注。**Copy** 不经过 ocs，直接复制成 Markdown；**Open in editor** 用 VS Code、Cursor、Windsurf 或 WebStorm 打开对应文件。
 - **项目和会话**每个站点只选一次，候选来自 dev server 进程目录、ocs 会话目录，以及哪个项目里真的有页面标注的源码文件。页面数据改变不了这个选择。
-- **投递不会重放**：每批请求有自己的 ID，ocs 的“已存储”和“已唤醒”分开显示，结果不明时只查询、不重发。完整上下文写在 `~/.chrome-use/inspect/ctx/<id>/`，只有你能读，7 天后清理。
+- **投递不会重放**：每批请求有自己的 ID，ocs 的“已存储”和“已唤醒”分开显示，结果不明时只查询、不重发。完整上下文写在 `~/.chrome-use/inspect/ctx/<id>/`，只有你能读，7 天后清理；之后只留下批次 ID 和结果的记录，保证同一批不会发两次。
 - **边界**：默认关闭；不常驻页面，也不出现调试提示条。输入框运行在扩展自己的 iframe 里，凭一次性密钥认证，页面脚本读不到也改不了你写的内容；每次发送前都重新确认输入框完整可见。页面内容标注为不可信数据，投递不会提高接收会话的权限。
 
 详见 [点选改代码文档](https://chrome-use.leeguoo.com/inspect.html)。

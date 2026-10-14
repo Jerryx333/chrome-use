@@ -178,3 +178,26 @@ test('send is refused when the selection changed after review', async () => {
   assert.match(real.sent.find(m => m.requestId === 9).error, /selection changed/);
   assert.equal(calls.filter(c => c[0] === 'inspectDeliver').length, 0);
 });
+
+test('drafts: editing text expires, uncertain batches keep only id and state and are never cut', async () => {
+  const { pruneDrafts } = await import('./inspect-controller.js');
+  const day = 24 * 60 * 60 * 1000;
+  const now = 100 * day;
+  const drafts = { 'http://old': { instruction: 'secret plan', state: 'editing', updatedAt: now - 8 * day }, 'http://u': { instruction: 'x', notes: { a: 'n' }, deliveryId: 'id', state: 'unknown', updatedAt: now - 9 * day } };
+  for (let i = 0; i < 40; i++) drafts['http://e' + i] = { instruction: 'e', state: 'editing', updatedAt: now - i };
+  const out = pruneDrafts(drafts, now);
+  assert.equal(out['http://old'], undefined);
+  assert.deepEqual(out['http://u'], { deliveryId: 'id', state: 'unknown', updatedAt: now - 9 * day });
+  assert.equal(Object.keys(out).length, 30);
+});
+
+test('a note edited after send started does not change the frozen batch', async () => {
+  const { instance, real, calls } = await authorized();
+  instance.annotations = [{ id: '0:0', element, probe: null, note: 'old' }];
+  instance.selectionRevision = 0;
+  real.msg[0]({ type: 'deliver', requestId: 11, deliveryId: '11111111-2222-3333-4444-555555555558', revision: 0, instruction: 'x', notes: { '0:0': 'reviewed note' } });
+  real.msg[0]({ type: 'note', requestId: 12, annotationId: '0:0', note: 'edited later' });
+  await flush(); await flush(); await flush();
+  const sent = calls.find(c => c[0] === 'inspectDeliver')[1];
+  assert.equal(sent.annotations[0].note, 'reviewed note');
+});

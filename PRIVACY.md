@@ -78,6 +78,12 @@ after 7 days) and hands a summary to the agent session you chose through ocs on
 this computer. That agent's CLI may then send it to its configured model
 service. Copy puts the same content on your clipboard instead. Site-to-project
 bindings and consents are stored in `~/.chrome-use/inspect/bindings.json`.
+After 7 days each delivery record is reduced to a tombstone holding only the
+batch id and its outcome (no page content, origin or session), kept
+permanently so the same batch is never sent twice. The extension keeps drafts
+of your own words (instruction and per-element notes) in Chrome storage and
+deletes them 7 days after the last edit; for a batch whose outcome is
+unconfirmed it keeps only the batch id and state until you check it.
 
 ## What it keeps on your computer
 
@@ -87,8 +93,9 @@ content can be retained in the local panel journal. Under `~/.chrome-use` it sto
 - profile-scoped panel messages, replies, tool results and conversation workspaces;
 - small session bookkeeping files (which tabs a session opened; no page
   content);
-- Inspect & Ask bindings, delivery records and per-request context folders
-  (removed after 7 days);
+- Inspect & Ask bindings, per-request context folders (removed after 7 days)
+  and delivery tombstones (batch id and outcome only, kept so an id is never
+  sent twice);
 - installed site adapters and, if downloaded, Chrome for Testing;
 - logins you choose to save with `auth save`, encrypted (AES-256-GCM) with a key
   kept on your computer;

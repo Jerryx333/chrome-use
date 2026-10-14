@@ -158,7 +158,7 @@ codeInspectorPlugin({
         </tbody>
       </table>
       <p>
-        完整内容（每个元素的 HTML、样式、截图）写在本机 <code>~/.chrome-use/inspect/ctx/&lt;id&gt;/</code>，只有你自己能读，7 天后清理；
+        完整内容（每个元素的 HTML、样式、截图）写在本机 <code>~/.chrome-use/inspect/ctx/&lt;id&gt;/</code>，只有你自己能读，7 天后清理（之后只保留批次 ID 和结果，用来保证同一批不会发两次）；
         ocs 消息里只放摘要和这个文件的路径。没有 ocs 或不想投递时，<strong>Copy</strong> 会把同样的内容复制成 Markdown；
         <strong>Open in editor</strong> 会用 VS Code、Cursor、Windsurf 或 WebStorm 打开对应文件和行。
       </p>

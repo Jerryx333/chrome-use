@@ -66,6 +66,18 @@ export function annotationPayload(annotation, number) {
   };
 }
 
+const UNCERTAIN = ['sending', 'unknown', 'unconfirmed'];
+export function pruneDrafts(drafts, now) {
+  const kept = [];
+  for (const [origin, draft] of Object.entries(drafts || {})) {
+    const old = now - (draft?.updatedAt || 0) >= DRAFT_TTL_MS;
+    if (UNCERTAIN.includes(draft?.state)) kept.push([origin, old ? { deliveryId: draft.deliveryId, state: draft.state, updatedAt: draft.updatedAt } : draft]);
+    else if (!old) kept.push([origin, draft]);
+  }
+  kept.sort((a, b) => (UNCERTAIN.includes(b[1].state) - UNCERTAIN.includes(a[1].state)) || (b[1].updatedAt || 0) - (a[1].updatedAt || 0));
+  return Object.fromEntries(kept.slice(0, Math.max(30, kept.filter(([, d]) => UNCERTAIN.includes(d.state)).length)));
+}
+
 // Pure: which delivery states may never be sent again under the same id.
 export function deliveryLocked(state) {
   return ['sending', 'sent', 'stored', 'unknown', 'unconfirmed'].includes(state);
@@ -280,8 +292,10 @@ export class InspectController {
     const drafts = (await this.chrome.storage.local.get(DRAFTS_KEY))?.[DRAFTS_KEY] || {};
     // Drafts expire after 7 days, except an unconfirmed batch, which stays
     // until its outcome is checked.
-    const draft = drafts[instance.origin];
-    const fresh = draft && (Date.now() - (draft.updatedAt || 0) < DRAFT_TTL_MS || ['sending', 'unknown', 'unconfirmed'].includes(draft.state));
+    const pruned = pruneDrafts(drafts, Date.now());
+    if (Object.keys(pruned).length !== Object.keys(drafts).length || JSON.stringify(pruned) !== JSON.stringify(drafts)) await this.chrome.storage.local.set({ [DRAFTS_KEY]: pruned });
+    const draft = pruned[instance.origin];
+    const fresh = !!draft;
     instance.port?.postMessage({
       type: 'authorized', origin: instance.origin, pageUrl: sanitizedPageUrl(instance.pageUrl),
       env: isLocalOrigin(instance.origin) ? 'local' : 'test', settings,
@@ -299,12 +313,15 @@ export class InspectController {
     return this.request(operation, params);
   }
 
+  // Drafts hold only your words. Editing drafts are deleted 7 days after their
+  // last change; an unconfirmed batch keeps just its id and state (text and
+  // notes dropped) until its outcome is checked. Uncertain batches are never
+  // the ones cut when the 30-site cap applies.
   async saveDraft(origin, draft) {
     const stored = (await this.chrome.storage.local.get(DRAFTS_KEY))?.[DRAFTS_KEY] || {};
     if (draft) stored[origin] = { ...draft, updatedAt: Date.now() };
     else delete stored[origin];
-    const entries = Object.entries(stored).sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0)).slice(0, 30);
-    await this.chrome.storage.local.set({ [DRAFTS_KEY]: Object.fromEntries(entries) });
+    await this.chrome.storage.local.set({ [DRAFTS_KEY]: pruneDrafts(stored, Date.now()) });
   }
 
   async onFrameMessage(instance, message) {
@@ -375,7 +392,14 @@ export class InspectController {
     // element added or removed while the send was being verified) is refused
     // rather than mixed into this batch. The batch is frozen from here on.
     if (kind === 'edit' && message.revision !== (instance.selectionRevision || 0)) throw new Error('The selection changed while sending. Review it and send again.');
-    const annotations = instance.annotations.slice();
+    // Deep copy before the first await: later note edits or selection
+    // changes cannot alter what this batch sends. Notes come from the frame's
+    // own snapshot, keyed by the annotation ids of the reviewed revision.
+    const annotations = instance.annotations.map(a => structuredClone({ id: a.id, element: a.element, probe: a.probe, note: a.note }));
+    if (message.notes && typeof message.notes === 'object') {
+      for (const a of annotations) if (typeof message.notes[a.id] === 'string') a.note = message.notes[a.id].slice(0, NOTE_MAX);
+    }
+    const pageRevision = instance.revision;
     const instruction = String(message.instruction || '').slice(0, INSTRUCTION_MAX);
     if (kind === 'edit' && !annotations.length) throw new Error('Select at least one element first.');
     if (kind === 'edit' && !instruction.trim() && !annotations.some(a => a.note)) throw new Error('Write what should change first.');
@@ -399,7 +423,7 @@ export class InspectController {
         deliveryId, origin: instance.origin, kind,
         instruction: kind === 'edit' ? instruction : undefined,
         pageUrl: sanitizedPageUrl(instance.pageUrl), env: isLocalOrigin(instance.origin) ? 'local' : 'test',
-        revision: instance.revision || undefined,
+        revision: pageRevision || undefined,
         annotations: kind === 'edit' ? annotations.map((a, i) => annotationPayload(a, i + 1)) : [],
         images: kind === 'edit' ? images : [],
       });
