@@ -1,7 +1,9 @@
 //! Durable conversation intents and events. Backend acceptance and completion
 //! are separate states; reconnecting never dispatches an existing message.
 
+use super::attachments::Attachment;
 use super::config_transaction::{atomic_write, private_tree};
+use super::options::ModelOptions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -51,6 +53,37 @@ pub(super) struct Message {
     /// The tab the user was looking at when they sent the message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<PageContext>,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
+    #[serde(default)]
+    pub skill: Option<super::skill_library::SelectedSkill>,
+}
+
+impl Message {
+    /// Preserve legacy text-only IDs, while binding rich messages to all inputs.
+    pub fn prompt_text(&self) -> String {
+        let skill = self.skill.as_ref().map(|s| s.preface()).unwrap_or_default();
+        let page = self
+            .page
+            .as_ref()
+            .map(|p| format!("{}\n\n", p.preface()))
+            .unwrap_or_default();
+        format!("{skill}{page}{}", self.text)
+    }
+    fn fingerprint(&self) -> Result<String, String> {
+        if self.attachments.is_empty() && self.skill.is_none() {
+            return Ok(hex::encode(Sha256::digest(self.text.as_bytes())));
+        }
+        Ok(hex::encode(Sha256::digest(
+            serde_json::to_vec(&(
+                self.text.as_str(),
+                &self.attachments,
+                &self.page,
+                &self.skill,
+            ))
+            .map_err(|_| "Cannot fingerprint message")?,
+        )))
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -107,6 +140,8 @@ pub(super) struct Conversation {
     pub session_id: Option<String>,
     pub model: Option<String>,
     pub requested_model: Option<String>,
+    #[serde(default)]
+    pub options: ModelOptions,
     pub active: Option<Message>,
     pub queue: VecDeque<Message>,
     pub queue_paused: bool,
@@ -127,6 +162,8 @@ pub(super) struct Conversation {
     /// Host of the page the conversation started from, for the per-site list.
     #[serde(default)]
     pub site: Option<String>,
+    #[serde(default)]
+    pub schedule_id: Option<String>,
 }
 
 impl Conversation {
@@ -157,6 +194,7 @@ impl Conversation {
             session_id: None,
             model: None,
             requested_model: model,
+            options: ModelOptions::default(),
             active: None,
             queue: VecDeque::new(),
             queue_paused: false,
@@ -169,10 +207,11 @@ impl Conversation {
             executable,
             full_access: false,
             site: None,
+            schedule_id: None,
         })
     }
     pub(super) fn summary(&self) -> Value {
-        json!({"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
+        json!({"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
     }
     pub(super) fn queue_snapshot(&self) -> Value {
         Value::Array(
@@ -180,7 +219,7 @@ impl Conversation {
                 .iter()
                 .map(|message| {
                     let text: String = message.text.chars().take(1024).collect();
-                    json!({"id":message.id,"truncated":text.len()!=message.text.len(),"text":text,"direct":self.direct_message_id.as_ref()==Some(&message.id)})
+                    json!({"id":message.id,"truncated":text.len()!=message.text.len(),"text":text,"attachments":message.attachments,"direct":self.direct_message_id.as_ref()==Some(&message.id)})
                 })
                 .collect(),
         )
@@ -190,7 +229,10 @@ impl Conversation {
         if message.text.trim().is_empty() || message.text.len() > 32 * 1024 {
             return Err("A message must contain between one and 32768 bytes of text".into());
         }
-        let hash = hex::encode(Sha256::digest(message.text.as_bytes()));
+        if message.attachments.len() > super::attachments::MAX_IMAGES {
+            return Err("A message supports up to five images".into());
+        }
+        let hash = message.fingerprint()?;
         if let Some(existing) = self.accepted.get(&message.id) {
             if existing != &hash {
                 return Err("A message id was reused for different text".into());
@@ -264,7 +306,7 @@ impl Conversation {
         &mut self,
         id: &str,
         expected: &str,
-        replacement: Message,
+        mut replacement: Message,
     ) -> Result<(), String> {
         let index = self
             .queue
@@ -287,10 +329,11 @@ impl Conversation {
         if self.accepted.len() >= 50000 {
             return Err("Conversation deduplication capacity reached".into());
         }
-        self.accepted.insert(
-            replacement.id.clone(),
-            hex::encode(Sha256::digest(replacement.text.as_bytes())),
-        );
+        replacement.attachments = self.queue[index].attachments.clone();
+        replacement.page = self.queue[index].page.clone();
+        replacement.skill = self.queue[index].skill.clone();
+        self.accepted
+            .insert(replacement.id.clone(), replacement.fingerprint()?);
         if self.direct_message_id.as_deref() == Some(id) {
             self.direct_message_id = Some(replacement.id.clone());
         }
@@ -743,6 +786,8 @@ mod tests {
             id: uuid::Uuid::new_v4().to_string(),
             text: text.into(),
             page: None,
+            attachments: Vec::new(),
+            skill: None,
         }
     }
     #[test]

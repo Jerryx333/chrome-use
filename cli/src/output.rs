@@ -6413,6 +6413,11 @@ Setup:
                              The extension toolbar opens its agent side panel when
                              Chrome confirms support; otherwise it keeps the setup
                              popup. Settings remain accessible in the side panel.
+                             The panel supports /skill selection, profile skill imports,
+                             up to five image attachments, conversation tool/effort/tier
+                             overrides and scheduled prompts. Schedules use host-local
+                             times and isolated background sessions; active/unconfirmed
+                             runs are never overlapped or replayed. See real-chrome docs.
                              Queued messages support verified edit/remove; long
                              previews load in full before edits. Lost replies are
                              unconfirmed and never automatically replayed.

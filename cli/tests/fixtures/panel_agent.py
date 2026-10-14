@@ -39,6 +39,12 @@ def complete(text, status="completed"):
 
 
 
+def capture(message):
+    if os.environ.get("PANEL_FIXTURE_CAPTURE"):
+        with open(os.environ["PANEL_FIXTURE_CAPTURE"], "a") as proof:
+            proof.write(json.dumps({"pid": os.getpid(), "argv": sys.argv, "cwd": os.getcwd(), "message": message}) + "\n")
+
+
 def arg(name):
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
 
@@ -66,6 +72,7 @@ if "--mode" in sys.argv and arg("--mode") == "rpc":
 
     for line in sys.stdin:
         command = json.loads(line)
+        capture(command)
         kind, rid = command.get("type"), command.get("id")
         if kind == "get_state":
             emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"sessionId": pi_session, "model": {"provider": "synthetic", "id": "pi-model"}}})
@@ -104,6 +111,7 @@ if "--mode" in sys.argv and arg("--mode") == "rpc":
 
 for line in sys.stdin:
     message = json.loads(line)
+    capture(message)
     if acp:
         method = message.get("method")
         params = message.get("params", {})
@@ -112,7 +120,7 @@ for line in sys.stdin:
                 time.sleep(11)  # a cold OpenCode start, past the old 10 s budget
             assert params["protocolVersion"] == 1
             assert params["clientCapabilities"]["terminal"] is False
-            emit({"jsonrpc":"2.0","id":message["id"],"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":True,"sessionCapabilities":{"resume":{},"delete":{}}}}})
+            emit({"jsonrpc":"2.0","id":message["id"],"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":True,"promptCapabilities":{"image":bool(os.environ.get("PANEL_FIXTURE_IMAGES"))},"sessionCapabilities":{"resume":{},"delete":{}}}}})
         elif method in ("session/new", "session/resume", "session/load"):
             inspection = not params["mcpServers"]
             env = {row["name"]:row["value"] for row in params["mcpServers"][0]["env"]} if not inspection else {"AGENT_BROWSER_BROWSER":"fixture","AGENT_BROWSER_SESSION":"panel-fixture","CHROME_USE_RELAY_DIR":os.environ["CHROME_USE_RELAY_DIR"]}
@@ -176,7 +184,7 @@ for line in sys.stdin:
             emit({"id":message["id"],"result":{"account":{"type":"chatgpt","email":"private@synthetic.invalid","accessToken":"synthetic-never-transport"},"requiresOpenaiAuth":True}})
         elif method == "model/list":
             page = message["params"].get("cursor")
-            data=[{"model":"synthetic-codex-model","displayName":"Synthetic Codex","isDefault":True,"supportedReasoningEfforts":[{"reasoningEffort":"high"}]}] if page is None else [{"model":"synthetic-codex-alternate","displayName":"Synthetic alternate","isDefault":False}]
+            data=[{"model":"synthetic-codex-model","displayName":"Synthetic Codex","isDefault":True,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}] if page is None else [{"model":"synthetic-codex-alternate","displayName":"Synthetic alternate","isDefault":False}]
             emit({"id":message["id"],"result":{"data":data,"nextCursor":"page-two" if page is None else None}})
         elif method == "config/read":
             emit({"id": message["id"], "result": {"config": {"mcp_servers": {"other_browser": {"command": "never-executed"}}}}})
@@ -241,7 +249,8 @@ for line in sys.stdin:
                 complete("synthetic stop", "interrupted")
         elif message.get("type") == "user":
             assert not inspection, "Metadata inspection sent a prompt"
-            text = message["message"]["content"]
+            content = message["message"]["content"]
+            text = content if isinstance(content, str) else "".join(block.get("text", "") for block in content if block.get("type") == "text")
             turn = message["uuid"]
             emit({"type": "system", "subtype": "init", "session_id": session, "model": "synthetic-claude-model"})
             if text in ("wait", "wait-exit"):

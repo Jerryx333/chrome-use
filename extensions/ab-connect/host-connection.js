@@ -27,8 +27,10 @@ export class HostConnectionState {
     const fullAccess = reported?.fullAccess === true
     const pageContext = reported?.pageContext === true
     const chatAgents = Array.isArray(reported?.chatAgents) && reported.chatAgents.every(id => typeof id === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(id)) ? [...new Set(reported.chatAgents)] : ['codex', 'claude']
-    const changed = !this.confirmed || (valid && (reported.mode !== this.agentPanel?.mode || reported.modelInspection !== this.agentPanel?.modelInspection || conversationDelete !== this.agentPanel?.conversationDelete || fullAccess !== this.agentPanel?.fullAccess || pageContext !== this.agentPanel?.pageContext || JSON.stringify(chatAgents) !== JSON.stringify(this.agentPanel?.chatAgents)))
-    if (valid) this.agentPanel = {schemaVersion:1,mode:reported.mode,modelInspection:reported.modelInspection,conversationDelete,fullAccess,pageContext,chatAgents}
+    const features = Object.fromEntries(['conversationOptions','imageAttachments','skillLibrary','schedules'].filter(key => reported?.[key] === true).map(key => [key,true]));
+    const featuresChanged = ['conversationOptions','imageAttachments','skillLibrary','schedules'].some(key => (reported?.[key] === true) !== (this.agentPanel?.[key] === true));
+    const changed = (valid && featuresChanged) || !this.confirmed || (valid && (reported.mode !== this.agentPanel?.mode || reported.modelInspection !== this.agentPanel?.modelInspection || conversationDelete !== this.agentPanel?.conversationDelete || fullAccess !== this.agentPanel?.fullAccess || pageContext !== this.agentPanel?.pageContext || JSON.stringify(chatAgents) !== JSON.stringify(this.agentPanel?.chatAgents)))
+    if (valid) this.agentPanel = {schemaVersion:1,mode:reported.mode,modelInspection:reported.modelInspection,conversationDelete,fullAccess,pageContext,chatAgents,...features}
     this.confirmed = true
     this.error = null
     return changed

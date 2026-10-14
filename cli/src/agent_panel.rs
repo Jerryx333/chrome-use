@@ -12,13 +12,64 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod acp;
+mod attachments;
 mod backend;
 mod config_edit;
 mod config_transaction;
 mod configuration;
 mod conversation;
 mod inspection;
+mod options;
+mod schedules;
 mod service;
+mod skill_library;
+
+/// Panel-only MCP tools receive their caller from the host-generated server
+/// environment. Tool arguments cannot select another profile or conversation.
+pub(crate) fn panel_mcp_context() -> Option<(String, String)> {
+    if cfg!(windows) {
+        return None;
+    }
+    let profile = std::env::var("CHROME_USE_PANEL_PROFILE").ok()?;
+    let caller = std::env::var("CHROME_USE_PANEL_CONVERSATION").ok()?;
+    if profile.is_empty()
+        || profile.len() > 80
+        || !profile
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        || uuid::Uuid::parse_str(&caller).is_err()
+    {
+        return None;
+    }
+    Some((profile, caller))
+}
+pub(crate) fn call_panel_mcp(tool: &str, arguments: &Value) -> Result<Value, String> {
+    let (profile, caller) = panel_mcp_context()
+        .ok_or("This tool is available only in a bound agent-panel conversation")?;
+    let mut params = arguments
+        .as_object()
+        .cloned()
+        .ok_or("Panel tool arguments must be an object")?;
+    let action = params
+        .remove("action")
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .ok_or("Panel tool action is required")?;
+    if params.contains_key("callerConversation") {
+        return Err("A panel tool cannot override its caller".into());
+    }
+    params.insert("callerConversation".into(), caller.into());
+    let operation = match (tool, action.as_str()) {
+        ("chrome_use_schedules", "list") => "agentScheduleList",
+        ("chrome_use_schedules", "save") => "agentScheduleSave",
+        ("chrome_use_schedules", "delete") => "agentScheduleDelete",
+        ("chrome_use_schedules", "run") => "agentScheduleRun",
+        ("chrome_use_skills", "list") => "agentSkillList",
+        ("chrome_use_skills", "read") => "agentSkillRead",
+        ("chrome_use_skills", "save") => "agentSkillSave",
+        _ => return Err("Unsupported panel tool action".into()),
+    };
+    service::call(operation, &Value::Object(params), Some(&profile))
+}
 
 pub fn run_service(args: &[String]) -> Result<(), String> {
     service::run(args)
@@ -505,7 +556,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
     let chat_agents: &[&str] = if cfg!(unix) { CHAT_AGENTS } else { &[] };
-    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix),"chatAgents":chat_agents})
+    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix),"conversationOptions":cfg!(unix),"imageAttachments":cfg!(unix),"skillLibrary":cfg!(unix),"schedules":cfg!(unix),"chatAgents":chat_agents})
 }
 
 fn operation_allowed(operation: &str, read_only: bool) -> bool {
@@ -546,6 +597,26 @@ pub fn handle_for_profile(
         | "conversationRespond"
         | "conversationDelete"
         | "conversationSetAccess"
+        | "conversationSetOptions"
+        | "conversationAttachmentPut"
+        | "conversationAttachmentRead"
+        | "conversationSkillSelect"
+        | "skillList"
+        | "skillRead"
+        | "skillSave"
+        | "skillImport"
+        | "skillSetEnabled"
+        | "scheduleList"
+        | "scheduleSave"
+        | "scheduleDelete"
+        | "scheduleRun"
+        | "agentScheduleList"
+        | "agentScheduleSave"
+        | "agentScheduleDelete"
+        | "agentScheduleRun"
+        | "agentSkillList"
+        | "agentSkillRead"
+        | "agentSkillSave"
         | "serviceHealth"
         | "serviceStop" => service::call(operation, params, profile),
         _ => Err(format!("Unsupported agent panel operation: {operation}")),

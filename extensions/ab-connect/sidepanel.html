@@ -57,9 +57,13 @@
     <form id="composer" class="composer">
       <div class="input-box">
         <div id="pageChip" class="page-chip" hidden><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg><span id="pageTitle"></span><button id="pageDetach" type="button" title="Don't send this page" aria-label="Don't send this page">×</button></div>
+        <div id="skillPicker" class="skill-picker" role="listbox" aria-label="Skills" hidden></div>
+        <div id="attachmentDrafts" class="attachment-images" hidden></div>
+        <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
         <label class="sr-only" for="message">Message</label>
         <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line"></textarea>
         <div class="composer-controls">
+          <button id="attachImages" class="quiet" type="button" hidden>Attach images</button>
           <span id="newOptions" class="new-options" aria-label="New conversation options">
             <details class="more">
               <summary title="More options" aria-label="More options">＋</summary>
@@ -74,6 +78,16 @@
             <label class="chip"><span class="sr-only">Agent</span><select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
           </span>
           <button id="access" class="access" type="button" hidden aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg><span id="accessLabel">Full access</span></button>
+          <details id="turnOptions" class="more" hidden>
+            <summary>Conversation options</summary>
+            <div class="more-body">
+              <label>Allowed tools<select id="turnAccess"><option value="">Follow permission switch</option></select></label>
+              <label id="turnEffortLabel">Reasoning effort<select id="turnEffort"><option value="">CLI default</option></select></label>
+              <label id="turnTierLabel">Service tier<select id="turnTier"><option value="">CLI default</option><option value="default">Standard</option><option value="priority">Priority</option></select></label>
+              <p class="hint">Applies to this conversation. Changes take effect on the next response without editing CLI settings.</p>
+              <button id="saveTurnOptions" class="quiet" type="button">Save conversation options</button>
+            </div>
+          </details>
           <span id="queue" class="hint"></span>
           <label id="modelChip" class="chip model"><span class="sr-only">Model</span><select id="model"><option value="">Default model</option></select></label>
           <button id="resume" class="quiet" type="button" hidden>Resume queue</button>
@@ -91,8 +105,45 @@
       <button id="settings" class="quiet" type="button">Extension settings</button>
     </header>
     <div class="agents-body">
+      <nav class="scope settings-tabs" role="tablist" aria-label="Agent settings">
+        <button id="agentsSettingsTab" type="button" role="tab" aria-selected="true">Agents</button>
+        <button id="skillsSettingsTab" type="button" role="tab" aria-selected="false" hidden>Skills</button>
+        <button id="schedulesSettingsTab" type="button" role="tab" aria-selected="false" hidden>Schedules</button>
+      </nav>
+      <section id="localAgents">
       <header class="section-heading"><h2>Local agents</h2><button id="discover" class="quiet" type="button">Find again</button></header>
       <div id="agentList"></div>
+      </section>
+      <section id="scheduleSettings" class="configuration" hidden>
+        <h2>Scheduled prompts</h2>
+        <p class="hint">Runs while the local agent service is running. Times use this host's local time zone. Missed periods run once. A run with an unknown outcome needs your review before another can start.</p>
+        <button id="reloadSchedules" class="quiet" type="button">Refresh schedules</button>
+        <div id="scheduleEntries"></div>
+        <input id="scheduleId" type="hidden">
+        <label>Name<input id="scheduleName" maxlength="160"></label>
+        <label>Agent<select id="scheduleAgent"></select></label>
+        <label>Model<input id="scheduleModel" placeholder="CLI default"></label>
+        <label>Reasoning effort<input id="scheduleEffort" placeholder="CLI default; Codex or Claude only"></label>
+        <label>Service tier<select id="scheduleTier"><option value="">CLI default</option><option value="default">Standard (Codex)</option><option value="priority">Priority (Codex)</option></select></label>
+        <label>Allowed tools<select id="scheduleAccess"><option value="readFiles">Browser and file reads</option><option value="browserOnly">Browser only (Claude or Pi)</option><option value="writeFiles">Browser, file reads and writes</option><option value="runCommands">Browser, files and commands</option></select></label>
+        <label class="choice"><input id="scheduleAutomatic" type="checkbox">Allow permitted tools automatically</label>
+        <label>When<select id="scheduleKind"><option value="interval">Every N minutes</option><option value="daily">Daily at HH:MM</option><option value="weekdays">Weekdays at HH:MM</option><option value="cron">Five-field cron</option></select><input id="scheduleTiming" value="60" placeholder="60, 09:00 or 0 9 * * 1-5"></label>
+        <label>Skill<select id="scheduleSkill"><option value="">No skill</option></select></label>
+        <label>Prompt<textarea id="schedulePrompt" rows="5" maxlength="32768"></textarea></label>
+        <label class="choice"><input id="scheduleEnabled" type="checkbox" checked>Enabled</label>
+        <button id="saveSchedule" class="quiet" type="button">Save schedule</button>
+        <button id="newSchedule" class="quiet" type="button">New schedule</button>
+      </section>
+      <section id="skillLibrary" class="configuration" hidden>
+        <h2>Skill library</h2><p class="hint">Library entries are shared by agents in this Chrome profile. Your existing skills are read-only here.</p>
+        <button id="reloadSkills" class="quiet" type="button">Refresh skills</button>
+        <div id="skillEntries"></div>
+        <label>Library skill name<input id="skillName" placeholder="lowercase-name" autocomplete="off"></label>
+        <label>SKILL.md<textarea id="skillContent" rows="8" maxlength="98304"></textarea></label>
+        <button id="saveSkill" class="quiet" type="button">Save library skill</button>
+        <label>Import source<select id="skillImportKind"><option value="folder">Local folder</option><option value="archive">Local ZIP or .skill archive</option><option value="git">Git HTTPS URL</option></select><input id="skillImportSource" placeholder="Absolute path or repository URL"></label>
+        <button id="importSkill" class="quiet" type="button">Import skills</button>
+      </section>
       <section id="configuration" class="configuration" hidden>
         <h2 id="configTitle">Agent configuration</h2>
         <p id="configPath" class="path"></p>

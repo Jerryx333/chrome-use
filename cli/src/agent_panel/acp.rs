@@ -61,6 +61,7 @@ pub(super) async fn protocol(
     let mut session = setup.backend_session.clone();
     let mut requests = HashMap::from([(1u64, "initialize".to_string())]);
     let mut next_id = 1u64;
+    let mut images_supported = false;
     let mut ready = false;
     let mut queued = None;
     let mut active: Option<u64> = None;
@@ -167,6 +168,7 @@ pub(super) async fn protocol(
                     let result = &value["result"];
                     match method.as_str() {
                         "initialize" => {
+                            images_supported = result["agentCapabilities"]["promptCapabilities"]["image"] == true;
                             if result["protocolVersion"] != 1 { return Err("OpenCode did not negotiate ACP v1".into()); }
                             let method = if let Some(id) = &session {
                                 session_params["sessionId"] = json!(id);
@@ -219,12 +221,25 @@ pub(super) async fn protocol(
                 requests.insert(next_id, "session/prompt".into());
                 // ACP v1 has no per-session developer-instruction field. Keep
                 // pinned-browser instructions in each prompt, outside page data.
-                let page = message
-                    .page
-                    .as_ref()
-                    .map(|page| format!("{}\n\n", page.preface()))
-                    .unwrap_or_default();
-                rpc(input,next_id,"session/prompt",json!({"sessionId":session,"prompt":[{"type":"text","text":format!("{instructions}\n\n{page}{}",message.text)}]})).await?;
+                if !message.attachments.is_empty() && !images_supported {
+                    return Err(
+                        "This ACP agent does not advertise image input; the message was not sent"
+                            .into(),
+                    );
+                }
+                let mut prompt = vec![
+                    json!({"type":"text","text":format!("{instructions}\n\n{}",message.prompt_text())}),
+                ];
+                for image in &message.attachments {
+                    prompt.push(json!({"type":"image","mimeType":image.media_type,"data":image.base64(&setup.workspace)?}));
+                }
+                rpc(
+                    input,
+                    next_id,
+                    "session/prompt",
+                    json!({"sessionId":session,"prompt":prompt}),
+                )
+                .await?;
                 emit(events, "running", json!({"turnId":next_id.to_string()})).await?;
             }
         }

@@ -5,6 +5,7 @@
 use super::backend::{self, Command as BackendCommand, Notice, Setup};
 use super::config_transaction::{atomic_write, private_open, private_tree};
 use super::conversation::{Conversation, Message, PageContext, Phase, Store};
+use super::options::ModelOptions;
 use super::DiscoveryContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -129,6 +130,7 @@ fn endpoint(directory: &Path, profile: &str) -> Result<Endpoint, String> {
 fn operation_seconds(operation: &str) -> u64 {
     match operation {
         "agentInspect" => 30,
+        "skillImport" => 40,
         "conversationDelete" => 45,
         _ => 10,
     }
@@ -460,6 +462,8 @@ pub(super) fn call(
 struct Job {
     generation: u64,
     full_access: bool,
+    options: ModelOptions,
+    retiring: bool,
     sender: mpsc::Sender<BackendCommand>,
 }
 struct Engine {
@@ -469,6 +473,7 @@ struct Engine {
     requests: HashMap<(String, String), (Value, String, Value, bool)>,
     profile: String,
     stop: bool,
+    schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
 }
 
 impl Engine {
@@ -537,6 +542,20 @@ impl Engine {
         generation: u64,
         mut notice: Notice,
     ) -> Result<Option<Message>, String> {
+        if self
+            .jobs
+            .get(id)
+            .is_some_and(|job| job.generation == generation && job.retiring)
+        {
+            if notice.kind == "exited" {
+                self.jobs.remove(id);
+                self.requests.retain(|(chat, _), _| chat != id);
+                return Ok(None);
+            }
+            if notice.kind != "processUnconfirmed" {
+                return Ok(None);
+            }
+        }
         if self.chat(id)?.generation != generation {
             return Ok(None);
         }
@@ -686,10 +705,18 @@ impl Engine {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Create {
     agent_id: String,
+    #[serde(default)]
+    options: ModelOptions,
     model: Option<String>,
     executable: Option<PathBuf>,
     #[serde(default)]
     full_access: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetOptions {
+    conversation_id: String,
+    options: ModelOptions,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -710,6 +737,9 @@ struct Send {
     text: String,
     #[serde(default)]
     page: Option<PageContext>,
+    #[serde(default)]
+    attachments: Vec<super::attachments::Attachment>,
+    skill_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -764,6 +794,15 @@ async fn dispatch(
         return Err("Agent service is stopping; reconnect after its exit is confirmed".into());
     }
     match operation {
+        "scheduleList"
+        | "scheduleSave"
+        | "scheduleDelete"
+        | "scheduleRun"
+        | "agentScheduleList"
+        | "agentScheduleSave"
+        | "agentScheduleDelete"
+        | "agentScheduleRun" => schedule_dispatch(engine, operation, params).await,
+
         "agentInspect" => {
             let root = engine.lock().await.store.directory.clone();
             super::inspection::inspect(params, &root).await
@@ -801,6 +840,176 @@ async fn dispatch(
             let e = engine.lock().await;
             Ok(json!({"schemaVersion":1,"conversations":e.store.list()}))
         }
+
+        "agentSkillList" | "agentSkillRead" | "agentSkillSave" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct AgentSkillRequest {
+                caller_conversation: String,
+                id: Option<String>,
+                path: Option<String>,
+                name: Option<String>,
+                content: Option<String>,
+            }
+            let p: AgentSkillRequest = serde_json::from_value(params.clone())
+                .map_err(|_| "Invalid skill tool arguments")?;
+            let mut e = engine.lock().await;
+            let caller = e.chat(&p.caller_conversation)?.clone();
+            if operation == "agentSkillList" {
+                return Ok(
+                    json!({"schemaVersion":1,"skills":super::skill_library::catalog(&e.store.directory,&caller.agent_id)?,"selectedSkill":caller.active.as_ref().and_then(|m|m.skill.as_ref()).map(|s|json!({"id":s.id,"name":s.name}))}),
+                );
+            }
+            if operation == "agentSkillSave" {
+                if caller.schedule_id.is_some() {
+                    return Err(
+                        "Scheduled conversations cannot modify skill instructions for future runs"
+                            .into(),
+                    );
+                }
+                super::skill_library::save(
+                    &e.store.directory,
+                    p.name.as_deref().ok_or("Skill name is required")?,
+                    p.content.as_deref().ok_or("Skill content is required")?,
+                )?;
+                return Ok(
+                    json!({"schemaVersion":1,"skills":super::skill_library::catalog(&e.store.directory,&caller.agent_id)?}),
+                );
+            }
+            if let Some(path) = p.path {
+                let skill = caller
+                    .active
+                    .as_ref()
+                    .and_then(|m| m.skill.as_ref())
+                    .ok_or("No skill is selected for the active message")?;
+                if p.id.as_deref().is_some_and(|id| id != skill.id) {
+                    return Err(
+                        "Asset reads must belong to the active message's selected skill".into(),
+                    );
+                }
+                let workspace = e.store.directory.join(&caller.id).join("workspace");
+                return Ok(
+                    json!({"schemaVersion":1,"skill":{"id":skill.id,"name":skill.name,"path":path,"content":super::skill_library::read_asset(&workspace,skill,&path)?}}),
+                );
+            }
+            let skill = if let Some(id) = p.id {
+                super::skill_library::read_entry(&e.store.directory, &caller.agent_id, &id)?
+            } else {
+                caller
+                    .active
+                    .as_ref()
+                    .and_then(|m| m.skill.clone())
+                    .ok_or("No skill selected; list the catalog and specify an ID")?
+            };
+            Ok(json!({"schemaVersion":1,"skill":skill}))
+        }
+        "skillList" | "skillRead" | "skillSave" | "skillSetEnabled" | "skillImport" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct SkillRequest {
+                agent_id: String,
+                id: Option<String>,
+                name: Option<String>,
+                content: Option<String>,
+                enabled: Option<bool>,
+                kind: Option<String>,
+                source: Option<String>,
+            }
+            let p: SkillRequest = serde_json::from_value(params.clone())
+                .map_err(|_| "Skill operation requires agentId and entry details")?;
+            if !super::CHAT_AGENTS.contains(&p.agent_id.as_str()) {
+                return Err("Unknown panel agent".into());
+            }
+            let root = engine.lock().await.store.directory.clone();
+            if operation == "skillImport" {
+                super::skill_library::import(
+                    &root,
+                    p.kind.as_deref().ok_or("Import kind is required")?,
+                    p.source.as_deref().ok_or("Import source is required")?,
+                )
+                .await?;
+            }
+            if operation == "skillSetEnabled" {
+                super::skill_library::set_enabled(
+                    &root,
+                    &p.agent_id,
+                    p.id.as_deref().ok_or("Skill ID is required")?,
+                    p.enabled.ok_or("Enabled choice is required")?,
+                )?;
+            }
+            if operation == "skillRead" {
+                let skill = super::skill_library::read_entry(
+                    &root,
+                    &p.agent_id,
+                    p.id.as_deref().ok_or("Skill ID is required")?,
+                )?;
+                return Ok(json!({"schemaVersion":1,"skill":skill}));
+            }
+            if operation == "skillSave" {
+                super::skill_library::save(
+                    &root,
+                    p.name.as_deref().ok_or("Skill name is required")?,
+                    p.content.as_deref().ok_or("Skill content is required")?,
+                )?;
+            }
+            Ok(
+                json!({"schemaVersion":1,"skills":super::skill_library::catalog(&root,&p.agent_id)?}),
+            )
+        }
+        "conversationSkillSelect" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct SelectSkill {
+                conversation_id: String,
+                skill_id: String,
+            }
+            let p: SelectSkill = serde_json::from_value(params.clone())
+                .map_err(|_| "Select a skill with conversationId and skillId")?;
+            let mut e = engine.lock().await;
+            let agent = e.chat(&p.conversation_id)?.agent_id.clone();
+            let workspace = e.store.directory.join(&p.conversation_id).join("workspace");
+            private_tree(&workspace)?;
+            let skill = super::skill_library::snapshot(
+                &e.store.directory,
+                &agent,
+                &p.skill_id,
+                &workspace,
+            )?;
+            Ok(
+                json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary(),"skill":{"id":skill.id,"name":skill.name,"catalogId":p.skill_id}}),
+            )
+        }
+        "conversationAttachmentPut" | "conversationAttachmentRead" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct ImageRequest {
+                conversation_id: String,
+                data: Option<String>,
+                attachment: Option<super::attachments::Attachment>,
+            }
+            let p: ImageRequest = serde_json::from_value(params.clone())
+                .map_err(|_| "Image request needs conversationId and image data or attachment")?;
+            let mut e = engine.lock().await;
+            e.chat(&p.conversation_id)?;
+            let workspace = e.store.directory.join(&p.conversation_id).join("workspace");
+            private_tree(&workspace)?;
+            let attachment = if operation == "conversationAttachmentPut" {
+                super::attachments::save(
+                    &workspace,
+                    p.data.as_deref().ok_or("Image data is required")?,
+                )?
+            } else {
+                p.attachment.ok_or("Attachment identity is required")?
+            };
+            let data = if operation == "conversationAttachmentRead" {
+                Some(attachment.base64(&workspace)?)
+            } else {
+                None
+            };
+            Ok(
+                json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary(),"attachment":attachment,"data":data}),
+            )
+        }
         "conversationCreate" => {
             let p: Create = serde_json::from_value(params.clone()).map_err(|_| {
                 "conversationCreate requires an agent id and optional model/executable"
@@ -809,6 +1018,8 @@ async fn dispatch(
                 return Err("A custom agent executable must be an absolute path".into());
             }
             let mut chat = Conversation::new(&p.agent_id, p.model, p.executable)?;
+            p.options.validate(&p.agent_id)?;
+            chat.options = p.options;
             chat.full_access = p.full_access;
             let mut e = engine.lock().await;
             e.store.create(&chat)?;
@@ -850,6 +1061,8 @@ async fn dispatch(
                     id: p.replacement_id.clone(),
                     text: p.text.clone(),
                     page: None,
+                    attachments: Vec::new(),
+                    skill: None,
                 },
             )?;
             e.record(
@@ -918,7 +1131,20 @@ async fn dispatch(
                     chat.site = page_site(&page.url);
                 }
             }
+            if p.attachments.len() > super::attachments::MAX_IMAGES {
+                return Err("A message supports up to five images".into());
+            }
+            let workspace = e.store.directory.join(&p.conversation_id).join("workspace");
+            for image in &p.attachments {
+                image.read(&workspace)?;
+            }
             let message = Message {
+                skill: p
+                    .skill_id
+                    .as_deref()
+                    .map(|id| super::skill_library::load_snapshot(&workspace, id))
+                    .transpose()?,
+                attachments: p.attachments.clone(),
                 id: p.message_id.clone(),
                 text: p.text.clone(),
                 page: p.page.clone(),
@@ -933,7 +1159,7 @@ async fn dispatch(
                 e.record(
                     &p.conversation_id,
                     "user",
-                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":p.page}),
+                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":p.page,"attachments":p.attachments,"skillId":p.skill_id}),
                 )?;
             }
             if added {
@@ -974,6 +1200,22 @@ async fn dispatch(
             Ok(
                 json!({"schemaVersion":1,"conversation":summary,"message":{"id":p.message_id,"accepted":added,"replayed":false}}),
             )
+        }
+        "conversationSetOptions" => {
+            let p: SetOptions = serde_json::from_value(params.clone())
+                .map_err(|_| "Conversation options require conversationId and options")?;
+            let mut e = engine.lock().await;
+            let chat = e.chat(&p.conversation_id)?;
+            if chat.phase.busy() || chat.phase == Phase::RecoveryRequired {
+                return Err(
+                    "Stop the response and confirm its outcome before changing options".into(),
+                );
+            }
+            p.options.validate(&chat.agent_id)?;
+            chat.options = p.options;
+            chat.updated = super::conversation::now();
+            e.persist(&p.conversation_id)?;
+            Ok(json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary()}))
         }
         "conversationSetAccess" => {
             let p: SetAccess = serde_json::from_value(params.clone())
@@ -1288,16 +1530,36 @@ fn start<'a>(
 {
     Box::pin(async move {
         let mut e = engine.lock().await;
-        let wanted = e.chat(id)?.full_access;
-        // An idle process started with other permission flags is replaced.
-        // Bumping the generation first makes its exit notice stale, so it
-        // cannot fail the turn that is about to start.
-        if e.jobs.get(id).is_some_and(|job| job.full_access != wanted) {
-            if let Some(job) = e.jobs.remove(id) {
-                let _ = job.sender.try_send(BackendCommand::Shutdown);
+        let wanted = e.chat(id)?.clone();
+        // A resumed CLI must have the requested conversation options. Wait for
+        // the old process to exit before starting its replacement.
+        if e.jobs.get(id).is_some_and(|job| {
+            job.full_access != wanted.full_access || job.options != wanted.options
+        }) {
+            let sender = e.jobs.get(id).ok_or("Backend disappeared")?.sender.clone();
+            sender
+                .try_send(BackendCommand::Shutdown)
+                .map_err(|_| "Backend shutdown was not dispatched")?;
+            e.jobs.get_mut(id).ok_or("Backend disappeared")?.retiring = true;
+            drop(e);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let locked = engine.lock().await;
+                if !locked.jobs.contains_key(id) {
+                    e = locked;
+                    if e.chat(id)?.phase == Phase::RecoveryRequired {
+                        return Err("Previous backend exit is unconfirmed".into());
+                    }
+                    break;
+                }
+                drop(locked);
+                if tokio::time::Instant::now() > deadline {
+                    return Err(
+                        "Backend shutdown has not been confirmed; no replacement started".into(),
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(30)).await;
             }
-            e.chat(id)?.generation += 1;
-            e.requests.retain(|(chat, _), _| chat != id);
         }
         if let Some(job) = e.jobs.get(id) {
             let sender = job.sender.clone();
@@ -1378,6 +1640,8 @@ fn start<'a>(
             Job {
                 generation,
                 full_access: chat.full_access,
+                options: chat.options.clone(),
+                retiring: false,
                 sender: commands.clone(),
             },
         );
@@ -1388,7 +1652,9 @@ fn start<'a>(
             profile,
             browser_session: format!("panel-{id}"),
             backend_session: chat.session_id,
+            previous_model: chat.model,
             model: chat.requested_model,
+            options: chat.options,
             mcp_executable: std::env::current_exe()
                 .map_err(|_| "Cannot locate browser tools executable")?,
             full_access: chat.full_access,
@@ -1485,6 +1751,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         requests: HashMap::new(),
         profile: profile.clone(),
         stop: false,
+        schedules: super::schedules::load(&directory.join("conversations"))?,
     }));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -1495,6 +1762,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|_|"Cannot bind private agent-service transport")?;
         let endpoint=Endpoint {schema_version:1,profile,address:listener.local_addr().map_err(|_|"Cannot inspect agent-service address")?,capability:format!("{}{}",uuid::Uuid::new_v4().simple(),uuid::Uuid::new_v4().simple()),binary_hash:BINARY_HASH.as_ref().map_err(Clone::clone)?.clone(),pid:std::process::id()};
         atomic_write(&directory.join("service.json"),&serde_json::to_vec(&endpoint).map_err(|_|"Cannot encode private service endpoint")?,None)?;
+        let scheduler=engine.clone();
+        tokio::spawn(async move {
+            // Give extension handshakes and profile registration time to settle.
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            loop {
+                if scheduler.lock().await.stop { break; }
+                if let Err(error)=schedule_tick(&scheduler).await { eprintln!("Schedule check failed: {error}"); }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
         let slots=Arc::new(tokio::sync::Semaphore::new(16));
         loop {
             tokio::select! {
@@ -1628,5 +1905,589 @@ mod acp_approval_tests {
             &json!({"options":[{"optionId":"always","kind":"allow_always"}]})
         )
         .is_none());
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScheduleRequest {
+    id: Option<String>,
+    name: Option<String>,
+    prompt: Option<String>,
+    agent_id: Option<String>,
+    model: Option<String>,
+    options: Option<ModelOptions>,
+    full_access: Option<bool>,
+    rule: Option<super::schedules::Rule>,
+    enabled: Option<bool>,
+    skill_id: Option<String>,
+    caller_conversation: Option<String>,
+    acknowledge_unconfirmed: Option<bool>,
+}
+/// Capability names alone do not establish equal authority across adapters:
+/// Codex workspace writes are narrower than Claude/Pi file writes, and Pi
+/// has no approval mechanism even when its saved fullAccess flag is false.
+/// Codex also retains command execution in its read-only sandbox.
+fn schedule_permissions_fit(schedule: &super::schedules::Schedule, caller: &Conversation) -> bool {
+    use super::options::ToolAccess;
+    let requested = schedule
+        .options
+        .effective_access(&schedule.agent_id, schedule.full_access);
+    let allowed = caller
+        .options
+        .effective_access(&caller.agent_id, caller.full_access);
+    let automatic = schedule.full_access || schedule.agent_id == "pi";
+    let caller_automatic = caller.full_access || caller.agent_id == "pi";
+    requested <= allowed
+        && (!automatic || caller_automatic)
+        && !(caller.agent_id == "codex"
+            && allowed == ToolAccess::WriteFiles
+            && schedule.agent_id != "codex"
+            && requested >= ToolAccess::WriteFiles)
+        && !(schedule.agent_id == "codex"
+            && caller.agent_id != "codex"
+            && allowed < ToolAccess::RunCommands)
+}
+
+async fn schedule_dispatch(
+    engine: &Arc<Mutex<Engine>>,
+    operation: &str,
+    params: &Value,
+) -> Result<Value, String> {
+    let p: ScheduleRequest =
+        serde_json::from_value(params.clone()).map_err(|_| "Invalid schedule parameters")?;
+    let mut e = engine.lock().await;
+    let caller = if operation.starts_with("agent") {
+        let chat = e
+            .chat(
+                p.caller_conversation
+                    .as_deref()
+                    .ok_or("Agent schedule calls require a conversation identity")?,
+            )?
+            .clone();
+        if chat.schedule_id.is_some() && operation != "agentScheduleList" {
+            return Err(
+                "Scheduled conversations cannot create, modify, delete or run schedules".into(),
+            );
+        }
+        Some(chat)
+    } else {
+        if p.caller_conversation.is_some() {
+            return Err("Panel schedule calls do not accept agent identity".into());
+        }
+        None
+    };
+    if operation.ends_with("List") {
+        return Ok(
+            json!({"schemaVersion":1,"schedules":e.schedules.values().collect::<Vec<_>>(),"timeZone":"hostLocal","serviceRunning":!e.stop}),
+        );
+    }
+    if operation.ends_with("Run") {
+        let id = p.id.ok_or("Schedule ID is required")?;
+        if let Some(caller) = &caller {
+            let schedule = e.schedules.get(&id).ok_or("Schedule not found")?;
+            if !schedule_permissions_fit(schedule, caller) {
+                return Err(
+                    "This schedule has more authority than the calling conversation".into(),
+                );
+            }
+        }
+        drop(e);
+        return run_schedule(engine, &id).await;
+    }
+    let id = p.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    uuid::Uuid::parse_str(&id).map_err(|_| "Invalid schedule ID")?;
+    if operation.ends_with("Delete") {
+        let schedule = e.schedules.get(&id).ok_or("Schedule not found")?;
+        if caller
+            .as_ref()
+            .is_some_and(|caller| !schedule_permissions_fit(schedule, caller))
+        {
+            return Err("A more powerful schedule can only be deleted in the user panel".into());
+        }
+        if schedule.active_chat.is_some() {
+            return Err("Stop and confirm the active run before deleting this schedule".into());
+        }
+        let mut updated = e.schedules.clone();
+        updated.remove(&id);
+        super::schedules::persist(&e.store.directory, &updated)?;
+        e.schedules = updated;
+        return Ok(json!({"schemaVersion":1,"deleted":{"id":id}}));
+    }
+    if e.schedules.len() >= 64 && !e.schedules.contains_key(&id) {
+        return Err("A profile supports at most 64 schedules".into());
+    }
+    let old = e.schedules.get(&id).cloned();
+    if old.as_ref().is_some_and(|task| {
+        task.last_result.as_deref() == Some("unconfirmed") && task.active_chat.is_none()
+    }) && p.enabled == Some(true)
+        && p.acknowledge_unconfirmed != Some(true)
+    {
+        return Err("Acknowledge the missing run history before enabling this schedule".into());
+    }
+    let now = super::conversation::now();
+    let mut schedule = old.clone().unwrap_or(super::schedules::Schedule {
+        id: id.clone(),
+        name: String::new(),
+        prompt: String::new(),
+        agent_id: caller
+            .as_ref()
+            .map(|c| c.agent_id.clone())
+            .unwrap_or_else(|| "codex".into()),
+        model: None,
+        options: ModelOptions::default(),
+        full_access: false,
+        rule: super::schedules::Rule::Interval { minutes: 60 },
+        enabled: true,
+        next_run: 0,
+        skill_id: None,
+        active_chat: None,
+        last_chat: None,
+        last_result: None,
+        last_run: None,
+        finished_at: None,
+    });
+    if let Some(name) = p.name {
+        schedule.name = name;
+    }
+    if let Some(prompt) = p.prompt {
+        schedule.prompt = prompt;
+    }
+    if let Some(agent) = p.agent_id {
+        if agent != schedule.agent_id {
+            schedule.model = None;
+            schedule.options = ModelOptions::default();
+        }
+        schedule.agent_id = agent;
+    }
+    // Explicit updates with a null model use the CLI default.
+    if params.get("model").is_some() {
+        schedule.model = p.model;
+    }
+    if let Some(options) = p.options {
+        schedule.options = options;
+    }
+    if let Some(access) = p.full_access {
+        schedule.full_access = access;
+    }
+    if let Some(rule) = p.rule {
+        schedule.rule = rule;
+    }
+    if let Some(enabled) = p.enabled {
+        schedule.enabled = enabled;
+    }
+    if params.get("skillId").is_some() {
+        schedule.skill_id = p.skill_id;
+    }
+    if let Some(caller) = &caller {
+        let limit = caller
+            .options
+            .effective_access(&caller.agent_id, caller.full_access);
+        if schedule.options.tool_access.is_none() {
+            schedule.options.tool_access = Some(limit);
+        }
+        if !schedule_permissions_fit(&schedule, caller) {
+            return Err(
+                "A schedule cannot gain more permissions than the conversation creating it".into(),
+            );
+        }
+        if let Some(original) = &old {
+            if !schedule_permissions_fit(original, caller) {
+                return Err(
+                    "A more powerful schedule can only be changed in the user panel".into(),
+                );
+            }
+        }
+    }
+    if p.acknowledge_unconfirmed == Some(true) {
+        if caller.is_some() {
+            return Err("Only the user can acknowledge an unconfirmed previous run".into());
+        }
+        if let Some(active) = &schedule.active_chat {
+            if e.chat(active)?.phase != Phase::RecoveryRequired {
+                return Err("The previous run is still confirmed active; stop it first".into());
+            }
+        }
+        schedule.active_chat = None;
+        schedule.last_result = Some("previous run acknowledged as unconfirmed".into());
+    }
+    schedule.validate()?;
+    if let Some(skill) = &schedule.skill_id {
+        super::skill_library::select(&e.store.directory, &schedule.agent_id, skill)?;
+    }
+    schedule.next_run = schedule.rule.next(now)?;
+    let mut updated = e.schedules.clone();
+    updated.insert(id.clone(), schedule.clone());
+    super::schedules::persist(&e.store.directory, &updated)?;
+    e.schedules = updated;
+    Ok(json!({"schemaVersion":1,"schedule":schedule}))
+}
+
+async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, String> {
+    let mut e = engine.lock().await;
+    if e.stop {
+        return Err("Agent service is stopping; scheduled work was not started".into());
+    }
+    let schedule = e.schedules.get(id).cloned().ok_or("Schedule not found")?;
+    if let Some(active) = &schedule.active_chat {
+        let phase = e.chat(active)?.phase.clone();
+        if phase.busy() || phase == Phase::RecoveryRequired {
+            return Err("The previous scheduled run is active or unconfirmed; it was not overlapped or replayed".into());
+        }
+    }
+    let mut chat = Conversation::new(&schedule.agent_id, schedule.model.clone(), None)?;
+    chat.title = schedule.name.clone();
+    chat.schedule_id = Some(id.into());
+    chat.options = schedule.options.clone();
+    chat.full_access = schedule.full_access;
+    e.store.create(&chat)?;
+    let prepared = (|| -> Result<(Message, Message), String> {
+        let workspace = e.store.directory.join(&chat.id).join("workspace");
+        private_tree(&workspace)?;
+        let skill = schedule
+            .skill_id
+            .as_deref()
+            .map(|skill| {
+                super::skill_library::snapshot(
+                    &e.store.directory,
+                    &schedule.agent_id,
+                    skill,
+                    &workspace,
+                )
+            })
+            .transpose()?;
+        let message = Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            text: format!("[Scheduled task: {}. Work in your own background browser session; no user tab is attached.]\n\n{}", schedule.name, schedule.prompt),
+            page: None, attachments: Vec::new(), skill,
+        };
+        chat.accept(message.clone())?;
+        chat.title = schedule.name.clone();
+        let next = chat.begin_next().ok_or("Scheduled turn was not prepared")?;
+        e.store.save(&chat)?;
+        Ok((message, next))
+    })();
+    let (message, next) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            e.store.delete(&chat.id).map_err(|cleanup| {
+                format!("{error}; unused conversation cleanup failed: {cleanup}")
+            })?;
+            return Err(error);
+        }
+    };
+    let chat_id = chat.id.clone();
+    e.chats.insert(chat_id.clone(), chat);
+    e.record(&chat_id,"user",json!({"messageId":message.id,"text":message.text,"scheduleId":id,"skillId":schedule.skill_id}))?;
+    let schedule = e.schedules.get_mut(id).ok_or("Schedule disappeared")?;
+    schedule.active_chat = Some(chat_id.clone());
+    schedule.last_chat = Some(chat_id.clone());
+    schedule.last_run = Some(super::conversation::now());
+    schedule.last_result = Some("starting".into());
+    schedule.finished_at = None;
+    super::schedules::persist(&e.store.directory, &e.schedules)?;
+    drop(e);
+    if let Err(error) = start(engine, &chat_id, next).await {
+        let mut e = engine.lock().await;
+        let chat = e.chat(&chat_id)?;
+        chat.phase = Phase::Failed;
+        chat.last_error = Some(error.clone());
+        chat.active = None;
+        chat.queue_paused = true;
+        e.persist(&chat_id)?;
+        let schedule = e.schedules.get_mut(id).ok_or("Schedule disappeared")?;
+        schedule.last_result = Some(format!("failed: {error}"));
+        schedule.active_chat = None;
+        schedule.finished_at = Some(super::conversation::now());
+        super::schedules::persist(&e.store.directory, &e.schedules)?;
+        return Err(format!(
+            "Scheduled run was saved but could not start: {error}"
+        ));
+    }
+    Ok(
+        json!({"schemaVersion":1,"schedule":engine.lock().await.schedules.get(id),"run":{"conversationId":chat_id,"dispatched":true,"completed":false}}),
+    )
+}
+async fn schedule_tick(engine: &Arc<Mutex<Engine>>) -> Result<(), String> {
+    let mut e = engine.lock().await;
+    if e.stop {
+        return Ok(());
+    }
+    let now = super::conversation::now();
+    let ids: Vec<String> = e.schedules.keys().cloned().collect();
+    let mut due = Vec::new();
+    let mut changed = false;
+    for id in ids {
+        if let Some(active) = e.schedules[&id].active_chat.clone() {
+            let phase = match e.chat(&active) {
+                Ok(chat) => chat.phase.clone(),
+                Err(_) => {
+                    // Deleting or losing one run's history must not stall every
+                    // other schedule, nor make its unknown work replayable.
+                    let task = e.schedules.get_mut(&id).ok_or("Schedule disappeared")?;
+                    task.enabled = false;
+                    task.active_chat = None;
+                    task.last_chat = None;
+                    task.last_result = Some("unconfirmed".into());
+                    task.finished_at = None;
+                    changed = true;
+                    continue;
+                }
+            };
+            if phase == Phase::RecoveryRequired {
+                if e.schedules[&id].last_result.as_deref() != Some("unconfirmed") {
+                    e.schedules.get_mut(&id).unwrap().last_result = Some("unconfirmed".into());
+                    changed = true;
+                }
+            } else if !phase.busy() {
+                let error = e.chat(&active)?.last_error.clone();
+                let schedule = e.schedules.get_mut(&id).unwrap();
+                schedule.active_chat = None;
+                schedule.finished_at = Some(now);
+                schedule.last_result = Some(match phase {
+                    Phase::Idle => "completed".into(),
+                    Phase::Interrupted => "interrupted".into(),
+                    _ => format!(
+                        "failed: {}",
+                        error.unwrap_or_else(|| "no confirmed completion".into())
+                    ),
+                });
+                changed = true;
+            }
+        }
+        let schedule = e.schedules.get_mut(&id).unwrap();
+        if schedule.enabled && schedule.next_run <= now {
+            schedule.next_run = schedule.rule.next(now)?;
+            changed = true;
+            if schedule.active_chat.is_none() {
+                due.push(id);
+            } else if schedule.last_result.as_deref() != Some("unconfirmed") {
+                schedule.last_result = Some("skipped: previous run still active".into());
+            }
+        }
+    }
+    if changed {
+        super::schedules::persist(&e.store.directory, &e.schedules)?;
+    }
+    drop(e);
+    for id in due {
+        if let Err(error) = run_schedule(engine, &id).await {
+            let mut e = engine.lock().await;
+            if let Some(schedule) = e.schedules.get_mut(&id) {
+                schedule.last_result = Some(format!("failed: {error}"));
+                schedule.finished_at = Some(now);
+            }
+            super::schedules::persist(&e.store.directory, &e.schedules)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+    fn engine(root: &Path) -> Arc<Mutex<Engine>> {
+        Arc::new(Mutex::new(Engine {
+            store: Store::open(root.join("conversations")).unwrap(),
+            chats: HashMap::new(),
+            jobs: HashMap::new(),
+            requests: HashMap::new(),
+            profile: "fixture".into(),
+            stop: false,
+            schedules: std::collections::BTreeMap::new(),
+        }))
+    }
+    #[tokio::test]
+    async fn scheduling_does_not_escalate_or_allow_recursive_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        let created = dispatch(
+            &engine,
+            "conversationCreate",
+            &json!({"agentId":"claude","fullAccess":false,"options":{"toolAccess":"browserOnly"}}),
+        )
+        .await
+        .unwrap();
+        let caller = created["conversation"]["id"].as_str().unwrap();
+        let save = json!({"callerConversation":caller,"name":"Restricted task","prompt":"Read the page","rule":{"kind":"interval","minutes":10},"options":{"toolAccess":"browserOnly"}});
+        let saved = schedule_dispatch(&engine, "agentScheduleSave", &save)
+            .await
+            .unwrap();
+        let id = saved["schedule"]["id"].as_str().unwrap();
+        for options in [
+            json!({"toolAccess":"readFiles"}),
+            json!({"toolAccess":"writeFiles"}),
+            json!({"toolAccess":"runCommands"}),
+        ] {
+            let mut changed = save.clone();
+            changed["id"] = id.into();
+            changed["options"] = options;
+            assert!(schedule_dispatch(&engine, "agentScheduleSave", &changed)
+                .await
+                .unwrap_err()
+                .contains("more permissions"));
+        }
+        let mut automatic = save.clone();
+        automatic["fullAccess"] = true.into();
+        assert!(schedule_dispatch(&engine, "agentScheduleSave", &automatic)
+            .await
+            .is_err());
+        engine.lock().await.chat(caller).unwrap().schedule_id = Some(id.into());
+        assert!(schedule_dispatch(
+            &engine,
+            "agentScheduleList",
+            &json!({"callerConversation":caller})
+        )
+        .await
+        .is_ok());
+        for operation in [
+            "agentScheduleSave",
+            "agentScheduleDelete",
+            "agentScheduleRun",
+        ] {
+            assert!(schedule_dispatch(
+                &engine,
+                operation,
+                &json!({"callerConversation":caller,"id":id})
+            )
+            .await
+            .unwrap_err()
+            .contains("Scheduled conversations"));
+        }
+    }
+    #[tokio::test]
+    async fn cross_adapter_permissions_preserve_sandbox_and_approval_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        let created = dispatch(
+            &engine,
+            "conversationCreate",
+            &json!({"agentId":"codex","fullAccess":true,"options":{"toolAccess":"writeFiles"}}),
+        )
+        .await
+        .unwrap();
+        let caller = created["conversation"]["id"].as_str().unwrap();
+        let body = json!({"callerConversation":caller,"name":"Cross backend task","prompt":"Read the fixture","agentId":"claude","rule":{"kind":"interval","minutes":10},"options":{"toolAccess":"writeFiles"}});
+        assert!(schedule_dispatch(&engine, "agentScheduleSave", &body)
+            .await
+            .is_err());
+        let mut read_only = body.clone();
+        read_only["options"]["toolAccess"] = "readFiles".into();
+        assert!(schedule_dispatch(&engine, "agentScheduleSave", &read_only)
+            .await
+            .is_ok());
+        {
+            let mut e = engine.lock().await;
+            let chat = e.chat(caller).unwrap();
+            chat.full_access = false;
+            chat.options.tool_access = Some(super::super::options::ToolAccess::ReadFiles);
+        }
+        let mut pi = read_only;
+        pi["agentId"] = "pi".into();
+        pi["fullAccess"] = false.into();
+        assert!(schedule_dispatch(&engine, "agentScheduleSave", &pi)
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn restricted_callers_cannot_grant_codex_shell_or_delete_stronger_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        for agent in ["claude", "pi"] {
+            let created = dispatch(
+                &engine,
+                "conversationCreate",
+                &json!({"agentId":agent,"options":{"toolAccess":"readFiles"}}),
+            )
+            .await
+            .unwrap();
+            let caller = created["conversation"]["id"].as_str().unwrap();
+            let rejected = schedule_dispatch(&engine, "agentScheduleSave", &json!({"callerConversation":caller,"name":"Shell escalation","prompt":"Read","agentId":"codex","options":{"toolAccess":"readFiles"},"rule":{"kind":"interval","minutes":10}})).await;
+            assert!(rejected.is_err(), "{agent} granted a Codex shell");
+            let saved = schedule_dispatch(&engine, "scheduleSave", &json!({"name":"Powerful task","prompt":"Run","agentId":"codex","options":{"toolAccess":"runCommands"},"rule":{"kind":"interval","minutes":10}})).await.unwrap();
+            let id = saved["schedule"]["id"].as_str().unwrap();
+            assert!(schedule_dispatch(
+                &engine,
+                "agentScheduleDelete",
+                &json!({"callerConversation":caller,"id":id})
+            )
+            .await
+            .is_err());
+            assert!(engine.lock().await.schedules.contains_key(id));
+            assert!(
+                super::super::schedules::load(&dir.path().join("conversations"))
+                    .unwrap()
+                    .contains_key(id)
+            );
+            assert!(
+                schedule_dispatch(&engine, "scheduleDelete", &json!({"id":id}))
+                    .await
+                    .is_ok()
+            );
+        }
+    }
+    #[tokio::test]
+    async fn missing_run_history_disables_only_that_schedule_without_replaying() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        let saved=schedule_dispatch(&engine,"scheduleSave",&json!({"name":"Deleted history","prompt":"Read the fixture","agentId":"codex","rule":{"kind":"interval","minutes":1},"options":{"toolAccess":"readFiles"}})).await.unwrap();
+        let id = saved["schedule"]["id"].as_str().unwrap().to_string();
+        {
+            let mut e = engine.lock().await;
+            let task = e.schedules.get_mut(&id).unwrap();
+            task.active_chat = Some(uuid::Uuid::new_v4().to_string());
+            task.next_run = 0;
+        }
+        schedule_tick(&engine).await.unwrap();
+        {
+            let e = engine.lock().await;
+            assert!(!e.schedules[&id].enabled);
+            assert!(e.chats.is_empty());
+            assert_eq!(e.schedules[&id].last_result.as_deref(), Some("unconfirmed"));
+        }
+        assert!(
+            schedule_dispatch(&engine, "scheduleSave", &json!({"id":id,"enabled":true}))
+                .await
+                .is_err()
+        );
+        assert!(schedule_dispatch(
+            &engine,
+            "scheduleSave",
+            &json!({"id":id,"acknowledgeUnconfirmed":true,"enabled":true})
+        )
+        .await
+        .is_ok());
+    }
+    #[tokio::test]
+    async fn unknown_run_outcomes_are_not_overlapped_or_replayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        let saved=schedule_dispatch(&engine,"scheduleSave",&json!({"name":"Unknown run","prompt":"Read the page","agentId":"codex","rule":{"kind":"interval","minutes":1},"options":{"toolAccess":"readFiles"}})).await.unwrap();
+        let id = saved["schedule"]["id"].as_str().unwrap().to_string();
+        let mut chat = Conversation::new("codex", None, None).unwrap();
+        chat.phase = Phase::RecoveryRequired;
+        chat.schedule_id = Some(id.clone());
+        let chat_id = chat.id.clone();
+        {
+            let mut e = engine.lock().await;
+            e.store.create(&chat).unwrap();
+            e.chats.insert(chat_id.clone(), chat);
+            let schedule = e.schedules.get_mut(&id).unwrap();
+            schedule.active_chat = Some(chat_id.clone());
+            schedule.next_run = 0;
+        }
+        assert!(run_schedule(&engine, &id)
+            .await
+            .unwrap_err()
+            .contains("unconfirmed"));
+        schedule_tick(&engine).await.unwrap();
+        let e = engine.lock().await;
+        assert_eq!(e.chats.len(), 1);
+        assert_eq!(
+            e.schedules[&id].active_chat.as_deref(),
+            Some(chat_id.as_str())
+        );
+        assert_eq!(e.schedules[&id].last_result.as_deref(), Some("unconfirmed"));
+        assert!(e.schedules[&id].next_run > super::super::conversation::now());
     }
 }

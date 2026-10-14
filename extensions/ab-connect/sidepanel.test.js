@@ -19,7 +19,7 @@ class Node {
   setAttribute() {}
   querySelectorAll(tag) { return this.children.flatMap(node => [ ...(node.tag === tag ? [node] : []), ...node.querySelectorAll(tag)]); }
   remove() { this.parent.children = this.parent.children.filter(node => node !== this); }
-  fire(type) { this.listeners[type]?.({ preventDefault() {} }); }
+  fire(type, details = {}) { this.listeners[type]?.({ preventDefault() {}, ...details }); }
 }
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -48,7 +48,7 @@ async function fixture(overrides = {}, saved = {}) {
     },
   };
   const document = { createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); } };
-  const panel = createPanel({ document, runtime, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
+  const panel = createPanel({ document, runtime, encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
   return { panel, nodes, calls, chats, writes, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
@@ -523,4 +523,42 @@ test('consecutive tool calls fold into one group that stays open only while a to
   assert.equal(groups()[1].children[0].textContent, '2 steps');
   assert.equal(groups()[1].open, false);
   f.panel.close();
+});
+test('conversation options persist per chat without writing the agent global configuration', async () => {
+  const value={...chat('b'),agentId:'codex',options:{effort:'high',serviceTier:'default',toolAccess:'readFiles'}};
+  const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,conversationOptions:true}}),conversationList:async()=>({success:true,result:{conversations:[value]}}),conversationRead:async()=>({success:true,result:{conversation:value,journal:{events:[],cursor:0}}}),conversationSetOptions:async params=>({success:true,result:{conversation:{...value,options:params.options}}})});
+  f.panel.select('b');await settle();f.nodes.get('turnEffort').value='low';f.nodes.get('turnTier').value='priority';f.nodes.get('turnAccess').value='writeFiles';f.nodes.get('saveTurnOptions').fire('click');await settle();
+  const call=f.calls.find(c=>c.operation==='conversationSetOptions');assert.deepEqual(call.params,{conversationId:'b',options:{effort:'low',serviceTier:'priority',toolAccess:'writeFiles'}});
+  assert.equal(f.calls.some(c=>['configApply','configPlan'].includes(c.operation)),false);
+  f.panel.close();
+});
+
+test('explicit skill selection snapshots its input before sending and retains the token on retry', async () => {
+  let sends=0;
+  const skill={id:'catalog-id',name:'example',source:'library',description:'Example',enabled:true,editable:true};
+  const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,skillLibrary:true}}),skillList:async()=>({success:true,result:{skills:[skill]}}),conversationSkillSelect:async()=>({success:true,result:{skill:{id:'snapshot-token',name:'example'}}}),conversationSend:async()=>{sends++;throw new Error('lost acknowledgement');},conversationRead:async()=>({success:true,result:{conversation:{...chat('b'),agentId:'codex'},journal:{events:[],cursor:0}}})});
+  f.panel.select('b');await settle();f.nodes.get('message').value='/example task';f.nodes.get('composer').fire('submit');await settle();await settle();
+  assert.equal(f.calls.find(c=>c.operation==='conversationSend').params.skillId,'snapshot-token');
+  await f.panel.refresh();await settle();f.nodes.get('retryPending').fire('click');await settle();
+  assert.equal(sends,2);assert.equal(f.calls.filter(c=>c.operation==='conversationSkillSelect').length,1);
+  assert.equal(f.calls.filter(c=>c.operation==='conversationSend')[1].params.skillId,'snapshot-token');f.panel.close();
+});
+
+test('image uploads complete before delivery and explicit retry preserves the same images and page', async () => {
+  const attachment={id:'a'.repeat(64),mediaType:'image/png',bytes:12};
+  const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,imageAttachments:true,pageContext:true}}),encodeImage:async()=>({name:'fixture.png',mediaType:'image/png',data:'synthetic-base64'}),conversationAttachmentPut:async()=>({success:true,result:{attachment}}),conversationSend:async()=>{throw new Error('lost acknowledgement');},tabs:{async query(){return [{id:42,title:'Fixture',url:'https://example.test'}];}}});
+  f.panel.select('b');await settle();f.nodes.get('imageFiles').files=[{type:'image/png'}];f.nodes.get('imageFiles').fire('change');await settle();
+  f.nodes.get('message').value='Check this image';f.nodes.get('composer').fire('submit');await settle();await settle();
+  const first=f.calls.find(c=>c.operation==='conversationSend');assert.deepEqual(first.params.attachments,[attachment]);assert.equal(first.params.page.tabId,42);
+  assert.ok(f.calls.findIndex(c=>c.operation==='conversationAttachmentPut')<f.calls.findIndex(c=>c.operation==='conversationSend'));
+  await f.panel.refresh();f.nodes.get('retryPending').fire('click');await settle();
+  assert.deepEqual(f.calls.filter(c=>c.operation==='conversationSend')[1].params,first.params);
+  assert.equal(f.calls.filter(c=>c.operation==='conversationAttachmentPut').length,1);f.panel.close();
+});
+
+test('a failed image upload never sends the text alone or creates an uncertain message', async () => {
+  const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,imageAttachments:true}}),encodeImage:async()=>({name:'fixture.png',mediaType:'image/png',data:'synthetic'}),conversationAttachmentPut:async()=>{throw new Error('image save failed');}});
+  f.panel.select('b');await settle();f.nodes.get('imageFiles').files=[{type:'image/png'}];f.nodes.get('imageFiles').fire('change');await settle();
+  f.nodes.get('message').value='Keep image';f.nodes.get('composer').fire('submit');await settle();await settle();
+  assert.equal(f.calls.some(c=>c.operation==='conversationSend'),false);assert.equal(f.nodes.get('send').disabled,false);assert.equal(f.nodes.get('message').value,'Keep image');assert.equal(f.nodes.get('attachmentDrafts').hidden,false);f.panel.close();
 });
