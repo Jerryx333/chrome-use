@@ -46,12 +46,12 @@ unchanged. Test domains are the main case.
    "source": "confirmed|linked", "evidence": {"kind": "port", "port": 5173, "cwd": "/w/admin"},
    "consents": {"plugin": false, "testEnv": false}, "updatedAt": 0}],
  "pendingClaims": [{"claimId": "<128-bit hex>", "origin": "…", "pathScope": "/", "root": "…",
-   "sessionId": "…", "sessionCwd": "…", "replaces": "<fingerprint of the binding it would replace, or null>",
+   "sessionId": "…", "sessionCwd": "…", "affects": ["<fingerprint of every binding whose scope overlaps>"],
    "requestedAt": 0}]}
 ```
 
 Version 1 files migrate on first write: each entry becomes `pathScope: "/"`,
-`source: "confirmed"`.
+`source: "confirmed"`, `sourceRoots: [root]`.
 
 ## Project configuration (`.chrome-use/inspect.json`, committed by the team)
 
@@ -86,12 +86,14 @@ Version 1 files migrate on first write: each entry becomes `pathScope: "/"`,
 Input: `origin`, `pagePath` (no query/fragment), `sourcePaths`, `revision?`,
 `port?` (loopback only). Output: `{state, binding?, card?, candidates[], pendingClaim?}`.
 
-1. **Scope**: pick the longest-matching scope among bindings and pending
-   claims for this origin and path.
-2. **Pending claim** on that scope: always returned (`pendingClaim`), also when
-   the scope is bound; the frame shows it before anything else, with the current
-   and the claimed target. While a claim is pending the bound target still
-   receives sends; the claimant receives nothing until accepted.
+1. **Effective binding**: the longest-matching scope among confirmed bindings
+   only. Pending claims never take part in this match, so an unaccepted claim
+   cannot shadow a valid default or make the page look unbound.
+2. **Pending claims**: matched separately; every claim whose scope applies to
+   this URL is returned (`pendingClaims`), also when a binding is effective. The
+   frame shows them first, each with the current effective target and the
+   claimed one. Until a claim is accepted the effective binding keeps receiving
+   sends; the claimant receives nothing.
 3. **Bound**: check the bound session is in the roster with the same canonical
    cwd, and, for bindings with port evidence on loopback, that the port's owner
    cwd is in the same worktree as the root and equal to, inside, or containing
@@ -142,10 +144,20 @@ previous target and preselect only under rule 4.
   `ocs who --json` entry. No roster entry or a non-absolute cwd: refuse.
 - Root: `--root`, else the app root of a config in the session's worktree that
   matches the URL, else the session cwd.
-- Scope unbound or bound to the same session: write it (`source: linked`).
-  Bound to another session: write a pending claim (new `claimId`, `replaces` =
-  fingerprint of the current binding) and print that the browser panel will
-  ask; no `--force`. A newer claim on the same scope supersedes the older one.
+- Overlap rule: two scopes overlap when they have the same origin and one
+  `pathScope` is a segment prefix of the other (`/` overlaps `/admin`). The
+  link is written directly (`source: linked`) only when no overlapping binding
+  has a different target. Otherwise it becomes a pending claim (new `claimId`,
+  `affects` = fingerprints of every overlapping binding with a different
+  target), printed with the scopes it would take over; no `--force`. A narrower
+  scope cannot bypass a broader binding: B linking `/admin` while `/` belongs to
+  A is a claim, and B linking `/` while `/admin` belongs to A is a claim that
+  lists `/admin` as affected (accepting it moves `/` to B and leaves `/admin`
+  with A unless the user also replaces that one on the card).
+- A newer claim on the same scope supersedes the older one; claims on
+  different scopes coexist.
+- When several configs in the session's worktree match the URL, link does not
+  pick one; it lists them and asks for `--root`.
 - Skill reference tells agents to run it when the user says to hand a site to
   them.
 
@@ -156,8 +168,8 @@ previous target and preselect only under rule 4.
 | `inspectResolve` | new, above |
 | `inspectStatus` | kept for 0.5.56 extensions, origin-level only: when the origin has any path-scoped binding or pending claim it returns `upgradeRequired` instead of a binding, and the legacy `inspectDeliver` (no `pagePath`) refuses with `upgradeRequired`; it never picks a scope for an unknown path |
 | `inspectBind` | adds `pathScope`, `source: confirmed`, records evidence; clears consents when root or session changes (as now) |
-| `inspectClaimDecide` | `{claimId, expectedBinding, accept}`; refused unless the claim is still the current one for its scope and the scope's binding still has the fingerprint the card showed (stale cards cannot accept a newer claim or a changed binding) |
-| `inspectDeliver` | adds `pagePath` for scope matching and optional `target {root, sessionId}` for a tab target; the host re-validates any target (live, related, canonical root) and re-runs the port check |
+| `inspectClaimDecide` | `{claimId, expectedAffects, accept}`; refused unless the claim is still current for its scope and every affected binding still has the fingerprint the card showed (a stale card cannot accept a newer claim or a changed binding) |
+| `inspectDeliver` | adds `pagePath` for scope matching and an optional tab target `{root, sourceRoots, sessionId, sessionCwd, confirmedFingerprint}` from the card the user clicked; the host recomputes the fingerprint from live data and refuses a mismatch, never widens `sourceRoots` beyond what that card showed, re-validates live/related/canonical root and re-runs the port check |
 | capabilities | `"inspectResolve": true`; a new extension on an older host falls back to `inspectStatus` and says that path scopes, tab targets and claims need the newer CLI |
 
 Source paths resolve only inside `sourceRoots`. A repo-relative path
@@ -213,6 +225,14 @@ unverified, even when it exists elsewhere in the same worktree.
 19. `inspect.json` that is a symlink, oversized, unknown version or unknown
     field is rejected with a visible reason; the resolve budget is respected.
 20. `inspect unlink` from session B cannot remove session A's binding.
+21. `/` bound to A, B links `/admin`: pending claim; `/admin` pages still go to
+    A until accepted.
+22. `/admin` bound to A, B links `/`: pending claim listing `/admin` as
+    affected; accepting moves `/` only, `/admin` stays with A.
+23. Two pending claims on different scopes of one origin are both shown and
+    decided independently; deciding from a stale card is refused.
+24. Tab target carrying wider `sourceRoots` or a wrong fingerprint is refused.
+25. `inspect link` with two matching configs in one worktree asks for `--root`.
 
 Also: the existing 14 scenarios, the headed real-shortcut check, a real-ocs run
 of `inspect link` plus delivery, unit tests for every rule above, and the stealth
