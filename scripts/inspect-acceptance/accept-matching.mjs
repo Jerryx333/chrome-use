@@ -180,10 +180,17 @@ await scenario('m02-port-reused-by-another-worktree', async () => {
     await waitText(ctx, /dev server on this port now runs from another folder/, 'portMoved');
     await tryEnterWithoutTarget(ctx);
   } finally {
+    // Put the original dev server back: wait for the port to be free (the old
+    // process can take a moment), then start it, retrying a strict-port race.
     try { process.kill(-vite.pid); } catch {}
     spawnSync('pkill', ['-f', 'vite --port 5173']);
-    spawn('npx', ['vite', '--port', '5173', '--strictPort'], { cwd: react, stdio: 'ignore', detached: true }).unref();
-    await waitFor(async () => (await fetch('http://localhost:5173/')).ok, { timeout: 30000, label: 'vite restored' });
+    await waitFor(() => spawnSync('lsof', ['-nP', '-iTCP:5173', '-sTCP:LISTEN']).status !== 0, { timeout: 20000, label: 'port 5173 free' });
+    let up = false;
+    for (let attempt = 0; attempt < 3 && !up; attempt++) {
+      spawn('npx', ['vite', '--port', '5173', '--strictPort'], { cwd: react, stdio: 'ignore', detached: true }).unref();
+      up = await waitFor(async () => (await fetch('http://localhost:5173/')).ok, { timeout: 30000, label: 'vite restored' }).then(() => true, () => false);
+    }
+    assert.ok(up, 'react dev server restored on 5173');
   }
   return { ok: true };
 });
