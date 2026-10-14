@@ -116,3 +116,10 @@ needed), 1 refused (reason printed).
    `pathScope`, else `/`; `--path-scope` must apply to the URL's path.
 8. Accepting a claim writes `source: "linked"` and re-checks the claimant is
    live with the same cwd.
+9. `inspectDeliver` requires `expectedTarget` (the fingerprint the panel
+   showed) whenever `pagePath` is present. Choosing the target and comparing it
+   with `expectedTarget` under the bindings lock is the point at which a
+   delivery is accepted. The accepted target is fixed from then on; the `ocs dm`
+   call and the record and context writes after it run outside the lock. A
+   later unlink, claim or rebinding does not redirect or withdraw an accepted
+   delivery, and does not cancel it either.
