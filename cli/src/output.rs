@@ -4071,6 +4071,7 @@ Examples:
         "inspect" => {
             r##"
 chrome-use inspect - Open Chrome DevTools for the active page
+chrome-use inspect link|unlink|list - Route Inspect & Ask requests to a session
 
 Starts a local WebSocket proxy and opens Chrome's DevTools frontend in your
 default browser. The proxy routes DevTools traffic through the daemon's

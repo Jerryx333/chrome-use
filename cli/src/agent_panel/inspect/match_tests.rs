@@ -5,9 +5,11 @@ use super::*;
 
 const TEST: &str = "https://test-admin.x.com";
 
+/// Create a directory and return its canonical path, as the host reports
+/// paths (on Windows: backslashes and a verbatim prefix).
 fn mkdir(p: &Path) -> PathBuf {
     fs::create_dir_all(p).unwrap();
-    p.to_path_buf()
+    fs::canonicalize(p).unwrap()
 }
 
 fn file(p: &Path, body: &str) {
@@ -312,7 +314,7 @@ fn a_test_domain_config_preselects_and_exact_origins_outrank_wildcards() {
 fn path_scoped_apps_on_one_origin_resolve_to_their_own_roots() {
     let w = world();
     let m = mono(&w, "repo");
-    let shop = m.top.join("apps/shop");
+    let shop = mkdir(&m.top.join("apps/shop"));
     let mut configs = Vec::new();
     config(
         &mut configs,
@@ -943,7 +945,7 @@ fn unlink_only_touches_the_calling_sessions_own_scope_and_claims() {
 fn link_identity_root_and_config_choice_are_checked() {
     let w = world();
     let m = mono(&w, "repo");
-    let shop = m.top.join("apps/shop");
+    let shop = mkdir(&m.top.join("apps/shop"));
     let mut configs = Vec::new();
     let body = r#"{"version":1,"sites":[{"origins":["https://test-admin.x.com"]}]}"#;
     config(&mut configs, &m.top, CONFIG, body);
