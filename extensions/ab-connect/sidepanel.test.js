@@ -590,3 +590,13 @@ test('a failed CLI read says why', async () => {
   const f=await fixture({agentInspect:()=>({success:false,error:'The system stopped this CLI as soon as it started'})},{ab_panel_agent:'codex'});
   assert.match(f.nodes.get('modelStatus').textContent,/stopped this CLI as soon as it started/);f.panel.close();
 });
+
+test('composer keeps stop and send together in one right-aligned group', async () => {
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('./sidepanel.html', import.meta.url), 'utf8');
+  const group = /<span class="composer-send">([\s\S]*?)<\/span>/.exec(html)?.[1] || '';
+  for (const id of ['resume', 'sendDirect', 'stop', 'send']) assert.match(group, new RegExp(`id="${id}"`), `${id} is in the send group`);
+  const css = readFileSync(new URL('./sidepanel.css', import.meta.url), 'utf8');
+  assert.match(css, /\.composer-send \{[^}]*margin-left:auto/);
+  assert.match(css, /\.composer-send \{[^}]*flex:none/);
+});

@@ -242,7 +242,14 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 .agents-view[data-section="skills"] #configuration,
 .agents-view[data-section="schedules"] #configuration { display:none; }
 .composer-controls #queue:empty { display:none; }
-.composer-controls .send { margin-left:auto; }
+/* Send-side actions stay together at the right; when the row is too narrow
+   they wrap as one group instead of leaving the send button alone below. */
+.composer-send { display:inline-flex; align-items:center; gap:4px; flex:none; margin-left:auto; }
+.composer-controls button.quiet, .composer-controls button.access, .composer-controls #turnOptions > summary { font-size:12px; line-height:1.4; }
+.composer-controls { gap:2px; }
+.composer-controls button.quiet, .composer-controls button.access { padding:3px 4px; }
+.composer-controls #turnOptions { display:inline-flex; align-items:center; }
+.composer-controls #turnOptions > summary { display:inline-flex; align-items:center; padding:0 6px; color:var(--accent); }
 .composer-controls #turnOptions { width:auto; height:auto; }
-.composer-controls #turnOptions > summary { width:auto; height:24px; padding:0 8px; white-space:nowrap; font-size:11px; }
+.composer-controls #turnOptions > summary { width:auto; height:24px; padding:0 8px; white-space:nowrap; }
 .composer-controls .model { min-width:110px; max-width:160px; flex:1 1 110px; }
