@@ -651,12 +651,17 @@ fn private_dir(root: &Path, parts: &[&str]) -> Result<PathBuf, String> {
                 return Err("Inspect & Ask directory belongs to another user".into());
             }
         }
+        // Owner-only DACL through a handle opened without following reparse
+        // points, as the other panel stores do on Windows.
+        #[cfg(windows)]
+        super::windows::protect_directory(&path)?;
     }
     Ok(path)
 }
 
-/// Write a new 0600 file. An existing file or symlink at `path` is an error
-/// (`AlreadyExists`), and a symlink is never followed.
+/// Write a new owner-only file (0600 on Unix, a private DACL on Windows). An
+/// existing file or symlink at `path` is an error (`AlreadyExists`), and a
+/// symlink or reparse point is never followed.
 fn create_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -665,7 +670,11 @@ fn create_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
+    #[cfg(windows)]
+    super::windows::open_options(&mut options, true);
     let mut file = options.open(path)?;
+    #[cfg(windows)]
+    super::windows::protect(&file).map_err(std::io::Error::other)?;
     file.write_all(bytes)?;
     file.sync_all()
 }
@@ -687,10 +696,16 @@ fn read_regular(path: &Path, max: u64) -> Result<Option<Vec<u8>>, String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW);
     }
-    let mut data = Vec::new();
-    options
+    #[cfg(windows)]
+    super::windows::open_options(&mut options, false);
+    let file = options
         .open(path)
-        .and_then(|f| f.take(max + 1).read_to_end(&mut data))
+        .map_err(|_| "Cannot read an Inspect & Ask record")?;
+    #[cfg(windows)]
+    super::windows::regular(&file)?;
+    let mut data = Vec::new();
+    file.take(max + 1)
+        .read_to_end(&mut data)
         .map_err(|_| "Cannot read an Inspect & Ask record")?;
     if data.len() as u64 > max {
         return Err("Inspect & Ask record exceeds its limit".into());
