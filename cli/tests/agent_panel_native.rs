@@ -12,7 +12,7 @@ use std::time::Duration;
 /// Spaces in the shim path exercise the real installed-CLI launch path.
 #[cfg(windows)]
 fn protect_fixture_endpoint(path: &std::path::Path) {
-    let script = r#"$ErrorActionPreference='Stop'; $acl=New-Object System.Security.AccessControl.FileSecurity; $acl.SetAccessRuleProtection($true,$false); $user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; foreach($sid in @($user,[System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) { $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'); $acl.AddAccessRule($rule) }; Set-Acl -LiteralPath $env:PANEL_FIXTURE_FILE -AclObject $acl"#;
+    let script = r#"$ErrorActionPreference='Stop'; $acl=New-Object System.Security.AccessControl.FileSecurity; $acl.SetAccessRuleProtection($true,$false); $user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; foreach($sid in @($user,[System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) { $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'); $acl.AddAccessRule($rule) }; [System.IO.File]::SetAccessControl($env:PANEL_FIXTURE_FILE,$acl)"#;
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .env("PANEL_FIXTURE_FILE", path)
