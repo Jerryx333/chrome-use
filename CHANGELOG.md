@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.208
+## 1.5.209
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.53. Chrome Web Store publication follows Google review.
+
+### Improvements
+
+- **The popup matches the side panel.** The toolbar popup, shown when Chrome has no side panel, drops the old cream-and-gold look for the side panel's colours, follows the system dark mode and has a **Settings** button. (#615)
+- **New store listing images.** Four screenshots, a promo tile and a marquee are rendered from the real side panel and settings page by `scripts/store-screenshots.sh`, so they can be redone after any UI change. (#615)
+- **A lighter repository.** README illustrations are WebP (4.4 MB down to 180 KB) and the README shows the side panel. The docs site's VIP badge shrinks from 1.38 MB to 6.6 KB, and unused images and old extension zips are gone. (#615)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.208
+
 ### Bug Fixes
 
 - **macOS no longer blocks an agent's `.bun-…dylib`.** Agents started from the side panel inherited Chrome's file quarantine, so every file they wrote was quarantined. OpenCode, Claude Code and other Bun-built CLIs unpack native libraries to `$TMPDIR/.bun-<uid>-*.dylib` and load them, and macOS refused with "Apple could not verify '.bun-501-….dylib' is free of malware". The panel's agent service now starts through launchd, outside Chrome's process tree, so its agents write ordinary files. On start it also clears the quarantine from `.bun-*` libraries that earlier runs left behind. (#613)
@@ -10,7 +25,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.207
 
