@@ -27,6 +27,9 @@ mod skill_library;
 /// Panel-only MCP tools receive their caller from the host-generated server
 /// environment. Tool arguments cannot select another profile or conversation.
 pub(crate) fn panel_mcp_context() -> Option<(String, String)> {
+    if cfg!(windows) {
+        return None;
+    }
     let profile = std::env::var("CHROME_USE_PANEL_PROFILE").ok()?;
     let caller = std::env::var("CHROME_USE_PANEL_CONVERSATION").ok()?;
     if profile.is_empty()
