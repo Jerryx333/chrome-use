@@ -31,7 +31,7 @@
   if (q.get('size') === 'marquee') {
     document.body.innerHTML = `<div class="marquee"><div class="copy"><div class="brand"><img src="${icon}" alt="">chrome-use</div>
       <h1>Your local AI agent,<br>in the Chrome you're logged into</h1>
-      <p>Codex, Claude Code, OpenCode or Pi works on real pages from a side panel. Everything runs on your own computer.</p></div>
+      <p>Codex, Claude Code, OpenCode or Pi works on real pages from a side panel, using the CLI you already signed in to.</p></div>
       <div class="shot"><iframe src="${q.get('panel')}"></iframe></div></div>`
   } else {
     document.body.innerHTML = `<div class="small"><div class="brand"><img src="${icon}" alt="">chrome-use</div>
