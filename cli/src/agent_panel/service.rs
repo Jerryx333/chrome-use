@@ -335,6 +335,14 @@ fn launchd_start(
     let plist = launchd_plist(&label, executable, arguments)?;
     let path = directory.join("service.plist");
     atomic_write(&path, plist.as_bytes(), None)?;
+    // A quarantined writer quarantines the plist too, and launchd refuses
+    // to load a quarantined job definition.
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let file = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| "Invalid agent-service plist path")?;
+        unsafe { libc::removexattr(file.as_ptr(), c"com.apple.quarantine".as_ptr(), 0) };
+    }
     let target = format!("{domain}/{label}");
     let _ = launchctl(&["bootout".as_ref(), target.as_ref()]);
     // bootout returns before launchd forgets the label; retry briefly.
