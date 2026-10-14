@@ -151,7 +151,7 @@ npx skills add leeguooooo/chrome-use -g
   <img src="assets/side-panel.webp" alt="chrome-use 侧栏：agent 对比价格页上的套餐，用表格给出结果" width="820">
 </p>
 
-点击扩展图标打开侧栏，**Settings** 打开连接设置。macOS/Linux 可选择 **Codex**、**Claude Code**、**OpenCode** 或 **Pi**，沿用已安装 CLI 的登录和模型服务配置。菜单只列出当前主机支持的 agent；旧主机需升级才能使用新增适配器。Windows 目前仅支持 agent 发现和配置查看。
+点击扩展图标打开侧栏，**Settings** 打开连接设置。macOS、Linux 和 Windows 可选择 **Codex**、**Claude Code**、**OpenCode** 或 **Pi**，沿用已安装 CLI 的登录和模型服务配置。菜单只列出当前主机支持的 agent；旧主机需升级才能使用新增适配器。Windows 同样支持聊天、配置预览/应用/恢复、技能、图片、会话参数和定时任务。旧 Windows 主机需升级 CLI，不需要管理员权限。agent 进程通过独立 Windows Job 管理，面板私有文件仅允许当前用户和 SYSTEM 访问。
 
 Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，Pi 走 JSONL RPC。每个会话使用独立浏览器 session。输入框上方的页面标签会随下一条消息附带当前网页，让 agent 知道要操作哪个标签页；点 **×** 可从这条消息中去掉它。
 

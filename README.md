@@ -163,7 +163,7 @@ For hosts that speak **MCP but can't run arbitrary shell commands** (Claude Desk
   <img src="assets/side-panel.webp" alt="chrome-use side panel: the agent compares the plans on a pricing page and answers with a table" width="820">
 </p>
 
-Click the extension toolbar icon to open the side panel; **Settings** opens connection options. On macOS/Linux, choose **Codex**, **Claude Code**, **OpenCode** or **Pi** and use the installed CLI's existing login and provider configuration. The agent menu follows the connected host's capabilities; older hosts need an upgrade to offer newer adapters. Windows currently supports agent discovery and configuration reads only.
+Click the extension toolbar icon to open the side panel; **Settings** opens connection options. On macOS, Linux or Windows, choose **Codex**, **Claude Code**, **OpenCode** or **Pi** and use the installed CLI's existing login and provider configuration. The agent menu follows the connected host's capabilities; older hosts need an upgrade to offer newer adapters. Windows offers the same conversations, configuration preview/apply/restore, skills, images, options and schedules. Older Windows hosts need a CLI upgrade; no administrator access is needed. Agent processes run in owned Windows jobs, and private panel files use protected user/SYSTEM ACLs.
 
 Codex uses its app-server protocol, Claude Code uses stream-json, OpenCode uses ACP, and Pi uses JSONL RPC. Each conversation has its own browser session. The current webpage appears as a tag above the composer and is attached to the next message so the agent can target that tab. Click **×** to leave it out of that message.
 

@@ -427,7 +427,7 @@ async fn run_socket_server(
 
 #[cfg(windows)]
 async fn run_socket_server(
-    socket_path: &PathBuf,
+    socket_path: &std::path::Path,
     session: &str,
     stream_client: Option<Arc<RwLock<Option<Arc<CdpClient>>>>>,
     stream_server: Option<Arc<StreamServer>>,
@@ -854,7 +854,7 @@ fn get_port_for_session(session: &str) -> u16 {
     for c in session.chars() {
         hash = ((hash << 5).wrapping_sub(hash)).wrapping_add(c as i32);
     }
-    21000 + ((hash.unsigned_abs() as u32 % 11000) as u16)
+    21000 + ((hash.unsigned_abs() % 11000) as u16)
 }
 
 #[cfg(test)]

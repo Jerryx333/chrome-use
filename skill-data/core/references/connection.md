@@ -270,16 +270,21 @@ OpenCode and Pi return unverified. Email, organization and credentials are not
 transported; modelAccessVerified stays false. Two concurrent probes, bounded
 output/deadlines and owned-process exit checks apply. The panel discards stale
 selection results and does not substitute a static catalog after failure.
-Inspections require Unix ownership support; Windows panels remain read-only.
+Inspections use owned Unix process groups or Windows jobs; all descendants
+must exit before completion is reported.
 
 The native hello reply advertises agentPanel schemaVersion/mode/modelInspection
 capabilities. Port liveness alone does not enable the panel; an older host without
 a compatible advertisement requires upgrade. Capabilities reset on reconnection
 and stale ports cannot change them. Opening while connecting automatically loads
-agent/history metadata after host confirmation. Windows mode is readOnly: only
-discover/configRead pass the native gate; no panel service, process or private
-configuration journal is created through its API. Existing browser commands are
-unchanged. Conversation support and write support are macOS/Linux in this release.
+agent/history metadata after host confirmation. macOS, Linux and Windows advertise full mode, with the same conversation,
+configuration transaction, skills, images, options and schedule operations.
+Legacy Windows hosts may still advertise readOnly and require a CLI upgrade.
+Windows launches agent jobs without a console window, confirms their process
+trees are empty on stop/delete/options changes, and protects private state with
+a user/SYSTEM ACL. Atomic configuration replacements preserve existing ACLs
+and use real Windows file identities. Native executables and installed .cmd/.bat
+entry points are supported; no administrator access is required.
 
 Browser-tool approvals show the requested arguments and allow only a single call. Claude permission requests remain pending until a matching tool result arrives; writing a reply alone does not confirm resolution.
 Codex chrome_use MCP approvals accept only the known empty-form call schema;
@@ -297,8 +302,8 @@ byte-cursor caches, invalidated when an external file change is observed.
 
 ### Side panel controls
 
-On macOS/Linux, select Codex, Claude Code, OpenCode or Pi from the host-advertised
-agent menu. Windows panels remain read-only. Use the installed CLI's own login
+On macOS, Linux or Windows, select Codex, Claude Code, OpenCode or Pi from the
+host-advertised agent menu. Use the installed CLI's own login
 and provider configuration. The model menu reads that CLI's catalog; Default
 model uses its configured model. A Custom model ID in the ＋ menu overrides the
 menu choice; Reload models from CLI refreshes metadata, not execution access.

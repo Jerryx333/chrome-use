@@ -465,9 +465,7 @@ pub(super) fn snapshot(source: &Path) -> Result<Snapshot, String> {
     let existed = bytes.is_some();
     let bytes = bytes.unwrap_or_default();
     let identity = if existed {
-        Some(identity(
-            &fs::metadata(&target).map_err(|_| "Cannot inspect configuration file")?,
-        ))
+        Some(path_identity(&target)?)
     } else {
         None
     };
@@ -511,6 +509,26 @@ fn resolve_target(path: &Path, depth: usize) -> Result<PathBuf, String> {
     }
 }
 
+fn path_identity(path: &Path) -> Result<Identity, String> {
+    #[cfg(windows)]
+    {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        super::windows::open_options(&mut options, false);
+        let file = options
+            .open(path)
+            .map_err(|_| "Cannot inspect configuration identity")?;
+        let (device, inode) = super::windows::identity(&file)?;
+        Ok(Identity { device, inode })
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(identity(
+            &fs::metadata(path).map_err(|_| "Cannot inspect configuration file")?,
+        ))
+    }
+}
+#[cfg(not(windows))]
 fn identity(meta: &fs::Metadata) -> Identity {
     #[cfg(unix)]
     {
@@ -549,6 +567,8 @@ fn read_regular(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
     }
+    #[cfg(windows)]
+    super::windows::open_options(&mut options, false);
     let file = options
         .open(path)
         .map_err(|_| "Cannot read configuration file")?;
@@ -556,11 +576,22 @@ fn read_regular(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, String> {
         .metadata()
         .map_err(|_| "Cannot inspect open configuration")?
         .is_file()
-        || identity(
-            &file
-                .metadata()
-                .map_err(|_| "Cannot inspect open configuration")?,
-        ) != identity(&meta)
+    {
+        return Err("Configuration must be a regular file".into());
+    }
+    #[cfg(windows)]
+    {
+        let (device, inode) = super::windows::identity(&file)?;
+        if (Identity { device, inode }) != path_identity(path)? {
+            return Err("Configuration file identity changed during read".into());
+        }
+    }
+    #[cfg(not(windows))]
+    if identity(
+        &file
+            .metadata()
+            .map_err(|_| "Cannot inspect open configuration")?,
+    ) != identity(&meta)
     {
         return Err("Configuration file identity changed during read".into());
     }
@@ -656,9 +687,13 @@ pub(super) fn atomic_write(
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
+        #[cfg(windows)]
+        super::windows::open_options(&mut options, true);
         let mut file = options
             .open(&temporary)
             .map_err(|_| "Cannot create configuration temporary file")?;
+        #[cfg(windows)]
+        super::windows::protect(&file)?;
         if let Ok(meta) = fs::metadata(path) {
             #[cfg(unix)]
             {
@@ -668,6 +703,8 @@ pub(super) fn atomic_write(
                     return Err("Cannot preserve configuration file group".into());
                 }
             }
+            #[cfg(windows)]
+            super::windows::copy_permissions(path, &file)?;
             file.set_permissions(meta.permissions())
                 .map_err(|_| "Cannot preserve configuration file permissions")?;
         }
@@ -678,6 +715,9 @@ pub(super) fn atomic_write(
         if let Some(expected) = expected {
             verify_snapshot(expected)?;
         }
+        #[cfg(windows)]
+        super::windows::replace(&temporary, path)?;
+        #[cfg(not(windows))]
         fs::rename(&temporary, path).map_err(|_| "Cannot commit configuration file")?;
         sync_parent(parent)?;
         Ok(())
@@ -736,7 +776,9 @@ pub(super) fn private_tree(path: &Path) -> Result<(), String> {
         }
     }
     if !path.exists() {
-        let mut builder = fs::DirBuilder::new();
+        let builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        let mut builder = builder;
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
@@ -764,6 +806,8 @@ pub(super) fn private_tree(path: &Path) -> Result<(), String> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
             .map_err(|_| "Cannot protect configuration store")?;
     }
+    #[cfg(windows)]
+    super::windows::protect_directory(path)?;
     Ok(())
 }
 
@@ -782,9 +826,16 @@ pub(super) fn private_open(path: &Path, create: bool) -> Result<File, String> {
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(windows)]
+    super::windows::open_options(&mut options, true);
     let file = options
         .open(path)
         .map_err(|_| "Cannot open configuration transaction lock")?;
+    #[cfg(windows)]
+    {
+        super::windows::regular(&file)?;
+        super::windows::protect(&file)?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

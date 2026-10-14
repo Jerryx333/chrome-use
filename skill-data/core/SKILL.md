@@ -58,9 +58,10 @@ discovery. It returns CLI-reported model suggestions and account state without
 identity or credentials, sends no prompt and does not verify model access.
 Missing or partial catalogs are explicit; typed model IDs remain available.
 A connected legacy relay does not imply panel support: the native host must
-advertise schema capabilities. Windows panel operations are read-only discovery
-and configuration reads; conversational processes and configuration persistence
-remain disabled there. Browser CLI automation is unaffected.
+advertise schema capabilities. Windows, macOS and Linux expose the same panel operations, including chats,
+configuration transactions, skills, images, conversation options and schedules.
+Upgrade legacy Windows hosts that advertise readOnly. Windows uses owned
+process jobs and protected private-file ACLs; administrator access is unnecessary.
 
 ## Start with the cheapest useful evidence
 
