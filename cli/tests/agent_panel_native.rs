@@ -1975,6 +1975,19 @@ fn panel_rich_messages_options_and_schedules_reach_the_real_native_service() {
             json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"policy"}),
         );
         conversation_poll(&mut host, &rx, &id, "idle");
+        if agent == "codex" {
+            call(
+                &mut host,
+                "conversationSetOptions",
+                json!({"conversationId":id,"options":{"toolAccess":"readFiles"}}),
+            );
+            call(
+                &mut host,
+                "conversationSend",
+                json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"default-options"}),
+            );
+            conversation_poll(&mut host, &rx, &id, "idle");
+        }
     }
     let records: Vec<Value> = std::fs::read_to_string(&proof)
         .unwrap()
@@ -1988,7 +2001,7 @@ fn panel_rich_messages_options_and_schedules_reach_the_real_native_service() {
                 .contains(&r["message"]["method"].as_str().unwrap_or(""))
         })
         .collect();
-    assert_eq!(starts.len(), 2);
+    assert_eq!(starts.len(), 3);
     assert_ne!(starts[0]["pid"], starts[1]["pid"]);
     assert_eq!(
         starts[0]["message"]["params"]["config"]["model_reasoning_effort"],
@@ -2000,6 +2013,10 @@ fn panel_rich_messages_options_and_schedules_reach_the_real_native_service() {
         "low"
     );
     assert_eq!(starts[1]["message"]["params"]["sandbox"], "read-only");
+    assert_eq!(
+        starts[2]["message"]["params"]["config"]["model_reasoning_effort"],
+        "medium"
+    );
     let codex_rich = records
         .iter()
         .find(|r| {

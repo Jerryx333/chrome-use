@@ -1652,6 +1652,7 @@ fn start<'a>(
             profile,
             browser_session: format!("panel-{id}"),
             backend_session: chat.session_id,
+            previous_model: chat.model,
             model: chat.requested_model,
             options: chat.options,
             mcp_executable: std::env::current_exe()
@@ -2007,6 +2008,13 @@ async fn schedule_dispatch(
         return Err("A profile supports at most 64 schedules".into());
     }
     let old = e.schedules.get(&id).cloned();
+    if old.as_ref().is_some_and(|task| {
+        task.last_result.as_deref() == Some("unconfirmed") && task.active_chat.is_none()
+    }) && p.enabled == Some(true)
+        && p.acknowledge_unconfirmed != Some(true)
+    {
+        return Err("Acknowledge the missing run history before enabling this schedule".into());
+    }
     let now = super::conversation::now();
     let mut schedule = old.clone().unwrap_or(super::schedules::Schedule {
         id: id.clone(),
@@ -2201,7 +2209,21 @@ async fn schedule_tick(engine: &Arc<Mutex<Engine>>) -> Result<(), String> {
     let mut changed = false;
     for id in ids {
         if let Some(active) = e.schedules[&id].active_chat.clone() {
-            let phase = e.chat(&active)?.phase.clone();
+            let phase = match e.chat(&active) {
+                Ok(chat) => chat.phase.clone(),
+                Err(_) => {
+                    // Deleting or losing one run's history must not stall every
+                    // other schedule, nor make its unknown work replayable.
+                    let task = e.schedules.get_mut(&id).ok_or("Schedule disappeared")?;
+                    task.enabled = false;
+                    task.active_chat = None;
+                    task.last_chat = None;
+                    task.last_result = Some("unconfirmed".into());
+                    task.finished_at = None;
+                    changed = true;
+                    continue;
+                }
+            };
             if phase == Phase::RecoveryRequired {
                 if e.schedules[&id].last_result.as_deref() != Some("unconfirmed") {
                     e.schedules.get_mut(&id).unwrap().last_result = Some("unconfirmed".into());
@@ -2356,6 +2378,38 @@ mod schedule_tests {
         assert!(schedule_dispatch(&engine, "agentScheduleSave", &pi)
             .await
             .is_err());
+    }
+    #[tokio::test]
+    async fn missing_run_history_disables_only_that_schedule_without_replaying() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        let saved=schedule_dispatch(&engine,"scheduleSave",&json!({"name":"Deleted history","prompt":"Read the fixture","agentId":"codex","rule":{"kind":"interval","minutes":1},"options":{"toolAccess":"readFiles"}})).await.unwrap();
+        let id = saved["schedule"]["id"].as_str().unwrap().to_string();
+        {
+            let mut e = engine.lock().await;
+            let task = e.schedules.get_mut(&id).unwrap();
+            task.active_chat = Some(uuid::Uuid::new_v4().to_string());
+            task.next_run = 0;
+        }
+        schedule_tick(&engine).await.unwrap();
+        {
+            let e = engine.lock().await;
+            assert!(!e.schedules[&id].enabled);
+            assert!(e.chats.is_empty());
+            assert_eq!(e.schedules[&id].last_result.as_deref(), Some("unconfirmed"));
+        }
+        assert!(
+            schedule_dispatch(&engine, "scheduleSave", &json!({"id":id,"enabled":true}))
+                .await
+                .is_err()
+        );
+        assert!(schedule_dispatch(
+            &engine,
+            "scheduleSave",
+            &json!({"id":id,"acknowledgeUnconfirmed":true,"enabled":true})
+        )
+        .await
+        .is_ok());
     }
     #[tokio::test]
     async fn unknown_run_outcomes_are_not_overlapped_or_replayed() {

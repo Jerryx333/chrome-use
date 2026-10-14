@@ -18,6 +18,7 @@ pub(super) struct Setup {
     pub browser_session: String,
     pub backend_session: Option<String>,
     pub model: Option<String>,
+    pub previous_model: Option<String>,
     pub options: ModelOptions,
     pub mcp_executable: PathBuf,
     pub full_access: bool,
@@ -340,6 +341,8 @@ async fn protocol(
     let codex = setup.agent_id == "codex";
     let mut next_id = 1u64;
     let mut requests = HashMap::<u64, String>::new();
+    let mut default_effort_thread: Option<(String, Value, String)> = None;
+    let mut model_pages = 0usize;
     let mut session = setup.backend_session.clone();
     let mut turn: Option<String> = None;
     let mut queued: Option<Message> = None;
@@ -425,8 +428,32 @@ async fn protocol(
                                 if let Some(s)=&session {params["threadId"]=s.clone().into();params["excludeTurns"]=true.into();}
                                 if let Some(model)=&setup.model {params["model"]=model.clone().into();}
                                 if let Some(effort)=&setup.options.effort {params["config"]["model_reasoning_effort"]=effort.clone().into();}
+                                else if session.is_some() {
+                                    // Resume inherits the old rollout effort even after process
+                                    // restart. Restore the CLI setting, or its model catalog's
+                                    // actual default; null is not a valid config override.
+                                    if let Some(effort)=config.get("model_reasoning_effort").filter(|v|v.is_string()) {params["config"]["model_reasoning_effort"]=effort.clone();}
+                                    else {
+                                        let model=setup.model.as_ref().or(setup.previous_model.as_ref()).cloned().or_else(||config.get("model").and_then(Value::as_str).map(str::to_owned)).ok_or("Cannot identify the model whose default effort is requested; choose an explicit effort")?;
+                                        default_effort_thread=Some((method.into(),params,model));
+                                        requests.insert(next_id,"model/list".into());write(stdin,json!({"id":next_id,"method":"model/list","params":{"limit":100}})).await?;
+                                        continue;
+                                    }
+                                }
                                 if let Some(tier)=&setup.options.service_tier {params["serviceTier"]=tier.clone().into();}
                                 requests.insert(next_id,method.into());write(stdin,json!({"id":next_id,"method":method,"params":params})).await?;
+                            }else if method=="model/list" {
+                                model_pages+=1;
+                                let (method,mut params,wanted)=default_effort_thread.take().ok_or("Unexpected default effort catalog reply")?;
+                                let data=value["result"]["data"].as_array().ok_or("Default effort catalog is malformed")?;
+                                if let Some(model)=data.iter().find(|model|model["model"].as_str()==Some(wanted.as_str())) {
+                                    let effort=model["defaultReasoningEffort"].as_str().filter(|e|["none","minimal","low","medium","high","xhigh","max"].contains(e)).ok_or("This model has no reported default effort; choose an explicit effort")?;
+                                    params["config"]["model_reasoning_effort"]=effort.into();
+                                    if let Some(tier)=&setup.options.service_tier {params["serviceTier"]=tier.clone().into();}
+                                    next_id+=1;requests.insert(next_id,method.clone());write(stdin,json!({"id":next_id,"method":method,"params":params})).await?;
+                                } else if let Some(cursor)=value["result"]["nextCursor"].as_str().filter(|c|c.len()<=1024 && model_pages<8) {
+                                    default_effort_thread=Some((method,params,wanted));next_id+=1;requests.insert(next_id,"model/list".into());write(stdin,json!({"id":next_id,"method":"model/list","params":{"limit":100,"cursor":cursor}})).await?;
+                                } else {return Err("The CLI catalog does not identify this model's default effort; choose an explicit effort".into());}
                             }else if method=="thread/start"||method=="thread/resume" {
                                 let returned=value["result"]["thread"]["id"].as_str().ok_or("Backend thread has no identity")?.to_string();if session.as_ref().is_some_and(|s|s!=&returned){return Err("Backend resumed a different conversation".into());}session=Some(returned.clone());ready=true;events.send(notice("ready",json!({"sessionId":returned,"model":value["result"]["model"],"pid":pid}))).await.map_err(|_|"Event consumer closed")?;
                                 if queued.is_some(){send_turn(true,&setup.workspace,stdin,&mut next_id,&mut requests,&session,&mut queued).await?;busy=true;}

@@ -184,7 +184,7 @@ for line in sys.stdin:
             emit({"id":message["id"],"result":{"account":{"type":"chatgpt","email":"private@synthetic.invalid","accessToken":"synthetic-never-transport"},"requiresOpenaiAuth":True}})
         elif method == "model/list":
             page = message["params"].get("cursor")
-            data=[{"model":"synthetic-codex-model","displayName":"Synthetic Codex","isDefault":True,"supportedReasoningEfforts":[{"reasoningEffort":"high"}]}] if page is None else [{"model":"synthetic-codex-alternate","displayName":"Synthetic alternate","isDefault":False}]
+            data=[{"model":"synthetic-codex-model","displayName":"Synthetic Codex","isDefault":True,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"high"}]}] if page is None else [{"model":"synthetic-codex-alternate","displayName":"Synthetic alternate","isDefault":False}]
             emit({"id":message["id"],"result":{"data":data,"nextCursor":"page-two" if page is None else None}})
         elif method == "config/read":
             emit({"id": message["id"], "result": {"config": {"mcp_servers": {"other_browser": {"command": "never-executed"}}}}})

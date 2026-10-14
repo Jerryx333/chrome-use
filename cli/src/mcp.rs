@@ -1,6 +1,6 @@
 //! Stdio MCP server exposing chrome-use tools in one of two profiles.
 //!
-//! Every tool call is delegated to the current binary in `--json` mode: we
+//! Browser tool calls are delegated to the current binary in `--json` mode: we
 //! build the same argument vector a human would type on the command line,
 //! run `chrome-use <args> --json` as a child process, and hand its JSON
 //! output back as the tool result. No browser logic lives here — this file

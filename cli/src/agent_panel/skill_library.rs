@@ -38,11 +38,18 @@ pub(super) struct Skill {
     pub folder: PathBuf,
 }
 fn read_text(path: &Path, max: usize) -> Result<String, String> {
-    let meta = std::fs::metadata(path).map_err(|_| "Cannot inspect skill file")?;
+    let meta = std::fs::symlink_metadata(path).map_err(|_| "Cannot inspect skill file")?;
     if !meta.is_file() || meta.len() > max as u64 {
         return Err("Skill file is not bounded text".into());
     }
-    let mut file = std::fs::File::open(path).map_err(|_| "Cannot read skill file")?;
+    let mut open = std::fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = open.open(path).map_err(|_| "Cannot read skill file")?;
     let mut bytes = Vec::new();
     file.by_ref()
         .take((max + 1) as u64)
@@ -306,6 +313,53 @@ pub(super) fn save(directory: &Path, name: &str, content: &str) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn wrapped_skill_archives_import_assets_and_refuse_path_escape() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("skills.zip");
+        let options = zip::write::SimpleFileOptions::default();
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
+        use std::io::Write;
+        zip.start_file("repo-main/skills/example/SKILL.md", options)
+            .unwrap();
+        zip.write_all(b"---\nname: example\n---\nRead references/detail.md")
+            .unwrap();
+        zip.start_file("repo-main/skills/example/references/detail.md", options)
+            .unwrap();
+        zip.write_all(b"Synthetic reference").unwrap();
+        zip.finish().unwrap();
+        let library = root.path().join("profile");
+        super::import(&library, "archive", archive.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            read_text(
+                &library.join("skill-library/example/references/detail.md"),
+                MAX_TEXT
+            )
+            .unwrap(),
+            "Synthetic reference"
+        );
+        let bad = root.path().join("bad.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&bad).unwrap());
+        zip.start_file("../outside", options).unwrap();
+        zip.write_all(b"refused").unwrap();
+        zip.finish().unwrap();
+        assert!(super::import(&library, "archive", bad.to_str().unwrap())
+            .await
+            .is_err());
+        assert!(!root.path().join("outside").exists());
+    }
+    #[test]
+    #[cfg(unix)]
+    fn skill_leaf_symlinks_are_not_followed() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("original");
+        std::fs::write(&original, "Synthetic data").unwrap();
+        let link = root.path().join("SKILL.md");
+        std::os::unix::fs::symlink(original, &link).unwrap();
+        assert!(read_text(&link, MAX_TEXT).is_err());
+    }
     #[test]
     fn library_saves_are_scoped_and_refs_cannot_escape() {
         let dir = tempfile::tempdir().unwrap();
@@ -451,6 +505,32 @@ pub(super) async fn import(directory: &Path, kind: &str, source: &str) -> Result
         }
         _ => return Err("Import kind is folder, archive or git".into()),
     };
+    // GitHub archives wrap the repository in one directory; repositories
+    // often put entries below skills/. Strip those wrappers before scanning.
+    let mut root = root;
+    for _ in 0..3 {
+        if root.join("SKILL.md").is_file() {
+            break;
+        }
+        if root.join("skills").is_dir() {
+            root = root.join("skills");
+            break;
+        }
+        let folders: Vec<_> = std::fs::read_dir(&root)
+            .map_err(|_| "Cannot inspect import folders")?
+            .flatten()
+            .filter(|e| {
+                e.path().is_dir()
+                    && !e.file_name().to_string_lossy().starts_with('.')
+                    && e.file_name() != "__MACOSX"
+            })
+            .take(2)
+            .collect();
+        if folders.len() != 1 {
+            break;
+        }
+        root = folders[0].path();
+    }
     let mut found = BTreeMap::new();
     scan(&root, "import", false, &mut found, 0);
     if found.is_empty() {
