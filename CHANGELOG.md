@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.211
+## 1.5.212
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.55 or newer, including the selected-agent-only model probe.
+
+### New Features
+
+- **Full Windows agent panel.** Windows now supports Codex, Claude Code, OpenCode and Pi conversations, CLI model inspection, configuration preview/apply/restore, skills and imports, images, conversation permissions/options, scheduled prompts and panel-bound MCP tools. Native executable and batch entry points are supported without administrator access. (#622)
+
+### Improvements
+
+- **Owned Windows process trees and private state.** Agents enter a kill-on-close Windows Job before running; stop, delete and option changes confirm all owned descendants exit. Private state has a protected user/SYSTEM ACL, atomic writes preserve configuration ACLs, and file identities detect replacement. Windows Path and other environment names are matched without case sensitivity. (#622)
+- **Windows runtime verification.** A dedicated Windows CI runs private-state/process-tree tests and the same native-host protocol acceptance used on macOS/Linux, with CRLF batch fixtures and all four adapters. (#622)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.211
+
 Requires extension ab-connect 0.5.55. Chrome Web Store publication follows Google review.
 
 ### Bug Fixes
@@ -13,7 +31,6 @@ Requires extension ab-connect 0.5.55. Chrome Web Store publication follows Googl
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.210
 

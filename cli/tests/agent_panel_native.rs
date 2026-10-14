@@ -8,6 +8,61 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+/// Use the installed interpreter through a CRLF batch shim on Windows.
+/// Spaces in the shim path exercise the real installed-CLI launch path.
+#[cfg(windows)]
+fn protect_fixture_endpoint(path: &std::path::Path) {
+    let script = r#"$ErrorActionPreference='Stop'; $acl=New-Object System.Security.AccessControl.FileSecurity; $acl.SetAccessRuleProtection($true,$false); $user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; foreach($sid in @($user,[System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) { $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'); $acl.AddAccessRule($rule) }; [System.IO.File]::SetAccessControl($env:PANEL_FIXTURE_FILE,$acl)"#;
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env("PANEL_FIXTURE_FILE", path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn test_binary() -> std::path::PathBuf {
+    std::env::var_os("CHROME_USE_TEST_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_chrome-use").into())
+}
+
+fn fixture_program(root: &std::path::Path) -> std::path::PathBuf {
+    let script =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    #[cfg(unix)]
+    {
+        let _ = root;
+        script
+    }
+    #[cfg(windows)]
+    {
+        let output = Command::new("python")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let python = String::from_utf8(output.stdout).unwrap();
+        let path = root.join("fixture runner.cmd");
+        std::fs::write(
+            &path,
+            format!(
+                "@echo off\r\n@set \"PYTHONUTF8=1\"\r\n@\"{}\" \"{}\" %*\r\n",
+                python.trim(),
+                script.display()
+            ),
+        )
+        .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.windows(2).any(|b| b == b"\r\n"));
+        path
+    }
+}
+
 struct Host(Child);
 
 impl Drop for Host {
@@ -87,7 +142,7 @@ fn panel_reply(
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn configuration_preview_apply_and_restore_use_only_isolated_fixture_settings() {
     let registry = tempfile::tempdir().unwrap();
@@ -97,7 +152,7 @@ fn configuration_preview_apply_and_restore_use_only_isolated_fixture_settings() 
     let original = br#"{"model":"old","env":{"ANTHROPIC_MODEL":"pinned","ANTHROPIC_AUTH_TOKEN":"synthetic-token"},"theme":"light"}"#;
     std::fs::write(&settings, original).unwrap();
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CLAUDE_CONFIG_DIR", &agent_dir)
@@ -189,14 +244,14 @@ fn configuration_preview_apply_and_restore_use_only_isolated_fixture_settings() 
     assert_eq!(std::fs::read(&settings).unwrap(), original);
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct ServiceFixture {
     root: std::path::PathBuf,
     profile: String,
     chats: Vec<String>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl ServiceFixture {
     fn request(&self, operation: &str, params: Value) -> Option<Value> {
         use std::net::TcpStream;
@@ -237,7 +292,7 @@ impl ServiceFixture {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Drop for ServiceFixture {
     fn drop(&mut self) {
         for id in &self.chats {
@@ -257,7 +312,7 @@ impl Drop for ServiceFixture {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn conversation_poll(
     host: &mut Host,
     rx: &mpsc::Receiver<Result<Value, String>>,
@@ -291,7 +346,7 @@ fn conversation_poll(
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() {
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-conversation-fixture";
@@ -302,7 +357,7 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
     };
     let spawn = || {
         Host(
-            Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+            Command::new(test_binary())
                 .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
                 .env("CHROME_USE_RELAY_DIR", registry.path())
                 .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -322,8 +377,7 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
     let health = panel_reply(&mut host, &rx, "health", "serviceHealth", json!({}));
     assert!(health.get("error").is_none());
     let service_pid = health["result"]["pid"].clone();
-    let fixture =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let fixture = fixture_program(registry.path());
     let relative = panel_reply(
         &mut host,
         &rx,
@@ -892,7 +946,7 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
 fn discovery_and_errors_are_correlated_without_entering_browser_dispatch() {
     let registry = tempfile::tempdir().unwrap();
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -997,9 +1051,10 @@ fn discovery_and_errors_are_correlated_without_entering_browser_dispatch() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdown() {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{
         atomic::{AtomicU64, Ordering},
@@ -1009,13 +1064,17 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
     let profile = "upgrade-fixture";
     let directory = registry.path().join("agent-panel/profiles").join(profile);
     std::fs::create_dir_all(&directory).unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let ownership = std::fs::File::create(directory.join("service.lock")).unwrap();
     ownership.lock().unwrap();
     let endpoint_path = directory.join("service.json");
     std::fs::write(&endpoint_path, json!({"schemaVersion":1,"profile":profile,"address":listener.local_addr().unwrap(),"capability":"f".repeat(64),"binaryHash":"synthetic-old-build","pid":std::process::id()}).to_string()).unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&endpoint_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(windows)]
+    protect_fixture_endpoint(&endpoint_path);
     let active = Arc::new(AtomicU64::new(1));
     let active_for_server = active.clone();
     let server = std::thread::spawn(move || {
@@ -1050,7 +1109,7 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
         }
     });
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1086,62 +1145,8 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
     panic!("Owned upgraded service exit was not confirmed");
 }
 
-#[cfg(windows)]
 #[test]
-fn windows_native_panel_reads_fixture_configuration_but_refuses_writes_without_persistence() {
-    let registry = tempfile::tempdir().unwrap();
-    let agent_dir = registry.path().join("synthetic-agent");
-    std::fs::create_dir(&agent_dir).unwrap();
-    let settings = agent_dir.join("settings.json");
-    let original = br#"{"model":"old","env":{"ANTHROPIC_AUTH_TOKEN":"synthetic-token"}}"#;
-    std::fs::write(&settings, original).unwrap();
-    let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
-            .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
-            .env("CHROME_USE_RELAY_DIR", registry.path())
-            .env("CLAUDE_CONFIG_DIR", &agent_dir)
-            .env("CHROME_USE_NO_UPDATE_CHECK", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    let rx = frames(&mut host);
-    send(
-        &mut host,
-        json!({"method":"hello","version":"fixture","profileId":"windows-read-only-fixture"}),
-    );
-    let read = panel_reply(
-        &mut host,
-        &rx,
-        "read-only-config",
-        "configRead",
-        json!({"agentId":"claude"}),
-    );
-    assert!(read.get("error").is_none());
-    assert!(!read.to_string().contains("synthetic-token"));
-    for operation in [
-        "configPlan",
-        "configApply",
-        "configRestore",
-        "agentInspect",
-        "conversationCreate",
-        "serviceHealth",
-    ] {
-        let reply = panel_reply(&mut host, &rx, operation, operation, json!({}));
-        assert!(
-            reply["error"].as_str().unwrap().contains("read-only"),
-            "{}",
-            reply
-        );
-    }
-    assert_eq!(std::fs::read(settings).unwrap(), original);
-    assert!(!registry.path().join("agent-panel").exists());
-}
-
-#[test]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-delete-fixture";
@@ -1152,7 +1157,7 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1169,8 +1174,7 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
         &mut host,
         json!({"method":"hello","version":"fixture","profileId":profile}),
     );
-    let fixture =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let fixture = fixture_program(registry.path());
     let mut ids = vec![];
     for _ in 0..2 {
         let created = panel_reply(
@@ -1287,7 +1291,7 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request() {
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-full-access-fixture";
@@ -1297,7 +1301,7 @@ fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1312,8 +1316,7 @@ fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request
         &mut host,
         json!({"method":"hello","version":"fixture","profileId":profile}),
     );
-    let fixture =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let fixture = fixture_program(registry.path());
     let turn = |host: &mut Host, id: &str, text: &str, phase: &str| -> Value {
         let sent = panel_reply(
             host,
@@ -1422,7 +1425,7 @@ fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request
     assert!(replies(&done).ends_with("policy: never/danger-full-access"));
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
     let registry = tempfile::tempdir().unwrap();
@@ -1433,7 +1436,7 @@ fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1448,8 +1451,7 @@ fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
         &mut host,
         json!({"method":"hello","version":"fixture","profileId":profile}),
     );
-    let fixture =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let fixture = fixture_program(registry.path());
     let inspection = panel_reply(
         &mut host,
         &rx,
@@ -1652,7 +1654,7 @@ fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-pi-fixture";
@@ -1662,7 +1664,7 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1679,8 +1681,7 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
         &mut host,
         json!({"method":"hello","version":"fixture","profileId":profile}),
     );
-    let fixture =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let fixture = fixture_program(registry.path());
     let inspected = panel_reply(
         &mut host,
         &rx,
@@ -1789,7 +1790,7 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-slow-inspection-fixture";
@@ -1799,7 +1800,7 @@ fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1815,8 +1816,7 @@ fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
         &mut host,
         json!({"method":"hello","version":"fixture","profileId":profile}),
     );
-    let fixture =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let fixture = fixture_program(registry.path());
     let inspected = panel_reply(
         &mut host,
         &rx,
@@ -1836,9 +1836,10 @@ fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn panel_rich_messages_options_and_schedules_reach_the_real_native_service() {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-rich-panel-fixture";
@@ -1850,26 +1851,28 @@ fn panel_rich_messages_options_and_schedules_reach_the_real_native_service() {
     let home = registry.path().join("home");
     let bin = home.join(".local/bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let fixture =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    let fixture = fixture_program(registry.path());
+    #[cfg(unix)]
     symlink(&fixture, bin.join("codex")).unwrap();
+    #[cfg(windows)]
+    std::fs::copy(&fixture, bin.join("codex.cmd")).unwrap();
     let proof = registry.path().join("protocol.jsonl");
     let spawn = || {
         Host(
-            Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+            Command::new(test_binary())
                 .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
                 .env("CHROME_USE_RELAY_DIR", registry.path())
                 .env("CHROME_USE_NO_UPDATE_CHECK", "1")
                 .env("HOME", &home)
+                .env("USERPROFILE", &home)
                 .env("CODEX_HOME", home.join(".codex"))
                 .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
                 .env(
                     "PATH",
-                    format!(
-                        "{}:{}",
-                        bin.display(),
-                        std::env::var("PATH").unwrap_or_default()
-                    ),
+                    std::env::join_paths(std::iter::once(bin.clone()).chain(
+                        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+                    ))
+                    .unwrap(),
                 )
                 .env("PANEL_FIXTURE_CAPTURE", &proof)
                 .env("PANEL_FIXTURE_IMAGES", "1")

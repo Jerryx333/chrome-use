@@ -219,10 +219,8 @@ async fn drive(
         command.as_std_mut().process_group(0);
     }
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.as_std_mut().creation_flags(0x08000000);
-    }
+    let (mut child, owned_job) = super::windows::ProcessJob::spawn(&mut command).await?;
+    #[cfg(not(windows))]
     let mut child = command
         .spawn()
         .map_err(|_| "Could not start the selected agent executable")?;
@@ -276,7 +274,10 @@ async fn drive(
         }
         _ => Err("This agent has no conversational adapter yet".into()),
     };
+    #[cfg(windows)]
+    owned_job.terminate()?;
     // Kill only the still-live owned process group, before reaping its PID.
+    #[cfg(not(windows))]
     if child
         .try_wait()
         .map_err(|_| "Cannot inspect backend process")?
@@ -315,6 +316,8 @@ async fn drive(
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
+    #[cfg(windows)]
+    owned_job.confirm_empty().await?;
     *exit_confirmed = true;
     result
 }

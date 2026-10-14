@@ -253,7 +253,7 @@ pub(super) async fn delete_session(
     workspace: &Path,
     session: &str,
 ) -> Result<(), String> {
-    let mut probe = super::inspection::OwnedProbe::spawn(executable, &["acp"], workspace)?;
+    let mut probe = super::inspection::OwnedProbe::spawn(executable, &["acp"], workspace).await?;
     let result = tokio::time::timeout(Duration::from_secs(15), async {
         let mut input = probe
             .child

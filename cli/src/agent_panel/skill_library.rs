@@ -492,17 +492,13 @@ pub(super) async fn import(directory: &Path, kind: &str, source: &str) -> Result
             let context = DiscoveryContext::current()?;
             let git = context.executable("git").ok_or("Git is not installed")?;
             let checkout = scratch.path().join("repo");
+            let hooks = scratch.path().join("empty-hooks");
+            private_tree(&hooks)?;
             let mut command = tokio::process::Command::new(git);
             command
-                .args([
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--quiet",
-                    "--",
-                ])
+                .arg("-c")
+                .arg(format!("core.hooksPath={}", hooks.display()))
+                .args(["clone", "--depth", "1", "--quiet", "--"])
                 .arg(source)
                 .arg(&checkout)
                 .env("GIT_TERMINAL_PROMPT", "0")
@@ -510,6 +506,9 @@ pub(super) async fn import(directory: &Path, kind: &str, source: &str) -> Result
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .kill_on_drop(true);
+            #[cfg(windows)]
+            let (mut child, job) = super::windows::ProcessJob::spawn(&mut command).await?;
+            #[cfg(not(windows))]
             let mut child = command.spawn().map_err(|_| "Could not start Git import")?;
             match tokio::time::timeout(std::time::Duration::from_secs(30), child.wait()).await {
                 Ok(Ok(status)) if status.success() => {}
@@ -519,6 +518,11 @@ pub(super) async fn import(directory: &Path, kind: &str, source: &str) -> Result
                     let _ = child.wait().await;
                     return Err("Git import timed out; no skills were installed".into());
                 }
+            }
+            #[cfg(windows)]
+            {
+                job.terminate()?;
+                job.confirm_empty().await?;
             }
             checkout
         }

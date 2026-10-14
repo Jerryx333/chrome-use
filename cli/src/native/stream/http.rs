@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 #[cfg(windows)]
 #[cfg(windows)]
 use crate::connection::announced_port;
+#[cfg(unix)]
 use crate::connection::get_socket_dir;
 
 use super::chat::{chat_status_json, handle_chat_request, handle_models_request};
