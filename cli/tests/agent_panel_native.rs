@@ -1050,6 +1050,7 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
     ownership.lock().unwrap();
     let endpoint_path = directory.join("service.json");
     std::fs::write(&endpoint_path, json!({"schemaVersion":1,"profile":profile,"address":listener.local_addr().unwrap(),"capability":"f".repeat(64),"binaryHash":"synthetic-old-build","pid":std::process::id()}).to_string()).unwrap();
+    #[cfg(unix)]
     std::fs::set_permissions(&endpoint_path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let active = Arc::new(AtomicU64::new(1));
     let active_for_server = active.clone();

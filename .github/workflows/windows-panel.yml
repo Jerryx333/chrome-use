@@ -33,5 +33,7 @@ jobs:
           key: x86_64-pc-windows-msvc-ci
       - name: Windows private-state and process-tree tests
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use agent_panel -- --test-threads=1
+      - name: Check Windows code and protocol tests
+        run: cargo clippy --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use --test agent_panel_native -- -D warnings
       - name: Full native-host protocol parity
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --test agent_panel_native -- --test-threads=1

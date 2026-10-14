@@ -319,11 +319,24 @@ struct DiscoveryContext {
     windows: bool,
 }
 
+/// Windows environment names are case-insensitive, including inherited Path.
+fn environment_key(key: &str, windows: bool) -> String {
+    if windows {
+        key.to_ascii_uppercase()
+    } else {
+        key.into()
+    }
+}
+
 impl DiscoveryContext {
     fn current() -> Result<Self, String> {
         let home = dirs::home_dir().ok_or("Cannot locate the user's home directory")?;
         let environment: HashMap<_, _> = std::env::vars_os()
-            .filter_map(|(k, v)| k.into_string().ok().map(|k| (k, v)))
+            .filter_map(|(k, v)| {
+                k.into_string()
+                    .ok()
+                    .map(|k| (environment_key(&k, cfg!(windows)), v))
+            })
             .collect();
         let mut directories: Vec<PathBuf> = environment
             .get("PATH")
@@ -647,6 +660,14 @@ mod tests {
             assert_eq!(c[feature], true, "{feature} unavailable");
         }
         assert_eq!(c["chatAgents"], json!(CHAT_AGENTS));
+    }
+
+    #[test]
+    fn inherited_windows_environment_keys_match_cli_overrides() {
+        assert_eq!(environment_key("Path", true), "PATH");
+        assert_eq!(environment_key("AppData", true), "APPDATA");
+        assert_eq!(environment_key("Codex_Home", true), "CODEX_HOME");
+        assert_eq!(environment_key("Path", false), "Path");
     }
 
     fn context(home: &TempDir) -> DiscoveryContext {
