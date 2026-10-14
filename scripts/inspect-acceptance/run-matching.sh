@@ -4,6 +4,11 @@
 #   ./run-matching.sh [OLD_HOST=/path/to/v1.5.213/chrome-use]
 set -e
 cd "$(dirname "$0")"
+# A run interrupted earlier (dropped SSH) can still hold the fixture ports.
+pkill -f "node accept.mjs|node accept-matching.mjs|node hostcheck.mjs" 2>/dev/null || true
+pkill -f "user-data-dir=.*inspect-accept-" 2>/dev/null || true
+rm -f fake-roster.json
+sleep 1
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 export CHROME="$HOME/.chrome-use/browsers/chrome-155.0.8059.39/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
 sh setup-matching.sh

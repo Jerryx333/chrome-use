@@ -78,12 +78,15 @@ async function scenario(name, fn) {
     results.scenarios.push({ name, ok: true, ms: Date.now() - started, detail });
     console.log('PASS', name);
   } catch (error) {
-    results.scenarios.push({ name, ok: false, ms: Date.now() - started, error: String(error.stack || error) });
+    let frameText = null;
+    try { frameText = lastCtx ? await A.evaluate(lastCtx.frame.sid, 'document.getElementById("app").innerText') : null; } catch {}
+    results.scenarios.push({ name, ok: false, ms: Date.now() - started, error: String(error.stack || error), frameText });
     console.log('FAIL', name, String(error.message || error).slice(0, 300));
   }
 }
 
 let enabled = false;
+let lastCtx = null;
 // Open a page, start the picker as the shortcut would, pick, return the frame.
 async function pickOn(url, selector) {
   const page = await A.openPage(url);
@@ -99,7 +102,8 @@ async function pickOn(url, selector) {
   if (!enabled && /Enable Inspect & Ask/.test(await text(frame))) { await A.clickInFrame(page.sid, frame.sid, byText('Enable Inspect & Ask')); enabled = true; }
   enabled = true;
   await waitFor(async () => /→|Send requests from|Choose where|No running agent|asks to take over|Target: not confirmed/.test(await text(frame)), { label: 'matching state' });
-  return { page, frame, tabId };
+  lastCtx = { page, frame, tabId };
+  return lastCtx;
 }
 const text = frame => A.evaluate(frame.sid, 'document.getElementById("app").innerText');
 async function send(ctx, words) {
@@ -119,7 +123,11 @@ async function tryEnterWithoutTarget(ctx) {
   await sleep(1500);
   assert.equal(dms().length, before, 'nothing delivered without a confirmed target');
 }
-const click = (ctx, label) => A.clickInFrame(ctx.page.sid, ctx.frame.sid, byText(label));
+const click = async (ctx, label) => {
+  await A.clickInFrame(ctx.page.sid, ctx.frame.sid, byText(label));
+  if (label === 'Hand over') await waitText(ctx, /→ /, 'bound after Hand over');
+  if (label === 'Only this tab') await waitText(ctx, /this tab only/, 'tab target set');
+};
 async function waitText(ctx, re, label) { await waitFor(async () => re.test(await text(ctx.frame)), { label }); return text(ctx.frame); }
 
 // Run with LEGACY_HOST=1 and bin/current pointing at a v1.5.213 host: the new
@@ -290,7 +298,6 @@ await scenario('m11-tab-only-target', async () => {
   await waitText(tabA, /react-second/, 'pairs listed');
   await A.clickInFrame(tabA.page.sid, tabA.frame.sid, `[...document.querySelectorAll('label')].find(l => /react-second/.test(l.textContent)).querySelector('input')`);
   await click(tabA, 'Only this tab');
-  await waitText(tabA, /this tab only/, 'tab target');
   assert.equal((await send(tabA, 'tab A')).target, 'claude-bbbb2222');
   const tabB = await pickOn('http://test.inspect.example/?tabB', '.save-button');
   assert.equal((await send(tabB, 'tab B')).target, 'claude-aaaa1111', 'other tabs keep the site default');

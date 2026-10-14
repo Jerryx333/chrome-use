@@ -81,7 +81,8 @@ async function check(name, fn) {
 
 const ORIGIN = 'http://test.inspect.example';
 const annotation = { label: 'button "Save"', selector: '.save-button', markdown: '### 1. button' };
-const deliverParams = extra => ({ deliveryId: crypto.randomUUID(), origin: ORIGIN, kind: 'edit', instruction: 'x', pageUrl: ORIGIN + '/admin', env: 'test', annotations: [annotation], images: [], ...extra });
+// pageUrl's path must equal pagePath when pagePath is given (contract item 6).
+const deliverParams = extra => ({ deliveryId: crypto.randomUUID(), origin: ORIGIN, kind: 'edit', instruction: 'x', pageUrl: ORIGIN + (extra.pagePath || '/admin'), env: 'test', annotations: [annotation], images: [], ...extra });
 
 await check('h15-legacy-caller-refused-on-scoped-origin', async h => {
   setRoster([S('claude-aaaa1111', 'react-main', react)]);

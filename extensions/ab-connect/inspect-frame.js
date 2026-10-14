@@ -567,10 +567,18 @@ async function gated(label, fn) {
   state.busy = true;
   state.notice = { tone: '', text: 'Checking that the panel is visible…' };
   render();
-  const check = checkVisibility();
-  verifying = check;
-  const reply = await check;
-  verifying = null;
+  // A panel that was just resized or repositioned (for example after adding
+  // elements) can read as not visible for one observation; look again briefly.
+  // A cover that stays in place still fails every look.
+  let reply = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const check = checkVisibility();
+    verifying = check;
+    reply = await check;
+    verifying = null;
+    if (reply?.cancelled || reply?.timeout || reply?.isVisible !== false) break;
+    await new Promise(r => setTimeout(r, 250));
+  }
   if (reply?.cancelled) { state.busy = false; state.notice = { tone: 'bad', text: 'Cancelled because the panel lost focus. Try again.' }; render(); return; }
   const verdict = visibilityVerdict(reply);
   if (!verdict.ok) { state.busy = false; state.notice = { tone: 'bad', text: verdict.message }; render(); return; }
