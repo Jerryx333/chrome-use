@@ -4,4 +4,4 @@
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export HOME="$DIR/home"
 mkdir -p "$HOME"
-exec "$DIR/bin/chrome-use" __nm-host "$@"
+exec "$DIR/bin/current" __nm-host "$@"

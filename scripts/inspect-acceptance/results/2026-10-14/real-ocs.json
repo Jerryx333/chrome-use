@@ -1,0 +1,30 @@
+{
+ "ocsInstalled": {
+  "installed": true,
+  "path": "<wrapper running the real ocs>",
+  "version": "0.8.3"
+ },
+ "sessions": 17,
+ "bind": "claude-1aafa5c3",
+ "deliver": {
+  "channel": "dm-f46fdfe19863483017615a745f1ccf48368ad297--claude-1aafa5c3-f83",
+  "contextDir": "<isolated HOME>/.chrome-use/inspect/ctx/<id>",
+  "deliveryId": "2252e7d6-482e-47b9-9d7e-18a3f7c18713",
+  "exit": 0,
+  "schemaVersion": 1,
+  "seq": 2,
+  "state": "sent",
+  "stored": true,
+  "wake": "accepted"
+ },
+ "replay": {
+  "state": "sent",
+  "duplicate": true
+ },
+ "status": "sent",
+ "unbind": {
+  "existed": true,
+  "schemaVersion": 1,
+  "unbound": true
+ }
+}
