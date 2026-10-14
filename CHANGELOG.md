@@ -1,8 +1,24 @@
 # Changelog
 
-## 1.5.206
+## 1.5.207
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.52. Chrome Web Store publication follows Google review.
+
+### Improvements
+
+- **Tool steps fold into one line.** Consecutive tool calls in the side panel now form one group. It stays open while a step runs, then folds to `4 steps · 1 failed` so the reply below stays in view; a group you opened stays open. A running step shows a spinner instead of `Running…`, and a step left open when a response ended no longer looks busy. Three dots show the agent is still working when nothing else does. (#612)
+- **A cleaner chat view.** The toolbar uses one icon set, queued messages read as pending bubbles, Markdown tables get rounded borders, and the empty state offers three example tasks that fill the message box without sending it. (#612)
+- **Agents & models at a glance.** Each agent has a status dot (signed in, signed out, installed, not installed) instead of a red line, the agent being configured is highlighted, the model field suggests the model IDs the CLI reported and reasoning effort suggests its levels, and the preview shows each change as old → new. (#612)
+- **Settings match the panel.** The extension settings page uses the side panel's colours and follows the system dark mode. (#612)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.206
+
 ### Bug Fixes
 
 - **A refused first tab says nothing was opened.** When the extension declines to open a tab before creating anything (for example `agent window ownership is unknown`), `open` now fails with `first tab refused … Nothing was opened or attached.` (code `first_tab_refused`). It used to report `first tab outcome unknown` and tell you to look for a blank tab that was never opened. (#609)
@@ -11,7 +27,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.205
 
