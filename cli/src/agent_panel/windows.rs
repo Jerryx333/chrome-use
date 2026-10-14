@@ -229,12 +229,14 @@ pub(super) fn open_options(options: &mut std::fs::OpenOptions, private: bool) {
 }
 /// Set a protected owner-only DACL through the open handle, never a path alias.
 /// SYSTEM is retained for OS maintenance, equivalent to privileged Unix access.
-/// Protect through the handle, then read the ACL back. A first-use race can
-/// clear the protection between the two: when two requests create a private
-/// store at once, protecting a directory re-propagates its inheritable
-/// entries onto children a concurrent request has just protected. Only that
-/// readback failure is retried; a foreign owner, a non-file handle or any
-/// unexpected ACL entry still fails at once.
+/// Protect through the handle, then read the ACL back. When two requests
+/// create a private store at once, the readback can report NOT_PROTECTED
+/// (protected flag missing, no DACL, or control flags unreadable). The
+/// suspected cause, not confirmed on Windows, is that protecting a directory
+/// re-propagates its inheritable entries onto children a concurrent request
+/// has just protected. Only NOT_PROTECTED is retried, a bounded number of
+/// times, and the call still fails closed if it persists; a foreign owner, a
+/// non-file handle or any unexpected ACL entry fails at once.
 pub(super) fn protect(file: &File) -> Result<(), String> {
     let mut attempt = 0;
     loop {
