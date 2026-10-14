@@ -274,6 +274,7 @@ function setupView() {
 // ---- matching (hosts with inspectResolve) ---------------------------------
 
 function matchingView(status, box) {
+  if (status.rosterError) box.append(h('div', { class: 'notice warn small', text: `Could not list running agent sessions (${status.rosterError}). The target cannot be checked right now; nothing will be sent until it can.` }));
   for (const claim of status.pendingClaims || []) box.append(claimBanner(claim));
   for (const e of status.configErrors || []) box.append(h('div', { class: 'notice warn small', text: `Project config ignored: ${e.path}: ${e.reason}` }));
   if (status.skipped?.length) box.append(h('div', { class: 'small muted', text: `Some checks were skipped (time budget): ${status.skipped.join(', ')}` }));
