@@ -641,12 +641,15 @@ fn private_dir(root: &Path, parts: &[&str]) -> Result<PathBuf, String> {
     let mut path = root.to_path_buf();
     for part in parts {
         path.push(part);
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
-        }
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         match builder.create(&path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -2318,24 +2321,37 @@ mod tests {
 
     #[test]
     fn roster_and_lsof_output_are_parsed_from_real_shapes() {
-        let roster = r#"{"entries":[
-            {"kind":"claude","name":"chrome-use-2b","id":"claude-4b9d5d82","pid":1,"status":"idle","cwd":"/w/a","self":false},
-            {"kind":"claude","name":"no-id","pid":2,"status":"idle","cwd":"/w/b"},
+        // Working directories are absolute on the platform under test.
+        let cwd = |name: &str| {
+            if cfg!(windows) {
+                format!("C:\\w\\{name}")
+            } else {
+                format!("/w/{name}")
+            }
+        };
+        let roster = json!({"entries": [
+            {"kind":"claude","name":"chrome-use-2b","id":"claude-4b9d5d82","pid":1,"status":"idle","cwd":cwd("a"),"self":false},
+            {"kind":"claude","name":"no-id","pid":2,"status":"idle","cwd":cwd("b")},
             {"kind":"claude","name":"no-cwd","id":"claude-00000000","cwd":null},
-            {"kind":"codex-task","target":"codex-01a13992","threadId":"01a13992-5a5b","summary":null,"cwd":"/w/c","livePid":null},
-            {"kind":"pi","target":"pi-abcdef12","sessionId":"abcdef12-1","name":"pi one","pid":3,"cwd":"/w/d"},
+            {"kind":"claude","name":"relative","id":"claude-11111111","cwd":"w/e"},
+            {"kind":"codex-task","target":"codex-01a13992","threadId":"01a13992-5a5b","summary":null,"cwd":cwd("c"),"livePid":null},
+            {"kind":"pi","target":"pi-abcdef12","sessionId":"abcdef12-1","name":"pi one","pid":3,"cwd":cwd("d")},
             {"kind":"hermes","target":"hermes-x","status":"idle"},
             {"kind":"cmux","ref":"surface:1","title":"claude"}
-        ],"cmux":true}"#;
-        let sessions = parse_roster(roster).unwrap();
+        ], "cmux": true})
+        .to_string();
+        let sessions = parse_roster(&roster).unwrap();
         let ids: Vec<_> = sessions.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["claude-4b9d5d82", "codex-01a13992", "pi-abcdef12"]);
         assert_eq!(sessions[0].status.as_deref(), Some("idle"));
         assert_eq!(sessions[1].status, None);
         assert_eq!(sessions[2].name.as_deref(), Some("pi one"));
+        assert_eq!(sessions[0].cwd, PathBuf::from(cwd("a")));
         assert!(parse_roster("not json").is_err());
         assert_eq!(lsof_pid("p38242\nf199\n"), Some(38242));
         assert_eq!(lsof_pid(""), None);
+        // lsof runs only on Unix, and its paths are Unix paths.
+        #[cfg(unix)]
         assert_eq!(
             lsof_name("p38242\nfcwd\nn/Users/x/web\n"),
             Some(PathBuf::from("/Users/x/web"))
@@ -2703,10 +2719,10 @@ mod tests {
         let unknown_id = json!({"deliveryId": "00000000-0000-4000-8000-0000000000ff"});
         let missing = call(&w, &sys, "inspectDeliveryStatus", unknown_id).unwrap();
         assert_eq!(missing, json!({"schemaVersion": 1, "delivery": null}));
-        let record = w.data.join("deliveries").join(format!("{FIRST}.json"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let record = w.data.join("deliveries").join(format!("{FIRST}.json"));
             assert_eq!(
                 fs::metadata(&record).unwrap().permissions().mode() & 0o777,
                 0o600
