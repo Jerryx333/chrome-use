@@ -98,8 +98,23 @@ pub(super) fn data_root(context: &DiscoveryContext) -> Result<PathBuf, String> {
 
 fn endpoint(directory: &Path, profile: &str) -> Result<Endpoint, String> {
     let path = directory.join("service.json");
-    let mut file =
-        private_open(&path, false).map_err(|_| "Agent service endpoint is unavailable")?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    super::windows::open_options(&mut options, false);
+    let mut file = options
+        .open(&path)
+        .map_err(|_| "Agent service endpoint is unavailable")?;
+    #[cfg(windows)]
+    {
+        super::windows::regular(&file)?;
+        super::windows::verify_private(&file)?;
+    }
     let meta = file
         .metadata()
         .map_err(|_| "Agent service endpoint is unavailable")?;
@@ -2495,5 +2510,29 @@ mod schedule_tests {
         );
         assert_eq!(e.schedules[&id].last_result.as_deref(), Some("unconfirmed"));
         assert!(e.schedules[&id].next_run > super::super::conversation::now());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod endpoint_permission_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn unsafe_endpoint_is_refused_without_repair_and_read_only_private_endpoint_is_readable() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("service.json");
+        std::fs::write(&path, json!({"schemaVersion":1,"profile":"fixture","address":"127.0.0.1:1","capability":"f".repeat(64),"binaryHash":"fixture","pid":1}).to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(endpoint(root.path(), "fixture").is_err());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(endpoint(root.path(), "fixture").is_ok());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o400
+        );
     }
 }

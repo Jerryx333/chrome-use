@@ -10,6 +10,21 @@ use std::time::Duration;
 
 /// Use the installed interpreter through a CRLF batch shim on Windows.
 /// Spaces in the shim path exercise the real installed-CLI launch path.
+#[cfg(windows)]
+fn protect_fixture_endpoint(path: &std::path::Path) {
+    let script = r#"$ErrorActionPreference='Stop'; $acl=New-Object System.Security.AccessControl.FileSecurity; $acl.SetAccessRuleProtection($true,$false); $user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; foreach($sid in @($user,[System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) { $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow'); $acl.AddAccessRule($rule) }; Set-Acl -LiteralPath $env:PANEL_FIXTURE_FILE -AclObject $acl"#;
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env("PANEL_FIXTURE_FILE", path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn test_binary() -> std::path::PathBuf {
     std::env::var_os("CHROME_USE_TEST_BIN")
         .map(std::path::PathBuf::from)
@@ -1058,6 +1073,8 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
     std::fs::write(&endpoint_path, json!({"schemaVersion":1,"profile":profile,"address":listener.local_addr().unwrap(),"capability":"f".repeat(64),"binaryHash":"synthetic-old-build","pid":std::process::id()}).to_string()).unwrap();
     #[cfg(unix)]
     std::fs::set_permissions(&endpoint_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(windows)]
+    protect_fixture_endpoint(&endpoint_path);
     let active = Arc::new(AtomicU64::new(1));
     let active_for_server = active.clone();
     let server = std::thread::spawn(move || {

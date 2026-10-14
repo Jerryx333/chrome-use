@@ -416,16 +416,17 @@ pub(super) fn append_options(options: &mut std::fs::OpenOptions) {
     options.access_mode(FILE_GENERIC_READ | FILE_APPEND_DATA | READ_CONTROL | WRITE_DAC);
 }
 
-fn verify_private(file: &File) -> Result<(), String> {
+pub(super) fn verify_private(file: &File) -> Result<(), String> {
     let user = token_sid(TokenUser)?;
     unsafe {
         let mut sd = ptr::null_mut();
+        let mut owner = ptr::null_mut();
         let mut dacl = ptr::null_mut();
         let result = GetSecurityInfo(
             file.as_raw_handle() as _,
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            ptr::null_mut(),
+            DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+            &mut owner,
             ptr::null_mut(),
             &mut dacl,
             ptr::null_mut(),
@@ -435,6 +436,14 @@ fn verify_private(file: &File) -> Result<(), String> {
             return Err(format!("Windows private ACL readback failed ({result})"));
         }
         let _sd = Local(sd);
+        let default_owner = token_sid(TokenOwner)?;
+        if owner.is_null()
+            || (EqualSid(owner, user.as_ptr() as _) == 0
+                && EqualSid(owner, default_owner.as_ptr() as _) == 0)
+        {
+            return Err("Panel state belongs to another Windows user".into());
+        }
+
         let mut control = 0;
         let mut revision = 0;
         if GetSecurityDescriptorControl(sd, &mut control, &mut revision) == 0
@@ -509,6 +518,20 @@ mod tests {
         super::super::config_transaction::atomic_write(&path, b"first", None).unwrap();
         super::super::config_transaction::atomic_write(&path, b"replacement", None).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+    }
+    #[test]
+    fn read_only_privacy_check_rejects_inherited_acl_without_modifying_it() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("unsafe.json");
+        std::fs::write(&path, b"synthetic").unwrap();
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        open_options(&mut options, false);
+        let file = options.open(&path).unwrap();
+        assert!(verify_private(&file).is_err());
+        drop(file);
+        let protected = super::super::config_transaction::private_open(&path, false).unwrap();
+        verify_private(&protected).unwrap();
     }
     #[tokio::test]
     async fn job_contains_descendants_before_the_leader_runs_and_confirms_their_exit() {

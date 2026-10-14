@@ -563,6 +563,7 @@ impl Store {
         let before = file
             .metadata()
             .map_err(|_| "Cannot inspect journal before append")?;
+        let file_identity = journal_identity(&file, &before)?;
         file.write_all(&raw)
             .map_err(|_| "Cannot append conversation event")?;
         // Only our append can advance a cached prefix's file stamp. External
@@ -578,7 +579,7 @@ impl Store {
             if cursor.length == before.len()
                 && cursor.modified.is_some()
                 && cursor.modified == before.modified().ok()
-                && cursor.identity == journal_identity(&file, &before)?
+                && cursor.identity == file_identity
             {
                 cursor.length = after.len();
                 cursor.modified = after.modified().ok();
