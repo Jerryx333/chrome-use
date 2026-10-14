@@ -3,175 +3,89 @@
 <head>
 <meta charset="utf-8" />
 <style>
-  :root {
-    --cream: #fff7e6;
-    --cream-2: #fffdf8;
-    --ink: #3b2f1c;
-    --muted: #9a8c72;
-    --gold: #f7a823;
-    --gold-deep: #e8890b;
-    --gold-soft: #ffe7b0;
-    --cyan: #1bb6c9;
-    --cyan-soft: #d6f3f7;
-    --green: #34b364;
-    --green-soft: #d8f3e0;
-    --amber: #e8890b;
-    --amber-soft: #ffe2bd;
-    --card: #ffffff;
-    --border: #f0e2c6;
-    --shadow: 0 8px 24px -10px rgba(180, 130, 30, 0.35);
-    --radius: 16px;
-  }
+  /* Same tokens as the side panel and settings page. */
+  :root { color-scheme:light dark; --bg:#fff; --surface:#f4f5f7; --ink:#1f1f1f; --muted:#6b6f76; --line:#e2e4e8;
+    --accent:#1a5fd0; --accent-ink:#fff; --accent-soft:#eef3fd; --ok:#188038; --warning:#b06000; --warning-bg:#fef4e5; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1f1f1f; --surface:#2b2c2f; --ink:#e8eaed; --muted:#a8acb3; --line:#3c3f44;
+    --accent:#8ab4f8; --accent-ink:#1f1f1f; --accent-soft:#25324a; --ok:#81c995; --warning:#fdd663; --warning-bg:#3a3220; } }
   * { box-sizing: border-box; }
   html, body { margin: 0; }
-  body {
-    width: 344px;
-    color: var(--ink);
-    font-family: "SF Pro Rounded", ui-rounded, "Hiragino Maru Gothic ProN",
-                 "Quicksand", "Segoe UI", system-ui, sans-serif;
-    font-size: 13px;
-    line-height: 1.5;
-    position: relative;
-    overflow: hidden;
-    background:
-      radial-gradient(120% 90% at 100% -10%, #ffe9b8 0%, rgba(255,233,184,0) 55%),
-      linear-gradient(180deg, var(--cream) 0%, var(--cream-2) 60%);
-  }
-  /* soft sun glow, top-right */
-  body::before {
-    content: "";
-    position: absolute; top: -46px; right: -46px;
-    width: 150px; height: 150px; border-radius: 50%;
-    background: radial-gradient(circle, #ffd067 0%, #ffc23e 38%, rgba(255,194,62,0) 70%);
-    opacity: 0.55; pointer-events: none;
-  }
-  .wrap { position: relative; z-index: 1; }
+  body { width: 320px; background: var(--bg); color: var(--ink); font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 
-  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-  .anim { opacity: 0; animation: rise 0.5s cubic-bezier(.2,.7,.3,1) forwards; }
-  .d1 { animation-delay: .02s; } .d2 { animation-delay: .08s; }
-  .d3 { animation-delay: .14s; } .d4 { animation-delay: .20s; }
-
-  header { display: flex; align-items: center; gap: 11px; padding: 17px 18px 8px; }
-  .logo {
-    width: 42px; height: 42px; flex: none;
-    filter: drop-shadow(0 4px 9px rgba(180,130,30,.4));
-  }
+  header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
+  .logo { width: 32px; height: 32px; flex: none; }
   .logo img { width: 100%; height: 100%; display: block; }
-  header .title { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }
-  header .tag { color: var(--muted); font-size: 11.5px; margin-top: 1px; }
+  header .title { font-weight: 650; font-size: 15px; }
+  header .tag { color: var(--muted); font-size: 11.5px; }
 
-  main { padding: 6px 18px 4px; }
-
-  .status {
-    display: flex; align-items: center; gap: 11px;
-    padding: 13px 14px; background: var(--card);
-    border: 1.5px solid var(--border); border-radius: var(--radius);
-    box-shadow: var(--shadow);
-  }
-  .dot {
-    width: 11px; height: 11px; border-radius: 50%; flex: none;
-    background: var(--muted); position: relative;
-  }
-  .dot.on { background: var(--green); }
-  .dot.on::after {
-    content: ""; position: absolute; inset: -5px; border-radius: 50%;
-    border: 2px solid var(--green); opacity: .55; animation: ping 1.8s ease-out infinite;
-  }
-  .dot.off { background: var(--amber); }
+  main { padding: 0 16px 12px; }
+  .status { display: flex; align-items: center; gap: 10px; padding: 11px 12px; background: var(--surface); border-radius: 10px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--muted); position: relative; }
+  .dot.on { background: var(--ok); }
+  .dot.on::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--ok); opacity: .45; animation: ping 1.8s ease-out infinite; }
+  .dot.off { background: var(--warning); }
   @keyframes ping { 0% { transform: scale(.7); opacity: .6; } 100% { transform: scale(1.7); opacity: 0; } }
-
   .status .grow { flex: 1; min-width: 0; }
-  .status .label { font-weight: 700; font-size: 14px; }
-  .status .sub { color: var(--muted); font-size: 11.5px; }
-  .pill {
-    flex: none; font-size: 11px; font-weight: 700;
-    padding: 4px 10px; border-radius: 999px; white-space: nowrap;
-    background: var(--cyan-soft); color: #0e7e8c;
-  }
+  .status .label { font-weight: 600; }
+  .status .sub { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+  .pill { flex: none; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; white-space: nowrap; background: var(--accent-soft); color: var(--accent); }
   .pill.hidden { display: none; }
 
-  .desc { color: #6f6048; margin: 13px 4px 2px; font-size: 12.5px; }
+  .desc { color: var(--muted); margin: 10px 2px 0; font-size: 12px; }
+  .hint { margin: 10px 0 0; padding: 10px 11px; background: var(--warning-bg); border-radius: 10px; font-size: 12px; display: none; }
+  .hint code { display: block; margin-top: 6px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
+    font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; user-select: all; }
 
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 11px 2px 2px; }
-  .chip {
-    font-size: 10.5px; font-weight: 600; color: var(--gold-deep);
-    background: var(--gold-soft); padding: 4px 9px; border-radius: 999px;
-  }
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  .actions button { flex: 1; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; padding: 6px 10px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+  .actions button:hover { background: var(--surface); }
+  .actions button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .actions button.primary:hover { filter: brightness(.94); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-  .hint {
-    margin: 11px 0 2px; padding: 11px 12px;
-    background: var(--amber-soft); border: 1.5px solid #ffd49a;
-    border-radius: 12px; color: #8a5208; font-size: 12px; display: none;
-  }
-  .hint b { font-weight: 700; }
-  .hint code {
-    display: block; margin-top: 7px; padding: 7px 9px;
-    background: #fff; border: 1px solid #ffd49a; border-radius: 8px;
-    color: var(--gold-deep); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11.5px; user-select: all;
-  }
-
-  footer {
-    margin-top: 12px; padding: 11px 18px 15px;
-    border-top: 1.5px solid var(--border);
-    display: flex; flex-direction: column; align-items: flex-start; gap: 7px;
-  }
-  footer .privacy { color: var(--muted); font-size: 11px; font-weight: 600; }
-  footer .links { display: flex; gap: 14px; flex-wrap: wrap; }
-  footer a {
-    color: var(--gold-deep); text-decoration: none; font-size: 11.5px;
-    font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 3px;
-  }
-  footer a:hover { color: var(--gold); }
+  footer { padding: 9px 16px 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+  footer .privacy { color: var(--muted); font-size: 11px; margin-right: auto; }
+  footer a { color: var(--accent); text-decoration: none; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+  footer a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <header class="anim d1">
-      <div class="logo"><img src="icons/icon128.png" alt="" /></div>
-      <div>
-        <div class="title">chrome-use</div>
-        <div class="tag">local automation bridge</div>
+  <header>
+    <div class="logo"><img src="icons/icon128.png" alt="" /></div>
+    <div>
+      <div class="title">chrome-use</div>
+      <div class="tag">Local browser automation bridge</div>
+    </div>
+  </header>
+
+  <main>
+    <div class="status">
+      <span id="dot" class="dot"></span>
+      <div class="grow">
+        <div class="label" id="statusLabel">Checking…</div>
+        <div class="sub" id="statusSub">saying hi to your local CLI</div>
       </div>
-    </header>
+      <span id="tabPill" class="pill hidden"></span>
+    </div>
 
-    <main>
-      <div class="status anim d2">
-        <span id="dot" class="dot"></span>
-        <div class="grow">
-          <div class="label" id="statusLabel">Checking…</div>
-          <div class="sub" id="statusSub">saying hi to your local CLI</div>
-        </div>
-        <span id="tabPill" class="pill hidden"></span>
-      </div>
+    <p class="desc">Your local <strong>chrome-use</strong> CLI drives your own logged-in Chrome tabs, on this machine, only when you ask.</p>
 
-      <p class="desc anim d3">
-        Your local <strong>chrome-use</strong> CLI drives your own logged-in Chrome
-        tabs — right here on this machine, only when you run a command. ☀️
-      </p>
+    <div class="hint" id="hint">
+      <span id="hintText">Check the local CLI connection:</span>
+      <code id="hintCommand">chrome-use status</code>
+    </div>
 
-      <div class="chips anim d3">
-        <span class="chip">🔒 local only</span>
-        <span class="chip">no tracking</span>
-        <span class="chip">no cloud</span>
-      </div>
+    <div class="actions">
+      <button class="primary" data-action="options">Settings</button>
+    </div>
+  </main>
 
-      <div class="hint" id="hint">
-        <span id="hintText">Check the local CLI connection:</span>
-        <code id="hintCommand">chrome-use status</code>
-      </div>
-    </main>
-
-    <footer class="anim d4">
-      <span class="privacy">No tracking · local only</span>
-      <span class="links">
-        <a data-href="https://chrome-use.leeguoo.com">Docs ↗</a>
-        <a id="repo" data-href="https://github.com/leeguooooo/chrome-use">GitHub ↗</a>
-        <a data-href="https://leeguoo.com">leeguoo.com ↗</a>
-      </span>
-    </footer>
-  </div>
+  <footer>
+    <span class="privacy">Runs locally · no tracking</span>
+    <a data-href="https://chrome-use.leeguoo.com">Docs</a>
+    <a id="repo" data-href="https://github.com/leeguooooo/chrome-use">GitHub</a>
+  </footer>
 
   <script src="popup.js"></script>
 </body>

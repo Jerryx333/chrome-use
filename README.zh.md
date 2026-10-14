@@ -12,7 +12,7 @@
 
 <p align="center"><i>⭐ 如果它帮你省掉了一次重新登录，点个 star 能让更多开发者找到它。</i></p>
 
-![chrome-use](assets/hero.png)
+![chrome-use](assets/hero.webp)
 
 <p align="center">
   <img src="assets/demo.gif" alt="chrome-use 演示：在你的真实 Chrome 里打开 Hacker News，一条命令把热门内容拉成结构化 JSON" width="820">
@@ -57,11 +57,11 @@ chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚�
 
 ## 工作原理
 
-![工作原理](assets/how-it-works.png)
+![工作原理](assets/how-it-works.webp)
 
 你的 **chrome-use CLI** 通过 Chrome **原生消息（native messaging）** 和一个小**浏览器扩展**通信：这是本机进程间通道，**无网络端口、无 token、无远程服务器**。扩展用 `chrome.debugger` 驱动你指定的标签页（在你**已登录**的 Chrome 里），再把结果交还给 CLI。全程都在你本机。
 
-![架构](assets/architecture.png)
+![架构](assets/architecture.webp)
 
 每个 `--session` 拿到**自己的彩色标签组**，多个 agent 共用同一个真实浏览器、互不干扰，也不动你自己的标签页。省略 `--session` 时，chrome-use 会按支持的 runner id（包括 Codex 的 `CODEX_THREAD_ID`）派生稳定的 per-agent 会话；显式 `--session` / `AGENT_BROWSER_SESSION` 始终优先。会话命名、`session list` / `stop` / `prune`、所有权交接与 daemon 恢复见[会话指南](https://chrome-use.leeguoo.com/sessions.html)。
 
@@ -146,6 +146,10 @@ npx skills add leeguooooo/chrome-use -g
 ```
 
 ### 本机 agent 侧栏
+
+<p align="center">
+  <img src="assets/side-panel.webp" alt="chrome-use 侧栏：agent 对比价格页上的套餐，用表格给出结果" width="820">
+</p>
 
 点击扩展图标打开侧栏，**Settings** 打开连接设置。macOS/Linux 可选择 **Codex**、**Claude Code**、**OpenCode** 或 **Pi**，沿用已安装 CLI 的登录和模型服务配置。菜单只列出当前主机支持的 agent；旧主机需升级才能使用新增适配器。Windows 目前仅支持 agent 发现和配置查看。
 
@@ -390,7 +394,7 @@ chrome-use jev run --goal "查苏黎世到伦敦的航班" --url https://www.goo
 
 ## 反检测
 
-<img src="assets/shield.png" alt="隐身盾牌" width="320" align="right" />
+<img src="assets/shield.webp" alt="隐身盾牌" width="320" align="right" />
 
 连接你真实 Chrome 时，我们**零** JS 注入。浏览器指纹完全是真的。指导原则是 **native CDP/Chrome 覆盖优先于 JS 谎言**：被重定义的 getter 本身可被检测，原生覆盖则不会。
 

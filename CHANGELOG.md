@@ -1,9 +1,9 @@
 # Changelog
 
-## 1.5.209
+## 1.5.210
 
 <!-- release:start -->
-Requires extension ab-connect 0.5.53. Chrome Web Store publication follows Google review.
+Requires extension ab-connect 0.5.54. Chrome Web Store publication follows Google review.
 
 ### New Features
 
@@ -20,6 +20,20 @@ Requires extension ab-connect 0.5.53. Chrome Web Store publication follows Googl
 
 - @leeguooooo
 <!-- release:end -->
+
+## 1.5.209
+
+Requires extension ab-connect 0.5.53. Chrome Web Store publication follows Google review.
+
+### Improvements
+
+- **The popup matches the side panel.** The toolbar popup, shown when Chrome has no side panel, drops the old cream-and-gold look for the side panel's colours, follows the system dark mode and has a **Settings** button. (#615)
+- **New store listing images.** Four screenshots, a promo tile and a marquee are rendered from the real side panel and settings page by `scripts/store-screenshots.sh`, so they can be redone after any UI change. (#615)
+- **A lighter repository.** README illustrations are WebP (4.4 MB down to 180 KB) and the README shows the side panel. The docs site's VIP badge shrinks from 1.38 MB to 6.6 KB, and unused images and old extension zips are gone. (#615)
+
+### Contributors
+
+- @leeguooooo
 
 ## 1.5.208
 

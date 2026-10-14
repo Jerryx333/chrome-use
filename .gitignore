@@ -46,6 +46,7 @@ test/e2e/.dogfood-output/
 # ...but these are real repo assets, not test artifacts — keep them tracked
 !assets/*.png
 !extensions/ab-connect/icons/*.png
+!extensions/store/*.png
 
 # Package manager
 package-lock.json
