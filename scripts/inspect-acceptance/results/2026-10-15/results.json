@@ -1,0 +1,158 @@
+{
+  "startedAt": "2026-10-14T17:21:10.020Z",
+  "scenarios": [
+    {
+      "name": "react-local-enable-bind-send",
+      "ok": true,
+      "ms": 4331,
+      "detail": {
+        "tabId": 523018715,
+        "dm": [
+          "[chrome-use Inspect & Ask] from the user's browser",
+          "Instruction (typed by the user): Make the save button rounded and blue",
+          "Project: /Users/leo/inspect-accept/react-app",
+          "Page: http://localhost:5173/ (local)",
+          "1. button \"Save order\" — src/OrderForm.jsx:6:5 (verified) <OrderForm>",
+          "Revision: fixture-rev-1 (from page meta, unverified; may differ from your checkout)"
+        ],
+        "ctxDir": "/Users/leo/inspect-accept/home/.chrome-use/inspect/ctx/7d899e4489ca9f60e3d8829d8b93425f"
+      }
+    },
+    {
+      "name": "multi-select-and-pause",
+      "ok": true,
+      "ms": 6172,
+      "detail": {
+        "cards": 2,
+        "paused": false,
+        "resumed": true
+      }
+    },
+    {
+      "name": "pick-does-not-trigger-page",
+      "ok": true,
+      "ms": 17341,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "copied-frame-and-flood-refused",
+      "ok": true,
+      "ms": 1753,
+      "detail": {
+        "frames": 2,
+        "authorized": 1,
+        "realText": "Inspect & Ask\ntest env\n⏸\n✕\nChoose where requests from this page go:\nreact-main c"
+      }
+    },
+    {
+      "name": "overlay-blocks-send",
+      "ok": true,
+      "ms": 1845,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "background-tab-capture-dropped",
+      "ok": true,
+      "ms": 631,
+      "detail": {
+        "result": {
+          "images": 1
+        }
+      }
+    },
+    {
+      "name": "unknown-delivery-not-resent",
+      "ok": true,
+      "ms": 37911,
+      "detail": {
+        "tabId": 523018727,
+        "text": [
+          "Check status",
+          "New batch",
+          "Outcome unknown: ocs may have stored it (ocs did not finish in time; the message may already be stored). Not resent. Check status before starting a new batch."
+        ]
+      }
+    },
+    {
+      "name": "stored-and-wake-shown-apart",
+      "ok": true,
+      "ms": 567,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "note-only-immediate-send",
+      "ok": true,
+      "ms": 1262,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "vue-source-and-session",
+      "ok": true,
+      "ms": 1936,
+      "detail": {
+        "text": "Inspect & Ask\nlocal dev\n⏸\n✕\n1<CartCard> button \"Checkout\"\n/Users/leo/inspect-accept/vue-app/src/CartCard.vue:4:5\nOpen in editor\n attach screenshot\nremove\n→ codex-cccc3333 @ /Users/leo/inspect-accept/v"
+      }
+    },
+    {
+      "name": "test-env-marks-and-revision",
+      "ok": true,
+      "ms": 2073,
+      "detail": {
+        "line": "1. button \"Save order\" — src/OrderForm.jsx:6:5 (verified)"
+      }
+    },
+    {
+      "name": "prod-no-marks-consent-setup",
+      "ok": true,
+      "ms": 1848,
+      "detail": {
+        "dm": [
+          "[chrome-use Inspect & Ask] from the user's browser",
+          "Setup request (the user consented to this in chrome-use): let test builds of the project at /Users/leo/inspect-accept/react-app carry source locations.",
+          "1. Add an explicit environment flag so that test builds, and never production builds, enable code-inspector-plugin with pathType: 'relative'.",
+          "2. Make test builds emit <meta name=\"chrome-use-revision\" content=\"<git sha>\"> with the commit they were built from."
+        ]
+      }
+    },
+    {
+      "name": "copy-without-host",
+      "ok": true,
+      "ms": 247,
+      "detail": {
+        "head": "## Inspect & Ask\n\n**Instruction (typed by the user):** Make the save button rounded and bluepStored only\n**Page:** `http"
+      }
+    },
+    {
+      "name": "reload-revokes-frame",
+      "ok": true,
+      "ms": 1886,
+      "detail": {
+        "hostReady": true,
+        "resolveReady": true,
+        "instance": null
+      }
+    }
+  ],
+  "chrome": "Chrome/155.0.8059.39",
+  "logs": [
+    "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+    "LOG %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold"
+  ],
+  "extensionId": "ciiljdlhdpfckdcfkphgmfalanpdejep",
+  "finishedAt": "2026-10-14T17:22:34.430Z",
+  "dms": 8
+}

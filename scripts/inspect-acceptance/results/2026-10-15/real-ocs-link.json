@@ -1,0 +1,9 @@
+{
+ "note": "inspect link run inside a live Claude Code session (real ocs 0.8.3 whoami/who), then a delivery quoting the bound fingerprint over native messaging; the session received the message.",
+ "linkExit": 0,
+ "binding": { "origin": "http://localhost:59996", "pathScope": "/", "source": "linked", "sessionId": "claude-1aafa5c3", "fingerprint": "ffbf19c003a53c763938b1a2e4909845" },
+ "resolveState": "bound",
+ "deliver": { "state": "sent", "stored": true, "wake": "accepted", "exit": 0, "seq": 1 },
+ "replay": { "state": "sent", "duplicate": true },
+ "unlinkExit": 0
+}

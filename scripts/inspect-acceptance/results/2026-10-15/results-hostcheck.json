@@ -1,0 +1,81 @@
+{
+  "startedAt": "2026-10-14T17:23:20.740Z",
+  "host": "/Users/leo/inspect-accept/bin/chrome-use-m-36c434343796",
+  "checks": [
+    {
+      "name": "h15-legacy-caller-refused-on-scoped-origin",
+      "ok": true,
+      "detail": {
+        "legacy": "upgradeRequired",
+        "scoped": "sent"
+      }
+    },
+    {
+      "name": "h16-v1-bindings-migrate",
+      "ok": true,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "h17-h23-claims-and-stale-decisions",
+      "ok": true,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "h22-broader-claim-lists-narrower-scope",
+      "ok": true,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "h19-config-validation",
+      "ok": true,
+      "detail": {
+        "errors": [
+          {
+            "path": "/private/var/folders/c1/nbxqfmm5057f_pvh0_h9tg600000gn/T/inspect-badcfg-2honSA/apps/big/.chrome-use/inspect.json",
+            "reason": "larger than 64 KiB"
+          },
+          {
+            "path": "/private/var/folders/c1/nbxqfmm5057f_pvh0_h9tg600000gn/T/inspect-badcfg-2honSA/apps/field/.chrome-use/inspect.json",
+            "reason": "invalid schema: unknown field `extra`, expected `origins` or `pathScope`"
+          },
+          {
+            "path": "/private/var/folders/c1/nbxqfmm5057f_pvh0_h9tg600000gn/T/inspect-badcfg-2honSA/apps/symlink/.chrome-use/inspect.json",
+            "reason": "a symlink is not read"
+          },
+          {
+            "path": "/private/var/folders/c1/nbxqfmm5057f_pvh0_h9tg600000gn/T/inspect-badcfg-2honSA/apps/version/.chrome-use/inspect.json",
+            "reason": "unsupported version 2; expected 1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "h20-unlink-only-own-binding",
+      "ok": true,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "h24-forged-tab-target-refused",
+      "ok": true,
+      "detail": {
+        "state": "targetChanged"
+      }
+    },
+    {
+      "name": "h25-two-configs-need-root",
+      "ok": true,
+      "detail": {
+        "ok": true
+      }
+    }
+  ],
+  "finishedAt": "2026-10-14T17:23:25.012Z"
+}

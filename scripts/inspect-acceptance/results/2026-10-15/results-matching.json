@@ -1,0 +1,165 @@
+{
+  "startedAt": "2026-10-14T17:22:36.353Z",
+  "host": "/Users/leo/inspect-accept/bin/chrome-use-m-36c434343796",
+  "scenarios": [
+    {
+      "name": "m14-new-extension-old-host",
+      "ok": true,
+      "ms": 0,
+      "detail": {
+        "skipped": "set LEGACY_HOST=1 with an older host"
+      }
+    },
+    {
+      "name": "m01-local-dev-unique-session",
+      "ok": true,
+      "ms": 2857,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m02-port-reused-by-another-worktree",
+      "ok": true,
+      "ms": 5114,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m03-test-domain-config-one-click",
+      "ok": true,
+      "ms": 1988,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m04-same-origin-two-apps",
+      "ok": true,
+      "ms": 4335,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m05-worktrees-ranked-by-revision",
+      "ok": true,
+      "ms": 370,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m06-two-sessions-one-worktree",
+      "ok": true,
+      "ms": 2870,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m07-session-restarted",
+      "ok": true,
+      "ms": 2244,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m08-session-moved",
+      "ok": true,
+      "ms": 3170,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m09-link-from-session-zero-clicks",
+      "ok": true,
+      "ms": 1511,
+      "detail": {
+        "link": {
+          "data": {
+            "binding": {
+              "consents": {
+                "plugin": false,
+                "testEnv": false
+              },
+              "evidence": {
+                "kind": "config",
+                "path": "/Users/leo/inspect-accept/react-app/.chrome-use/inspect.json",
+                "wildcard": false
+              },
+              "fingerprint": "36a5a6509b869dd9d9a44459f9dd4978",
+              "origin": "http://test.inspect.example",
+              "pathScope": "/",
+              "root": "/Users/leo/inspect-accept/react-app",
+              "sessionCwd": "/Users/leo/inspect-accept/react-app",
+              "sessionId": "claude-aaaa1111",
+              "sessionLabel": "react-main",
+              "source": "linked",
+              "sourceRoots": [
+                "/Users/leo/inspect-accept/react-app"
+              ],
+              "updatedAt": 1791998583174
+            },
+            "state": "linked"
+          },
+          "success": true
+        }
+      }
+    },
+    {
+      "name": "m10-link-conflict-needs-browser-ok",
+      "ok": true,
+      "ms": 3387,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m11-tab-only-target",
+      "ok": true,
+      "ms": 4834,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m12-monorepo-app-root-and-forged-marks",
+      "ok": true,
+      "ms": 2332,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m18-wildcard-config",
+      "ok": true,
+      "ms": 1148,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m19-spa-route-change",
+      "ok": true,
+      "ms": 3142,
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "name": "m20-target-changed-after-panel-showed-it",
+      "ok": true,
+      "ms": 1370,
+      "detail": {
+        "ok": true
+      }
+    }
+  ],
+  "chrome": "Chrome/155.0.8059.39",
+  "resolveReady": true,
+  "finishedAt": "2026-10-14T17:23:20.692Z"
+}
