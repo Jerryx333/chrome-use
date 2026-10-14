@@ -46,3 +46,21 @@ test('matching labels', async () => {
   assert.equal(deliveryMessage({ state: 'upgradeRequired' }).locked, false);
   assert.match(deliveryMessage({ state: 'targetChanged' }).text, /Nothing was sent/);
 });
+
+test('link commands quote page URLs as one literal argument', async () => {
+  const { shellQuote, linkCommand } = await import('./inspect-frame-logic.js');
+  const { execFileSync } = await import('node:child_process');
+  const hostile = [
+    "https://test.example/$(echo PWNED)", 'https://test.example/`echo PWNED`', "https://x.example/a;echo PWNED", "https://x.example/a&b|c",
+    "https://x.example/(paren)", "https://x.example/it's", "https://x.example/sp ace", "https://x.example/%24%28id%29", "https://x.example/'$(echo PWNED)'",
+  ];
+  for (const url of hostile) {
+    // sh receives exactly the URL back: nothing was substituted or split.
+    const out = execFileSync('/bin/sh', ['-c', `printf %s ${shellQuote(url, 'macos')}`]).toString();
+    assert.equal(out, url);
+  }
+  assert.equal(shellQuote("it's", 'windows'), "'it''s'");
+  assert.equal(shellQuote('a$(b)', 'windows'), "'a$(b)'");
+  assert.equal(shellQuote('a’b', 'windows'), "'a’’b'");
+  assert.equal(linkCommand('https://x.example/p', 'linux'), "chrome-use inspect link 'https://x.example/p'");
+});

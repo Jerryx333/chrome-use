@@ -120,6 +120,16 @@ export class InspectController {
     c.tabs.onActivated.addListener(({ tabId, windowId }) => { this.registry.bumpWindow(windowId); this.registry.bump(tabId); });
     c.tabs.onZoomChange?.addListener(({ tabId }) => this.registry.bump(tabId));
     c.windows?.onRemoved?.addListener(windowId => this.registry.bumpWindow(windowId));
+    // pushState / replaceState / popstate in a single-page app: same document,
+    // new path. The tab-only target belonged to the old path; the panel must
+    // resolve again and the user re-checks what is selected.
+    c.webNavigation.onHistoryStateUpdated?.addListener(details => {
+      if (details.frameId !== 0) return;
+      const instance = this.registry.get(details.tabId);
+      if (!instance) return;
+      instance.tabTarget = null;
+      instance.port?.postMessage({ type: 'pageChanged', url: (() => { try { const u = new URL(details.url); return u.origin + u.pathname; } catch { return null; } })() });
+    });
     c.webNavigation.onCommitted.addListener(details => {
       if (details.frameId !== 0) return;
       this.registry.bump(details.tabId);
@@ -226,15 +236,21 @@ export class InspectController {
     return instance.captureChain;
   }
 
-  // The page's current path (single-page apps move without a new document),
-  // falling back to the path the picker started on. Only the path is sent.
-  async pagePath(instance) {
+  // One snapshot of the page's current URL (single-page apps move without a
+  // new document): pageUrl and pagePath always come from the same read.
+  async pageNow(instance) {
+    let url = null;
     try {
       const tab = await this.chrome.tabs.get(instance.tabId);
-      const url = new URL(tab.url);
-      if (url.origin === instance.origin) return url.pathname || '/';
+      const parsed = new URL(tab.url);
+      if (parsed.origin === instance.origin) url = parsed;
     } catch {}
-    try { return new URL(instance.pageUrl).pathname || '/'; } catch { return '/'; }
+    if (!url) { try { url = new URL(instance.pageUrl); } catch { url = new URL(instance.origin); } }
+    return { pageUrl: url.origin + (url.pathname || '/'), pagePath: url.pathname || '/' };
+  }
+
+  async pagePath(instance) {
+    return (await this.pageNow(instance)).pagePath;
   }
 
   // Bounded: a frozen or hidden page must not stall the capture queue.
@@ -369,7 +385,7 @@ export class InspectController {
         if (!this.resolveReady()) return answer({ status: await this.host('inspectStatus', params), legacy: true });
         params.pagePath = await this.pagePath(instance);
         if (instance.revision && /^[0-9a-f]{7,40}$/.test(instance.revision)) params.revision = instance.revision;
-        return answer({ status: await this.host('inspectResolve', params), tabTarget: instance.tabTarget || null });
+        return answer({ status: await this.host('inspectResolve', params), tabTarget: instance.tabTarget || null, pagePath: params.pagePath });
       }
       case 'confirm': {
         if (!this.resolveReady()) throw new Error('This chrome-use CLI is too old for this choice; upgrade it with `chrome-use upgrade`.');
@@ -396,7 +412,7 @@ export class InspectController {
         if (!['plugin', 'testEnv'].includes(message.kind)) throw new Error('Unknown consent');
         return answer({ result: await this.host('inspectConsent', { origin: instance.origin, ...(this.resolveReady() && typeof message.pathScope === 'string' ? { pathScope: message.pathScope } : {}), kind: message.kind, granted: message.granted === true }) });
       case 'launchCommand':
-        return answer({ result: await this.host('inspectLaunchCommand', { origin: instance.origin, agent: message.agent === 'codex' ? 'codex' : 'claude' }) });
+        return answer({ result: await this.host('inspectLaunchCommand', { origin: instance.origin, ...(this.resolveReady() && typeof message.pathScope === 'string' ? { pathScope: message.pathScope } : {}), agent: message.agent === 'codex' ? 'codex' : 'claude' }) });
       case 'note': {
         const annotation = instance.annotations.find(a => a.id === message.annotationId);
         if (annotation) annotation.note = String(message.note || '').slice(0, NOTE_MAX);
@@ -428,7 +444,8 @@ export class InspectController {
         return answer({ result: await this.host('inspectDeliveryStatus', { deliveryId: String(message.deliveryId || '') }) });
       case 'setup': {
         const kind = message.kind === 'setupTestEnv' ? 'setupTestEnv' : 'setupPlugin';
-        return answer({ result: await this.deliver(instance, { ...message, kind, instruction: '' }) });
+        // Setup always goes to the site default; a tab-only target never receives it.
+        return answer({ result: await this.deliver(instance, { ...message, kind, instruction: '', revision: instance.selectionRevision || 0 }) });
       }
       default:
         throw new Error('Unknown inspect frame request');
@@ -468,14 +485,24 @@ export class InspectController {
     }
     const notes = Object.fromEntries(annotations.filter(a => a.note).map(a => [a.element.selector, a.note]));
     await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state: 'sending' });
-    const scoped = this.resolveReady() ? { pagePath: await this.pagePath(instance), ...(instance.tabTarget ? { target: tabTargetPayload(instance.tabTarget) } : {}) } : {};
+    // The panel names the page path and the target it showed; if either moved
+    // since (route change, claim accepted elsewhere, rebinding), nothing is sent.
+    const page = await this.pageNow(instance);
+    let scoped = {};
+    if (this.resolveReady()) {
+      if (typeof message.expectedPath !== 'string' || message.expectedPath !== page.pagePath) {
+        return { state: 'targetChanged', reason: 'pageChanged' };
+      }
+      if (typeof message.expectedTarget !== 'string' || !message.expectedTarget) return { state: 'targetChanged', reason: 'bindingChanged' };
+      scoped = { pagePath: page.pagePath, expectedTarget: message.expectedTarget, ...(instance.tabTarget && kind === 'edit' ? { target: tabTargetPayload(instance.tabTarget) } : {}) };
+    }
     let result;
     try {
       result = await this.host('inspectDeliver', {
         ...scoped,
         deliveryId, origin: instance.origin, kind,
         instruction: kind === 'edit' ? instruction : undefined,
-        pageUrl: sanitizedPageUrl(instance.pageUrl), env: isLocalOrigin(instance.origin) ? 'local' : 'test',
+        pageUrl: page.pageUrl, env: isLocalOrigin(instance.origin) ? 'local' : 'test',
         revision: pageRevision || undefined,
         annotations: kind === 'edit' ? annotations.map((a, i) => annotationPayload(a, i + 1)) : [],
         images: kind === 'edit' ? images : [],

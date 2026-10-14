@@ -55,7 +55,9 @@ export function deliveryMessage(result) {
     case 'noSession': return { tone: 'bad', locked: false, text: 'No running agent session for this project. Start one, then press Check again.' };
     case 'sessionChanged': return { tone: 'bad', locked: false, text: 'The bound session is gone or moved to another folder. Pick the session again.' };
     case 'upgradeRequired': return { tone: 'bad', locked: false, text: 'This site has path-specific targets or a pending claim that this chrome-use version cannot apply. Nothing was sent. Upgrade with `chrome-use upgrade`.' };
-    case 'targetChanged': return { tone: 'bad', locked: false, text: 'The chosen target changed (session, folder or dev server). Nothing was sent. Confirm the target again.' };
+    case 'targetChanged': return { tone: 'bad', locked: false, text: result?.reason === 'pageChanged'
+      ? 'The page moved to another path since you reviewed it. Nothing was sent. Check the target and the selected elements, then send again.'
+      : 'The target changed since the panel showed it (another session took over, it was unbound, or the dev server moved). Nothing was sent. Check the target, then send again.' };
     case 'noOcs': return { tone: 'bad', locked: false, text: 'ocs is not installed. Install it with the command above, then send again.' };
     case 'failed': return { tone: 'bad', locked: false, text: `Delivery failed${result?.error ? `: ${result.error}` : ''}. Nothing was stored.` };
     default: return { tone: 'warn', locked: true, text: 'Unrecognized delivery result. Not resent.' };
@@ -113,4 +115,16 @@ export function reasonText(reason, binding) {
 
 export function targetLabel(t) {
   return `${t?.sessionLabel || t?.sessionId || 'session'} @ ${t?.root || '?'}`;
+}
+
+// A literal argument for the user's shell. Page URLs are page-controlled, so a
+// copied command must never let `$(…)`, backticks, `;` or quotes run anything.
+export function shellQuote(value, platform) {
+  const text = String(value ?? '');
+  if (platform === 'windows') return "'" + text.replace(/['\u2018\u2019\u201a\u201b]/g, m => m + m) + "'";
+  return "'" + text.replace(/'/g, "'\\''") + "'";
+}
+
+export function linkCommand(url, platform) {
+  return `chrome-use inspect link ${shellQuote(url, platform)}`;
 }

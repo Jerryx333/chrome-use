@@ -5,7 +5,7 @@
 // access to page context or delivery.
 
 import { plain, inlineCode } from './inspect-format.js';
-import { visibilityVerdict, editorUrl, deliveryMessage, LOCKED_STATES, newDeliveryId, scopeLabel, evidenceLabels, revisionText, reasonText, targetLabel } from './inspect-frame-logic.js';
+import { visibilityVerdict, editorUrl, deliveryMessage, LOCKED_STATES, newDeliveryId, scopeLabel, evidenceLabels, revisionText, reasonText, targetLabel, linkCommand } from './inspect-frame-logic.js';
 
 const $ = id => document.getElementById(id);
 const view = $('view');
@@ -99,6 +99,12 @@ function onBackground(message) {
       state.imageReason = message.reason || null;
       render();
       return;
+    case 'pageChanged':
+      focusEpoch++;
+      state.tabTarget = null;
+      state.notice = { tone: 'warn', text: 'The page moved to another path. Check the target and the selected elements before sending.' };
+      void refreshStatus();
+      return;
     case 'revoked':
       end(`This Inspect & Ask session ended (${message.reason}). Press the shortcut again.`);
       return;
@@ -181,8 +187,9 @@ function restoreNotes() {
 async function refreshStatus() {
   if (!state.ctx?.hostConnected) { state.statusError = 'The chrome-use native host is not connected. Copy still works.'; render(); return; }
   try {
-    const { status, legacy, tabTarget } = await request('status');
+    const { status, legacy, tabTarget, pagePath } = await request('status');
     state.status = status;
+    state.resolvedPath = pagePath || null;
     state.legacy = !!legacy;
     state.tabTarget = tabTarget || null;
     state.statusError = null;
@@ -280,7 +287,9 @@ function matchingView(status, box) {
   if (status.skipped?.length) box.append(h('div', { class: 'small muted', text: `Some checks were skipped (time budget): ${status.skipped.join(', ')}` }));
   if (status.state === 'bound' && !state.choosing) {
     const binding = status.binding;
-    if (!hasMarks() && state.annotations.length) {
+    if (!hasMarks() && state.annotations.length && state.tabTarget) {
+      box.append(h('div', { class: 'notice small', text: 'Source-mapping setup goes to the site default target. Use the site default (not "this tab only") to request it.' }));
+    } else if (!hasMarks() && state.annotations.length) {
       const consent = state.ctx.env === 'local' ? 'plugin' : 'testEnv';
       if (!binding.consents?.[consent]) box.append(consentCard(consent));
       else box.append(h('div', { class: 'notice small', text: consent === 'plugin' ? 'Source mapping setup was requested. After the agent adds code-inspector-plugin and the dev server restarts, elements show file:line here.' : 'Test-build source mapping was requested. It takes effect after the next test deployment.' }));
@@ -292,11 +301,14 @@ function matchingView(status, box) {
 }
 
 function claimBanner(claim) {
-  const now = claim.affects?.length ? claim.affects.map(a => `${targetLabel(a)} (${scopeLabel(a.origin, a.pathScope)})`).join(', ') : 'no other session';
+  const current = state.status?.binding;
+  const extra = (claim.sourceRoots || []).filter(r => r !== claim.root);
   return h('div', { class: 'notice warn stack small' },
     h('strong', { text: `${claim.sessionLabel || claim.sessionId} asks to take over ${scopeLabel(claim.origin, claim.pathScope)}` }),
-    h('div', {}, 'Requested target: ', h('span', { class: 'mono', text: claim.root })),
-    h('div', {}, 'Requests go to: ', h('span', { class: 'mono', text: now }), ' until you decide.'),
+    h('div', {}, 'Claimed target: ', h('span', { class: 'mono', text: claim.root }), ' · session folder ', h('span', { class: 'mono', text: claim.sessionCwd || '?' })),
+    extra.length ? h('div', {}, 'Also counts as source: ', h('span', { class: 'mono', text: extra.join(', ') })) : null,
+    h('div', {}, 'This page currently sends to: ', h('span', { class: 'mono', text: current ? `${targetLabel(current)} (${scopeLabel(current.origin, current.pathScope)})` : 'no target' }), '.'),
+    claim.affects?.length ? h('div', {}, 'Replace moves only ', h('span', { class: 'mono', text: scopeLabel(claim.origin, claim.pathScope) }), ' from: ', h('span', { class: 'mono', text: claim.affects.map(a => `${targetLabel(a)} (${scopeLabel(a.origin, a.pathScope)})`).join(', ') }), '. Narrower paths bound elsewhere keep their target.') : null,
     h('div', { class: 'actions' },
       h('button', { class: 'primary', onclick: event => { if (event.isTrusted) void decideClaim(claim, true); } }, 'Replace'),
       h('button', { onclick: event => { if (event.isTrusted) void decideClaim(claim, false); } }, 'Keep current')));
@@ -317,15 +329,13 @@ function confirmCard(status) {
   const box = h('div', { class: 'notice stack' });
   if (reason) box.append(h('div', { class: 'small', text: reason }));
   if (!pairs.length) {
-    const url = state.ctx.pageUrl;
+    const command = linkCommand(state.ctx.pageUrl, status.platform);
     box.append(h('strong', { text: 'No running agent session matches this page' }),
       h('div', { class: 'small', text: 'Start Claude Code, Codex or Pi in the project, then press Check again. Or, in the session that should receive requests, run:' }),
-      h('pre', { class: 'cmd', text: `chrome-use inspect link ${url}` }),
+      h('pre', { class: 'cmd', text: command }),
       h('div', { class: 'actions' },
-        h('button', { onclick: () => copy(`chrome-use inspect link ${url}`) }, 'Copy command'),
-        h('button', { onclick: () => launch('claude') }, 'Claude Code start command'),
+        h('button', { onclick: () => copy(command) }, 'Copy command'),
         h('button', { onclick: refreshStatus }, 'Check again')));
-    if (state.launch) box.append(h('pre', { class: 'cmd', text: state.launch.command }));
     return box;
   }
   // A candidate project without a running session can be shown but not
@@ -344,7 +354,7 @@ function confirmCard(status) {
           h('span', { class: 'mono muted', text: p.root }), h('br'),
           h('span', { class: 'muted small', text: [...evidenceLabels(p), revisionText(p.revision)].filter(Boolean).join(' · ') }))))));
   }
-  if (pairs.some(p => !live(p))) box.append(h('div', { class: 'small muted' }, 'To use a project without a running session, start Claude Code or Codex there, or run ', h('span', { class: 'mono', text: `chrome-use inspect link ${state.ctx.pageUrl}` }), ' in the session that should receive requests.'));
+  if (pairs.some(p => !live(p))) box.append(h('div', { class: 'small muted' }, 'To use a project without a running session, start Claude Code or Codex there, or run ', h('span', { class: 'mono', text: linkCommand(state.ctx.pageUrl, status.platform) }), ' in the session that should receive requests.'));
   box.append(h('div', { class: 'actions' },
     h('button', { class: 'primary', disabled: !chosen, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'default'); } }, 'Hand over'),
     h('button', { disabled: !chosen, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'tab'); } }, 'Only this tab'),
@@ -438,7 +448,7 @@ function consentCard(kind) {
         await gated('setup', async () => {
           await request('consent', { kind, granted: true, pathScope: state.status?.binding?.pathScope });
           const deliveryId = newDeliveryId();
-          const { result } = await request('setup', { kind: plugin ? 'setupPlugin' : 'setupTestEnv', deliveryId });
+          const { result } = await request('setup', { kind: plugin ? 'setupPlugin' : 'setupTestEnv', deliveryId, ...shownTarget(), expectedTarget: state.status?.binding?.fingerprint || '' });
           state.notice = deliveryMessage(result);
           await refreshStatus();
         });
@@ -507,6 +517,13 @@ function targetView() {
     h('button', { class: 'link', onclick: () => { state.choosing = true; render(); } }, 'change'));
 }
 
+// What the panel shows as the receiver; the host refuses to send elsewhere.
+function shownTarget() {
+  if (state.legacy || !state.status) return {};
+  const fingerprint = state.tabTarget?.fingerprint || (state.status.state === 'bound' ? state.status.binding?.fingerprint : null);
+  return { expectedPath: state.resolvedPath, expectedTarget: fingerprint || '' };
+}
+
 // Recomputed on every keystroke without re-rendering, so typing keeps focus.
 function sendable() {
   const binding = state.status?.binding;
@@ -562,8 +579,12 @@ function checkVisibility() {
 // behalf (send, bind, consent + setup): a trusted gesture, no other action in
 // flight, and a fresh visibility check of this panel.
 let verifying = null;
+// Bumped on blur and on route changes: a verification that started before
+// either never completes into an action, including between retries.
+let focusEpoch = 0;
 async function gated(label, fn) {
   if (state.busy) return;
+  const epoch = focusEpoch;
   state.busy = true;
   state.notice = { tone: '', text: 'Checking that the panel is visible…' };
   render();
@@ -578,7 +599,9 @@ async function gated(label, fn) {
     verifying = null;
     if (reply?.cancelled || reply?.timeout || reply?.isVisible !== false) break;
     await new Promise(r => setTimeout(r, 250));
+    if (epoch !== focusEpoch) { reply = { cancelled: true }; break; }
   }
+  if (epoch !== focusEpoch) reply = { cancelled: true };
   if (reply?.cancelled) { state.busy = false; state.notice = { tone: 'bad', text: 'Cancelled because the panel lost focus. Try again.' }; render(); return; }
   const verdict = visibilityVerdict(reply);
   if (!verdict.ok) { state.busy = false; state.notice = { tone: 'bad', text: verdict.message }; render(); return; }
@@ -591,6 +614,7 @@ async function gated(label, fn) {
 // Leaving the panel cancels a pending verification instead of letting it
 // complete later.
 addEventListener('blur', () => {
+  focusEpoch++;
   for (const [key, p] of pending) if (String(key).startsWith('vis:')) { pending.delete(key); p.resolve({ cancelled: true }); }
 });
 
@@ -611,7 +635,7 @@ async function submit() {
   await gated('send', async () => {
     if (state.selection !== selection) throw new Error('The selection changed while checking. Review it and send again.');
     state.deliveryId = state.deliveryId || newDeliveryId();
-    const { result } = await request('deliver', { deliveryId: state.deliveryId, revision: selection, instruction, images, notes });
+    const { result } = await request('deliver', { deliveryId: state.deliveryId, revision: selection, instruction, images, notes, ...shownTarget() });
     state.delivery = result;
     if (!deliveryMessage(result).locked) state.deliveryId = null;
     if (['noBinding', 'sessionChanged', 'noSession', 'targetChanged', 'upgradeRequired'].includes(result?.state)) await refreshStatus();

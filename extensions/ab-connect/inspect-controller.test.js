@@ -11,12 +11,13 @@ function fakeChrome() {
     commands: { onCommand: on('command') },
     tabs: { onRemoved: on('removed'), onActivated: on('activated'), onZoomChange: on('zoom'), query: async () => [], get: async () => ({}) },
     windows: { onRemoved: on('wremoved') },
-    webNavigation: { onCommitted: on('committed'), getFrame: async () => ({ documentId: 'doc' }) },
+    webNavigation: { onCommitted: on('committed'), onHistoryStateUpdated: on('history'), getFrame: async () => ({ documentId: 'doc' }) },
     scripting: { injected: [], executeScript: async args => { chrome.scripting.injected.push(args); return [{ result: [] }]; } },
     storage: { local: { get: async key => ({ [key]: store[key] }), set: async value => Object.assign(store, value) } },
   };
   return { chrome, store, listeners };
 }
+let lastListeners = null;
 
 function framePort(sender) {
   const port = {
@@ -32,7 +33,8 @@ const flush = () => new Promise(r => setTimeout(r, 0));
 const element = { label: 'button "Save"', selector: 'button.save', path: 'button.save', classes: '', rect: { x: 0, y: 0, width: 10, height: 10 }, text: 'Save', selectedText: '', nearby: [], styles: [], html: '<button>Save</button>', source: { kind: 'insp', path: 'src/a.tsx', line: 3, column: 1 } };
 
 async function started() {
-  const { chrome, store } = fakeChrome();
+  const { chrome, store, listeners } = fakeChrome();
+  lastListeners = listeners;
   const calls = [];
   const controller = new InspectController({ chrome, hostReady: () => true, request: async (op, params) => { calls.push([op, params]); return op === 'inspectDeliver' ? { schemaVersion: 1, state: 'sent', wake: 'accepted' } : { schemaVersion: 1 }; } });
   controller.install();
@@ -232,7 +234,7 @@ test('matching: a tab-only target is held locally and sent with each delivery', 
   assert.equal(instance.tabTarget.fingerprint, pair.fingerprint);
   instance.annotations = [{ id: '0:0', element, probe: null, note: '' }];
   instance.selectionRevision = 0;
-  real.msg[0]({ type: 'deliver', requestId: 32, deliveryId: '11111111-2222-3333-4444-555555555559', revision: 0, instruction: 'x' });
+  real.msg[0]({ type: 'deliver', requestId: 32, deliveryId: '11111111-2222-3333-4444-555555555559', revision: 0, instruction: 'x', expectedPath: '/shop', expectedTarget: pair.fingerprint });
   await flush(); await flush(); await flush();
   const deliver = calls.find(c => c[0] === 'inspectDeliver')[1];
   assert.equal(deliver.pagePath, '/shop');
@@ -254,4 +256,37 @@ test('matching: malformed pairs and claims are refused before the host', async (
   assert.match(real.sent.find(m => m.requestId === 41).error, /Unknown target/);
   assert.match(real.sent.find(m => m.requestId === 42).error, /Unknown claim/);
   assert.equal(calls.filter(c => ['inspectBind', 'inspectClaimDecide'].includes(c[0])).length, 0);
+});
+
+test('matching: deliver refuses when the page path or the shown target moved', async () => {
+  const { controller, chrome, real, calls, instance } = await authorized();
+  controller.resolveReady = () => true;
+  let url = 'http://localhost:5173/admin';
+  chrome.tabs.get = async () => ({ id: 7, url });
+  instance.annotations = [{ id: '0:0', element, probe: null, note: '' }];
+  instance.selectionRevision = 0;
+  url = 'http://localhost:5173/shop';
+  real.msg[0]({ type: 'deliver', requestId: 51, deliveryId: '11111111-2222-3333-4444-555555555560', revision: 0, instruction: 'x', expectedPath: '/admin', expectedTarget: 'a'.repeat(32) });
+  await flush(); await flush(); await flush();
+  assert.deepEqual(real.sent.find(m => m.requestId === 51).result, { state: 'targetChanged', reason: 'pageChanged' });
+  real.msg[0]({ type: 'deliver', requestId: 52, deliveryId: '11111111-2222-3333-4444-555555555561', revision: 0, instruction: 'x', expectedPath: '/shop' });
+  await flush(); await flush(); await flush();
+  assert.equal(real.sent.find(m => m.requestId === 52).result.reason, 'bindingChanged');
+  assert.equal(calls.filter(c => c[0] === 'inspectDeliver').length, 0, 'nothing reaches the host');
+  real.msg[0]({ type: 'deliver', requestId: 53, deliveryId: '11111111-2222-3333-4444-555555555562', revision: 0, instruction: 'x', expectedPath: '/shop', expectedTarget: 'b'.repeat(32) });
+  await flush(); await flush(); await flush();
+  const sent = calls.find(c => c[0] === 'inspectDeliver')[1];
+  assert.equal(sent.pagePath, '/shop');
+  assert.equal(sent.pageUrl, 'http://localhost:5173/shop', 'pageUrl and pagePath come from one snapshot');
+  assert.equal(sent.expectedTarget, 'b'.repeat(32));
+});
+
+test('matching: a route change clears the tab target and tells the panel', async () => {
+  const { real, instance } = await authorized();
+  instance.tabTarget = { fingerprint: 'f' };
+  lastListeners.history[0]({ tabId: 7, frameId: 0, url: 'http://localhost:5173/shop?q=1' });
+  assert.equal(instance.tabTarget, null);
+  assert.deepEqual(real.sent.at(-1), { type: 'pageChanged', url: 'http://localhost:5173/shop' });
+  lastListeners.history[0]({ tabId: 7, frameId: 3, url: 'http://localhost:5173/x' });
+  assert.equal(real.sent.at(-1).url, 'http://localhost:5173/shop', 'subframe history is ignored');
 });
