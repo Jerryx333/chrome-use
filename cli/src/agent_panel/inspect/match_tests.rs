@@ -1003,7 +1003,7 @@ fn link_identity_root_and_config_choice_are_checked() {
     assert!(linked
         .warnings
         .iter()
-        .any(|w| w.contains("apps/bad") && w.contains("unsupported version")));
+        .any(|w| w.replace('\\', "/").contains("apps/bad") && w.contains("unsupported version")));
     // A root in another worktree, an unknown session, or no whoami: refused.
     let other = mono(&w, "other");
     let other_root = other.admin.display().to_string();
