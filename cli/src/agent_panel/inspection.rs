@@ -36,10 +36,13 @@ impl Drop for Scratch {
 
 pub(super) struct OwnedProbe {
     pub(super) child: Child,
+    #[cfg(unix)]
     pid: u32,
+    #[cfg(windows)]
+    job: super::windows::ProcessJob,
 }
 impl OwnedProbe {
-    pub(super) fn spawn(
+    pub(super) async fn spawn(
         executable: &Path,
         args: &[&str],
         workspace: &Path,
@@ -63,13 +66,26 @@ impl OwnedProbe {
             use std::os::unix::process::CommandExt;
             command.as_std_mut().process_group(0);
         }
+        #[cfg(windows)]
+        let (child, job) = super::windows::ProcessJob::spawn(&mut command).await?;
+        #[cfg(not(windows))]
         let child = command
             .spawn()
             .map_err(|_| "Cannot start the selected CLI metadata probe")?;
+        #[cfg(unix)]
         let pid = child.id().ok_or("CLI probe has no process identity")?;
-        Ok(Self { child, pid })
+        Ok(Self {
+            child,
+            #[cfg(unix)]
+            pid,
+            #[cfg(windows)]
+            job,
+        })
     }
     pub(super) async fn finish(&mut self) -> Result<std::process::ExitStatus, String> {
+        #[cfg(windows)]
+        self.job.terminate()?;
+        #[cfg(not(windows))]
         if self
             .child
             .try_wait()
@@ -103,6 +119,8 @@ impl OwnedProbe {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
+        #[cfg(windows)]
+        self.job.confirm_empty().await?;
         Ok(status)
     }
 }
@@ -454,14 +472,6 @@ async fn opencode_catalog(probe: &mut OwnedProbe, workspace: &Path) -> Result<Ve
 }
 
 pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String> {
-    #[cfg(not(unix))]
-    {
-        let _ = (params, root);
-        return Err(
-            "CLI metadata inspection requires owned process-group support on this platform".into(),
-        );
-    }
-    #[cfg(unix)]
     {
         let _permit = PROBES
             .try_acquire()
@@ -479,20 +489,20 @@ pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String
         if !executable.is_absolute() {
             return Err("A custom agent executable must be an absolute path".into());
         }
-        if !super::is_executable(&executable, false) {
+        if !super::is_executable(&executable, cfg!(windows)) {
             return Err("The selected CLI is not executable".into());
         }
         let workspace = root.join(format!("inspection-{}", uuid::Uuid::new_v4()));
         private_tree(&workspace)?;
         let _scratch = Scratch(workspace.clone());
         let result=async {
-            let mut probe=OwnedProbe::spawn(&executable,&["--version"],&workspace)?;
+            let mut probe=OwnedProbe::spawn(&executable,&["--version"],&workspace).await?;
             let mut output=probe.child.stdout.take().ok_or("CLI version output unavailable")?;
             let version_result=tokio::time::timeout(Duration::from_secs(2),async {let mut bytes=Vec::new();(&mut output).take(1025).read_to_end(&mut bytes).await.ok()?;version(std::str::from_utf8(&bytes).ok()?)}).await.ok().flatten();
             let version_exit=probe.finish().await?;
             let version_result=if version_exit.success() {version_result} else {None};
             if request.agent_id == "opencode" {
-                let mut probe = OwnedProbe::spawn(&executable, &["acp"], &workspace)?;
+                let mut probe = OwnedProbe::spawn(&executable, &["acp"], &workspace).await?;
                 let catalog = tokio::time::timeout(Duration::from_secs(15), opencode_catalog(&mut probe, &workspace)).await.map_err(|_| "OpenCode model inspection timed out");
                 probe.finish().await?;
                 let catalog = catalog??;
@@ -501,7 +511,7 @@ pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String
             let codex=request.agent_id=="codex";
             let pi=request.agent_id=="pi";
             let args=if pi {vec!["--mode","rpc","--no-session","--no-mcp","--no-tools","--no-approve"]} else if codex {vec!["app-server","--listen","stdio://"]} else {vec!["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--strict-mcp-config","--mcp-config","{\"mcpServers\":{}}","--tools","","--no-session-persistence","--setting-sources","user","--settings","{\"disableAllHooks\":true}"]};
-            let mut probe=OwnedProbe::spawn(&executable,&args,&workspace)?;
+            let mut probe=OwnedProbe::spawn(&executable,&args,&workspace).await?;
             let catalog=match tokio::time::timeout(Duration::from_secs(if pi {10} else {4}),async { if pi {pi_catalog(&mut probe).await} else {protocol(&mut probe,codex).await} }).await {Ok(result)=>result,Err(_)=>Err("CLI metadata inspection timed out".into())};
             let cleanup=probe.finish().await;
             let _=cleanup?;let catalog=catalog?;

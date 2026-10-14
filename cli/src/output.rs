@@ -6425,16 +6425,16 @@ Setup:
                              before priority sending; ordinary queues remain paused.
                              Read CLI models fetches bounded CLI metadata without
                              a prompt; account reports do not verify model access.
-                             This metadata adapter currently requires Unix ownership.
+                             Metadata probes use owned process groups or Windows jobs.
                              Unconfirmed sends offer explicit same-ID retry or warning
                              reset; reset does not cancel possible delivery. Idle old
                              agent services exit before replacement; active work can
                              still be read/stopped. Custom programs use absolute paths.
                              Browser-tool approvals preview arguments and allow one
                              call. Replies remain pending until backend confirmation.
-                             Agent panel conversations/configuration writes support
-                             macOS/Linux; Windows panel discovery/config reads are
-                             read-only. Legacy native hosts require a CLI upgrade.
+                             Agent panel chats, configuration writes, skills, images,
+                             options and schedules support macOS/Linux/Windows.
+                             Legacy read-only Windows hosts require a CLI upgrade.
                              Extension 0.5.48 adds guarded native user-tab grouping
                              for Thermo; session ownership rules remain unchanged.
   extension uninstall        Remove the native-messaging host (+ tells you how to drop

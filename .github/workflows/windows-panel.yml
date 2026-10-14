@@ -1,0 +1,37 @@
+name: Windows agent panel
+on:
+  pull_request:
+    paths:
+      - 'cli/**'
+      - '.github/workflows/windows-panel.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cli/**'
+      - '.github/workflows/windows-panel.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-panel-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  native-panel:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+          key: x86_64-pc-windows-msvc-ci
+      - name: Windows private-state and process-tree tests
+        run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use agent_panel -- --test-threads=1
+      - name: Full native-host protocol parity
+        run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --test agent_panel_native -- --test-threads=1

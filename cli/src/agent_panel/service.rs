@@ -98,8 +98,11 @@ pub(super) fn data_root(context: &DiscoveryContext) -> Result<PathBuf, String> {
 
 fn endpoint(directory: &Path, profile: &str) -> Result<Endpoint, String> {
     let path = directory.join("service.json");
-    let meta =
-        std::fs::symlink_metadata(&path).map_err(|_| "Agent service endpoint is unavailable")?;
+    let mut file =
+        private_open(&path, false).map_err(|_| "Agent service endpoint is unavailable")?;
+    let meta = file
+        .metadata()
+        .map_err(|_| "Agent service endpoint is unavailable")?;
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 8192 {
         return Err("Invalid agent service endpoint file".into());
     }
@@ -110,10 +113,13 @@ fn endpoint(directory: &Path, profile: &str) -> Result<Endpoint, String> {
             return Err("Agent service endpoint is not private".into());
         }
     }
-    let endpoint: Endpoint = serde_json::from_slice(
-        &std::fs::read(path).map_err(|_| "Cannot read agent service endpoint")?,
-    )
-    .map_err(|_| "Invalid agent service endpoint")?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(8193)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Cannot read agent service endpoint")?;
+    let endpoint: Endpoint =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid agent service endpoint")?;
     if endpoint.schema_version != 1
         || endpoint.profile != profile
         || !endpoint.address.ip().is_loopback()

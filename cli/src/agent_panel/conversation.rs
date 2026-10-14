@@ -550,9 +550,16 @@ impl Store {
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
+        #[cfg(windows)]
+        super::windows::append_options(&mut options);
         let mut file = options
             .open(path)
             .map_err(|_| "Cannot open conversation journal")?;
+        #[cfg(windows)]
+        {
+            super::windows::regular(&file)?;
+            super::windows::protect(&file)?;
+        }
         let before = file
             .metadata()
             .map_err(|_| "Cannot inspect journal before append")?;
@@ -571,7 +578,7 @@ impl Store {
             if cursor.length == before.len()
                 && cursor.modified.is_some()
                 && cursor.modified == before.modified().ok()
-                && cursor.identity == journal_identity(&before)
+                && cursor.identity == journal_identity(&file, &before)?
             {
                 cursor.length = after.len();
                 cursor.modified = after.modified().ok();
@@ -602,6 +609,7 @@ impl Store {
             .cursors
             .lock()
             .map_err(|_| "Journal cursor cache unavailable")?;
+        let file_identity = journal_identity(&file, &meta)?;
         let offset = cached
             .get(id)
             .filter(|c| {
@@ -609,7 +617,7 @@ impl Store {
                     && c.length == meta.len()
                     && c.modified.is_some()
                     && c.modified == meta.modified().ok()
-                    && c.identity == journal_identity(&meta)
+                    && c.identity == file_identity
             })
             .map(|c| c.offset)
             .unwrap_or(0);
@@ -674,7 +682,7 @@ impl Store {
                 offset: accepted_offset,
                 length: meta.len(),
                 modified: meta.modified().ok(),
-                identity: journal_identity(&meta),
+                identity: file_identity,
             },
         );
         Ok(json!({"events":rows,"cursor":cursor,"more":more}))
@@ -719,16 +727,17 @@ impl Store {
     }
 }
 
-fn journal_identity(meta: &fs::Metadata) -> (u64, u64) {
+fn journal_identity(file: &fs::File, meta: &fs::Metadata) -> Result<(u64, u64), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        (meta.dev(), meta.ino())
+        let _ = file;
+        Ok((meta.dev(), meta.ino()))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         let _ = meta;
-        (0, 0)
+        super::windows::identity(file)
     }
 }
 
@@ -740,9 +749,13 @@ fn open_journal(path: &Path) -> Result<fs::File, String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
+    #[cfg(windows)]
+    super::windows::open_options(&mut options, false);
     let file = options
         .open(path)
         .map_err(|_| "Cannot open conversation journal")?;
+    #[cfg(windows)]
+    super::windows::regular(&file)?;
     let meta = file
         .metadata()
         .map_err(|_| "Cannot inspect conversation journal")?;
@@ -765,11 +778,15 @@ fn read_private(path: &Path, max: u64) -> Result<Vec<u8>, String> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    let mut data = Vec::new();
-    options
+    #[cfg(windows)]
+    super::windows::open_options(&mut options, false);
+    let file = options
         .open(path)
-        .map_err(|_| "Cannot open conversation file")?
-        .take(max + 1)
+        .map_err(|_| "Cannot open conversation file")?;
+    #[cfg(windows)]
+    super::windows::regular(&file)?;
+    let mut data = Vec::new();
+    file.take(max + 1)
         .read_to_end(&mut data)
         .map_err(|_| "Cannot read conversation file")?;
     if data.len() as u64 > max {

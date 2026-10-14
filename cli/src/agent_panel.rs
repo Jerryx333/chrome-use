@@ -23,13 +23,12 @@ mod options;
 mod schedules;
 mod service;
 mod skill_library;
+#[cfg(windows)]
+mod windows;
 
 /// Panel-only MCP tools receive their caller from the host-generated server
 /// environment. Tool arguments cannot select another profile or conversation.
 pub(crate) fn panel_mcp_context() -> Option<(String, String)> {
-    if cfg!(windows) {
-        return None;
-    }
     let profile = std::env::var("CHROME_USE_PANEL_PROFILE").ok()?;
     let caller = std::env::var("CHROME_USE_PANEL_CONVERSATION").ok()?;
     if profile.is_empty()
@@ -555,12 +554,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    let chat_agents: &[&str] = if cfg!(unix) { CHAT_AGENTS } else { &[] };
-    json!({"schemaVersion":1,"mode":if cfg!(windows) {"readOnly"} else {"full"},"modelInspection":cfg!(unix),"conversationDelete":cfg!(unix),"fullAccess":cfg!(unix),"pageContext":cfg!(unix),"conversationOptions":cfg!(unix),"imageAttachments":cfg!(unix),"skillLibrary":cfg!(unix),"schedules":cfg!(unix),"chatAgents":chat_agents})
-}
-
-fn operation_allowed(operation: &str, read_only: bool) -> bool {
-    !read_only || ["discover", "configRead"].contains(&operation)
+    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"skillLibrary":true,"schedules":true,"chatAgents":CHAT_AGENTS})
 }
 
 pub fn handle_for_profile(
@@ -568,9 +562,6 @@ pub fn handle_for_profile(
     params: &Value,
     profile: Option<&str>,
 ) -> Result<Value, String> {
-    if !operation_allowed(operation, cfg!(windows)) {
-        return Err(format!("Unsupported agent-panel operation {operation} in Windows read-only mode; browser CLI automation remains available"));
-    }
     match operation {
         "discover" => {
             if !params.is_object() || params.as_object().is_some_and(|p| !p.is_empty()) {
@@ -640,26 +631,22 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     #[test]
-    fn windows_read_only_mode_refuses_all_persistence_and_process_operations() {
-        assert!(operation_allowed("discover", true));
-        assert!(operation_allowed("configRead", true));
-        for operation in [
-            "configPlan",
-            "configApply",
-            "configRestore",
-            "agentInspect",
-            "conversationCreate",
-            "conversationList",
-            "conversationSend",
-            "serviceHealth",
-            "serviceStop",
-            "futureOperation",
+    fn all_platforms_advertise_the_complete_panel_contract() {
+        let c = capabilities();
+        assert_eq!(c["mode"], "full");
+        for feature in [
+            "modelInspection",
+            "conversationDelete",
+            "fullAccess",
+            "pageContext",
+            "conversationOptions",
+            "imageAttachments",
+            "skillLibrary",
+            "schedules",
         ] {
-            assert!(
-                !operation_allowed(operation, true),
-                "{operation} bypassed the read-only gate"
-            );
+            assert_eq!(c[feature], true, "{feature} unavailable");
         }
+        assert_eq!(c["chatAgents"], json!(CHAT_AGENTS));
     }
 
     fn context(home: &TempDir) -> DiscoveryContext {
