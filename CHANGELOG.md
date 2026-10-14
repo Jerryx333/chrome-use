@@ -1,8 +1,30 @@
 # Changelog
 
-## 1.5.213
+## 1.5.214
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.57 for page-to-session matching (0.5.56 was never published; 0.5.57 includes it). Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Inspect & Ask finds the right project and session.** The first pick on a site (or a path of it) shows one card naming the session, its folder, the project and the evidence; **Hand over** makes it the default, **Only this tab** holds it for one tab. Only local evidence preselects: a committed `.chrome-use/inspect.json` naming the site's domains (single-label `*.` wildcards, per-path `pathScope`, shared `sourceRoots`), or the local dev server's folder, with exactly one running session there. Test environments rank candidates by CI source paths and by how the deployed revision relates to each worktree. (#628)
+- **`chrome-use inspect link <url>`.** A session claims a site for itself (`unlink`, `list` too). When the site or an overlapping path belongs to another session, the claim waits for your Replace or Keep in the browser; until then requests keep going to the current target. (#628)
+
+### Safety
+
+- **What you see is where it goes.** Each send carries the page path and the target fingerprint the panel showed; a route change in a single-page app, an accepted claim, an unlink or a rebinding in between refuses the send instead of redirecting it. Sessions that ended or moved, a dev-server port now served from another folder, and different git worktrees never inherit a target. Copyable link commands quote the page URL for sh and PowerShell. Older extensions are refused on sites with path-specific targets rather than guessing. (#628)
+
+### Bug Fixes
+
+- **Side panel composer.** Stop and send stay together on the right and wrap as one group in narrow panels; the composer controls use one size. (#628)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.213
+
 Requires extension ab-connect 0.5.56 for Inspect & Ask. Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -17,7 +39,6 @@ Requires extension ab-connect 0.5.56 for Inspect & Ask. Chrome Web Store publica
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.212
 
