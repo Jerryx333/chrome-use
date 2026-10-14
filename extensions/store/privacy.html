@@ -66,6 +66,7 @@
   <tr><td class="key">alarms, idle</td><td>Keep the MV3 service worker alive during an active automation session and detect idle state so idle sessions can be cleaned up.</td></tr>
   <tr><td class="key">webNavigation</td><td>Detect when a driven tab finishes navigating so automation can wait for the right moment before reading or acting.</td></tr>
   <tr><td class="key">notifications</td><td>Surface local status/error notices (e.g. connection lost) to the user. No data leaves the device.</td></tr>
+  <tr><td class="key">activeTab, scripting</td><td>Inspect &amp; Ask: only after the user presses its keyboard shortcut or the popup's "Inspect element" button, show an element picker in that tab, read the selected elements (text, sanitized HTML, styles, component names, source locations) and screenshot the visible tab for them. The result goes to the local native host only when the user presses Send, and from there through ocs to the agent session the user chose. Nothing is injected without that gesture and nothing stays in the page.</td></tr>
 </table>
 </div>
 

@@ -18,6 +18,7 @@ mod config_edit;
 mod config_transaction;
 mod configuration;
 mod conversation;
+mod inspect;
 mod inspection;
 mod options;
 mod schedules;
@@ -567,7 +568,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"skillLibrary":true,"schedules":true,"chatAgents":CHAT_AGENTS})
+    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"skillLibrary":true,"schedules":true,"inspect":true,"chatAgents":CHAT_AGENTS})
 }
 
 pub fn handle_for_profile(
@@ -623,6 +624,7 @@ pub fn handle_for_profile(
         | "agentSkillSave"
         | "serviceHealth"
         | "serviceStop" => service::call(operation, params, profile),
+        operation if inspect::OPERATIONS.contains(&operation) => inspect::handle(operation, params),
         _ => Err(format!("Unsupported agent panel operation: {operation}")),
     }
 }
@@ -656,6 +658,7 @@ mod tests {
             "imageAttachments",
             "skillLibrary",
             "schedules",
+            "inspect",
         ] {
             assert_eq!(c[feature], true, "{feature} unavailable");
         }

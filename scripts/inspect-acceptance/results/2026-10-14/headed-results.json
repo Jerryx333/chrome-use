@@ -1,0 +1,12 @@
+{
+  "startedAt": "2026-10-14T12:11:46.844Z",
+  "chrome": "Chrome/155.0.8059.39",
+  "commands": [
+    "_execute_action=",
+    "inspect-element=⌥⇧C"
+  ],
+  "pickerFromShortcut": true,
+  "screenshotViaActiveTab": true,
+  "frame": "Inspect & Ask\nlocal dev\n⏸\n✕\n1<OrderForm> button \"Save order\"\n/Users/leo/inspect-accept/react-app/src/OrderForm.jsx:6:5\nOpen in editor\n attach screenshot\nremove\nDeployed revision (page meta, unverified): fixture-rev-1\n→ react-main @ /Users/leo/inspect-accept/react-app change\nSend\nCopy\n+ Add element",
+  "ok": true
+}

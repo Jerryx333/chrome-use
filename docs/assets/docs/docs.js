@@ -119,6 +119,7 @@
       { slug: "testing",  ico: "🧷", zh: "测试与探索", en: "Testing & Dogfood", kw: "test dogfood qa expect 测试 探索" },
       { slug: "cloud",    ico: "☁️", zh: "云端浏览器", en: "Cloud Browsers", kw: "cloud bedrock agentcore vercel sandbox 云端" },
       { slug: "mcp",      ico: "🔌", zh: "MCP 服务器", en: "MCP Server", kw: "mcp model context protocol claude desktop stdio json-rpc n8n dify chatgpt connector" },
+      { slug: "inspect",  ico: "🎯", zh: "点选改代码", en: "Inspect & Ask", kw: "inspect ask click element source code-inspector react vue agent ocs 点选 改代码 元素 源码 前端 调试" },
     ]},
     { id: "compare", label: { zh: "对比", en: "Comparison" }, items: [
       { slug: "compare", ico: "⚖️", zh: "对比其他方案", en: "vs Other Tools", kw: "compare comparison ego-lite ego lite browser-use vs alternatives competitor 对比 竞品 比较" },

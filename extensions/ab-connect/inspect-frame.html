@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inspect &amp; Ask</title>
+  <link rel="stylesheet" href="inspect-frame.css">
+</head>
+<body>
+  <main id="app" aria-live="polite">
+    <header class="bar">
+      <strong>Inspect &amp; Ask</strong>
+      <span id="env" class="badge"></span>
+      <span class="grow"></span>
+      <button id="pause" class="icon" title="Pause animations (P)" aria-pressed="false">⏸</button>
+      <button id="close" class="icon" title="Close (Esc)">✕</button>
+    </header>
+    <section id="connecting" class="pad muted">Connecting…</section>
+    <section id="view" hidden></section>
+  </main>
+  <canvas id="drawCanvas" hidden></canvas>
+  <script type="module" src="inspect-frame.js"></script>
+</body>
+</html>

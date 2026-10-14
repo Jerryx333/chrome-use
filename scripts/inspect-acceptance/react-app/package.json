@@ -1,0 +1,4 @@
+{"name":"inspect-react-fixture","private":true,"type":"module",
+ "scripts":{"dev":"vite --port 5173 --strictPort","build":"vite build","build:test":"DEPLOY_ENV=test vite build --outDir dist-test"},
+ "dependencies":{"react":"18.3.1","react-dom":"18.3.1"},
+ "devDependencies":{"vite":"5.4.11","@vitejs/plugin-react":"4.3.4","code-inspector-plugin":"2.0.9"}}

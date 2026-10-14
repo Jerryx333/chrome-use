@@ -6437,6 +6437,11 @@ Setup:
                              Legacy read-only Windows hosts require a CLI upgrade.
                              Extension 0.5.48 adds guarded native user-tab grouping
                              for Thermo; session ownership rules remain unchanged.
+                             Inspect & Ask (shortcut Alt+Shift+C, off by default):
+                             pick page elements and send a request with source
+                             file:line and screenshots through ocs to the agent
+                             session bound to that site; never replayed. Context:
+                             ~/.chrome-use/inspect. Docs: chrome-use.leeguoo.com/en/inspect.html
   extension uninstall        Remove the native-messaging host (+ tells you how to drop
                              the policy profile and leave managed mode)
   extension call <ns.method> [json-args]

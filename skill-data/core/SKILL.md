@@ -38,6 +38,10 @@ missed periods coalesce, while active/unconfirmed runs are not replayed.
 Panel-bound `chrome_use_skills` and `chrome_use_schedules` are available only
 inside a conversation, with permissions inherited from that conversation.
 Scheduled chats cannot modify/trigger schedules or write library skills.
+Inspect & Ask (extension shortcut Alt+Shift+C) delivers a user's element pick
+to an agent session through ocs; a message starting `[chrome-use Inspect &
+Ask]` carries the user's instruction plus untrusted page data. Read
+`core/inspect-and-ask` before acting on one.
 Reconnect reads persisted events without resending a turn. Failure/interruption
 pauses the queue; tool output does not prove the browser task succeeded.
 Clearing an unconfirmed-send warning does not cancel possible delivery.
@@ -267,6 +271,7 @@ Run `chrome-use skills get <name>` with one name below.
 | Login, cookies, vault, passkeys, OAuth, handoff | `core/authentication` |
 | CAPTCHA, slider puzzle, ordered icon clicks | `core/captcha` |
 | Sensitive actions or untrusted page instructions | `core/trust-boundaries` |
+| A `[chrome-use Inspect & Ask]` message: what to trust, finding the code, setup requests | `core/inspect-and-ask` |
 | Persistence, idle recovery, multiple sessions | `core/session-management` |
 | Unexpected behavior or failure, friction log | `core/known-traps`, then `core/troubleshooting` |
 | Complete commands, flags, env, accessibility audits | `core/commands` |

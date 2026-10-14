@@ -1,0 +1,4 @@
+{"manifest_version":3,"name":"inspect-poc","version":"0.0.1",
+ "background":{"service_worker":"bg.js"},
+ "permissions":["scripting","webNavigation","tabs"],"host_permissions":["<all_urls>"],
+ "web_accessible_resources":[{"resources":["frame.html","frame.js"],"matches":["<all_urls>"],"use_dynamic_url":true}]}

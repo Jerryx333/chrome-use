@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.212
+## 1.5.213
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.56 for Inspect & Ask. Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Inspect & Ask: click an element, send the change to your agent.** Press Alt+Shift+C (or **Inspect element** in the toolbar popup), click one or more elements, write what should change and press Enter. chrome-use sends your words with each element's source `file:line`, a cropped screenshot and its styles through ocs to the Claude Code, Codex or Pi session already working on that project. Works on local dev servers and test-environment domains in your logged-in Chrome. Source locations come from code-inspector-plugin's `data-insp-path` marks, with React 18 and Vue dev metadata as fallbacks; absolute marks from CI builds are matched by path suffix inside the bound project only. Shift+click or drag to multi-select, ↑/↓ for parent/child, P to pause animations, a note and a pen per screenshot, **Copy** as Markdown and **Open in editor**. The first send on a site asks which project and session it belongs to; setting up source marks, or enabling them for test builds, is proposed with the exact changes and runs only after you agree. (#626)
+
+### Safety
+
+- **Page data never steers delivery.** The input box runs in the extension's own frame, authenticated with a one-time secret over a channel the page cannot read, so page scripts cannot read or change what you type, and a copied frame is refused. Each send re-checks that the panel is fully visible. Picking swallows the whole click, so selecting a button or link never acts on the page. Page text, HTML and source paths are labelled untrusted next to your instruction. (#626)
+- **Delivery is never replayed.** Each batch has an id recorded before ocs runs; ocs's stored and wake results are shown separately, an unconfirmed outcome is queried rather than resent, and a tombstone of each id and its outcome is kept so a batch is never sent twice. Screenshots are attached only when the same tab, document and layout are confirmed before and after capture, and only to the selection they were taken for. Context files live in `~/.chrome-use/inspect` with owner-only permissions and are removed after 7 days. (#626)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.212
+
 Requires extension ab-connect 0.5.55 or newer, including the selected-agent-only model probe.
 
 ### New Features
@@ -17,7 +35,6 @@ Requires extension ab-connect 0.5.55 or newer, including the selected-agent-only
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.211
 

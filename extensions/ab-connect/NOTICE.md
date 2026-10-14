@@ -9,3 +9,5 @@ transport is rewritten from a localhost WebSocket + shared token to Chrome
 **native messaging** (host `com.agent_browser.connect`) — no port, no token,
 Chrome authenticates the extension to the host by id. WebSocket/token/options
 code removed.
+
+Parts of Inspect & Ask are adapted from **Orca** (stablyai/orca, MIT); see `THIRD_PARTY_NOTICES.md`.

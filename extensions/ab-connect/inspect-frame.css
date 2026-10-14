@@ -1,0 +1,53 @@
+:root {
+  --bg: #ffffff; --fg: #111827; --muted: #6b7280; --line: #e5e7eb; --soft: #f3f4f6;
+  --accent: #2563eb; --accent-fg: #ffffff; --ok: #15803d; --warn: #b45309; --bad: #b91c1c;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111827; --fg: #f3f4f6; --muted: #9ca3af; --line: #374151; --soft: #1f2937; --accent: #60a5fa; --accent-fg: #0b1220; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: transparent; }
+body { font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); }
+#app { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.grow { flex: 1; }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 9px; background: var(--soft); color: var(--muted); }
+.badge.test { color: var(--warn); }
+.pad { padding: 10px 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
+button { font: inherit; color: inherit; background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
+button.icon { padding: 2px 7px; background: transparent; border-color: transparent; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; }
+textarea, input[type=text] { width: 100%; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; resize: vertical; }
+textarea:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.cards { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow: auto; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: grid; grid-template-columns: 64px 1fr; gap: 8px; }
+.card .thumb { width: 64px; height: 48px; object-fit: contain; background: var(--soft); border-radius: 4px; cursor: crosshair; }
+.card .nothumb { width: 64px; height: 48px; display: grid; place-items: center; background: var(--soft); border-radius: 4px; color: var(--muted); font-size: 10px; text-align: center; }
+.card .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card input[type=text] { padding: 3px 6px; font-size: 12px; }
+.num { display: inline-block; min-width: 18px; text-align: center; background: var(--ok); color: #fff; border-radius: 9px; font-size: 11px; font-weight: 700; margin-right: 4px; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.target { font-size: 12px; color: var(--muted); }
+.notice { border-radius: 8px; padding: 8px 10px; background: var(--soft); border: 1px solid var(--line); }
+.notice.ok { border-color: var(--ok); }
+.notice.warn { border-color: var(--warn); }
+.notice.bad { border-color: var(--bad); }
+.check { display: flex; gap: 6px; align-items: baseline; }
+.check .mark { width: 14px; text-align: center; }
+ol.steps { margin: 6px 0; padding-left: 18px; }
+pre.cmd { margin: 4px 0; padding: 6px 8px; background: var(--soft); border-radius: 6px; white-space: pre-wrap; word-break: break-all; font: 12px ui-monospace, Menlo, monospace; }
+.list { display: flex; flex-direction: column; gap: 4px; max-height: 150px; overflow: auto; }
+.list label { display: flex; gap: 6px; align-items: flex-start; padding: 4px; border-radius: 6px; cursor: pointer; }
+.list label:hover { background: var(--soft); }
+.stack > * + * { margin-top: 8px; }
+#drawLayer { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 5; }
+#drawLayer .surface { background: var(--bg); padding: 8px; border-radius: 8px; max-width: 96vw; }
+#drawLayer canvas { max-width: 92vw; max-height: 70vh; cursor: crosshair; touch-action: none; display: block; }

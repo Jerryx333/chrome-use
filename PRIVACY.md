@@ -66,6 +66,25 @@ folder. Codex's SQLite cache is not modified. Cleanup failures or unconfirmed
 tab closure are reported. The panel does not ask you for an agent API key. Login and credential setup
 remain with the chosen CLI; discovery does not return credential values.
 
+## Inspect & Ask
+
+Inspect & Ask is off until you enable it. When you press its shortcut or the
+popup button, the extension shows an element picker in that tab. When you
+select elements it reads their text, sanitized HTML, styles, component names
+and source locations, and takes a screenshot of the visible tab for them. When
+you press Send, the native host writes this to
+`~/.chrome-use/inspect/ctx/<id>/` (readable only by your user account, removed
+after 7 days) and hands a summary to the agent session you chose through ocs on
+this computer. That agent's CLI may then send it to its configured model
+service. Copy puts the same content on your clipboard instead. Site-to-project
+bindings and consents are stored in `~/.chrome-use/inspect/bindings.json`.
+After 7 days each delivery record is reduced to a tombstone holding only the
+batch id and its outcome (no page content, origin or session), kept
+permanently so the same batch is never sent twice. The extension keeps drafts
+of your own words (instruction and per-element notes) in Chrome storage and
+deletes them 7 days after the last edit; for a batch whose outcome is
+unconfirmed it keeps only the batch id and state until you check it.
+
 ## What it keeps on your computer
 
 chrome-use does not collect a general browsing history. Task-related page
@@ -74,6 +93,9 @@ content can be retained in the local panel journal. Under `~/.chrome-use` it sto
 - profile-scoped panel messages, replies, tool results and conversation workspaces;
 - small session bookkeeping files (which tabs a session opened; no page
   content);
+- Inspect & Ask bindings, per-request context folders (removed after 7 days)
+  and delivery tombstones (batch id and outcome only, kept so an id is never
+  sent twice);
 - installed site adapters and, if downloaded, Chrome for Testing;
 - logins you choose to save with `auth save`, encrypted (AES-256-GCM) with a key
   kept on your computer;

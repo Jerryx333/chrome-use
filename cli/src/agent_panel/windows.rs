@@ -49,12 +49,23 @@ impl ProcessJob {
     }
 
     pub fn new() -> Result<Self, String> {
+        Self::create(true)
+    }
+    /// A job that ends its tree only through `terminate`. Closing it leaves
+    /// any process the child started running, as a Unix process group does.
+    pub fn new_terminate_only() -> Result<Self, String> {
+        Self::create(false)
+    }
+    fn create(kill_on_close: bool) -> Result<Self, String> {
         unsafe {
             let handle = CreateJobObjectW(ptr::null(), ptr::null());
             if handle == 0 {
                 return Err(failure("Cannot create an owned agent job"));
             }
             let job = Self(Handle(handle));
+            if !kill_on_close {
+                return Ok(job);
+            }
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             if SetInformationJobObject(
@@ -79,6 +90,14 @@ impl ProcessJob {
             .raw_handle()
             .ok_or("Agent process handle is unavailable")? as HANDLE;
         let pid = child.id().ok_or("Agent process identity is unavailable")?;
+        self.attach_process(handle, pid)
+    }
+    /// The same for a child started with `std::process` (after `prepare`).
+    pub fn attach_std(&self, child: &std::process::Child) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        self.attach_process(child.as_raw_handle() as HANDLE, child.id())
+    }
+    fn attach_process(&self, handle: HANDLE, pid: u32) -> Result<(), String> {
         unsafe {
             if AssignProcessToJobObject(self.0 .0, handle) == 0 {
                 return Err(failure("Cannot own the agent process tree"));
@@ -210,7 +229,28 @@ pub(super) fn open_options(options: &mut std::fs::OpenOptions, private: bool) {
 }
 /// Set a protected owner-only DACL through the open handle, never a path alias.
 /// SYSTEM is retained for OS maintenance, equivalent to privileged Unix access.
+/// Protect through the handle, then read the ACL back. When two requests
+/// create a private store at once, the readback can report NOT_PROTECTED
+/// (protected flag missing, no DACL, or control flags unreadable). The
+/// suspected cause, not confirmed on Windows, is that protecting a directory
+/// re-propagates its inheritable entries onto children a concurrent request
+/// has just protected. Only NOT_PROTECTED is retried, a bounded number of
+/// times, and the call still fails closed if it persists; a foreign owner, a
+/// non-file handle or any unexpected ACL entry fails at once.
 pub(super) fn protect(file: &File) -> Result<(), String> {
+    let mut attempt = 0;
+    loop {
+        match protect_once(file) {
+            Err(error) if error == NOT_PROTECTED && attempt < 5 => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(10 * attempt));
+            }
+            result => return result,
+        }
+    }
+}
+const NOT_PROTECTED: &str = "Windows private ACL is not protected";
+fn protect_once(file: &File) -> Result<(), String> {
     info(file)?;
     let user = token_sid(TokenUser)?;
     let default_owner = token_sid(TokenOwner)?;
@@ -450,7 +490,7 @@ pub(super) fn verify_private(file: &File) -> Result<(), String> {
             || control & SE_DACL_PROTECTED == 0
             || dacl.is_null()
         {
-            return Err("Windows private ACL is not protected".into());
+            return Err(NOT_PROTECTED.into());
         }
         let mut details: ACL_SIZE_INFORMATION = std::mem::zeroed();
         if GetAclInformation(
