@@ -10,6 +10,11 @@ on:
       - 'cli/**'
       - '.github/workflows/windows-panel.yml'
   workflow_dispatch:
+    inputs:
+      published_tag:
+        description: 'Verify the published Windows binary (e.g. v1.5.212)'
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -34,6 +39,28 @@ jobs:
           cache-on-failure: true
       - name: Windows private-state and process-tree tests
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --bin chrome-use agent_panel -- --test-threads=1
+      - name: Download and verify the published Windows binary
+        if: github.event_name == 'workflow_dispatch' && inputs.published_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PANEL_RELEASE_TAG: ${{ inputs.published_tag }}
+        shell: pwsh
+        run: |
+          if ($env:PANEL_RELEASE_TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Invalid release tag' }
+          $fixtureBin = Join-Path $env:RUNNER_TEMP 'panel-published-binary'
+          New-Item -ItemType Directory -Path $fixtureBin -Force | Out-Null
+          gh release download $env:PANEL_RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $fixtureBin --pattern 'chrome-use-win32-x64.tar.gz' --pattern 'chrome-use-win32-x64.tar.gz.sha256'
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
+          $archive = Join-Path $fixtureBin 'chrome-use-win32-x64.tar.gz'
+          $expected = ((Get-Content "$archive.sha256").Trim() -split '\s+')[0]
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.ToLowerInvariant()) { throw 'Published archive checksum mismatch' }
+          tar -xzf $archive -C $fixtureBin
+          if ($LASTEXITCODE -ne 0) { throw 'Release extraction failed' }
+          $binary = Join-Path $fixtureBin 'chrome-use.exe'
+          $env:CHROME_USE_NO_UPDATE_CHECK = '1'
+          $version = & $binary --version
+          if ($LASTEXITCODE -ne 0 -or ($version -join "`n") -notmatch ([regex]::Escape($env:PANEL_RELEASE_TAG.Substring(1)))) { throw 'Published binary version mismatch' }
+          "CHROME_USE_TEST_BIN=$binary" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Full native-host protocol parity
         run: cargo test --profile ci --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --test agent_panel_native -- --test-threads=1
       - name: Check Windows code and protocol tests

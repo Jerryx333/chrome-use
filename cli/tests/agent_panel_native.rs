@@ -10,6 +10,12 @@ use std::time::Duration;
 
 /// Use the installed interpreter through a CRLF batch shim on Windows.
 /// Spaces in the shim path exercise the real installed-CLI launch path.
+fn test_binary() -> std::path::PathBuf {
+    std::env::var_os("CHROME_USE_TEST_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_chrome-use").into())
+}
+
 fn fixture_program(root: &std::path::Path) -> std::path::PathBuf {
     let script =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
@@ -131,7 +137,7 @@ fn configuration_preview_apply_and_restore_use_only_isolated_fixture_settings() 
     let original = br#"{"model":"old","env":{"ANTHROPIC_MODEL":"pinned","ANTHROPIC_AUTH_TOKEN":"synthetic-token"},"theme":"light"}"#;
     std::fs::write(&settings, original).unwrap();
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CLAUDE_CONFIG_DIR", &agent_dir)
@@ -336,7 +342,7 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
     };
     let spawn = || {
         Host(
-            Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+            Command::new(test_binary())
                 .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
                 .env("CHROME_USE_RELAY_DIR", registry.path())
                 .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -925,7 +931,7 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
 fn discovery_and_errors_are_correlated_without_entering_browser_dispatch() {
     let registry = tempfile::tempdir().unwrap();
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1086,7 +1092,7 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
         }
     });
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1134,7 +1140,7 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1278,7 +1284,7 @@ fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1413,7 +1419,7 @@ fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1641,7 +1647,7 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1777,7 +1783,7 @@ fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
         chats: vec![],
     };
     let mut host = Host(
-        Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+        Command::new(test_binary())
             .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
             .env("CHROME_USE_RELAY_DIR", registry.path())
             .env("CHROME_USE_NO_UPDATE_CHECK", "1")
@@ -1836,7 +1842,7 @@ fn panel_rich_messages_options_and_schedules_reach_the_real_native_service() {
     let proof = registry.path().join("protocol.jsonl");
     let spawn = || {
         Host(
-            Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+            Command::new(test_binary())
                 .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
                 .env("CHROME_USE_RELAY_DIR", registry.path())
                 .env("CHROME_USE_NO_UPDATE_CHECK", "1")
