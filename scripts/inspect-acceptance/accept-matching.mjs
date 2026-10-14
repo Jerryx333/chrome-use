@@ -88,11 +88,14 @@ async function scenario(name, fn) {
 let enabled = false;
 let lastCtx = null;
 // Open a page, start the picker as the shortcut would, pick, return the frame.
-async function pickOn(url, selector) {
-  const page = await A.openPage(url);
-  opened.push(page);
+async function pickOn(url, selector, existing) {
+  const page = existing || await A.openPage(url);
+  if (!existing) opened.push(page);
   await b.send('Page.bringToFront', {}, page.sid);
-  const tabId = await waitFor(() => A.evaluate(sw.sid, `chrome.tabs.query({}).then(ts => ts.find(t => t.url === ${JSON.stringify(url)} && t.status === 'complete')?.id)`), { label: 'tab ' + url });
+  // Identify the tab by a marker in this page, not by URL (tabs can share one).
+  const marker = 'm' + Math.random().toString(36).slice(2);
+  await A.evaluate(page.sid, `document.title = ${JSON.stringify(marker)}; 1`);
+  const tabId = await waitFor(() => A.evaluate(sw.sid, `chrome.tabs.query({}).then(ts => ts.find(t => t.title === ${JSON.stringify(marker)})?.id)`), { label: 'tab ' + url });
   const started = await A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.startInspect(${tabId}).then(r => JSON.stringify(r), e => 'ERR ' + e.message)`);
   assert.equal(started, '{"started":true}', started);
   await waitFor(() => A.evaluate(sw.sid, `chrome.tabs.query({ active: true }).then(ts => ts.some(t => t.id === ${tabId}))`), { label: 'active' }).catch(() => {});
@@ -302,8 +305,8 @@ await scenario('m11-tab-only-target', async () => {
   const tabB = await pickOn('http://test.inspect.example/?tabB', '.save-button');
   assert.equal((await send(tabB, 'tab B')).target, 'claude-aaaa1111', 'other tabs keep the site default');
   await b.send('Page.reload', {}, tabA.page.sid);
-  await sleep(1500);
-  const tabA2 = await pickOn('http://test.inspect.example/?tabA', '.save-button');
+  await waitFor(() => A.evaluate(tabA.page.sid, 'document.readyState === "complete"'), { label: 'reloaded' });
+  const tabA2 = await pickOn('http://test.inspect.example/?tabA', '.save-button', tabA.page);
   assert.equal((await send(tabA2, 'after reload')).target, 'claude-aaaa1111', 'reload ends the tab override');
   return { ok: true };
 });
