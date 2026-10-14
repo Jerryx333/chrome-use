@@ -280,11 +280,12 @@ fn run(program: &Path, args: &[&OsStr], timeout: Duration) -> Result<Run, String
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    // Windows has no process groups: the child starts suspended inside a
-    // kill-on-close job, so a timeout (or dropping the job) ends everything
-    // it started, as the process-group kill does on Unix.
+    // Windows has no process groups: the child starts suspended inside a job
+    // that is terminated only on timeout. A normal exit leaves anything it
+    // started running (ocs may wake Codex or Pi through a detached helper),
+    // as on Unix.
     #[cfg(windows)]
-    let job = super::windows::ProcessJob::new()?;
+    let job = super::windows::ProcessJob::new_terminate_only()?;
     #[cfg(windows)]
     super::windows::ProcessJob::prepare(&mut command);
     let name = program

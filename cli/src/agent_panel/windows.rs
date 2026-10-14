@@ -49,12 +49,23 @@ impl ProcessJob {
     }
 
     pub fn new() -> Result<Self, String> {
+        Self::create(true)
+    }
+    /// A job that ends its tree only through `terminate`. Closing it leaves
+    /// any process the child started running, as a Unix process group does.
+    pub fn new_terminate_only() -> Result<Self, String> {
+        Self::create(false)
+    }
+    fn create(kill_on_close: bool) -> Result<Self, String> {
         unsafe {
             let handle = CreateJobObjectW(ptr::null(), ptr::null());
             if handle == 0 {
                 return Err(failure("Cannot create an owned agent job"));
             }
             let job = Self(Handle(handle));
+            if !kill_on_close {
+                return Ok(job);
+            }
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
             if SetInformationJobObject(
