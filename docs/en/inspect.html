@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Inspect &amp; Ask · chrome-use docs</title>
+  <meta name="description" content="Click an element on a page, write one line about what should change, and hand it with its source location and a screenshot to the Claude Code, Codex or Pi session working on that project." />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use docs" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/en/inspect.html" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/inspect.html" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/inspect.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/inspect.html" />
+</head>
+
+<body data-page="inspect" data-lang="en">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main"><nav aria-label="Documentation"><a href="/en/">chrome-use</a> · <a href="/en/install.html">Install</a> · <a href="/en/logged-in-browser.html">Logged-in browser guide</a> · <a href="/en/mcp.html">MCP</a> · <a href="/en/compare.html">Compare</a></nav>
+
+      <p class="du-eyebrow">Specialized / Front-end debugging</p>
+
+      <div class="du-title-row">
+        <h1>Inspect &amp; Ask</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        Press <code>Alt+Shift+C</code>, click an element, write what should change, and press Enter.
+        chrome-use sends your words, the element's <span class="mark">source file and line</span>, a screenshot
+        and its styles through <code>ocs</code> to the Claude Code, Codex or Pi session already working on that
+        project, and that agent edits the code. It works on local dev servers and on test-environment domains,
+        in the Chrome you are already logged in to.
+      </p>
+
+      <h2 id="start">Getting started</h2>
+      <ol>
+        <li>Install chrome-use and the extension (extension 0.5.56 or later, CLI 1.5.213 or later).</li>
+        <li>Install <a href="https://github.com/leeguooooo/open-cross-session">ocs</a> and keep a Claude Code, Codex or Pi session open in the project folder. Without ocs the panel shows the install command and keeps your draft.</li>
+        <li>Press <code>Alt+Shift+C</code> on the page, or click <strong>Inspect element</strong> in the toolbar popup. The first time it asks you to enable the feature. Change the shortcut at <code>chrome://extensions/shortcuts</code>.</li>
+        <li>Click an element. <kbd>Shift</kbd>+click or drag a box to select several (up to 8); <kbd>↑</kbd>/<kbd>↓</kbd> move to the parent or child; <kbd>P</kbd> pauses page animations so moving things are easy to hit; <kbd>Esc</kbd> exits.</li>
+        <li>Write the change in the panel. Each element can carry its own note, and you can draw on its screenshot. <kbd>Enter</kbd> or <strong>Send</strong> sends; <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line.</li>
+      </ol>
+      <p>
+        The first send on a site asks two things: which project folder the site belongs to, and which session gets the request.
+        Candidates come from the local dev server's process folder, the working folders of ocs sessions, and which projects actually contain the source files the page names.
+        The choice is remembered per site. Review or remove bindings in the Inspect &amp; Ask card of the extension options.
+      </p>
+
+      <h2 id="setup">Source locations: add code-inspector-plugin</h2>
+      <p>
+        To show <code>file:line</code>, the project marks its DOM at build time. chrome-use reads the
+        <code>data-insp-path</code> attribute that <a href="https://github.com/zh-lx/code-inspector">code-inspector-plugin</a>
+        adds; it supports Vite, webpack, Rspack, esbuild and Turbopack, with React, Vue, Svelte and more. When a page has no marks,
+        the panel lists the exact changes and asks whether your agent should make them. Or add it yourself:
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">vite</span>
+        </div>
+<pre><code><span class="du-cmt">// vite.config.ts</span>
+import { codeInspectorPlugin } from 'code-inspector-plugin';
+
+export default defineConfig({
+  plugins: [
+    codeInspectorPlugin({ bundler: 'vite', pathType: 'relative' }),
+    // ...your other plugins
+  ],
+});</code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">webpack</span>
+        </div>
+<pre><code><span class="du-cmt">// webpack.config.js / vue.config.js (configureWebpack)</span>
+const { codeInspectorPlugin } = require('code-inspector-plugin');
+
+module.exports = {
+  plugins: [codeInspectorPlugin({ bundler: 'webpack', pathType: 'relative' })],
+};</code></pre>
+      </div>
+      <p>
+        Without the plugin it still works: React 18 and earlier dev builds expose a component's source location, and Vue dev
+        builds expose the component file. When neither is there, the message says "no source location" and carries the selector
+        and text so the agent can search. React 19 removed per-component source locations, so React 19 projects should add the plugin.
+      </p>
+      <p>
+        In our tests, code-inspector-plugin 2.0.9 builds carry absolute paths in the marks (on a test environment, paths from the CI machine).
+        chrome-use matches them by path suffix inside the project folder you bound, labels such matches "matched by path suffix", marks the rest
+        unverified, and never searches outside that folder.
+      </p>
+
+      <h2 id="test-env">Test environments</h2>
+      <p>
+        Test-environment pages work too, as long as the test build keeps the marks. The plugin only runs in development by
+        default, so turn it on explicitly for test builds. <strong>Never for production</strong>: with marks on, anyone who can open
+        the test environment can read source file paths in the page.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">vite</span>
+        </div>
+<pre><code><span class="du-cmt">// Test builds only, never production. DEPLOY_ENV is whatever your CI sets.</span>
+const isTestBuild = process.env.DEPLOY_ENV === 'test';
+
+codeInspectorPlugin({
+  bundler: 'vite',
+  pathType: 'relative',
+  dev: () => process.env.NODE_ENV === 'development' || isTestBuild,
+  server: isTestBuild ? 'close' : 'open',
+});
+
+<span class="du-cmt">// index.html of the test build: lets the agent compare revisions</span>
+&lt;meta name="chrome-use-revision" content="%GIT_SHA%"&gt;</code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># a production build must contain no source marks</span>
+<span class="du-prompt">$</span> grep -rl "data-insp-path" dist/ &amp;&amp; echo "FOUND: do not ship" || echo "clean"</code></pre>
+      </div>
+      <p>
+        A test environment may run older code than your local branch. When the page carries <code>chrome-use-revision</code>,
+        the message includes it and tells the agent to check local files and treat line numbers as approximate. The revision comes
+        from the page too, so it is only a hint, never an authorization.
+      </p>
+
+      <h2 id="delivery">Sending and status</h2>
+      <p>The panel reports what ocs actually returned, with storage and wake kept apart:</p>
+      <table>
+        <thead><tr><th>State</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td>Sent</td><td>ocs stored it and woke the session. The request is in the agent's queue; the code is not changed yet.</td></tr>
+          <tr><td>Stored</td><td>Stored, but the session was not woken (busy or refused). The agent sees it when it next reads its inbox. Do not resend.</td></tr>
+          <tr><td>Unknown / Unconfirmed</td><td>ocs may have stored it but the receipt was lost. Never resent automatically; press <strong>Check status</strong>, and start a new batch only once it is known not to have gone out.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        The full context (each element's HTML, styles and screenshot) is written to <code>~/.chrome-use/inspect/ctx/&lt;id&gt;/</code>,
+        readable only by you and removed after 7 days; the ocs message carries a summary and that path. Without ocs, or when you do
+        not want to deliver, <strong>Copy</strong> puts the same content on the clipboard as Markdown, and <strong>Open in editor</strong>
+        opens the file at the line in VS Code, Cursor, Windsurf or WebStorm.
+      </p>
+
+      <h2 id="safety">Safety boundaries</h2>
+      <ul>
+        <li>The page is touched only when you press the shortcut or the button. Nothing stays in pages, and no "started debugging this browser" bar appears.</li>
+        <li>Page text, HTML, component names and source paths are <strong>untrusted data</strong>, labelled apart from your words, and they never choose the project or the session.</li>
+        <li>The input box runs in the extension's own frame, so page scripts cannot read or change what you type. The frame proves itself with a one-time secret; a copy made by the page never gets it.</li>
+        <li>Every send re-checks that the panel is fully visible; a covered, faded or moved panel does not send. This lowers the risk of UI deception without guaranteeing against it.</li>
+        <li>Screenshots are attached only when the page is the visible tab and nothing changed during capture; otherwise they are dropped with a reason. Your tabs are never switched for you.</li>
+        <li>Delivery never raises the receiving session's permissions and never starts an agent for you.</li>
+      </ul>
+
+      <h2 id="compare">How it differs</h2>
+      <p>
+        code-inspector-plugin's AI mode, React Grab, Agentation, MCP Pointer and Cursor's Design Mode also hand a clicked element to AI.
+        Most are limited to a local dev server, or start their own agent process and deliver through the clipboard or a local MCP endpoint.
+        Inspect &amp; Ask works in your logged-in Chrome, on test environments too, and sends to the session you <strong>already run</strong>,
+        without a new process and without loosening permissions.
+      </p>
+
+      <h2 id="troubleshooting">Troubleshooting</h2>
+      <table>
+        <thead><tr><th>Symptom</th><th>Fix</th></tr></thead>
+        <tbody>
+          <tr><td>The shortcut does nothing</td><td>Check <code>chrome://extensions/shortcuts</code> for a conflict. <code>chrome://</code> pages and the Web Store cannot be inspected.</td></tr>
+          <tr><td>The panel says the native host is not connected</td><td>Run <code>chrome-use doctor</code>. Copy works without the host.</td></tr>
+          <tr><td>Elements show no source location</td><td>Add the plugin as above; test environments need the next deployment.</td></tr>
+          <tr><td>The panel says it is covered</td><td>Scroll until the panel is fully visible, or press the shortcut again.</td></tr>
+        </tbody>
+      </table>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

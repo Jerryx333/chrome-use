@@ -90,6 +90,18 @@ document.querySelectorAll('[data-href]').forEach((a) => {
   })
 })
 
+// Inspect & Ask: the popup click grants activeTab for the current tab, so the
+// background can inject the picker there. Errors stay visible in the popup.
+document.querySelectorAll('[data-action="inspect"]').forEach((button) => {
+  button.addEventListener('click', async () => {
+    if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return
+    const response = await chrome.runtime.sendMessage({ type: 'ab-inspect-start' }).catch((error) => ({ success: false, error: String(error.message || error) }))
+    if (response?.success) { window.close(); return }
+    const note = document.getElementById('inspectError')
+    if (note) { note.hidden = false; note.textContent = response?.error || 'Could not start Inspect & Ask on this page.' }
+  })
+})
+
 document.querySelectorAll('[data-action="options"]').forEach((button) => {
   button.addEventListener('click', () => {
     if (typeof chrome !== 'undefined') chrome.runtime?.openOptionsPage?.()

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>点选改代码（Inspect &amp; Ask） · chrome-use 文档</title>
+  <meta name="description" content="在页面上点选元素，写一句修改要求，连同源码位置和截图交给正在这个项目里工作的 Claude Code、Codex 或 Pi 会话。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/inspect.html" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/inspect.html" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/inspect.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/inspect.html" />
+</head>
+
+<body data-page="inspect" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar"></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main"><nav aria-label="文档"><a href="/">chrome-use</a> · <a href="/install.html">安装</a> · <a href="/logged-in-browser.html">已登录浏览器指南</a> · <a href="/mcp.html">MCP</a> · <a href="/compare.html">选型</a></nav>
+
+      <p class="du-eyebrow">专项能力 / 前端调试</p>
+
+      <div class="du-title-row">
+        <h1>点选改代码（Inspect &amp; Ask）</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        按快捷键 <code>Alt+Shift+C</code>，在页面上点一个元素，写一句“这里改成什么样”，
+        回车。chrome-use 会把这句话、元素的<span class="mark">源码文件和行号</span>、截图和样式，
+        通过 <code>ocs</code> 投给正在这个项目里干活的 Claude Code、Codex 或 Pi 会话，由它去改代码。
+        本地 dev server 和测试环境域名都能用，用的就是你已经登录的 Chrome。
+      </p>
+
+      <h2 id="start">开始使用</h2>
+      <ol>
+        <li>装好 chrome-use 和扩展（扩展 0.5.56 及以上、CLI 1.5.213 及以上）。</li>
+        <li>装 <a href="https://github.com/leeguooooo/open-cross-session">ocs</a>，并在项目目录里开着一个 Claude Code、Codex 或 Pi 会话。没装 ocs 时，面板会给出安装命令，草稿不会丢。</li>
+        <li>在页面上按 <code>Alt+Shift+C</code>，或点工具栏图标里的 <strong>Inspect element</strong>。第一次使用会先问你是否启用。快捷键可以在 <code>chrome://extensions/shortcuts</code> 里改。</li>
+        <li>点元素。<kbd>Shift</kbd>+点击或拖一个框可以一次选多个（最多 8 个）；<kbd>↑</kbd>/<kbd>↓</kbd> 在父子元素之间切换；<kbd>P</kbd> 暂停页面动画，方便选中会动的东西；<kbd>Esc</kbd> 退出。</li>
+        <li>在弹出的面板里写修改要求，每个元素也可以单独写备注，或者在截图上画圈。按 <kbd>Enter</kbd> 或 <strong>Send</strong> 发送；<kbd>Shift</kbd>+<kbd>Enter</kbd> 换行。</li>
+      </ol>
+      <p>
+        第一次在某个站点发送时，面板会问两件事：这个站点对应哪个项目目录，交给哪个会话。
+        候选项目来自本地 dev server 的进程目录、ocs 里会话的工作目录，以及哪个项目里真的存在页面标注的源码文件。
+        选一次就记住，之后同一站点直接发送。绑定可以在扩展设置的 Inspect &amp; Ask 卡片里查看和解除。
+      </p>
+
+      <h2 id="setup">源码定位：接入 code-inspector-plugin</h2>
+      <p>
+        元素要显示 <code>文件:行号</code>，项目需要在构建时给 DOM 加上位置标记。chrome-use 读取
+        <a href="https://github.com/zh-lx/code-inspector">code-inspector-plugin</a> 注入的
+        <code>data-insp-path</code> 属性，支持 Vite、webpack、Rspack、esbuild、Turbopack，React、Vue、Svelte 等都可以。
+        面板发现页面没有标记时，会列出要改的地方，问你是否让你的 agent 来配置；也可以自己加：
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">vite</span>
+        </div>
+<pre><code><span class="du-cmt">// vite.config.ts</span>
+import { codeInspectorPlugin } from 'code-inspector-plugin';
+
+export default defineConfig({
+  plugins: [
+    codeInspectorPlugin({ bundler: 'vite', pathType: 'relative' }),
+    // ...your other plugins
+  ],
+});</code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">webpack</span>
+        </div>
+<pre><code><span class="du-cmt">// webpack.config.js / vue.config.js (configureWebpack)</span>
+const { codeInspectorPlugin } = require('code-inspector-plugin');
+
+module.exports = {
+  plugins: [codeInspectorPlugin({ bundler: 'webpack', pathType: 'relative' })],
+};</code></pre>
+      </div>
+      <p>
+        没有接插件时也能用：React 18 及以下的开发构建会读组件自带的源码位置，Vue 开发构建会读组件文件名；
+        都读不到时，消息会标明“没有源码位置”，带上选择器和文本，让 agent 自己搜。React 19 已经去掉了组件上的源码位置，所以 React 19 项目建议接插件。
+      </p>
+      <p>
+        实测 code-inspector-plugin 2.0.9 的构建产物里，标记是绝对路径（测试环境里就是 CI 机器上的路径）。chrome-use 只在你绑定的项目目录里按路径后缀找对应文件，找到的标为“按路径后缀匹配”，找不到的标为未核实，不会去项目目录以外查找。
+      </p>
+
+      <h2 id="test-env">测试环境</h2>
+      <p>
+        测试环境的页面也能点选，前提是测试构建里保留了位置标记。插件默认只在开发模式生效，
+        需要给测试构建显式打开。<strong>生产构建绝不能打开</strong>：开启后，能访问测试环境的人都能在页面里看到源码文件路径。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">vite</span>
+        </div>
+<pre><code><span class="du-cmt">// Test builds only, never production. DEPLOY_ENV is whatever your CI sets.</span>
+const isTestBuild = process.env.DEPLOY_ENV === 'test';
+
+codeInspectorPlugin({
+  bundler: 'vite',
+  pathType: 'relative',
+  dev: () => process.env.NODE_ENV === 'development' || isTestBuild,
+  server: isTestBuild ? 'close' : 'open',
+});
+
+<span class="du-cmt">// index.html of the test build: lets the agent compare revisions</span>
+&lt;meta name="chrome-use-revision" content="%GIT_SHA%"&gt;</code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># a production build must contain no source marks</span>
+<span class="du-prompt">$</span> grep -rl "data-insp-path" dist/ &amp;&amp; echo "FOUND: do not ship" || echo "clean"</code></pre>
+      </div>
+      <p>
+        测试环境跑的代码可能比你本地分支旧。页面带了 <code>chrome-use-revision</code> 时，消息会附上这个版本号，
+        并提醒 agent 先核对本地文件，行号只当参考。这个版本号也来自页面，只用来提示，不作为任何授权依据。
+      </p>
+
+      <h2 id="delivery">发送和状态</h2>
+      <p>
+        面板只显示 ocs 真实返回的结果，存储和唤醒分开说：
+      </p>
+      <table>
+        <thead><tr><th>状态</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td>Sent</td><td>ocs 已存储并唤醒了会话。只代表消息到了 agent 的队列，不代表代码已经改好。</td></tr>
+          <tr><td>Stored</td><td>已存储，但会话没被唤醒（例如忙碌或拒绝）。agent 下次读收件箱时会看到，不要重发。</td></tr>
+          <tr><td>Unknown / Unconfirmed</td><td>ocs 可能已经存储，但回执丢了。不会自动重发；点 <strong>Check status</strong> 查询，确认没送出再开新批次。</td></tr>
+        </tbody>
+      </table>
+      <p>
+        完整内容（每个元素的 HTML、样式、截图）写在本机 <code>~/.chrome-use/inspect/ctx/&lt;id&gt;/</code>，只有你自己能读，7 天后清理；
+        ocs 消息里只放摘要和这个文件的路径。没有 ocs 或不想投递时，<strong>Copy</strong> 会把同样的内容复制成 Markdown；
+        <strong>Open in editor</strong> 会用 VS Code、Cursor、Windsurf 或 WebStorm 打开对应文件和行。
+      </p>
+
+      <h2 id="safety">安全边界</h2>
+      <ul>
+        <li>只在你按快捷键或点按钮时注入页面，不常驻任何页面，也不会弹出“正在调试此浏览器”的提示条。</li>
+        <li>页面里的文本、HTML、组件名、源码路径都当作<strong>不可信数据</strong>，在消息里和你写的要求分开标注；它们不能决定投给哪个项目、哪个会话。</li>
+        <li>输入框运行在扩展自己的 iframe 里，页面脚本读不到也改不了你写的内容。它凭一次性密钥向扩展证明身份，页面复制出来的输入框拿不到这个密钥。</li>
+        <li>每次发送前重新检查输入框是否完整可见；被遮挡、半透明或被挪动时不会发送。这只能降低界面欺骗的风险，无法保证完全防住。</li>
+        <li>截图只在页面就是当前可见标签、发送前后页面没变时才附上；否则丢弃截图并说明原因，不会替你切换标签。</li>
+        <li>投递不会提高接收会话原有的权限，也不会替你启动 agent。</li>
+      </ul>
+
+      <h2 id="compare">和同类工具的区别</h2>
+      <p>
+        code-inspector-plugin 的 AI 模式、React Grab、Agentation、MCP Pointer、Cursor 的 Design Mode 都能“点元素交给 AI”。
+        它们大多只支持本地 dev server，或者另起一个 agent 进程、经剪贴板或本地 MCP 交付。
+        Inspect &amp; Ask 用的是你已登录的 Chrome，测试环境也能用；它把请求投给你<strong>已经在跑</strong>的那个会话，不另开进程，也不放宽权限。
+      </p>
+
+      <h2 id="troubleshooting">故障排查</h2>
+      <table>
+        <thead><tr><th>现象</th><th>处理</th></tr></thead>
+        <tbody>
+          <tr><td>按快捷键没反应</td><td>在 <code>chrome://extensions/shortcuts</code> 确认快捷键没被别的扩展占用；<code>chrome://</code> 页面和扩展商店页面无法点选。</td></tr>
+          <tr><td>面板提示 native host 未连接</td><td>运行 <code>chrome-use doctor</code>；Copy 不依赖 host，仍然可用。</td></tr>
+          <tr><td>元素显示 no source location</td><td>按上面的方法接入插件；测试环境要等下一次部署才生效。</td></tr>
+          <tr><td>提示面板被遮挡</td><td>滚动页面让面板完整显示，或重新按快捷键。</td></tr>
+        </tbody>
+      </table>
+
+    </main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

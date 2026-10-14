@@ -3,7 +3,11 @@
 // replies must match the request's connection generation; no request is replayed.
 // Slow operations outlast the native host's own budget for them (32 s and 47 s),
 // so the host's answer arrives before this page gives up.
-const operationTimeouts = { agentInspect: 35000, conversationDelete: 50000, skillImport: 45000 };
+const operationTimeouts = { agentInspect: 35000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000 };
+
+// Inspect & Ask host operations. inspectDeliver is never replayed: a timeout
+// leaves the batch unconfirmed and the caller asks inspectDeliveryStatus.
+export const INSPECT_OPERATIONS = ['inspectStatus', 'inspectBind', 'inspectUnbind', 'inspectBindings', 'inspectConsent', 'inspectDeliver', 'inspectDeliveryStatus', 'inspectLaunchCommand'];
 
 export class AgentPanelBridge {
   constructor({ send, schedule = (callback, delay) => globalThis.setTimeout(callback, delay), cancel = timer => globalThis.clearTimeout(timer), timeoutMs = 15000, maxPending = 16 }) {
@@ -19,7 +23,7 @@ export class AgentPanelBridge {
   }
 
   request(operation, params = {}) {
-    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun'].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
+    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
     if (this.pending.size >= this.maxPending) return Promise.reject(new Error('Too many pending agent panel requests'));
     const requestId = `${this.identity}:${this.generation}:${++this.sequence}`;
     return new Promise((resolve, reject) => {
@@ -27,6 +31,8 @@ export class AgentPanelBridge {
         this.pending.delete(requestId);
         reject(new Error(operation.startsWith('conversation') && !['conversationRead', 'conversationList'].includes(operation)
           ? 'The conversation operation is unconfirmed. Read its current state before retrying; no message was replayed.'
+          : operation === 'inspectDeliver'
+          ? 'The delivery outcome is unconfirmed; it was not resent. Check its status.'
           : ['configApply', 'configRestore'].includes(operation)
           ? 'The configuration outcome could not be confirmed. Read its current values before retrying; the request was not replayed.'
           : 'The native host did not answer the agent panel request. Check the host version and connection; the request was not replayed.'));
@@ -79,6 +85,13 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
   if (['scheduleSave','scheduleRun'].includes(operation)) return typeof result.schedule?.id === 'string' && (!id || result.schedule.id === id) && (operation !== 'scheduleRun' || result.run?.dispatched === true && result.run.completed === false);
   if (operation === 'scheduleDelete') return result.deleted?.id === id;
   if (operation === 'discover') return Array.isArray(result.agents);
+  if (operation === 'inspectStatus') return typeof result.ocs?.installed === 'boolean' && Array.isArray(result.sessions) && Array.isArray(result.candidates);
+  if (operation === 'inspectBind' || operation === 'inspectConsent') return typeof result.binding?.origin === 'string' && typeof result.binding.root === 'string';
+  if (operation === 'inspectUnbind') return result.unbound === true && typeof result.existed === 'boolean';
+  if (operation === 'inspectBindings') return Array.isArray(result.bindings);
+  if (operation === 'inspectDeliver') return ['sent', 'stored', 'unknown', 'failed', 'noBinding', 'noSession', 'sessionChanged', 'noOcs'].includes(result.state);
+  if (operation === 'inspectDeliveryStatus') return result.delivery === null || typeof result.delivery?.state === 'string';
+  if (operation === 'inspectLaunchCommand') return typeof result.command === 'string' && typeof result.shell === 'string';
   if (operation === 'serviceHealth') return typeof result.profile === 'string' && typeof result.binaryHash === 'string' && Number.isInteger(result.pid);
   if (operation === 'serviceStop') return result.service?.stopRequested === true;
   if (operation === 'conversationList') return Array.isArray(result.conversations);

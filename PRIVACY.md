@@ -66,6 +66,19 @@ folder. Codex's SQLite cache is not modified. Cleanup failures or unconfirmed
 tab closure are reported. The panel does not ask you for an agent API key. Login and credential setup
 remain with the chosen CLI; discovery does not return credential values.
 
+## Inspect & Ask
+
+Inspect & Ask is off until you enable it. When you press its shortcut or the
+popup button, the extension shows an element picker in that tab. When you
+select elements it reads their text, sanitized HTML, styles, component names
+and source locations, and takes a screenshot of the visible tab for them. When
+you press Send, the native host writes this to
+`~/.chrome-use/inspect/ctx/<id>/` (readable only by your user account, removed
+after 7 days) and hands a summary to the agent session you chose through ocs on
+this computer. That agent's CLI may then send it to its configured model
+service. Copy puts the same content on your clipboard instead. Site-to-project
+bindings and consents are stored in `~/.chrome-use/inspect/bindings.json`.
+
 ## What it keeps on your computer
 
 chrome-use does not collect a general browsing history. Task-related page
@@ -74,6 +87,8 @@ content can be retained in the local panel journal. Under `~/.chrome-use` it sto
 - profile-scoped panel messages, replies, tool results and conversation workspaces;
 - small session bookkeeping files (which tabs a session opened; no page
   content);
+- Inspect & Ask bindings, delivery records and per-request context folders
+  (removed after 7 days);
 - installed site adapters and, if downloaded, Chrome for Testing;
 - logins you choose to save with `auth save`, encrypted (AES-256-GCM) with a key
   kept on your computer;

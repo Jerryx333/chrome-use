@@ -18,7 +18,8 @@
 
 import { getRelayHealth, observeDebuggerCommand } from './relay-health.js';
 import { ScheduleNotifications } from './schedule-notifications.js';
-import { AgentPanelBridge, isAgentPanelSender } from './agent-panel-bridge.js';
+import { AgentPanelBridge, isAgentPanelSender, INSPECT_OPERATIONS } from './agent-panel-bridge.js';
+import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
 import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
@@ -105,6 +106,19 @@ if (chrome.runtime.getManifest().key) {
   globalThis.__chromeUseAcceptance = {
     organizeUserTabs: async params => (await getUserTabOrganizer()).organize(params),
     undoOrganizeUserTabs: async params => (await getUserTabOrganizer()).undo(params),
+    // Inspect & Ask acceptance: start a picker as the shortcut would (the
+    // acceptance build adds host permissions in place of the activeTab grant).
+    startInspect: async tabId => globalThis.__chromeUseInspect.start(await chrome.tabs.get(tabId)),
+    inspectCapture: async tabId => {
+      const instance = globalThis.__chromeUseInspect.registry.get(tabId);
+      if (!instance) throw new Error('no instance');
+      await globalThis.__chromeUseInspect.capture(instance);
+      return { images: instance.images.size };
+    },
+    inspectState: tabId => {
+      const instance = globalThis.__chromeUseInspect.registry.get(tabId);
+      return { hostReady: globalThis.__chromeUseInspect.hostReady(), instance: instance && { origin: instance.origin, frameId: instance.frameId, annotations: instance.annotations.length, images: instance.images.size, generation: instance.generation } };
+    },
   };
 }
 const HOST_NAME = 'com.agent_browser.connect';
@@ -116,6 +130,18 @@ const agentPanelBridge = new AgentPanelBridge({
     port.postMessage(message);
   },
 });
+// Inspect & Ask: picker, input frame and delivery. Started only from the
+// keyboard command or the popup button; see inspect-controller.js.
+const inspectController = new InspectController({
+  chrome,
+  request: (operation, params) => agentPanelBridge.request(operation, params),
+  hostReady: () => { const state = hostConnection.snapshot(); return !!port && state.connected && state.agentPanel?.inspect === true; },
+});
+inspectController.install();
+if (chrome.runtime.getManifest().key) globalThis.__chromeUseInspect = inspectController;
+// Extension pages may manage bindings and consents (options page); delivery,
+// binding and status belong to the authenticated input frame only.
+const PAGE_INSPECT_OPERATIONS = ['inspectBindings', 'inspectUnbind', 'inspectConsent'];
 const scheduleNotifications = new ScheduleNotifications({ storage: chrome.storage.local, notifications: chrome.notifications });
 function pollScheduleNotifications() {
   const state = hostConnection.snapshot();
@@ -2496,9 +2522,27 @@ try {
 // Popup status page asks for the live pairing state. Attempt a (re)connect on
 // demand so opening the popup also nudges the link awake, then report.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (typeof msg?.type === 'string' && msg.type.startsWith('inspect:')) {
+    return inspectController.onPickerMessage(msg, _sender, sendResponse);
+  }
+  if (msg?.type === 'ab-inspect-start') {
+    if (_sender?.id !== chrome.runtime.id || _sender.tab || _sender.url !== chrome.runtime.getURL('popup.html')) {
+      sendResponse({ success: false, error: 'Inspect & Ask starts from the popup or the keyboard shortcut' });
+      return false;
+    }
+    inspectController.start(null).then(
+      () => sendResponse({ success: true }),
+      error => sendResponse({ success: false, error: String(error.message || error) }),
+    );
+    return true;
+  }
   if (msg?.type === 'ab-agent-request') {
     if (!isAgentPanelSender(_sender, chrome.runtime)) {
       sendResponse({ success: false, error: 'Agent services require the packaged extension panel' });
+      return false;
+    }
+    if (INSPECT_OPERATIONS.includes(msg.operation) && !PAGE_INSPECT_OPERATIONS.includes(msg.operation)) {
+      sendResponse({ success: false, error: 'This Inspect & Ask operation is only available from the input panel' });
       return false;
     }
     agentPanelBridge.request(msg.operation, msg.params ?? {}).then(

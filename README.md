@@ -179,7 +179,7 @@ History streams replies, expandable tool rows and requests. Tool output does not
 
 To delete a conversation, stop its response, click the header's delete button and confirm. Deletion removes panel history and that conversation's browser session, plus Codex rollout files, Claude session files/directories, OpenCode history through `session/delete`, or Pi session files inside the conversation folder. Codex's SQLite cache is left untouched. The panel reports cleanup failures or unconfirmed tab closure.
 
-Panel history is stored locally under `~/.chrome-use/agent-panel`, scoped to the Chrome profile. The selected CLI may send tasks and page content to its configured model service, whose privacy policy applies. The extension adds no webpage content script; opening the side panel can change the page viewport. Custom programs require an absolute path.
+Panel history is stored locally under `~/.chrome-use/agent-panel`, scoped to the Chrome profile. The selected CLI may send tasks and page content to its configured model service, whose privacy policy applies. The side panel adds no webpage content script; opening it can change the page viewport. Inspect & Ask (below) injects into a page only when you press its shortcut or button. Custom programs require an absolute path.
 
 The panel also supports:
 
@@ -187,6 +187,18 @@ The panel also supports:
 - **Images:** paste, drop or choose up to five PNG/JPEG/WebP files with **Attach images**. Images are reduced to a 2000-pixel long edge and at most 512 KiB each before native transport. They stay with the conversation, including queued-message edits and retries, and are removed with it. ACP agents must advertise image input; unsupported input fails instead of dropping the images. The model service receives the attachments.
 - **Conversation options:** choose allowed tools and, for Codex/Claude, reasoning effort; Codex also supports a service-tier override. Save while idle. Overrides take effect on the next response and do not edit CLI defaults. Codex can restrict writes but cannot remove its file-reading shell. OpenCode ACP does not enforce built-in tool restrictions; its own permission rules still apply. The approval switch controls automatic answers within the selected tool set; Pi has no per-call approvals.
 - **Scheduled prompts:** **Agents & models → Scheduled prompts** saves intervals, daily/weekday local times or five-field cron, with agent, model, options, skill and explicit tool scope. **Run now** does not move the next scheduled time. Runs use independent background browser sessions and remain in history; completion notifications link to their conversations. The host-local service must be running; closing the panel does not stop it. On restart or wake, missed periods coalesce into one run. An active or unconfirmed run is never overlapped or replayed; inspect the history before acknowledging an unknown outcome. A chat cannot schedule more tools or automatic approval than it has, and scheduled conversations cannot mutate or trigger schedules or rewrite library skills for future runs. Native acceptance and agent completion remain separate from verifying the requested page effect.
+
+### Inspect & Ask: click an element, let your agent change it
+
+Press **Alt+Shift+C** (or **Inspect element** in the toolbar popup), click an element, write what should change and press Enter. chrome-use sends your words, the element's source `file:line`, a cropped screenshot and its styles through [ocs](https://github.com/leeguooooo/open-cross-session) to the Claude Code, Codex or Pi session already running in that project. It works on local dev servers and on test-environment domains in your logged-in Chrome.
+
+- **Source locations** come from [code-inspector-plugin](https://github.com/zh-lx/code-inspector)'s `data-insp-path` marks (Vite, webpack, Rspack, esbuild, Turbopack; React, Vue and more). React 18 and Vue dev builds work without it; otherwise the message says "no source location" and carries selector and text. When marks are missing, the panel lists the exact changes and asks before your agent adds the plugin. Test builds need an explicit flag, never production.
+- **Multi-select and markup:** Shift+click or drag to select up to 8 elements, ↑/↓ for parent/child, P to pause animations, a note per element, and a pen on each screenshot. **Copy** gives the same content as Markdown without ocs; **Open in editor** opens the file in VS Code, Cursor, Windsurf or WebStorm.
+- **Project and session** are chosen once per site, from dev-server process folders, ocs session folders and the projects that contain the page's source files. Page data never changes that choice.
+- **Delivery is never replayed.** Each batch has an id; ocs's stored and wake results are shown separately, and an unconfirmed outcome is queried, not resent. Full context lives in `~/.chrome-use/inspect/ctx/<id>/` (owner-only, removed after 7 days).
+- **Boundaries:** off by default; nothing stays injected in pages and no debugger bar appears. The input box runs in the extension's own frame, authenticated with a one-time secret, so page scripts cannot read or change what you type; each send re-checks that the box is fully visible. Page content is labelled as untrusted data, and delivery never raises the receiving session's permissions.
+
+Details: [Inspect & Ask docs](https://chrome-use.leeguoo.com/en/inspect.html).
 
 ## Setup: connect to your Chrome
 

@@ -122,7 +122,9 @@ which may send task and page context to their configured model service.</pre>
   <tr><td class="field">webNavigation</td><td>Detect page loads/navigations so automation can wait for the right moment before acting.</td></tr>
   <tr><td class="field">notifications</td><td>Show local status and error notices to the user (for example, that the connection to the local CLI was lost). Notifications are generated on-device; no data leaves the machine.</td></tr>
   <tr><td class="field">identity, identity.email</td><td>Read the email of the Google account signed into the current Chrome profile (<code>chrome.identity.getProfileUserInfo</code>) purely to label which profile a local connection belongs to, so a user with several logged-in Chrome profiles can confirm the CLI is automating the intended account. The email is sent only to the paired local CLI over native messaging; it is never stored off-device or sent to any server. No OAuth token is requested (<code>getAuthToken</code> is not used).</td></tr>
-  <tr><td class="field">host permissions（若被问）</td><td>The extension declares none; tab access is mediated through the debugger attach the user initiates.</td></tr>
+  <tr><td class="field">activeTab</td><td>Inspect &amp; Ask: when the user presses the extension's keyboard shortcut or clicks "Inspect element" in the popup, the current tab is granted temporarily so the extension can show an element picker on that page and take a screenshot of the visible area for the selected elements. No access is requested for any other tab or time.</td></tr>
+  <tr><td class="field">scripting</td><td>Inspect &amp; Ask: injects the element picker and a read-only probe for React/Vue component names into the tab the user just activated through activeTab (keyboard shortcut or popup button). Nothing is injected without that gesture, and nothing stays in the page after the picker closes.</td></tr>
+  <tr><td class="field">host permissions（若被问）</td><td>The extension declares none; tab access is mediated through the debugger attach the user initiates, or through activeTab when the user starts Inspect &amp; Ask.</td></tr>
 </table>
 
 <h3>数据用途勾选 / Data usage</h3>

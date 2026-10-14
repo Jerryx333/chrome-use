@@ -124,6 +124,38 @@
     </div>
   </section>
 
+  <!-- Inspect & Ask -->
+  <section class="card">
+    <h2>Inspect &amp; Ask</h2>
+    <p class="lead">Press the shortcut, click an element, and send a change request with its source
+      location and a screenshot to the coding session working on that project (via ocs).</p>
+    <div class="row">
+      <div class="grow">
+        <div class="name">Enable Inspect &amp; Ask</div>
+        <div class="hint">Off by default. Nothing is injected into pages until you press the shortcut
+          (<span id="inspectShortcut">Alt+Shift+C</span>) or the popup button.
+          <a href="#" id="inspectShortcuts">Change the shortcut</a></div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="optInspect" /><span class="track"></span><span class="knob"></span></label>
+    </div>
+    <div class="row">
+      <div class="grow">
+        <div class="name">"Open in editor" uses</div>
+        <div class="hint">Source links open the file at the line in this editor.</div>
+      </div>
+      <select id="optInspectEditor" aria-label="Editor for source links">
+        <option value="vscode">VS Code</option>
+        <option value="cursor">Cursor</option>
+        <option value="windsurf">Windsurf</option>
+        <option value="webstorm">WebStorm</option>
+        <option value="none">Do not show</option>
+      </select>
+    </div>
+    <div class="name" style="margin-top:12px">Sites bound to projects</div>
+    <div class="hint" id="inspectBindingsHint">Loading…</div>
+    <div id="inspectBindings"></div>
+  </section>
+
   <!-- Debugger banner -->
   <section class="card">
     <h2>The “started debugging this browser” bar</h2>

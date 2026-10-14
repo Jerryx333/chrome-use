@@ -167,7 +167,7 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 
 删除会话前先停止回复，再点顶部删除按钮并确认。删除内容包括面板历史和该会话的浏览器 session，以及 Codex rollout 文件、Claude 会话文件及目录、通过 `session/delete` 删除的 OpenCode 历史，或会话文件夹内的 Pi 会话文件。Codex 的 SQLite 缓存不改动。清理失败或标签页关闭未确认时，侧栏会提示。
 
-面板历史按 Chrome profile 保存在本机 `~/.chrome-use/agent-panel`。所选 CLI 可能把任务和网页内容发送给它配置的模型服务，该服务的隐私政策适用。侧栏没有新增网页 content script，打开时仍可能改变页面视口。自定义程序需填写绝对路径。
+面板历史按 Chrome profile 保存在本机 `~/.chrome-use/agent-panel`。所选 CLI 可能把任务和网页内容发送给它配置的模型服务，该服务的隐私政策适用。侧栏没有新增网页 content script，打开时仍可能改变页面视口。下面的点选改代码只在你按快捷键或按钮时才注入页面。自定义程序需填写绝对路径。
 
 侧栏还支持以下功能：
 
@@ -175,6 +175,18 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 - **图片：**用 **Attach images** 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP。传输前缩到最长边 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入，不支持时会报错，不会丢掉图片只发送文字。附件会交给所选模型服务。
 - **会话参数：**选择允许的工具，Codex/Claude 可另设推理强度，Codex 可设服务等级。空闲时保存，下一次回复生效，不改 CLI 全局配置。Codex 能限制写入，但无法移除可以读文件的 shell；OpenCode ACP 无法保证限制内置工具，仍遵循它自己的权限规则。审批开关只决定是否自动处理当前工具范围内的请求，Pi 没有逐次审批。
 - **定时提示：**在 **Agents & models → Scheduled prompts** 设置间隔、每天或工作日的本地时间、五字段 cron，并保存 agent、模型、会话参数、技能和明确的工具范围。**Run now** 不改变下一次到期时间。任务使用独立后台浏览器 session，结果保留在历史，完成通知可打开对应会话。主机上的本地服务需要运行，关闭侧栏不会停掉服务。重启或唤醒后，错过的周期只补跑一次；上次仍在执行或结果未确认时，不会重叠执行或重放。确认未知结果前先看历史。聊天不能创建比自己工具范围更大或审批权限更高的任务；定时聊天不能修改或触发定时任务，也不能重写供未来任务使用的技能库。消息已接收、agent 已结束和网页目标已达成仍需分别确认。
+
+### 点选改代码（Inspect & Ask）
+
+按 **Alt+Shift+C**（或工具栏弹窗里的 **Inspect element**），点一个元素，写一句要改成什么样，回车。chrome-use 会把这句话、元素的源码 `文件:行号`、裁好的截图和样式，通过 [ocs](https://github.com/leeguooooo/open-cross-session) 交给已经在这个项目里运行的 Claude Code、Codex 或 Pi 会话。本地 dev server 和测试环境域名都能用，用的是你已登录的 Chrome。
+
+- **源码位置**来自 [code-inspector-plugin](https://github.com/zh-lx/code-inspector) 注入的 `data-insp-path`（Vite、webpack、Rspack、esbuild、Turbopack；React、Vue 等）。React 18 和 Vue 的开发构建不接插件也能读到；都读不到时消息会标明“没有源码位置”，并附上选择器和文本。页面没有标记时，面板会列出要改的地方，征得你同意后再让 agent 接入插件。测试构建需要显式打开，生产构建永远不开。
+- **多选与标注**：Shift+点击或拖框最多选 8 个，↑/↓ 切换父子元素，P 暂停动画，每个元素可写备注，截图上可以画笔标注。**Copy** 不经过 ocs，直接复制成 Markdown；**Open in editor** 用 VS Code、Cursor、Windsurf 或 WebStorm 打开对应文件。
+- **项目和会话**每个站点只选一次，候选来自 dev server 进程目录、ocs 会话目录，以及哪个项目里真的有页面标注的源码文件。页面数据改变不了这个选择。
+- **投递不会重放**：每批请求有自己的 ID，ocs 的“已存储”和“已唤醒”分开显示，结果不明时只查询、不重发。完整上下文写在 `~/.chrome-use/inspect/ctx/<id>/`，只有你能读，7 天后清理。
+- **边界**：默认关闭；不常驻页面，也不出现调试提示条。输入框运行在扩展自己的 iframe 里，凭一次性密钥认证，页面脚本读不到也改不了你写的内容；每次发送前都重新确认输入框完整可见。页面内容标注为不可信数据，投递不会提高接收会话的权限。
+
+详见 [点选改代码文档](https://chrome-use.leeguoo.com/inspect.html)。
 
 ## 连接你的 Chrome
 

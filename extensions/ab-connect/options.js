@@ -95,3 +95,76 @@ document.querySelectorAll('[data-href]').forEach((a) => {
 
 queryStatus()
 setTimeout(queryStatus, 700)
+
+// ---- Inspect & Ask ----
+const INSPECT_KEY = 'inspectSettings'
+const optInspect = el('optInspect'), optInspectEditor = el('optInspectEditor')
+function loadInspect() {
+  if (!hasChrome) return
+  chrome.storage.local.get(INSPECT_KEY, (stored) => {
+    const settings = stored?.[INSPECT_KEY] || {}
+    optInspect.checked = settings.enabled === true
+    optInspectEditor.value = settings.editor || 'vscode'
+  })
+  chrome.commands?.getAll?.((commands) => {
+    const command = (commands || []).find((c) => c.name === 'inspect-element')
+    if (command) el('inspectShortcut').textContent = command.shortcut || 'not set'
+  })
+}
+function saveInspect(patch) {
+  if (!hasChrome) return
+  chrome.storage.local.get(INSPECT_KEY, (stored) => {
+    chrome.storage.local.set({ [INSPECT_KEY]: { ...(stored?.[INSPECT_KEY] || {}), ...patch } })
+    flashSaved()
+  })
+}
+optInspect?.addEventListener('change', () => saveInspect({ enabled: optInspect.checked }))
+optInspectEditor?.addEventListener('change', () => saveInspect({ editor: optInspectEditor.value }))
+el('inspectShortcuts')?.addEventListener('click', (event) => {
+  event.preventDefault()
+  if (hasChrome) chrome.tabs.create({ url: 'chrome://extensions/shortcuts' })
+})
+function inspectRequest(operation, params = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: 'ab-agent-request', operation, params }, (response) => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message))
+      if (!response?.success) return reject(new Error(response?.error || 'Request failed'))
+      resolve(response.result)
+    })
+  })
+}
+async function renderBindings() {
+  const hint = el('inspectBindingsHint'), list = el('inspectBindings')
+  if (!hasChrome) { hint.textContent = 'Bindings appear here once a site is bound.'; return }
+  try {
+    const { bindings } = await inspectRequest('inspectBindings')
+    list.replaceChildren()
+    hint.textContent = bindings.length ? 'Remove a binding to choose again next time. Consents are kept per project.' : 'No site is bound yet. The first Send on a site asks which project it belongs to.'
+    for (const binding of bindings) {
+      const row = document.createElement('div')
+      row.className = 'row'
+      const text = document.createElement('div')
+      text.className = 'grow'
+      const name = document.createElement('div'); name.className = 'name'; name.textContent = binding.origin
+      const detail = document.createElement('div'); detail.className = 'hint'
+      const consents = Object.entries(binding.consents || {}).filter(([, v]) => v).map(([k]) => k === 'plugin' ? 'dev source mapping' : 'test-build source mapping')
+      detail.textContent = `${binding.root}${binding.sessionLabel ? ' · ' + binding.sessionLabel : ''}${consents.length ? ' · consented: ' + consents.join(', ') : ''}`
+      text.append(name, detail)
+      row.append(text)
+      for (const kind of ['plugin', 'testEnv']) {
+        if (!binding.consents?.[kind]) continue
+        const revoke = document.createElement('button'); revoke.className = 'btn'; revoke.textContent = kind === 'plugin' ? 'Revoke dev consent' : 'Revoke test consent'
+        revoke.addEventListener('click', async () => { await inspectRequest('inspectConsent', { origin: binding.origin, kind, granted: false }).catch(() => {}); renderBindings() })
+        row.append(revoke)
+      }
+      const remove = document.createElement('button'); remove.className = 'btn'; remove.textContent = 'Unbind'
+      remove.addEventListener('click', async () => { await inspectRequest('inspectUnbind', { origin: binding.origin }).catch(() => {}); renderBindings() })
+      row.append(remove)
+      list.append(row)
+    }
+  } catch (error) {
+    hint.textContent = `Bindings unavailable: ${error.message}`
+  }
+}
+loadInspect()
+renderBindings()
