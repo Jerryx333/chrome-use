@@ -96,7 +96,17 @@ async function pickOn(url, selector, existing) {
   const marker = 'm' + Math.random().toString(36).slice(2);
   await A.evaluate(page.sid, `document.title = ${JSON.stringify(marker)}; 1`);
   const tabId = await waitFor(() => A.evaluate(sw.sid, `chrome.tabs.query({}).then(ts => ts.find(t => t.title === ${JSON.stringify(marker)})?.id)`), { label: 'tab ' + url });
-  const started = await A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.startInspect(${tabId}).then(r => JSON.stringify(r), e => 'ERR ' + e.message)`);
+  // A dev server that just started may reload the page once (dependency
+  // pre-bundling); retry on an error page instead of failing on that race.
+  let started = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    started = await A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.startInspect(${tabId}).then(r => JSON.stringify(r), e => 'ERR ' + e.message)`);
+    if (started === '{"started":true}' || !/error page|http\(s\) pages only/.test(started)) break;
+    await sleep(1500);
+    await b.send('Page.reload', {}, page.sid).catch(() => {});
+    await waitFor(() => A.evaluate(page.sid, 'document.readyState === "complete" && location.protocol.startsWith("http")'), { label: 'page ready' }).catch(() => {});
+    await A.evaluate(page.sid, `document.title = ${JSON.stringify(marker)}; 1`).catch(() => {});
+  }
   assert.equal(started, '{"started":true}', started);
   await waitFor(() => A.evaluate(sw.sid, `chrome.tabs.query({ active: true }).then(ts => ts.some(t => t.id === ${tabId}))`), { label: 'active' }).catch(() => {});
   const c = await A.center(page.sid, selector);
