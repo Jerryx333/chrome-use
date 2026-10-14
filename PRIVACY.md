@@ -78,6 +78,10 @@ after 7 days) and hands a summary to the agent session you chose through ocs on
 this computer. That agent's CLI may then send it to its configured model
 service. Copy puts the same content on your clipboard instead. Site-to-project
 bindings and consents are stored in `~/.chrome-use/inspect/bindings.json`.
+To match a page to a project, the native host reads git-tracked
+`.chrome-use/inspect.json` files in the repositories of running agent
+sessions and asks git about the page's revision there; nothing from these
+checks leaves your computer.
 After 7 days each delivery record is reduced to a tombstone holding only the
 batch id and its outcome (no page content, origin or session), kept
 permanently so the same batch is never sent twice. The extension keeps drafts

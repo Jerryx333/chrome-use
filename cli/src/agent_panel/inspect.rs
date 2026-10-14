@@ -22,6 +22,20 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+mod cli;
+mod config;
+mod facts;
+#[cfg(test)]
+mod match_tests;
+mod resolve;
+mod scope;
+#[cfg(test)]
+mod testkit;
+
+pub(super) use cli::run as run_cli;
+use facts::{Facts, Probe, Relation};
+use scope::Target;
+
 const MAX_BINDINGS: usize = 256;
 const MAX_STORE: u64 = 1024 * 1024;
 const MAX_SOURCE_PATHS: usize = 16;
@@ -30,7 +44,6 @@ const MAX_IMAGE: usize = 4 * 1024 * 1024;
 const MESSAGE_BUDGET: usize = 4000;
 const CANDIDATE_LIMIT: usize = 12;
 const CONTEXT_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-const QUICK: Duration = Duration::from_secs(3);
 const ROSTER_TIMEOUT: Duration = Duration::from_secs(8);
 // A wake can take several seconds; past this the message may be stored, so
 // the outcome is reported as unknown and never resent.
@@ -38,9 +51,13 @@ const DELIVER_TIMEOUT: Duration = Duration::from_secs(30);
 const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 const LOCK_WAIT: Duration = Duration::from_secs(3);
 const MAX_RECORD: u64 = 64 * 1024;
+const MAX_CLAIMS: usize = 64;
+const STORE_VERSION: u32 = 2;
 
 pub(super) const OPERATIONS: &[&str] = &[
     "inspectStatus",
+    "inspectResolve",
+    "inspectClaimDecide",
     "inspectBind",
     "inspectUnbind",
     "inspectBindings",
@@ -186,11 +203,51 @@ struct Consents {
     test_env: bool,
 }
 
+/// A version 1 entry: the store was a map from origin to this.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BindingV1 {
+    origin: String,
+    root: PathBuf,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    session_cwd: Option<PathBuf>,
+    #[serde(default)]
+    session_label: Option<String>,
+    consents: Consents,
+    updated_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+enum BindingSource {
+    /// A trusted click in the extension frame.
+    Confirmed,
+    /// A session's own `chrome-use inspect link`, or a claim the user accepted.
+    Linked,
+}
+
+/// Why a binding was made, kept so later checks can re-verify it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum Evidence {
+    /// The loopback port's listener ran in `cwd`, inside the bound worktree.
+    #[serde(rename_all = "camelCase")]
+    Port { port: u16, cwd: PathBuf },
+    /// A tracked `.chrome-use/inspect.json` named this scope.
+    #[serde(rename_all = "camelCase")]
+    Config { path: PathBuf, wildcard: bool },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Binding {
     origin: String,
+    path_scope: String,
     root: PathBuf,
+    /// Where page source paths may resolve; `root` first.
+    source_roots: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     /// Canonical working directory of the session when it was bound. A
@@ -199,9 +256,221 @@ struct Binding {
     session_cwd: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_label: Option<String>,
+    source: BindingSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence: Option<Evidence>,
     /// Granted for this root and session only; rebinding either clears them.
     consents: Consents,
     updated_at: u64,
+}
+
+impl Binding {
+    fn target(&self) -> Target {
+        Target {
+            root: self.root.clone(),
+            source_roots: self.source_roots.clone(),
+            session_id: self.session_id.clone(),
+            session_cwd: self.session_cwd.clone(),
+        }
+    }
+    fn fingerprint(&self) -> String {
+        scope::fingerprint(&self.origin, &self.path_scope, &self.target())
+    }
+    /// The binding as the extension sees it.
+    fn view(&self) -> Value {
+        let mut v = serde_json::to_value(self).unwrap_or_else(|_| json!({}));
+        v["fingerprint"] = self.fingerprint().into();
+        v
+    }
+}
+
+/// A session asked (`inspect link`) for a scope whose overlapping bindings
+/// go elsewhere. It changes nothing until the user accepts it in the frame.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Claim {
+    claim_id: String,
+    origin: String,
+    path_scope: String,
+    root: PathBuf,
+    source_roots: Vec<PathBuf>,
+    session_id: String,
+    session_cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence: Option<Evidence>,
+    /// Fingerprints of the overlapping bindings it would take over, as they
+    /// were when the claim was made.
+    affects: Vec<String>,
+    requested_at: u64,
+}
+
+impl Claim {
+    fn target(&self) -> Target {
+        Target {
+            root: self.root.clone(),
+            source_roots: self.source_roots.clone(),
+            session_id: Some(self.session_id.clone()),
+            session_cwd: Some(self.session_cwd.clone()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Store {
+    version: u32,
+    bindings: Vec<Binding>,
+    #[serde(default)]
+    pending_claims: Vec<Claim>,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self {
+            version: STORE_VERSION,
+            bindings: Vec::new(),
+            pending_claims: Vec::new(),
+        }
+    }
+}
+
+impl Store {
+    fn binding(&self, origin: &str, path_scope: &str) -> Option<&Binding> {
+        self.bindings
+            .iter()
+            .find(|b| b.origin == origin && b.path_scope == path_scope)
+    }
+
+    /// The effective binding for a page: the longest bound scope that covers
+    /// it. Pending claims never take part.
+    fn effective(&self, origin: &str, page: &str) -> Option<&Binding> {
+        self.bindings
+            .iter()
+            .filter(|b| b.origin == origin && scope::applies(&b.path_scope, page))
+            .max_by_key(|b| b.path_scope.len())
+    }
+
+    /// Bindings of `origin` whose scope overlaps `path_scope` and whose target
+    /// differs from `target`.
+    fn conflicting(&self, origin: &str, path_scope: &str, target: &Target) -> Vec<&Binding> {
+        self.bindings
+            .iter()
+            .filter(|b| {
+                b.origin == origin
+                    && scope::overlaps(&b.path_scope, path_scope)
+                    && b.target() != *target
+            })
+            .collect()
+    }
+
+    /// Whether a caller that only knows origins (extension 0.5.56) must be
+    /// told to upgrade: the origin has a path scope or a pending claim.
+    fn needs_upgrade(&self, origin: &str) -> bool {
+        self.bindings
+            .iter()
+            .any(|b| b.origin == origin && b.path_scope != "/")
+            || self.pending_claims.iter().any(|c| c.origin == origin)
+    }
+
+    /// Insert or replace the binding for its scope. Consents survive only
+    /// when root and session are unchanged.
+    fn put(&mut self, mut binding: Binding) -> Binding {
+        if let Some(old) = self
+            .bindings
+            .iter()
+            .position(|b| b.origin == binding.origin && b.path_scope == binding.path_scope)
+        {
+            let old = self.bindings.remove(old);
+            if old.root == binding.root && old.session_id == binding.session_id {
+                binding.consents = old.consents;
+            }
+        }
+        self.bindings.push(binding.clone());
+        binding
+    }
+
+    /// A pending claim with the targets it would replace, as they are now.
+    fn claim_view(&self, claim: &Claim) -> Value {
+        let mut v = serde_json::to_value(claim).unwrap_or_else(|_| json!({}));
+        let target = claim.target();
+        let affects = self.conflicting(&claim.origin, &claim.path_scope, &target);
+        let mut expected: Vec<String> = affects.iter().map(|b| b.fingerprint()).collect();
+        expected.sort();
+        v["affects"] = affects.iter().map(|b| b.view()).collect::<Vec<_>>().into();
+        v["expectedAffects"] = expected.into();
+        v["fingerprint"] = scope::fingerprint(&claim.origin, &claim.path_scope, &target).into();
+        v
+    }
+
+    fn migrate(v1: BTreeMap<String, BindingV1>) -> Self {
+        let bindings = v1
+            .into_values()
+            .map(|b| Binding {
+                origin: b.origin,
+                path_scope: "/".into(),
+                source_roots: vec![b.root.clone()],
+                root: b.root,
+                session_id: b.session_id,
+                session_cwd: b.session_cwd,
+                session_label: b.session_label,
+                source: BindingSource::Confirmed,
+                evidence: None,
+                consents: b.consents,
+                updated_at: b.updated_at,
+            })
+            .collect();
+        Self {
+            bindings,
+            ..Self::default()
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let corrupt = |what: &str| format!("Inspect & Ask binding store has {what}");
+        if self.version != STORE_VERSION {
+            return Err(corrupt("an unsupported version"));
+        }
+        let mut scopes = std::collections::BTreeSet::new();
+        for b in &self.bindings {
+            if origin(&b.origin).is_err()
+                || scope::path_scope(&b.path_scope).as_deref() != Ok(b.path_scope.as_str())
+            {
+                return Err(corrupt("an invalid origin or scope"));
+            }
+            if !scopes.insert((b.origin.as_str(), b.path_scope.as_str())) {
+                return Err(corrupt("two bindings for one scope"));
+            }
+        }
+        for c in &self.pending_claims {
+            if origin(&c.origin).is_err()
+                || scope::path_scope(&c.path_scope).is_err()
+                || claim_id(&c.claim_id).is_err()
+            {
+                return Err(corrupt("an invalid pending claim"));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn claim_id(id: &str) -> Result<(), String> {
+    if id.len() == 32
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        Ok(())
+    } else {
+        Err("claimId must be 32 lowercase hex digits".into())
+    }
+}
+
+fn new_claim_id() -> Result<String, String> {
+    let mut random = [0u8; 16];
+    getrandom::getrandom(&mut random).map_err(|_| "Cannot create a claim identifier")?;
+    Ok(hex::encode(random))
 }
 
 // ----------------------------------------------------------------- processes
@@ -232,12 +501,18 @@ struct Ocs {
 }
 
 /// Everything that leaves the process. Tests substitute a fake so no test
-/// spawns `ocs`, `lsof` or `git`.
+/// spawns `ocs`, `lsof` or `git`. The git and lsof probes take the time their
+/// caller's budget allows for them.
 trait System {
     fn ocs(&self) -> Option<Ocs>;
     fn roster(&self, ocs: &Path) -> Result<Vec<Session>, String>;
-    fn port_cwd(&self, port: u16) -> Option<PathBuf>;
-    fn git_toplevel(&self, dir: &Path) -> Option<PathBuf>;
+    /// The calling session's ocs address (`ocs whoami --json` → `id`).
+    fn whoami(&self, ocs: &Path) -> Result<String, String>;
+    fn port_cwd(&self, port: u16, timeout: Duration) -> Probe<PathBuf>;
+    fn git_toplevel(&self, dir: &Path, timeout: Duration) -> Probe<PathBuf>;
+    /// Raw `git ls-files -z` output for `*.chrome-use/inspect.json`.
+    fn git_configs(&self, top: &Path, timeout: Duration) -> Probe<String>;
+    fn git_revision(&self, top: &Path, rev: &str, timeout: Duration) -> Probe<Relation>;
     fn dm(&self, ocs: &Path, id: &str, text: &str) -> Result<Run, String>;
 }
 
@@ -405,13 +680,33 @@ impl System for Host {
         }
         parse_roster(&result.stdout)
     }
-    fn port_cwd(&self, port: u16) -> Option<PathBuf> {
-        if !cfg!(unix) {
-            return None;
+    fn whoami(&self, ocs: &Path) -> Result<String, String> {
+        let result = run(
+            ocs,
+            &[OsStr::new("whoami"), OsStr::new("--json")],
+            ROSTER_TIMEOUT,
+        )?;
+        if result.timed_out {
+            return Err("ocs whoami did not answer in time".into());
         }
-        let lsof = program("lsof", &["/usr/sbin", "/usr/bin", "/sbin", "/bin"])?;
+        if result.code != Some(0) {
+            return Err(format!(
+                "ocs whoami failed: {}",
+                tail(&result.stderr, 300).trim()
+            ));
+        }
+        parse_whoami(&result.stdout)
+    }
+    fn port_cwd(&self, port: u16, timeout: Duration) -> Probe<PathBuf> {
+        if !cfg!(unix) {
+            return Probe::Absent;
+        }
+        let Some(lsof) = program("lsof", &["/usr/sbin", "/usr/bin", "/sbin", "/bin"]) else {
+            return Probe::Absent;
+        };
+        let deadline = Instant::now() + timeout;
         let spec = format!("-iTCP:{port}");
-        let found = run(
+        let Ok(found) = run(
             &lsof,
             &[
                 OsStr::new("-nP"),
@@ -419,12 +714,22 @@ impl System for Host {
                 OsStr::new("-sTCP:LISTEN"),
                 OsStr::new("-Fp"),
             ],
-            QUICK,
-        )
-        .ok()?;
-        let pid = lsof_pid(&found.stdout)?;
+            timeout,
+        ) else {
+            return Probe::Absent;
+        };
+        if found.timed_out {
+            return Probe::TimedOut;
+        }
+        let Some(pid) = lsof_pid(&found.stdout) else {
+            return Probe::Absent;
+        };
         let pid = pid.to_string();
-        let cwd = run(
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Probe::TimedOut;
+        }
+        let Ok(cwd) = run(
             &lsof,
             &[
                 OsStr::new("-a"),
@@ -434,26 +739,84 @@ impl System for Host {
                 OsStr::new("cwd"),
                 OsStr::new("-Fn"),
             ],
-            QUICK,
-        )
-        .ok()?;
-        lsof_name(&cwd.stdout)
+            left,
+        ) else {
+            return Probe::Absent;
+        };
+        if cwd.timed_out {
+            return Probe::TimedOut;
+        }
+        lsof_name(&cwd.stdout).map_or(Probe::Absent, Probe::Found)
     }
-    fn git_toplevel(&self, dir: &Path) -> Option<PathBuf> {
-        let git = program("git", &["/usr/bin", "/bin"])?;
-        let result = run(
-            &git,
+    fn git_toplevel(&self, dir: &Path, timeout: Duration) -> Probe<PathBuf> {
+        match git(
+            dir,
+            &[OsStr::new("rev-parse"), OsStr::new("--show-toplevel")],
+            timeout,
+        ) {
+            Probe::Found(out) => {
+                let top = out.trim();
+                if top.is_empty() {
+                    Probe::Absent
+                } else {
+                    Probe::Found(PathBuf::from(top))
+                }
+            }
+            Probe::Absent => Probe::Absent,
+            Probe::TimedOut => Probe::TimedOut,
+        }
+    }
+    fn git_configs(&self, top: &Path, timeout: Duration) -> Probe<String> {
+        git(
+            top,
             &[
-                OsStr::new("-C"),
-                dir.as_os_str(),
-                OsStr::new("rev-parse"),
-                OsStr::new("--show-toplevel"),
+                OsStr::new("ls-files"),
+                OsStr::new("-z"),
+                OsStr::new("--"),
+                OsStr::new("*.chrome-use/inspect.json"),
             ],
-            QUICK,
+            timeout,
         )
-        .ok()?;
-        let top = result.stdout.trim();
-        (result.code == Some(0) && !top.is_empty()).then(|| PathBuf::from(top))
+    }
+    fn git_revision(&self, top: &Path, rev: &str, timeout: Duration) -> Probe<Relation> {
+        // Only a validated hex revision reaches git, so it cannot be an option.
+        let Some(rev) = facts::revision(rev) else {
+            return Probe::Found(Relation::Unknown);
+        };
+        let deadline = Instant::now() + timeout;
+        let commit = format!("{rev}^{{commit}}");
+        match git(
+            top,
+            &[
+                OsStr::new("cat-file"),
+                OsStr::new("-e"),
+                OsStr::new(&commit),
+            ],
+            timeout,
+        ) {
+            Probe::Found(_) => {}
+            Probe::Absent => return Probe::Found(Relation::Unknown),
+            Probe::TimedOut => return Probe::TimedOut,
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Probe::TimedOut;
+        }
+        let range = format!("{rev}...HEAD");
+        match git(
+            top,
+            &[
+                OsStr::new("rev-list"),
+                OsStr::new("--left-right"),
+                OsStr::new("--count"),
+                OsStr::new(&range),
+            ],
+            left,
+        ) {
+            Probe::Found(out) => Probe::Found(Relation::from_counts(&out)),
+            Probe::Absent => Probe::Found(Relation::Unknown),
+            Probe::TimedOut => Probe::TimedOut,
+        }
     }
     fn dm(&self, ocs: &Path, id: &str, text: &str) -> Result<Run, String> {
         run(
@@ -485,6 +848,33 @@ fn lsof_name(output: &str) -> Option<PathBuf> {
         .find_map(|l| l.strip_prefix('n'))
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
+}
+
+/// `git -C <dir> <args>`: stdout on exit 0, `Absent` on any other exit or
+/// when git is missing.
+fn git(dir: &Path, args: &[&OsStr], timeout: Duration) -> Probe<String> {
+    let Some(git) = program("git", &["/usr/bin", "/bin"]) else {
+        return Probe::Absent;
+    };
+    let mut argv: Vec<&OsStr> = vec![OsStr::new("-C"), dir.as_os_str()];
+    argv.extend_from_slice(args);
+    match run(&git, &argv, timeout) {
+        Ok(r) if r.timed_out => Probe::TimedOut,
+        Ok(r) if r.code == Some(0) => Probe::Found(r.stdout),
+        _ => Probe::Absent,
+    }
+}
+
+/// `ocs whoami --json`: `{"host","id","name","session","addresses"}`.
+fn parse_whoami(text: &str) -> Result<String, String> {
+    let value: Value =
+        serde_json::from_str(text.trim()).map_err(|_| "ocs whoami returned unreadable JSON")?;
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("ocs whoami did not name this session; run this from inside an agent session")?;
+    session_id(id)?;
+    Ok(id.to_string())
 }
 
 /// `ocs who --json` roster: Claude sessions are addressed by `id`, Codex
@@ -742,17 +1132,47 @@ struct StatusParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BindParams {
+struct ResolveParams {
     origin: String,
-    root: String,
-    session_id: Option<String>,
-    session_label: Option<String>,
+    page_path: String,
+    #[serde(default)]
+    source_paths: Vec<String>,
+    revision: Option<String>,
+    port: Option<u16>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct OriginParams {
+struct BindParams {
     origin: String,
+    /// Absent for extension 0.5.56, which binds whole origins.
+    path_scope: Option<String>,
+    root: String,
+    source_roots: Option<Vec<String>>,
+    session_id: Option<String>,
+    session_label: Option<String>,
+    /// The card pair's fingerprint. Absent only from extension 0.5.56.
+    fingerprint: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClaimDecideParams {
+    claim_id: String,
+    expected_affects: Vec<String>,
+    accept: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScopeParams {
+    origin: String,
+    #[serde(default = "root_scope")]
+    path_scope: String,
+}
+
+fn root_scope() -> String {
+    "/".into()
 }
 
 #[derive(Deserialize)]
@@ -770,6 +1190,8 @@ enum ConsentKind {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConsentParams {
     origin: String,
+    #[serde(default = "root_scope")]
+    path_scope: String,
     kind: ConsentKind,
     granted: bool,
 }
@@ -785,6 +1207,8 @@ enum Agent {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LaunchParams {
     origin: String,
+    #[serde(default = "root_scope")]
+    path_scope: String,
     agent: Agent,
 }
 
@@ -851,6 +1275,25 @@ struct DeliverParams {
     images: Vec<Image>,
     /// Extension-generated UUID. A repeated id never sends again.
     delivery_id: String,
+    /// Sent by extensions that know path scopes. Without it only an
+    /// origin-level `/` binding is used.
+    page_path: Option<String>,
+    /// A target this tab's picker holds instead of the scope default.
+    target: Option<TabTarget>,
+    /// Fingerprint of the target the panel showed (the tab target's, or the
+    /// effective binding's). Required with `pagePath`; a delivery whose
+    /// target differs now is refused.
+    expected_target: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TabTarget {
+    root: String,
+    source_roots: Vec<String>,
+    session_id: String,
+    session_cwd: String,
+    fingerprint: String,
 }
 
 #[derive(Deserialize)]
@@ -956,8 +1399,70 @@ struct Located {
     relative: Option<PathBuf>,
 }
 
-/// Re-check a page-supplied source path inside the bound root.
-fn locate(root: &Path, a: &Annotation) -> Option<Located> {
+/// A directory page source paths may resolve in. `prefix` is its path
+/// relative to the worktree toplevel, so a repo-relative path
+/// (`apps/admin/src/x.tsx`) resolves in the app root `apps/admin`.
+#[derive(Clone, Debug)]
+struct SourceRoot {
+    dir: PathBuf,
+    prefix: Option<PathBuf>,
+    /// The bound root itself (paths relative to it also resolve; results
+    /// display relative to it).
+    main: bool,
+}
+
+impl SourceRoot {
+    fn single(root: &Path) -> Vec<Self> {
+        vec![Self {
+            dir: root.to_path_buf(),
+            prefix: None,
+            main: true,
+        }]
+    }
+
+    /// The target's source roots, `root` first. Roots that no longer exist
+    /// are dropped, so nothing resolves in them.
+    fn of(facts: &Facts, root: &Path, source_roots: &[PathBuf]) -> Vec<Self> {
+        let mut dirs = vec![root.to_path_buf()];
+        dirs.extend(source_roots.iter().filter(|r| *r != root).cloned());
+        dirs.into_iter()
+            .filter_map(|dir| canonical_dir(&dir).filter(|c| *c == dir))
+            .map(|dir| {
+                let prefix = match facts.worktree(&dir) {
+                    facts::Worktree::Git(top) => dir
+                        .strip_prefix(&top)
+                        .ok()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .map(Path::to_path_buf),
+                    _ => None,
+                };
+                Self {
+                    main: dir == root,
+                    dir,
+                    prefix,
+                }
+            })
+            .collect()
+    }
+}
+
+/// A relative page path inside one of `roots`: first with the root's
+/// worktree prefix stripped, then (bound root only) as relative to it.
+fn resolve_relative(roots: &[SourceRoot], rel: &Path) -> Option<(usize, PathBuf)> {
+    roots.iter().enumerate().find_map(|(i, r)| {
+        if let Some(rest) = r.prefix.as_deref().and_then(|p| rel.strip_prefix(p).ok()) {
+            if !rest.as_os_str().is_empty() && contained(&r.dir, rest).is_some() {
+                return Some((i, rest.to_path_buf()));
+            }
+        }
+        (r.main && contained(&r.dir, rel).is_some()).then(|| (i, rel.to_path_buf()))
+    })
+}
+
+/// Re-check a page-supplied source path inside the target's source roots.
+/// Anything that does not resolve there is unverified, even when it exists
+/// elsewhere in the same worktree.
+fn locate(roots: &[SourceRoot], a: &Annotation) -> Option<Located> {
     let raw = a.source_path.as_deref()?.trim();
     if raw.is_empty() {
         return None;
@@ -968,14 +1473,25 @@ fn locate(root: &Path, a: &Annotation) -> Option<Located> {
         _ => String::new(),
     };
     let resolved = match absolute_parts(raw) {
-        Some(parts) => resolve_absolute(root, &parts, 1),
+        Some(parts) => roots
+            .iter()
+            .enumerate()
+            .find_map(|(i, r)| resolve_absolute(&r.dir, &parts, 1).map(|(rel, v)| (i, rel, v))),
         None => relative(raw)
             .ok()
-            .filter(|r| contained(root, r).is_some())
-            .map(|r| (r, Verification::Verified)),
+            .and_then(|r| resolve_relative(roots, &r))
+            .map(|(i, rel)| (i, rel, Verification::Verified)),
     };
     let (shown, verification, rel) = match resolved {
-        Some((rel, v)) => (rel.to_string_lossy().replace('\\', "/"), v, Some(rel)),
+        Some((i, rel, v)) => {
+            // Paths in an extra source root are shown in full.
+            let shown = if roots[i].main {
+                rel.clone()
+            } else {
+                roots[i].dir.join(&rel)
+            };
+            (shown.to_string_lossy().replace('\\', "/"), v, Some(shown))
+        }
         None => (raw.to_string(), Verification::Unverified, None),
     };
     Some(Located {
@@ -1007,14 +1523,17 @@ fn source_hint(raw: &str) -> Result<SourceHint, String> {
 }
 
 impl SourceHint {
-    /// A suggestion only: an absolute path counts when a suffix of at least
-    /// two components exists inside the candidate.
-    fn matches(&self, root: &Path) -> bool {
+    /// A suggestion only: a relative path counts when it resolves in one of
+    /// the roots, an absolute one when a suffix of at least two components
+    /// exists inside one.
+    fn matches(&self, roots: &[SourceRoot]) -> bool {
         match self {
-            Self::Relative(rel) => contained(root, rel).is_some(),
+            Self::Relative(rel) => resolve_relative(roots, rel).is_some(),
             Self::Absolute(parts) => {
                 let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
-                resolve_absolute(root, &parts, 2).is_some()
+                roots
+                    .iter()
+                    .any(|r| resolve_absolute(&r.dir, &parts, 2).is_some())
             }
         }
     }
@@ -1127,15 +1646,23 @@ impl Inspect<'_> {
     fn dispatch(&self, operation: &str, params: &Value) -> Result<Value, String> {
         match operation {
             "inspectStatus" => self.status(parse(operation, params)?),
+            "inspectResolve" => self.resolve(parse(operation, params)?),
             "inspectBind" => self.bind(parse(operation, params)?),
+            "inspectClaimDecide" => self.decide(parse(operation, params)?),
             "inspectUnbind" => {
-                let p: OriginParams = parse(operation, params)?;
+                // The options page acts for the user and may remove any scope.
+                let p: ScopeParams = parse(operation, params)?;
                 let origin = origin(&p.origin)?;
+                let path_scope = scope::path_scope(&p.path_scope)?;
                 let existed = self.locked(|| {
-                    let mut bindings = self.load()?;
-                    let existed = bindings.remove(&origin).is_some();
+                    let mut store = self.load()?;
+                    let before = store.bindings.len();
+                    store
+                        .bindings
+                        .retain(|b| !(b.origin == origin && b.path_scope == path_scope));
+                    let existed = store.bindings.len() != before;
                     if existed {
-                        self.persist(&bindings)?;
+                        self.persist(&store)?;
                     }
                     Ok(existed)
                 })?;
@@ -1143,15 +1670,27 @@ impl Inspect<'_> {
             }
             "inspectBindings" => {
                 let _: EmptyParams = parse(operation, params)?;
-                Ok(json!({ "bindings": self.load()?.into_values().collect::<Vec<_>>() }))
+                let store = self.load()?;
+                let claims: Vec<Value> = store
+                    .pending_claims
+                    .iter()
+                    .map(|c| store.claim_view(c))
+                    .collect();
+                Ok(json!({
+                    "bindings": store.bindings.iter().map(Binding::view).collect::<Vec<_>>(),
+                    "pendingClaims": claims,
+                }))
             }
             "inspectConsent" => {
                 let p: ConsentParams = parse(operation, params)?;
                 let origin = origin(&p.origin)?;
+                let path_scope = scope::path_scope(&p.path_scope)?;
                 let binding = self.locked(|| {
-                    let mut bindings = self.load()?;
-                    let binding = bindings
-                        .get_mut(&origin)
+                    let mut store = self.load()?;
+                    let binding = store
+                        .bindings
+                        .iter_mut()
+                        .find(|b| b.origin == origin && b.path_scope == path_scope)
                         .ok_or("Bind this site to a project before granting consent")?;
                     match p.kind {
                         ConsentKind::Plugin => binding.consents.plugin = p.granted,
@@ -1159,17 +1698,18 @@ impl Inspect<'_> {
                     }
                     binding.updated_at = super::conversation::now();
                     let binding = binding.clone();
-                    self.persist(&bindings)?;
+                    self.persist(&store)?;
                     Ok(binding)
                 })?;
-                Ok(json!({ "binding": binding }))
+                Ok(json!({ "binding": binding.view() }))
             }
             "inspectLaunchCommand" => {
                 let p: LaunchParams = parse(operation, params)?;
                 let origin = origin(&p.origin)?;
-                let binding = self
-                    .load()?
-                    .remove(&origin)
+                let path_scope = scope::path_scope(&p.path_scope)?;
+                let store = self.load()?;
+                let binding = store
+                    .binding(&origin, &path_scope)
                     .ok_or("Bind this site to a project first")?;
                 let program = match p.agent {
                     Agent::Claude => "claude",
@@ -1234,11 +1774,13 @@ impl Inspect<'_> {
         )))
     }
 
-    fn load(&self) -> Result<BTreeMap<String, Binding>, String> {
+    /// The binding store. A version 1 file (a map from origin to binding)
+    /// is migrated in memory and written as version 2 on the next change.
+    fn load(&self) -> Result<Store, String> {
         private_tree(&self.root)?;
         let path = self.store();
         match fs::symlink_metadata(&path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Store::default()),
             Err(_) => return Err("Cannot inspect the Inspect & Ask binding store".into()),
             Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => {
                 return Err("Inspect & Ask binding store must be a regular file".into())
@@ -1253,22 +1795,39 @@ impl Inspect<'_> {
         if data.len() as u64 > MAX_STORE {
             return Err("Inspect & Ask binding store exceeds its limit".into());
         }
-        let bindings: BTreeMap<String, Binding> = serde_json::from_slice(&data)
-            .map_err(|_| "Inspect & Ask binding store is corrupt; it was left unchanged")?;
-        for (key, binding) in &bindings {
-            if key != &binding.origin || origin(key).is_err() {
-                return Err("Inspect & Ask binding store has an invalid origin".into());
+        const CORRUPT: &str = "Inspect & Ask binding store is corrupt; it was left unchanged";
+        let value: Value = serde_json::from_slice(&data).map_err(|_| CORRUPT)?;
+        // An origin is never the string "version", so the key tells the
+        // formats apart.
+        let store = if value.get("version").is_some() {
+            if value["version"] != STORE_VERSION {
+                return Err("Inspect & Ask binding store was written by a newer chrome-use; upgrade the CLI".into());
             }
-        }
-        Ok(bindings)
+            serde_json::from_value::<Store>(value).map_err(|_| CORRUPT)?
+        } else {
+            let v1: BTreeMap<String, BindingV1> =
+                serde_json::from_value(value).map_err(|_| CORRUPT)?;
+            for (key, binding) in &v1 {
+                if key != &binding.origin || origin(key).is_err() {
+                    return Err("Inspect & Ask binding store has an invalid origin".into());
+                }
+            }
+            Store::migrate(v1)
+        };
+        store.validate()?;
+        Ok(store)
     }
 
-    fn persist(&self, bindings: &BTreeMap<String, Binding>) -> Result<(), String> {
-        if bindings.len() > MAX_BINDINGS {
+    fn persist(&self, store: &Store) -> Result<(), String> {
+        if store.bindings.len() > MAX_BINDINGS {
             return Err("Too many Inspect & Ask bindings; unbind some sites first".into());
         }
+        if store.pending_claims.len() > MAX_CLAIMS {
+            return Err("Too many pending Inspect & Ask claims; decide some first".into());
+        }
+        store.validate()?;
         private_tree(&self.root)?;
-        let data = serde_json::to_vec_pretty(bindings).map_err(|_| "Cannot encode bindings")?;
+        let data = serde_json::to_vec_pretty(store).map_err(|_| "Cannot encode bindings")?;
         atomic_write(&self.store(), &data, None)
     }
 
@@ -1281,6 +1840,10 @@ impl Inspect<'_> {
         (ocs, roster)
     }
 
+    /// The origin-level status extension 0.5.56 asks for. It never picks a
+    /// scope for a path it does not know: when the origin has a path-scoped
+    /// binding or a pending claim, it says `upgradeRequired` instead of
+    /// naming a binding.
     fn status(&self, p: StatusParams) -> Result<Value, String> {
         let origin = origin(&p.origin)?;
         if p.source_paths.len() > MAX_SOURCE_PATHS {
@@ -1291,13 +1854,17 @@ impl Inspect<'_> {
             .iter()
             .map(|s| source_hint(s))
             .collect::<Result<Vec<_>, _>>()?;
-        let bindings = self.load()?;
-        let binding = bindings.get(&origin).cloned();
+        let store = self.load()?;
+        let upgrade = store.needs_upgrade(&origin);
+        let binding = (!upgrade)
+            .then(|| store.binding(&origin, "/").cloned())
+            .flatten();
         let (ocs, roster) = self.roster();
         let (sessions, roster_error) = match roster {
             Ok(s) => (s, None),
             Err(e) => (Vec::new(), ocs.as_ref().map(|_| e)),
         };
+        let facts = Facts::new(self.sys);
         let bound_root = binding.as_ref().and_then(|b| canonical_dir(&b.root));
         let offered: Vec<&Session> = match (&binding, &bound_root) {
             (Some(_), Some(root)) => sessions.iter().filter(|s| related(&s.cwd, root)).collect(),
@@ -1307,8 +1874,8 @@ impl Inspect<'_> {
         let port_cwd = p
             .port
             .filter(|_| is_loopback(&origin))
-            .and_then(|port| self.sys.port_cwd(port));
-        let candidates = self.candidates(port_cwd, &bindings, &sessions, &source_paths);
+            .and_then(|port| facts.port_owner(port));
+        let candidates = self.candidates(&facts, port_cwd, &store, &sessions, &source_paths);
         let ocs_state = match &ocs {
             Some(o) => json!({"installed": true, "path": o.path, "version": o.version}),
             None => json!({"installed": false}),
@@ -1320,8 +1887,11 @@ impl Inspect<'_> {
             "sessions": offered,
             "candidates": candidates,
         });
+        if upgrade {
+            out["upgradeRequired"] = true.into();
+        }
         if let Some(binding) = binding {
-            out["binding"] = serde_json::to_value(&binding).map_err(|e| e.to_string())?;
+            out["binding"] = binding.view();
             out["binding"]["rootExists"] = bound_root.is_some().into();
             if let Some(id) = &binding.session_id {
                 let live = sessions.iter().find(|s| &s.id == id);
@@ -1347,8 +1917,9 @@ impl Inspect<'_> {
 
     fn candidates(
         &self,
+        facts: &Facts,
         port_cwd: Option<PathBuf>,
-        bindings: &BTreeMap<String, Binding>,
+        store: &Store,
         sessions: &[Session],
         source_paths: &[SourceHint],
     ) -> Vec<Value> {
@@ -1373,23 +1944,26 @@ impl Inspect<'_> {
         if let Some(cwd) = port_cwd {
             add(&cwd, "dev-server-port");
         }
-        for binding in bindings.values() {
+        for binding in &store.bindings {
             add(&binding.root, "previous-binding");
         }
-        let mut cwds: Vec<&Path> = sessions.iter().map(|s| s.cwd.as_path()).collect();
+        let mut cwds: Vec<PathBuf> = sessions
+            .iter()
+            .filter_map(|s| canonical_dir(&s.cwd))
+            .collect();
         cwds.sort();
         cwds.dedup();
         for cwd in cwds {
-            if canonical_dir(cwd).is_none() {
-                continue;
+            match facts.worktree(&cwd) {
+                facts::Worktree::Git(top) => add(&top, "ocs-session"),
+                _ => add(&cwd, "ocs-session"),
             }
-            let top = self.sys.git_toplevel(cwd);
-            add(top.as_deref().unwrap_or(cwd), "ocs-session");
         }
         let mut scored: Vec<(PathBuf, Vec<&'static str>, usize)> = found
             .into_iter()
             .map(|(root, mut reasons)| {
-                let matched = source_paths.iter().filter(|p| p.matches(&root)).count();
+                let roots = SourceRoot::single(&root);
+                let matched = source_paths.iter().filter(|p| p.matches(&roots)).count();
                 if matched > 0 {
                     reasons.push("source-paths");
                 }
@@ -1418,70 +1992,29 @@ impl Inspect<'_> {
             .collect()
     }
 
-    fn bind(&self, p: BindParams) -> Result<Value, String> {
-        let origin = origin(&p.origin)?;
-        if p.root.is_empty() || p.root.len() > 4096 || p.root.chars().any(char::is_control) {
-            return Err("Project directory path is invalid".into());
-        }
-        if !Path::new(&p.root).is_absolute() {
-            return Err("Project directory must be an absolute path".into());
-        }
-        let root = canonical_dir(Path::new(&p.root))
-            .ok_or_else(|| format!("Project directory {:?} does not exist", p.root))?;
-        if root.to_string_lossy().chars().any(char::is_control) {
-            return Err("Project directory path is invalid".into());
-        }
-        let label = p
-            .session_label
-            .as_deref()
-            .map(|l| line(l, 120))
-            .filter(|l| !l.is_empty());
-        let mut session_cwd = None;
-        if let Some(id) = &p.session_id {
-            session_id(id)?;
-            let (ocs, roster) = self.roster();
-            if ocs.is_none() {
-                return Err("ocs is not installed, so the session cannot be confirmed".into());
-            }
-            let session = roster?
-                .into_iter()
-                .find(|s| &s.id == id)
-                .ok_or("That session is no longer running; pick another")?;
-            let cwd = canonical_dir(&session.cwd)
-                .ok_or("That session's working directory no longer exists")?;
-            if !(cwd.starts_with(&root) || root.starts_with(&cwd)) {
-                return Err("That session works in a different directory than the project".into());
-            }
-            session_cwd = Some(cwd);
-        }
-        let binding = self.locked(|| {
-            let mut bindings = self.load()?;
-            // Consent was given for one project and one session.
-            let consents = bindings
-                .get(&origin)
-                .filter(|b| b.root == root && b.session_id == p.session_id)
-                .map(|b| b.consents.clone())
-                .unwrap_or_default();
-            let binding = Binding {
-                origin: origin.clone(),
-                root: root.clone(),
-                session_id: p.session_id.clone(),
-                session_cwd: session_cwd.clone(),
-                session_label: label.clone(),
-                consents,
-                updated_at: super::conversation::now(),
-            };
-            bindings.insert(origin.clone(), binding.clone());
-            self.persist(&bindings)?;
-            Ok(binding)
-        })?;
-        Ok(json!({ "binding": binding }))
-    }
-
     fn deliver(&self, p: DeliverParams) -> Result<Value, String> {
         let origin = origin(&p.origin)?;
         let delivery_id = delivery_id(&p.delivery_id)?;
         let page = page_url(&p.page_url, &origin)?;
+        let page_path = match &p.page_path {
+            Some(raw) => {
+                let path = scope::page_path(raw)?;
+                let url_path = url::Url::parse(&page)
+                    .ok()
+                    .and_then(|u| scope::page_path(u.path()).ok());
+                if url_path.as_deref() != Some(path.as_str()) {
+                    return Err("pagePath does not match pageUrl".into());
+                }
+                if p.expected_target.is_none() {
+                    return Err("expectedTarget is required with pagePath".into());
+                }
+                Some(path)
+            }
+            None if p.target.is_some() => {
+                return Err("A tab target needs pagePath".into());
+            }
+            None => None,
+        };
         let instruction = p
             .instruction
             .as_deref()
@@ -1553,34 +2086,99 @@ impl Inspect<'_> {
             return Ok(duplicate(&record));
         }
 
-        let Some(binding) = self.load()?.remove(&origin) else {
-            return Ok(json!({ "state": "noBinding" }));
+        // The binding (scope default) or the tab's own target. Without
+        // pagePath the caller is extension 0.5.56: only an origin-level
+        // binding is used, and only when nothing scoped could apply instead.
+        // The choice is made, and compared with the target the panel showed,
+        // under the bindings lock, so a binding replaced since then (claim
+        // accepted, unlink and relink, a narrower scope added) is refused,
+        // never sent to.
+        let picked = self.locked(|| {
+            let store = self.load()?;
+            let binding = match &page_path {
+                None if store.needs_upgrade(&origin) => {
+                    return Ok(Err(json!({ "state": "upgradeRequired" })));
+                }
+                None => store.binding(&origin, "/").cloned(),
+                Some(_) if p.target.is_some() => None,
+                Some(page) => store.effective(&origin, page).cloned(),
+            };
+            if let Some(expected) = &p.expected_target {
+                let actual = match (&p.target, &binding) {
+                    (Some(tab), _) => Some(tab.fingerprint.clone()),
+                    (None, Some(b)) => Some(b.fingerprint()),
+                    (None, None) => None,
+                };
+                if actual.as_ref() != Some(expected) {
+                    return Ok(Err(
+                        json!({ "state": "targetChanged", "reason": "bindingChanged" }),
+                    ));
+                }
+            }
+            Ok(Ok(binding))
+        })?;
+        let binding = match picked {
+            Ok(binding) => binding,
+            Err(state) => return Ok(state),
         };
-        let consent = match p.kind {
-            DeliverKind::Edit => true,
-            DeliverKind::SetupPlugin => binding.consents.plugin,
-            DeliverKind::SetupTestEnv => binding.consents.test_env,
-        };
-        if !consent {
-            return Err("The user has not consented to this setup for the project".into());
+        let facts = Facts::new(self.sys);
+        if p.target.is_some() && p.kind != DeliverKind::Edit {
+            // Consent belongs to a persisted binding, never to a tab.
+            return Err("Setup requests go to the site's bound project, not a tab target".into());
         }
-        let root = canonical_dir(&binding.root)
-            .filter(|r| *r == binding.root)
-            .ok_or("The bound project directory moved or no longer exists; bind the site again")?;
-        let Some(id) = binding.session_id.clone() else {
-            return Ok(json!({ "state": "noSession" }));
-        };
+        if p.target.is_none() && binding.is_none() {
+            return Ok(json!({ "state": "noBinding" }));
+        }
+        if let Some(binding) = &binding {
+            let consent = match p.kind {
+                DeliverKind::Edit => true,
+                DeliverKind::SetupPlugin => binding.consents.plugin,
+                DeliverKind::SetupTestEnv => binding.consents.test_env,
+            };
+            if !consent {
+                return Err("The user has not consented to this setup for the project".into());
+            }
+            canonical_dir(&binding.root)
+                .filter(|r| *r == binding.root)
+                .ok_or(
+                    "The bound project directory moved or no longer exists; bind the site again",
+                )?;
+            if binding.session_id.is_none() {
+                return Ok(json!({ "state": "noSession" }));
+            }
+        }
         let (ocs, roster) = self.roster();
         let Some(ocs) = ocs else {
             return Ok(json!({ "state": "noOcs" }));
         };
         let roster = roster?;
-        let Some(live) = roster.iter().find(|s| s.id == id) else {
-            return Ok(json!({ "state": "noSession" }));
+        let live = resolve::live(&roster);
+        let target = match (&binding, &p.target) {
+            (Some(binding), _) => {
+                let id = binding.session_id.as_deref().unwrap_or_default();
+                let Some(session) = live.iter().find(|l| l.session.id == id) else {
+                    return Ok(json!({ "state": "noSession" }));
+                };
+                if binding.session_cwd.as_ref() != Some(&session.cwd) {
+                    return Ok(json!({ "state": "sessionChanged" }));
+                }
+                if !resolve::port_holds(&facts, binding) {
+                    return Ok(json!({ "state": "targetChanged", "reason": "portMoved" }));
+                }
+                binding.target()
+            }
+            (None, Some(tab)) => {
+                let page = page_path.as_deref().unwrap_or("/");
+                match self.tab_target(&facts, &origin, page, tab, &live)? {
+                    Some(target) => target,
+                    None => return Ok(json!({ "state": "targetChanged" })),
+                }
+            }
+            (None, None) => return Ok(json!({ "state": "noBinding" })),
         };
-        if binding.session_cwd.is_none() || canonical_dir(&live.cwd) != binding.session_cwd {
-            return Ok(json!({ "state": "sessionChanged" }));
-        }
+        let root = target.root.clone();
+        let id = target.session_id.clone().unwrap_or_default();
+        let source_roots = SourceRoot::of(&facts, &root, &target.source_roots);
 
         let mut random = [0u8; 16];
         getrandom::getrandom(&mut random).map_err(|_| "Cannot create a context identifier")?;
@@ -1602,8 +2200,11 @@ impl Inspect<'_> {
         );
         let header = "[chrome-use Inspect & Ask] from the user's browser".to_string();
 
-        let located: Vec<Option<Located>> =
-            p.annotations.iter().map(|a| locate(&root, a)).collect();
+        let located: Vec<Option<Located>> = p
+            .annotations
+            .iter()
+            .map(|a| locate(&source_roots, a))
+            .collect();
         let shots: Vec<String> = images
             .iter()
             .map(|(i, _)| format!("element-{}.png", i + 1))
@@ -1929,83 +2530,10 @@ fn powershell_command(root: &str, program: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::testkit::*;
     use super::*;
     use std::cell::RefCell;
     use tempfile::TempDir;
-
-    #[derive(Default)]
-    struct Fake {
-        installed: bool,
-        sessions: Vec<Session>,
-        port: Option<PathBuf>,
-        tops: Vec<(PathBuf, PathBuf)>,
-        dm_result: RefCell<Option<Run>>,
-        sent: RefCell<Vec<(String, String)>>,
-    }
-    impl System for Fake {
-        fn ocs(&self) -> Option<Ocs> {
-            self.installed.then(|| Ocs {
-                path: "/fake/ocs".into(),
-                version: Some("0.8.3".into()),
-            })
-        }
-        fn roster(&self, _: &Path) -> Result<Vec<Session>, String> {
-            Ok(self.sessions.clone())
-        }
-        fn port_cwd(&self, _: u16) -> Option<PathBuf> {
-            self.port.clone()
-        }
-        fn git_toplevel(&self, dir: &Path) -> Option<PathBuf> {
-            self.tops
-                .iter()
-                .find(|(d, _)| d == dir)
-                .map(|(_, t)| t.clone())
-        }
-        fn dm(&self, _: &Path, id: &str, text: &str) -> Result<Run, String> {
-            self.sent.borrow_mut().push((id.into(), text.into()));
-            Ok(self.dm_result.borrow_mut().take().unwrap_or(Run {
-                code: Some(0),
-                stdout: r#"{"v":1,"stored":true,"channel":"dm-x","seq":7,"wake":"delivered","exit":0,"lines":[]}"#.into(),
-                ..Run::default()
-            }))
-        }
-    }
-
-    fn session(id: &str, cwd: &Path) -> Session {
-        Session {
-            id: id.into(),
-            kind: "claude".into(),
-            name: Some("fixture".into()),
-            cwd: cwd.into(),
-            status: Some("idle".into()),
-        }
-    }
-
-    struct World {
-        _temp: TempDir,
-        data: PathBuf,
-        project: PathBuf,
-    }
-    fn world() -> World {
-        let temp = TempDir::new().unwrap();
-        let base = fs::canonicalize(temp.path()).unwrap();
-        let project = base.join("my project");
-        fs::create_dir_all(project.join("src")).unwrap();
-        fs::write(project.join("src/App.tsx"), "x").unwrap();
-        World {
-            data: base.join("home/.chrome-use/inspect"),
-            project,
-            _temp: temp,
-        }
-    }
-    fn call(w: &World, sys: &Fake, op: &str, params: Value) -> Result<Value, String> {
-        Inspect {
-            root: w.data.clone(),
-            sys,
-        }
-        .handle(op, &params)
-    }
-    const ORIGIN: &str = "http://localhost:5173";
 
     #[test]
     fn origins_must_be_exact_serializations() {
@@ -2066,39 +2594,60 @@ mod tests {
             markdown: String::new(),
         };
         let inside = w.project.join("src/App.tsx");
-        let abs = locate(&w.project, &annotation(inside.to_str().unwrap())).unwrap();
+        let abs = locate(
+            &SourceRoot::single(&w.project),
+            &annotation(inside.to_str().unwrap()),
+        )
+        .unwrap();
         assert_eq!(abs.verification, Verification::Verified);
         assert_eq!(abs.display, "src/App.tsx:3");
-        let escape = locate(&w.project, &annotation(outside.to_str().unwrap())).unwrap();
+        let escape = locate(
+            &SourceRoot::single(&w.project),
+            &annotation(outside.to_str().unwrap()),
+        )
+        .unwrap();
         assert_eq!(escape.verification, Verification::Unverified);
         assert_eq!(
-            locate(&w.project, &annotation("../secret.txt"))
-                .unwrap()
-                .verification,
+            locate(
+                &SourceRoot::single(&w.project),
+                &annotation("../secret.txt")
+            )
+            .unwrap()
+            .verification,
             Verification::Unverified
         );
         // A path from another machine resolves by its longest suffix that
         // exists inside the root; nothing outside the root is consulted.
         let ci = locate(
-            &w.project,
+            &SourceRoot::single(&w.project),
             &annotation("/var/jenkins/workspace/admin/src/App.tsx"),
         )
         .unwrap();
         assert_eq!(ci.verification, Verification::Suffix);
         assert_eq!(ci.display, "src/App.tsx:3");
         assert_eq!(ci.relative.as_deref(), Some(Path::new("src/App.tsx")));
-        let win = locate(&w.project, &annotation("C:\\ci\\admin\\src\\App.tsx")).unwrap();
+        let win = locate(
+            &SourceRoot::single(&w.project),
+            &annotation("C:\\ci\\admin\\src\\App.tsx"),
+        )
+        .unwrap();
         assert_eq!(win.verification, Verification::Suffix);
         assert_eq!(
-            locate(&w.project, &annotation("/ci/admin/src/../src/App.tsx"))
-                .unwrap()
-                .verification,
+            locate(
+                &SourceRoot::single(&w.project),
+                &annotation("/ci/admin/src/../src/App.tsx")
+            )
+            .unwrap()
+            .verification,
             Verification::Unverified
         );
         assert_eq!(
-            locate(&w.project, &annotation("/ci/admin/src/Gone.tsx"))
-                .unwrap()
-                .verification,
+            locate(
+                &SourceRoot::single(&w.project),
+                &annotation("/ci/admin/src/Gone.tsx")
+            )
+            .unwrap()
+            .verification,
             Verification::Unverified
         );
         #[cfg(unix)]
@@ -2106,7 +2655,7 @@ mod tests {
             // A suffix that resolves through a symlink out of the root fails.
             std::os::unix::fs::symlink(&outside, w.project.join("leak.txt")).unwrap();
             assert_eq!(
-                locate(&w.project, &annotation("/ci/leak.txt"))
+                locate(&SourceRoot::single(&w.project), &annotation("/ci/leak.txt"))
                     .unwrap()
                     .verification,
                 Verification::Unverified
@@ -2248,10 +2797,7 @@ mod tests {
                 session("claude-33333333", &base.join("gone")),
             ],
             port: Some(api.clone()),
-            tops: vec![
-                (web.join("src"), web.clone()),
-                (api.join("pkg"), api.clone()),
-            ],
+            tops: vec![web.clone(), api.clone()],
             ..Fake::default()
         };
         let status = call(
@@ -2580,7 +3126,7 @@ mod tests {
         let done = run(
             sh,
             &[arg("-c"), arg("echo out; echo err >&2; exit 3")],
-            QUICK,
+            facts::PER_CALL,
         )
         .unwrap();
         assert_eq!(
@@ -2596,7 +3142,12 @@ mod tests {
         .unwrap();
         assert!(slow.timed_out && slow.code.is_none());
         // A background descendant holding the pipe does not stall the caller.
-        let detached = run(sh, &[arg("-c"), arg("sleep 10 & echo started")], QUICK).unwrap();
+        let detached = run(
+            sh,
+            &[arg("-c"), arg("sleep 10 & echo started")],
+            facts::PER_CALL,
+        )
+        .unwrap();
         assert_eq!(detached.code, Some(0));
         assert_eq!(detached.stdout, "started\n");
         assert!(started.elapsed() < Duration::from_secs(3));
@@ -2891,11 +3442,20 @@ mod tests {
             fn roster(&self, _: &Path) -> Result<Vec<Session>, String> {
                 Err("offline".into())
             }
-            fn port_cwd(&self, _: u16) -> Option<PathBuf> {
-                None
+            fn whoami(&self, _: &Path) -> Result<String, String> {
+                Err("offline".into())
             }
-            fn git_toplevel(&self, _: &Path) -> Option<PathBuf> {
-                None
+            fn port_cwd(&self, _: u16, _: Duration) -> Probe<PathBuf> {
+                Probe::Absent
+            }
+            fn git_toplevel(&self, _: &Path, _: Duration) -> Probe<PathBuf> {
+                Probe::Absent
+            }
+            fn git_configs(&self, _: &Path, _: Duration) -> Probe<String> {
+                Probe::Absent
+            }
+            fn git_revision(&self, _: &Path, _: &str, _: Duration) -> Probe<Relation> {
+                Probe::Absent
             }
             fn dm(&self, _: &Path, _: &str, _: &str) -> Result<Run, String> {
                 Err("offline".into())

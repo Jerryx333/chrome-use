@@ -133,33 +133,45 @@ function inspectRequest(operation, params = {}) {
     })
   })
 }
+function scopeText(origin, pathScope) {
+  return origin + (pathScope && pathScope !== '/' ? pathScope : '')
+}
+function inspectButton(label, onClick) {
+  const button = document.createElement('button'); button.className = 'btn'; button.textContent = label
+  button.addEventListener('click', async () => { button.disabled = true; try { await onClick() } catch (error) { el('inspectBindingsHint').textContent = error.message } renderBindings() })
+  return button
+}
 async function renderBindings() {
   const hint = el('inspectBindingsHint'), list = el('inspectBindings')
   if (!hasChrome) { hint.textContent = 'Bindings appear here once a site is bound.'; return }
   try {
-    const { bindings } = await inspectRequest('inspectBindings')
+    const { bindings, pendingClaims = [] } = await inspectRequest('inspectBindings')
     list.replaceChildren()
-    hint.textContent = bindings.length ? 'Remove a binding to choose again next time. Consents are kept per project.' : 'No site is bound yet. The first Send on a site asks which project it belongs to.'
+    hint.textContent = bindings.length || pendingClaims.length ? 'A site (optionally limited to a path) sends to one agent session. Unbind to choose again; a session can also claim a site with `chrome-use inspect link <url>`.' : 'No site is bound yet. The first pick on a site asks where its requests go.'
+    for (const claim of pendingClaims) {
+      const row = document.createElement('div'); row.className = 'row'
+      const text = document.createElement('div'); text.className = 'grow'
+      const name = document.createElement('div'); name.className = 'name'; name.textContent = `Pending: ${claim.sessionLabel || claim.sessionId} asks for ${scopeText(claim.origin, claim.pathScope)}`
+      const detail = document.createElement('div'); detail.className = 'hint'
+      detail.textContent = `${claim.root}${claim.affects?.length ? ' · replaces ' + claim.affects.map(a => `${a.sessionLabel || a.sessionId} (${scopeText(a.origin, a.pathScope)})`).join(', ') : ''}`
+      text.append(name, detail); row.append(text)
+      row.append(inspectButton('Replace', () => inspectRequest('inspectClaimDecide', { claimId: claim.claimId, expectedAffects: claim.expectedAffects || [], accept: true })))
+      row.append(inspectButton('Keep current', () => inspectRequest('inspectClaimDecide', { claimId: claim.claimId, expectedAffects: claim.expectedAffects || [], accept: false })))
+      list.append(row)
+    }
     for (const binding of bindings) {
-      const row = document.createElement('div')
-      row.className = 'row'
-      const text = document.createElement('div')
-      text.className = 'grow'
-      const name = document.createElement('div'); name.className = 'name'; name.textContent = binding.origin
+      const row = document.createElement('div'); row.className = 'row'
+      const text = document.createElement('div'); text.className = 'grow'
+      const name = document.createElement('div'); name.className = 'name'; name.textContent = scopeText(binding.origin, binding.pathScope)
       const detail = document.createElement('div'); detail.className = 'hint'
       const consents = Object.entries(binding.consents || {}).filter(([, v]) => v).map(([k]) => k === 'plugin' ? 'dev source mapping' : 'test-build source mapping')
-      detail.textContent = `${binding.root}${binding.sessionLabel ? ' · ' + binding.sessionLabel : ''}${consents.length ? ' · consented: ' + consents.join(', ') : ''}`
-      text.append(name, detail)
-      row.append(text)
+      detail.textContent = `${binding.root}${binding.sessionLabel ? ' · ' + binding.sessionLabel : ''}${binding.source === 'linked' ? ' · linked by the session' : ''}${consents.length ? ' · consented: ' + consents.join(', ') : ''}`
+      text.append(name, detail); row.append(text)
       for (const kind of ['plugin', 'testEnv']) {
         if (!binding.consents?.[kind]) continue
-        const revoke = document.createElement('button'); revoke.className = 'btn'; revoke.textContent = kind === 'plugin' ? 'Revoke dev consent' : 'Revoke test consent'
-        revoke.addEventListener('click', async () => { await inspectRequest('inspectConsent', { origin: binding.origin, kind, granted: false }).catch(() => {}); renderBindings() })
-        row.append(revoke)
+        row.append(inspectButton(kind === 'plugin' ? 'Revoke dev consent' : 'Revoke test consent', () => inspectRequest('inspectConsent', { origin: binding.origin, ...(binding.pathScope ? { pathScope: binding.pathScope } : {}), kind, granted: false })))
       }
-      const remove = document.createElement('button'); remove.className = 'btn'; remove.textContent = 'Unbind'
-      remove.addEventListener('click', async () => { await inspectRequest('inspectUnbind', { origin: binding.origin }).catch(() => {}); renderBindings() })
-      row.append(remove)
+      row.append(inspectButton('Unbind', () => inspectRequest('inspectUnbind', { origin: binding.origin, ...(binding.pathScope ? { pathScope: binding.pathScope } : {}) })))
       list.append(row)
     }
   } catch (error) {

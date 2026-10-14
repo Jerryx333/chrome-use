@@ -90,10 +90,12 @@
           </details>
           <span id="queue" class="hint"></span>
           <label id="modelChip" class="chip model"><span class="sr-only">Model</span><select id="model"><option value="">Default model</option></select></label>
-          <button id="resume" class="quiet" type="button" hidden>Resume queue</button>
-          <button id="sendDirect" class="quiet" type="button" hidden>Stop &amp; send</button>
-          <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop">■</button>
-          <button id="send" class="primary send" type="submit" title="Send" aria-label="Send message">↑</button>
+          <span class="composer-send">
+            <button id="resume" class="quiet" type="button" hidden>Resume queue</button>
+            <button id="sendDirect" class="quiet" type="button" hidden>Stop &amp; send</button>
+            <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop">■</button>
+            <button id="send" class="primary send" type="submit" title="Send" aria-label="Send message">↑</button>
+          </span>
         </div>
       </div>
     </form>

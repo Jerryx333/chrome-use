@@ -117,7 +117,7 @@ if (chrome.runtime.getManifest().key) {
     },
     inspectState: tabId => {
       const instance = globalThis.__chromeUseInspect.registry.get(tabId);
-      return { hostReady: globalThis.__chromeUseInspect.hostReady(), instance: instance && { origin: instance.origin, frameId: instance.frameId, annotations: instance.annotations.length, images: instance.images.size, generation: instance.generation } };
+      return { hostReady: globalThis.__chromeUseInspect.hostReady(), resolveReady: globalThis.__chromeUseInspect.resolveReady(), instance: instance && { origin: instance.origin, frameId: instance.frameId, annotations: instance.annotations.length, images: instance.images.size, generation: instance.generation, tabTarget: instance.tabTarget || null } };
     },
   };
 }
@@ -136,12 +136,13 @@ const inspectController = new InspectController({
   chrome,
   request: (operation, params) => agentPanelBridge.request(operation, params),
   hostReady: () => { const state = hostConnection.snapshot(); return !!port && state.connected && state.agentPanel?.inspect === true; },
+  resolveReady: () => hostConnection.snapshot().agentPanel?.inspectResolve === true,
 });
 inspectController.install();
 if (chrome.runtime.getManifest().key) globalThis.__chromeUseInspect = inspectController;
 // Extension pages may manage bindings and consents (options page); delivery,
 // binding and status belong to the authenticated input frame only.
-const PAGE_INSPECT_OPERATIONS = ['inspectBindings', 'inspectUnbind', 'inspectConsent'];
+const PAGE_INSPECT_OPERATIONS = ['inspectBindings', 'inspectUnbind', 'inspectConsent', 'inspectClaimDecide'];
 const scheduleNotifications = new ScheduleNotifications({ storage: chrome.storage.local, notifications: chrome.notifications });
 function pollScheduleNotifications() {
   const state = hostConnection.snapshot();

@@ -568,7 +568,12 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"skillLibrary":true,"schedules":true,"inspect":true,"chatAgents":CHAT_AGENTS})
+    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"chatAgents":CHAT_AGENTS})
+}
+
+/// `chrome-use inspect link|unlink|list`; returns the process exit code.
+pub fn run_inspect_cli(args: &[String], json: bool) -> i32 {
+    inspect::run_cli(args, json)
 }
 
 pub fn handle_for_profile(
@@ -659,6 +664,7 @@ mod tests {
             "skillLibrary",
             "schedules",
             "inspect",
+            "inspectResolve",
         ] {
             assert_eq!(c[feature], true, "{feature} unavailable");
         }

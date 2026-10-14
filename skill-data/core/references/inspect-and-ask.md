@@ -47,3 +47,28 @@ For test builds, add `<meta name="chrome-use-revision" content="<git sha>">`
 and verify a production build contains no `data-insp-path`.
 
 User docs: https://chrome-use.leeguoo.com/en/inspect.html
+
+## Taking over a site for this session
+
+When the user asks you to receive Inspect & Ask requests from a site (for
+example "send the test site's picks to this session"), run inside this session:
+
+```bash
+chrome-use inspect link https://test-admin.example.com/
+chrome-use inspect link https://apps.example.com/shop --path-scope /shop   # one app on a shared domain
+chrome-use inspect list      # what is bound, to which session, and pending claims
+chrome-use inspect unlink https://test-admin.example.com/   # only your own binding
+```
+
+Exit code 0 means it is linked. Exit code 2 means the site (or an overlapping
+path) belongs to another session: a pending claim was written and the user
+decides in the browser panel; tell the user that, and do not retry. Exit code 1
+means refused (the reason is printed), for example several project configs
+match and `--root <app dir>` is needed. Never link a site the user did not ask
+for.
+
+Projects can also declare their sites in a committed
+`.chrome-use/inspect.json` (`{"version": 1, "sites": [{"origins": [...],
+"pathScope": "/admin"}]}`); if the user asks you to set that up, add it next to
+the app (the directory above `.chrome-use` is the app root) and do not commit
+or push unless asked.

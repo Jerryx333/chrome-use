@@ -1923,6 +1923,17 @@ fn main() {
         exit(autologin::run_cli(&clean[2..], flags.json));
     }
 
+    // `inspect link|unlink|list`: the session side of Inspect & Ask. Plain
+    // `inspect` (DevTools) still goes to the daemon.
+    if clean.first().map(|s| s.as_str()) == Some("inspect")
+        && matches!(
+            clean.get(1).map(|s| s.as_str()),
+            Some("link" | "unlink" | "list")
+        )
+    {
+        exit(agent_panel::run_inspect_cli(&clean[1..], flags.json));
+    }
+
     // Handle profiles command (doesn't need daemon)
     if clean.first().map(|s| s.as_str()) == Some("profiles") {
         run_profiles(flags.json);

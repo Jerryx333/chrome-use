@@ -56,7 +56,7 @@
 
       <h2 id="start">Getting started</h2>
       <ol>
-        <li>Install chrome-use and the extension (extension 0.5.56 or later, CLI 1.5.213 or later).</li>
+        <li>Install chrome-use and the extension (extension 0.5.57 or later and CLI 1.5.214 or later for path scopes, claims and tab-only targets).</li>
         <li>Install <a href="https://github.com/leeguooooo/open-cross-session">ocs</a> and keep a Claude Code, Codex or Pi session open in the project folder. Without ocs the panel shows the install command and keeps your draft.</li>
         <li>Press <code>Alt+Shift+C</code> on the page, or click <strong>Inspect element</strong> in the toolbar popup. The first time it asks you to enable the feature. Change the shortcut at <code>chrome://extensions/shortcuts</code>.</li>
         <li>Click an element. <kbd>Shift</kbd>+click or drag a box to select several (up to 8); <kbd>↑</kbd>/<kbd>↓</kbd> move to the parent or child; <kbd>P</kbd> pauses page animations so moving things are easy to hit; <kbd>Esc</kbd> exits.</li>
@@ -66,6 +66,59 @@
         The first send on a site asks two things: which project folder the site belongs to, and which session gets the request.
         Candidates come from the local dev server's process folder, the working folders of ocs sessions, and which projects actually contain the source files the page names.
         The choice is remembered per site. Review or remove bindings in the Inspect &amp; Ask card of the extension options.
+      </p>
+
+      <h2 id="matching">How a page finds its project and session</h2>
+      <p>
+        The first pick on a site (optionally per path) shows one card: "Send requests from <strong>this scope</strong> to <strong>a session</strong>
+        (its folder) in <strong>a project</strong>", with the evidence: project config, local dev server, matched source files, and how the deployed
+        revision relates to your checkout. <strong>Hand over</strong> makes it the site default with no further questions; <strong>Only this tab</strong>
+        applies to this tab until it reloads; <strong>Choose another</strong> lists the other candidates. Only locally verifiable evidence preselects:
+        a project config or the local port's process folder, and exactly one running session in that project. Source paths and revisions from the page only rank.
+      </p>
+      <h3 id="config">Project config: .chrome-use/inspect.json</h3>
+      <p>The easiest route for test environments: commit a config that names the domains of each app, shared by the whole team.</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">json</span>
+        </div>
+<pre><code>{
+  "version": 1,
+  "sourceRoots": ["../../packages/ui"],
+  "sites": [
+    { "origins": ["https://test-admin.x.com", "http://localhost:5173"] },
+    { "origins": ["https://*.preview.x.com"], "pathScope": "/admin" }
+  ]
+}</code></pre>
+      </div>
+      <ul>
+        <li>The directory above <code>.chrome-use</code> is the app root, so a monorepo can have one per app.</li>
+        <li><code>pathScope</code> matches whole path segments: <code>/admin</code> covers <code>/admin/orders</code>, not <code>/administrator</code>. Only needed when several apps share a domain.</li>
+        <li>A single-label wildcard <code>https://*.preview.x.com</code> is supported: scheme and port must match, exact domains win, and a confirmation binds only the exact domain you are on.</li>
+        <li>A top-level <code>sourceRoots</code> can list shared package directories (relative to the app root); they are shown on the card and count as the page's source only after you confirm.</li>
+        <li>Only git-tracked configs in the repositories of running sessions are read; a symlinked, oversized (over 64 KiB), unknown-version or unknown-field file is rejected with a note in the panel.</li>
+      </ul>
+      <h3 id="link">Claim a site from a session</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># run inside the agent session that should receive requests</span>
+<span class="du-prompt">$</span> chrome-use inspect link https://test-admin.x.com/
+<span class="du-prompt">$</span> chrome-use inspect link https://apps.x.com/shop --path-scope /shop
+<span class="du-prompt">$</span> chrome-use inspect list
+<span class="du-prompt">$</span> chrome-use inspect unlink https://test-admin.x.com/</code></pre>
+      </div>
+      <p>
+        The command identifies the session through ocs. When the site, or a path overlapping it, already belongs to another session, nothing is overwritten:
+        a pending claim appears in the panel, where you replace or keep the current target; until then requests keep going to the current one.
+        <code>unlink</code> removes only the calling session's own binding.
+      </p>
+      <p>
+        When the bound session exits, moves to another folder, or the local port is taken by a dev server from another folder, the card comes back instead of
+        redirecting silently. Different git worktrees of one repository are different projects.
       </p>
 
       <h2 id="setup">Source locations: add code-inspector-plugin</h2>

@@ -55,7 +55,7 @@
 
       <h2 id="start">开始使用</h2>
       <ol>
-        <li>装好 chrome-use 和扩展（扩展 0.5.56 及以上、CLI 1.5.213 及以上）。</li>
+        <li>装好 chrome-use 和扩展（扩展 0.5.57 及以上、CLI 1.5.214 及以上；路径范围、认领和仅本标签目标需要这两个版本）。</li>
         <li>装 <a href="https://github.com/leeguooooo/open-cross-session">ocs</a>，并在项目目录里开着一个 Claude Code、Codex 或 Pi 会话。没装 ocs 时，面板会给出安装命令，草稿不会丢。</li>
         <li>在页面上按 <code>Alt+Shift+C</code>，或点工具栏图标里的 <strong>Inspect element</strong>。第一次使用会先问你是否启用。快捷键可以在 <code>chrome://extensions/shortcuts</code> 里改。</li>
         <li>点元素。<kbd>Shift</kbd>+点击或拖一个框可以一次选多个（最多 8 个）；<kbd>↑</kbd>/<kbd>↓</kbd> 在父子元素之间切换；<kbd>P</kbd> 暂停页面动画，方便选中会动的东西；<kbd>Esc</kbd> 退出。</li>
@@ -65,6 +65,56 @@
         第一次在某个站点发送时，面板会问两件事：这个站点对应哪个项目目录，交给哪个会话。
         候选项目来自本地 dev server 的进程目录、ocs 里会话的工作目录，以及哪个项目里真的存在页面标注的源码文件。
         选一次就记住，之后同一站点直接发送。绑定可以在扩展设置的 Inspect &amp; Ask 卡片里查看和解除。
+      </p>
+
+      <h2 id="matching">页面怎么对上项目和会话</h2>
+      <p>
+        每个站点（可以再按路径细分）第一次选取时，面板会给出一张确认卡：“把这个站点的请求交给 <strong>某会话</strong>（所在目录）在 <strong>某项目</strong>”，
+        并列出依据：项目配置、本地 dev server、命中的源码文件数，以及测试环境部署的版本和你本地代码的关系。点 <strong>Hand over</strong> 设为站点默认，
+        之后不用再确认；点 <strong>Only this tab</strong> 只对当前标签页生效，刷新后恢复站点默认；<strong>Choose another</strong> 列出其他候选。
+        只有本机能核实的证据才会预选：项目配置、本地端口对应的进程目录，并且这个项目里正好只有一个运行中的会话。页面里的源码路径和版本号只用来排序。
+      </p>
+      <h3 id="config">项目配置：.chrome-use/inspect.json</h3>
+      <p>测试环境最省事的办法：在仓库里提交一个配置，写明这个应用对应哪些域名，全组共享。</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">json</span>
+        </div>
+<pre><code>{
+  "version": 1,
+  "sourceRoots": ["../../packages/ui"],
+  "sites": [
+    { "origins": ["https://test-admin.x.com", "http://localhost:5173"] },
+    { "origins": ["https://*.preview.x.com"], "pathScope": "/admin" }
+  ]
+}</code></pre>
+      </div>
+      <ul>
+        <li>文件所在的 <code>.chrome-use</code> 目录的上一级就是这个应用的根目录，monorepo 里可以每个应用放一份。</li>
+        <li><code>pathScope</code> 按路径段匹配，<code>/admin</code> 包含 <code>/admin/orders</code>，不包含 <code>/administrator</code>；同一域名下多个应用时才需要写。</li>
+        <li>支持一层子域名通配 <code>https://*.preview.x.com</code>：协议和端口必须一致，精确域名优先；确认时只绑定当前这个具体域名。</li>
+        <li>文件顶层的 <code>sourceRoots</code> 可以列出共享包目录（相对应用根目录），会显示在确认卡上，确认后才算作这个页面的源码。</li>
+        <li>只读取运行中会话所在的仓库里被 git 跟踪的配置；文件是符号链接、超过 64 KiB、版本不是 1 或有未知字段时会被拒绝，并在面板里说明。</li>
+      </ul>
+      <h3 id="link">在会话里认领站点</h3>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-cmt"># run inside the agent session that should receive requests</span>
+<span class="du-prompt">$</span> chrome-use inspect link https://test-admin.x.com/
+<span class="du-prompt">$</span> chrome-use inspect link https://apps.x.com/shop --path-scope /shop
+<span class="du-prompt">$</span> chrome-use inspect list
+<span class="du-prompt">$</span> chrome-use inspect unlink https://test-admin.x.com/</code></pre>
+      </div>
+      <p>
+        命令用 ocs 识别当前会话。站点或它重叠的路径已经交给别的会话时，不会覆盖，而是生成一条待确认的认领，面板下次打开时让你选择替换或保留；
+        确认之前请求仍然发给原来的会话。<code>unlink</code> 只能撤销当前会话自己的绑定。
+      </p>
+      <p>
+        绑定的会话退出、换了目录，或者本地端口改由另一个目录的 dev server 占用时，面板会重新弹出确认卡，不会悄悄改投。同一仓库的不同 worktree 当作不同项目。
       </p>
 
       <h2 id="setup">源码定位：接入 code-inspector-plugin</h2>

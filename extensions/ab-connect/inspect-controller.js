@@ -78,16 +78,33 @@ export function pruneDrafts(drafts, now) {
   return Object.fromEntries(kept.slice(0, Math.max(30, kept.filter(([, d]) => UNCERTAIN.includes(d.state)).length)));
 }
 
+// Pure: a target pair as the frame quotes it from inspectResolve. Only the
+// fields the host re-validates travel on; the host recomputes the fingerprint.
+export function validPair(pair) {
+  if (!pair || typeof pair !== 'object') return null;
+  const str = (v, max = 4096) => typeof v === 'string' && v.length > 0 && v.length <= max;
+  if (!str(pair.root) || !str(pair.sessionId, 200) || !str(pair.sessionCwd) || !str(pair.fingerprint, 128) || !str(pair.pathScope, 2000) || !pair.pathScope.startsWith('/')) return null;
+  if (!Array.isArray(pair.sourceRoots) || !pair.sourceRoots.length || pair.sourceRoots.length > 16 || !pair.sourceRoots.every(r => str(r))) return null;
+  return { root: pair.root, sourceRoots: [...pair.sourceRoots], sessionId: pair.sessionId, sessionCwd: pair.sessionCwd, sessionLabel: str(pair.sessionLabel, 200) ? pair.sessionLabel : null, pathScope: pair.pathScope, fingerprint: pair.fingerprint };
+}
+
+export function tabTargetPayload(target) {
+  return { root: target.root, sourceRoots: target.sourceRoots, sessionId: target.sessionId, sessionCwd: target.sessionCwd, fingerprint: target.fingerprint };
+}
+
 // Pure: which delivery states may never be sent again under the same id.
 export function deliveryLocked(state) {
   return ['sending', 'sent', 'stored', 'unknown', 'unconfirmed'].includes(state);
 }
 
 export class InspectController {
-  constructor({ chrome, request, hostReady }) {
+  constructor({ chrome, request, hostReady, resolveReady = () => false }) {
     this.chrome = chrome;
     this.request = request;
     this.hostReady = hostReady;
+    // Hosts from v1.5.214 resolve path-scoped bindings, claims and tab
+    // targets; older hosts only know one binding per origin.
+    this.resolveReady = resolveReady;
     this.registry = new InspectRegistry({ runtimeId: chrome.runtime.id });
   }
 
@@ -103,6 +120,16 @@ export class InspectController {
     c.tabs.onActivated.addListener(({ tabId, windowId }) => { this.registry.bumpWindow(windowId); this.registry.bump(tabId); });
     c.tabs.onZoomChange?.addListener(({ tabId }) => this.registry.bump(tabId));
     c.windows?.onRemoved?.addListener(windowId => this.registry.bumpWindow(windowId));
+    // pushState / replaceState / popstate in a single-page app: same document,
+    // new path. The tab-only target belonged to the old path; the panel must
+    // resolve again and the user re-checks what is selected.
+    c.webNavigation.onHistoryStateUpdated?.addListener(details => {
+      if (details.frameId !== 0) return;
+      const instance = this.registry.get(details.tabId);
+      if (!instance) return;
+      instance.tabTarget = null;
+      instance.port?.postMessage({ type: 'pageChanged', url: (() => { try { const u = new URL(details.url); return u.origin + u.pathname; } catch { return null; } })() });
+    });
     c.webNavigation.onCommitted.addListener(details => {
       if (details.frameId !== 0) return;
       this.registry.bump(details.tabId);
@@ -207,6 +234,23 @@ export class InspectController {
     const selection = instance.selectionRevision;
     instance.captureChain = (instance.captureChain || Promise.resolve()).then(() => this.capture(instance, selection)).catch(() => {});
     return instance.captureChain;
+  }
+
+  // One snapshot of the page's current URL (single-page apps move without a
+  // new document): pageUrl and pagePath always come from the same read.
+  async pageNow(instance) {
+    let url = null;
+    try {
+      const tab = await this.chrome.tabs.get(instance.tabId);
+      const parsed = new URL(tab.url);
+      if (parsed.origin === instance.origin) url = parsed;
+    } catch {}
+    if (!url) { try { url = new URL(instance.pageUrl); } catch { url = new URL(instance.origin); } }
+    return { pageUrl: url.origin + (url.pathname || '/'), pagePath: url.pathname || '/' };
+  }
+
+  async pagePath(instance) {
+    return (await this.pageNow(instance)).pagePath;
   }
 
   // Bounded: a frozen or hidden page must not stall the capture queue.
@@ -333,19 +377,42 @@ export class InspectController {
         return answer({ settings: await this.saveSettings({ enabled: true }) });
       }
       case 'status': {
-        // Page-supplied paths only rank candidates; the user still binds explicitly.
+        // Page-supplied paths and revision only rank candidates; a target is
+        // made by the user's click, a session's own link, or local config.
         const marks = instance.annotations.map(a => chooseSource(a.element.source, a.probe)).filter(s => s?.path && s.path.length <= 300 && !/[\u0000-\u001f]/.test(s.path)).map(s => s.path);
         const params = { origin: instance.origin, sourcePaths: [...new Set(marks)].slice(0, 16) };
         if (isLocalOrigin(instance.origin)) params.port = originPort(instance.origin);
-        return answer({ status: await this.host('inspectStatus', params) });
+        if (!this.resolveReady()) return answer({ status: await this.host('inspectStatus', params), legacy: true });
+        params.pagePath = await this.pagePath(instance);
+        if (instance.revision && /^[0-9a-f]{7,40}$/.test(instance.revision)) params.revision = instance.revision;
+        return answer({ status: await this.host('inspectResolve', params), tabTarget: instance.tabTarget || null, pagePath: params.pagePath, pageUrl: (await this.pageNow(instance)).pageUrl });
+      }
+      case 'confirm': {
+        if (!this.resolveReady()) throw new Error('This chrome-use CLI is too old for this choice; upgrade it with `chrome-use upgrade`.');
+        const pair = validPair(message.pair);
+        if (!pair) throw new Error('Unknown target');
+        if (message.mode === 'tab') {
+          // Held by this picker only; the host re-validates it on every send.
+          instance.tabTarget = pair;
+          return answer({ tabTarget: pair });
+        }
+        instance.tabTarget = null;
+        return answer({ result: await this.host('inspectBind', { origin: instance.origin, pathScope: pair.pathScope, root: pair.root, sourceRoots: pair.sourceRoots, sessionId: pair.sessionId, sessionLabel: pair.sessionLabel || undefined, fingerprint: pair.fingerprint }) });
+      }
+      case 'clearTabTarget':
+        instance.tabTarget = null;
+        return answer({ ok: true });
+      case 'claimDecide': {
+        if (typeof message.claimId !== 'string' || !Array.isArray(message.expectedAffects)) throw new Error('Unknown claim');
+        return answer({ result: await this.host('inspectClaimDecide', { claimId: message.claimId, expectedAffects: message.expectedAffects.filter(f => typeof f === 'string').slice(0, 64), accept: message.accept === true }) });
       }
       case 'bind':
         return answer({ result: await this.host('inspectBind', { origin: instance.origin, root: String(message.root || ''), sessionId: message.sessionId || undefined, sessionLabel: message.sessionLabel || undefined }) });
       case 'consent':
         if (!['plugin', 'testEnv'].includes(message.kind)) throw new Error('Unknown consent');
-        return answer({ result: await this.host('inspectConsent', { origin: instance.origin, kind: message.kind, granted: message.granted === true }) });
+        return answer({ result: await this.host('inspectConsent', { origin: instance.origin, ...(this.resolveReady() && typeof message.pathScope === 'string' ? { pathScope: message.pathScope } : {}), kind: message.kind, granted: message.granted === true }) });
       case 'launchCommand':
-        return answer({ result: await this.host('inspectLaunchCommand', { origin: instance.origin, agent: message.agent === 'codex' ? 'codex' : 'claude' }) });
+        return answer({ result: await this.host('inspectLaunchCommand', { origin: instance.origin, ...(this.resolveReady() && typeof message.pathScope === 'string' ? { pathScope: message.pathScope } : {}), agent: message.agent === 'codex' ? 'codex' : 'claude' }) });
       case 'note': {
         const annotation = instance.annotations.find(a => a.id === message.annotationId);
         if (annotation) annotation.note = String(message.note || '').slice(0, NOTE_MAX);
@@ -377,7 +444,8 @@ export class InspectController {
         return answer({ result: await this.host('inspectDeliveryStatus', { deliveryId: String(message.deliveryId || '') }) });
       case 'setup': {
         const kind = message.kind === 'setupTestEnv' ? 'setupTestEnv' : 'setupPlugin';
-        return answer({ result: await this.deliver(instance, { ...message, kind, instruction: '' }) });
+        // Setup always goes to the site default; a tab-only target never receives it.
+        return answer({ result: await this.deliver(instance, { ...message, kind, instruction: '', revision: instance.selectionRevision || 0 }) });
       }
       default:
         throw new Error('Unknown inspect frame request');
@@ -415,14 +483,27 @@ export class InspectController {
       const base64 = pngBase64(item.dataUrl);
       if (base64) images.push({ index: item.index, pngBase64: base64 });
     }
+    // Checked before anything is recorded as sending, so a refusal here
+    // leaves the batch editable. The panel names the page path and the target it showed; if either moved
+    // since (route change, claim accepted elsewhere, rebinding), nothing is sent.
+    const page = await this.pageNow(instance);
+    let scoped = {};
+    if (this.resolveReady()) {
+      if (typeof message.expectedPath !== 'string' || message.expectedPath !== page.pagePath) {
+        return { state: 'targetChanged', reason: 'pageChanged' };
+      }
+      if (typeof message.expectedTarget !== 'string' || !message.expectedTarget) return { state: 'targetChanged', reason: 'bindingChanged' };
+      scoped = { pagePath: page.pagePath, expectedTarget: message.expectedTarget, ...(instance.tabTarget && kind === 'edit' ? { target: tabTargetPayload(instance.tabTarget) } : {}) };
+    }
     const notes = Object.fromEntries(annotations.filter(a => a.note).map(a => [a.element.selector, a.note]));
     await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state: 'sending' });
     let result;
     try {
       result = await this.host('inspectDeliver', {
+        ...scoped,
         deliveryId, origin: instance.origin, kind,
         instruction: kind === 'edit' ? instruction : undefined,
-        pageUrl: sanitizedPageUrl(instance.pageUrl), env: isLocalOrigin(instance.origin) ? 'local' : 'test',
+        pageUrl: page.pageUrl, env: isLocalOrigin(instance.origin) ? 'local' : 'test',
         revision: pageRevision || undefined,
         annotations: kind === 'edit' ? annotations.map((a, i) => annotationPayload(a, i + 1)) : [],
         images: kind === 'edit' ? images : [],
@@ -431,7 +512,7 @@ export class InspectController {
       await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state: 'unconfirmed' });
       return { state: 'unconfirmed', deliveryId, error: String(error.message || error) };
     }
-    const state = ['noBinding', 'noSession', 'sessionChanged', 'noOcs', 'failed'].includes(result?.state) ? 'editing' : result?.state || 'unconfirmed';
+    const state = ['noBinding', 'noSession', 'sessionChanged', 'noOcs', 'failed', 'upgradeRequired', 'targetChanged'].includes(result?.state) ? 'editing' : result?.state || 'unconfirmed';
     await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state });
     return result;
   }

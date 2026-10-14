@@ -1,0 +1,17 @@
+{
+  "startedAt": "2026-10-14T17:23:25.084Z",
+  "host": "/Users/leo/inspect-accept/bin/chrome-use-old-4523",
+  "scenarios": [
+    {
+      "name": "m14-new-extension-old-host",
+      "ok": true,
+      "ms": 620,
+      "detail": {
+        "ok": true
+      }
+    }
+  ],
+  "chrome": "Chrome/155.0.8059.39",
+  "resolveReady": false,
+  "finishedAt": "2026-10-14T17:23:29.882Z"
+}

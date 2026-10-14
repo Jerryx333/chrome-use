@@ -125,9 +125,18 @@ async function typeAndEnter(page, frame, text) {
   await A.key(page.sid, 'Enter', 'Enter', 13, '\r');
 }
 
+// Hosts with inspectResolve show one confirmation card; older hosts ask for
+// the project, then the session.
 async function bindFirst(page, frame) {
-  await waitFor(async () => /Which project|Which agent session|→/.test(await frameText(frame)), { label: 'setup or target' });
-  if (/Which project/.test(await frameText(frame))) {
+  await waitFor(async () => /Which project|Which agent session|→|Send requests from|Choose where/.test(await frameText(frame)), { label: 'setup or target' });
+  const t = await frameText(frame);
+  if (/Send requests from|Choose where/.test(t)) {
+    if (!/Send requests from/.test(t)) await A.clickInFrame(page.sid, frame.sid, `([...document.querySelectorAll('label')].find(l => /react-main/.test(l.textContent))?.querySelector('input:not([disabled])')) || document.querySelector('input[name="pair"]:not([disabled])')`);
+    await A.clickInFrame(page.sid, frame.sid, byText('Hand over'));
+    await waitFor(async () => /→ /.test(await frameText(frame)), { label: 'bound' });
+    return;
+  }
+  if (/Which project/.test(t)) {
     await A.clickInFrame(page.sid, frame.sid, byText('Use this project'));
     await waitFor(async () => /Which agent session|→/.test(await frameText(frame)), { label: 'session chooser' });
   }
@@ -246,6 +255,7 @@ await scenario('overlay-blocks-send', async () => {
   await startOn(page);
   await pick(page, '.save-button');
   const frame = await A.realFrame();
+  if (!/→ /.test(await frameText(frame))) await bindFirst(page, frame);
   await waitFor(async () => /→/.test(await frameText(frame)), { label: 'bound target' });
   await A.evaluate(page.sid, `(() => { const d = document.createElement('div'); d.id = 'ov'; d.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,.01);z-index:2147483647;pointer-events:none'; document.documentElement.append(d); return 1; })()`);
   const before = dms().length;
@@ -286,6 +296,7 @@ await scenario('unknown-delivery-not-resent', async () => {
   const tabId = await startOn(page);
   await pick(page, '.save-button');
   const frame = await A.realFrame();
+  if (!/→ /.test(await frameText(frame))) await bindFirst(page, frame);
   await waitFor(async () => /→/.test(await frameText(frame)), { label: 'bound target' });
   const before = dms().length;
   await typeAndEnter(page, frame, 'Hang please');
@@ -319,6 +330,7 @@ await scenario('note-only-immediate-send', async () => {
   await startOn(page);
   await pick(page, '.save-button');
   const frame = await A.realFrame();
+  if (!/→ /.test(await frameText(frame))) await bindFirst(page, frame);
   await waitFor(async () => /→/.test(await frameText(frame)), { label: 'bound target' });
   await A.clickInFrame(page.sid, frame.sid, 'document.querySelector("input[data-annotation]")');
   await b.send('Input.insertText', { text: 'Only a note: make this green' }, page.sid);

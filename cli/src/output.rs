@@ -4071,6 +4071,7 @@ Examples:
         "inspect" => {
             r##"
 chrome-use inspect - Open Chrome DevTools for the active page
+chrome-use inspect link|unlink|list - Route Inspect & Ask requests to a session
 
 Starts a local WebSocket proxy and opens Chrome's DevTools frontend in your
 default browser. The proxy routes DevTools traffic through the daemon's
@@ -4083,6 +4084,36 @@ Examples:
   chrome-use open example.com
   chrome-use inspect          # opens DevTools in your browser
   chrome-use click "Submit"   # commands still work while DevTools is open
+
+Inspect & Ask, session side (no browser or daemon needed):
+  chrome-use inspect link <url> [--root <dir>] [--path-scope </seg>] [--json]
+  chrome-use inspect unlink <url> [--path-scope </seg>] [--json]
+  chrome-use inspect list [--json]
+
+  link hands the URL's scope to the calling ocs session (identity from
+  `ocs whoami`, working directory from `ocs who`), so requests picked on
+  that page reach this session without a click in the browser.
+    --root <dir>          Project root; default: the app root of a tracked
+                          .chrome-use/inspect.json in this worktree that
+                          matches the URL, else the session's directory.
+                          Several matching configs: --root is required.
+    --path-scope </seg>   Scope of whole path segments (/admin covers
+                          /admin/orders, not /administrator); default: the
+                          config site's scope, else / (the whole origin).
+  When an overlapping scope already goes to another session or root, link
+  writes a pending claim instead and exits 2; nothing changes until the user
+  accepts it in the Inspect & Ask frame on that page.
+  unlink removes only a scope bound to this session (longest match for the
+  URL unless --path-scope is given) and withdraws this session's pending
+  claim on it. Other sessions' bindings are removed from the extension
+  options page.
+  Exit codes: 0 done, 2 pending claim written, 1 refused (reason printed).
+
+Examples:
+  chrome-use inspect link https://test-admin.example.com/
+  chrome-use inspect link https://test.example.com/admin --path-scope /admin
+  chrome-use inspect link http://localhost:5173/ --root apps/admin
+  chrome-use inspect unlink https://test-admin.example.com/
 "##
         }
 
@@ -6260,6 +6291,14 @@ Debug:
   highlight <sel>            Highlight element
   inspect                    Open Chrome DevTools for the active page
   clipboard <op> [text]      Read/write clipboard (read, write, copy, paste)
+
+Inspect & Ask (run from inside an ocs agent session):
+  inspect link <url> [--root <dir>] [--path-scope </seg>]
+                             Send this site's Inspect & Ask requests to this session
+                             (exit 2: another target holds it; the user confirms in the browser)
+  inspect unlink <url> [--path-scope </seg>]
+                             Remove this session's link or pending claim for the URL
+  inspect list               Show linked scopes and pending claims
 
 Streaming:
   stream enable [--port <n>] Start runtime WebSocket streaming for this session

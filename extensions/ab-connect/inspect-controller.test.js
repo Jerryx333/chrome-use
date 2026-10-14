@@ -11,12 +11,13 @@ function fakeChrome() {
     commands: { onCommand: on('command') },
     tabs: { onRemoved: on('removed'), onActivated: on('activated'), onZoomChange: on('zoom'), query: async () => [], get: async () => ({}) },
     windows: { onRemoved: on('wremoved') },
-    webNavigation: { onCommitted: on('committed'), getFrame: async () => ({ documentId: 'doc' }) },
+    webNavigation: { onCommitted: on('committed'), onHistoryStateUpdated: on('history'), getFrame: async () => ({ documentId: 'doc' }) },
     scripting: { injected: [], executeScript: async args => { chrome.scripting.injected.push(args); return [{ result: [] }]; } },
     storage: { local: { get: async key => ({ [key]: store[key] }), set: async value => Object.assign(store, value) } },
   };
   return { chrome, store, listeners };
 }
+let lastListeners = null;
 
 function framePort(sender) {
   const port = {
@@ -32,7 +33,8 @@ const flush = () => new Promise(r => setTimeout(r, 0));
 const element = { label: 'button "Save"', selector: 'button.save', path: 'button.save', classes: '', rect: { x: 0, y: 0, width: 10, height: 10 }, text: 'Save', selectedText: '', nearby: [], styles: [], html: '<button>Save</button>', source: { kind: 'insp', path: 'src/a.tsx', line: 3, column: 1 } };
 
 async function started() {
-  const { chrome, store } = fakeChrome();
+  const { chrome, store, listeners } = fakeChrome();
+  lastListeners = listeners;
   const calls = [];
   const controller = new InspectController({ chrome, hostReady: () => true, request: async (op, params) => { calls.push([op, params]); return op === 'inspectDeliver' ? { schemaVersion: 1, state: 'sent', wake: 'accepted' } : { schemaVersion: 1 }; } });
   controller.install();
@@ -200,4 +202,109 @@ test('a note edited after send started does not change the frozen batch', async 
   await flush(); await flush(); await flush();
   const sent = calls.find(c => c[0] === 'inspectDeliver')[1];
   assert.equal(sent.annotations[0].note, 'reviewed note');
+});
+
+test('matching: status uses inspectResolve with the page path, falls back on old hosts', async () => {
+  const ctx = await authorized();
+  const { controller, chrome, real, calls, instance } = ctx;
+  chrome.tabs.get = async () => ({ id: 7, url: 'http://localhost:5173/admin/orders?x=1' });
+  controller.resolveReady = () => true;
+  controller.request = async (op, params) => { calls.push([op, params]); return { schemaVersion: 1, state: 'unbound', pendingClaims: [], ocs: { installed: true } }; };
+  instance.revision = 'abc1234';
+  real.msg[0]({ type: 'status', requestId: 21 });
+  await flush(); await flush(); await flush();
+  const resolve = calls.find(c => c[0] === 'inspectResolve')[1];
+  assert.equal(resolve.pagePath, '/admin/orders');
+  assert.equal(resolve.revision, 'abc1234');
+  controller.resolveReady = () => false;
+  real.msg[0]({ type: 'status', requestId: 22 });
+  await flush(); await flush();
+  assert.ok(calls.some(c => c[0] === 'inspectStatus'));
+  assert.equal(real.sent.find(m => m.requestId === 22).legacy, true);
+});
+
+test('matching: a tab-only target is held locally and sent with each delivery', async () => {
+  const { controller, chrome, real, calls, instance } = await authorized();
+  chrome.tabs.get = async () => ({ id: 7, url: 'http://localhost:5173/shop' });
+  controller.resolveReady = () => true;
+  const pair = { root: '/w/shop', sourceRoots: ['/w/shop'], sessionId: 'claude-1', sessionCwd: '/w/shop', sessionLabel: 'shop', pathScope: '/shop', fingerprint: 'f'.repeat(32), origin: 'http://localhost:5173', evidence: ['config'] };
+  real.msg[0]({ type: 'confirm', requestId: 31, pair, mode: 'tab' });
+  await flush();
+  assert.equal(calls.filter(c => c[0] === 'inspectBind').length, 0, 'tab target is not persisted');
+  assert.equal(instance.tabTarget.fingerprint, pair.fingerprint);
+  instance.annotations = [{ id: '0:0', element, probe: null, note: '' }];
+  instance.selectionRevision = 0;
+  real.msg[0]({ type: 'deliver', requestId: 32, deliveryId: '11111111-2222-3333-4444-555555555559', revision: 0, instruction: 'x', expectedPath: '/shop', expectedTarget: pair.fingerprint });
+  await flush(); await flush(); await flush();
+  const deliver = calls.find(c => c[0] === 'inspectDeliver')[1];
+  assert.equal(deliver.pagePath, '/shop');
+  assert.deepEqual(deliver.target, { root: '/w/shop', sourceRoots: ['/w/shop'], sessionId: 'claude-1', sessionCwd: '/w/shop', fingerprint: 'f'.repeat(32) });
+  real.msg[0]({ type: 'confirm', requestId: 33, pair, mode: 'default' });
+  await flush(); await flush();
+  const bind = calls.find(c => c[0] === 'inspectBind')[1];
+  assert.equal(bind.pathScope, '/shop');
+  assert.equal(bind.fingerprint, pair.fingerprint);
+  assert.equal(instance.tabTarget, null, 'site default replaces the tab override');
+});
+
+test('matching: malformed pairs and claims are refused before the host', async () => {
+  const { controller, real, calls } = await authorized();
+  controller.resolveReady = () => true;
+  real.msg[0]({ type: 'confirm', requestId: 41, pair: { root: '/w', sessionId: 'x', sourceRoots: [] }, mode: 'default' });
+  real.msg[0]({ type: 'claimDecide', requestId: 42, claimId: 5 });
+  await flush(); await flush();
+  assert.match(real.sent.find(m => m.requestId === 41).error, /Unknown target/);
+  assert.match(real.sent.find(m => m.requestId === 42).error, /Unknown claim/);
+  assert.equal(calls.filter(c => ['inspectBind', 'inspectClaimDecide'].includes(c[0])).length, 0);
+});
+
+test('matching: deliver refuses when the page path or the shown target moved', async () => {
+  const { controller, chrome, real, calls, instance } = await authorized();
+  controller.resolveReady = () => true;
+  let url = 'http://localhost:5173/admin';
+  chrome.tabs.get = async () => ({ id: 7, url });
+  instance.annotations = [{ id: '0:0', element, probe: null, note: '' }];
+  instance.selectionRevision = 0;
+  url = 'http://localhost:5173/shop';
+  real.msg[0]({ type: 'deliver', requestId: 51, deliveryId: '11111111-2222-3333-4444-555555555560', revision: 0, instruction: 'x', expectedPath: '/admin', expectedTarget: 'a'.repeat(32) });
+  await flush(); await flush(); await flush();
+  assert.deepEqual(real.sent.find(m => m.requestId === 51).result, { state: 'targetChanged', reason: 'pageChanged' });
+  real.msg[0]({ type: 'deliver', requestId: 52, deliveryId: '11111111-2222-3333-4444-555555555561', revision: 0, instruction: 'x', expectedPath: '/shop' });
+  await flush(); await flush(); await flush();
+  assert.equal(real.sent.find(m => m.requestId === 52).result.reason, 'bindingChanged');
+  assert.equal(calls.filter(c => c[0] === 'inspectDeliver').length, 0, 'nothing reaches the host');
+  real.msg[0]({ type: 'deliver', requestId: 53, deliveryId: '11111111-2222-3333-4444-555555555562', revision: 0, instruction: 'x', expectedPath: '/shop', expectedTarget: 'b'.repeat(32) });
+  await flush(); await flush(); await flush();
+  const sent = calls.find(c => c[0] === 'inspectDeliver')[1];
+  assert.equal(sent.pagePath, '/shop');
+  assert.equal(sent.pageUrl, 'http://localhost:5173/shop', 'pageUrl and pagePath come from one snapshot');
+  assert.equal(sent.expectedTarget, 'b'.repeat(32));
+});
+
+test('matching: a route change clears the tab target and tells the panel', async () => {
+  const { real, instance } = await authorized();
+  instance.tabTarget = { fingerprint: 'f' };
+  lastListeners.history[0]({ tabId: 7, frameId: 0, url: 'http://localhost:5173/shop?q=1' });
+  assert.equal(instance.tabTarget, null);
+  assert.deepEqual(real.sent.at(-1), { type: 'pageChanged', url: 'http://localhost:5173/shop' });
+  lastListeners.history[0]({ tabId: 7, frameId: 3, url: 'http://localhost:5173/x' });
+  assert.equal(real.sent.at(-1).url, 'http://localhost:5173/shop', 'subframe history is ignored');
+});
+
+test('matching: a refused precheck never records the batch as sending', async () => {
+  const { controller, chrome, real, calls, instance, store } = await authorized();
+  controller.resolveReady = () => true;
+  chrome.tabs.get = async () => ({ id: 7, url: 'http://localhost:5173/shop' });
+  instance.annotations = [{ id: '0:0', element, probe: null, note: 'n' }];
+  instance.selectionRevision = 0;
+  const id = '11111111-2222-3333-4444-555555555563';
+  real.msg[0]({ type: 'deliver', requestId: 61, deliveryId: id, revision: 0, instruction: 'x', expectedPath: '/admin', expectedTarget: 'a'.repeat(32) });
+  await flush(); await flush(); await flush();
+  assert.equal(real.sent.find(m => m.requestId === 61).result.reason, 'pageChanged');
+  assert.notEqual(store.inspectDrafts?.['http://localhost:5173']?.state, 'sending', 'not stuck as sending');
+  // Reopened and re-checked: the same id may now be sent.
+  real.msg[0]({ type: 'deliver', requestId: 62, deliveryId: id, revision: 0, instruction: 'x', expectedPath: '/shop', expectedTarget: 'a'.repeat(32) });
+  await flush(); await flush(); await flush();
+  assert.equal(real.sent.find(m => m.requestId === 62).result.state, 'sent');
+  assert.equal(calls.filter(c => c[0] === 'inspectDeliver').length, 1);
 });
