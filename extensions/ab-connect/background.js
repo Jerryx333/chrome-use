@@ -17,6 +17,7 @@
 // native messaging.
 
 import { getRelayHealth, observeDebuggerCommand } from './relay-health.js';
+import { ScheduleNotifications } from './schedule-notifications.js';
 import { AgentPanelBridge, isAgentPanelSender } from './agent-panel-bridge.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
 import { extensionInstallIdentity } from './relay-identity.js';
@@ -114,6 +115,19 @@ const agentPanelBridge = new AgentPanelBridge({
     if (!port) throw new Error('Native host is not connected');
     port.postMessage(message);
   },
+});
+const scheduleNotifications = new ScheduleNotifications({ storage: chrome.storage.local, notifications: chrome.notifications });
+function pollScheduleNotifications() {
+  const state = hostConnection.snapshot();
+  if (!state.connected || !state.agentPanel?.schedules || state.agentPanel.mode !== 'full') return;
+  void scheduleNotifications.poll(() => agentPanelBridge.request('scheduleList')).catch(error => console.warn('Schedule notification check failed:', String(error.message || error)));
+}
+chrome.notifications.onClicked.addListener(id => {
+  if (!/^schedule-run:[a-f0-9-]{36}$/.test(id)) return;
+  void chrome.storage.local.set({ ab_panel_conversation: id.slice('schedule-run:'.length) }).then(async () => {
+    const window = await chrome.windows.getLastFocused();
+    if (window?.id !== undefined) await chrome.sidePanel.open({windowId:window.id});
+  }).catch(error => console.warn('Open the side panel to read the scheduled run:', String(error.message || error)));
 });
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
 
@@ -701,6 +715,7 @@ function connectHost() {
       hostReconnect.confirmed();
       notifyConnChange(true);
       publishHostStatus();
+      pollScheduleNotifications();
     }
     void whenReady(() => {
       if (port === connectedPort) return onHostMessage(msg);
@@ -2518,6 +2533,7 @@ function scheduleKeepalivePing() {
     keepaliveTimer = null;
     sweepIdleTabs();
     if (!port) return; // disconnected; connectHost() will restart the loop
+    pollScheduleNotifications();
     postToHost({ method: 'ping' }); // host pongs (or ignores); the send is what matters
     scheduleKeepalivePing();
   }, KEEPALIVE_PING_MS);

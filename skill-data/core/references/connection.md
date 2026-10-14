@@ -330,3 +330,38 @@ Panel history stays in the profile-scoped local journal. The chosen CLI may
 send tasks and page observations to its configured model provider; that
 provider's privacy policy applies. The extension does not contact a model
 server directly or manage the CLI's authentication credentials.
+
+## Side panel skills, images and scheduled prompts
+
+The panel also supports:
+
+- **Skills:** type `/` to choose a bundled, user or profile-library skill. **Agents & models → Skill library** edits library entries, enables/disables them, and imports an absolute local folder, ZIP/.skill archive or HTTPS Git repository. User and CLI skill folders are read-only here. A selected skill and its assets are snapshotted before delivery, so queued messages and explicit retries retain the selected revision. Panel-bound agents can use `chrome_use_skills` to list/read skills, read selected relative text assets and save library instructions when asked.
+- **Images:** paste, drop or choose up to five PNG/JPEG/WebP files with **Attach images**. Images are reduced to a 2000-pixel long edge and at most 512 KiB each before native transport. They stay with the conversation, including queued-message edits and retries, and are removed with it. ACP agents must advertise image input; unsupported input fails instead of dropping the images. The model service receives the attachments.
+- **Conversation options:** choose allowed tools and, for Codex/Claude, reasoning effort; Codex also supports a service-tier override. Save while idle. Overrides take effect on the next response and do not edit CLI defaults. Codex can restrict writes but cannot remove its file-reading shell. OpenCode ACP does not enforce built-in tool restrictions; its own permission rules still apply. The approval switch controls automatic answers within the selected tool set; Pi has no per-call approvals.
+- **Scheduled prompts:** **Agents & models → Scheduled prompts** saves intervals, daily/weekday local times or five-field cron, with agent, model, options, skill and explicit tool scope. **Run now** does not move the next scheduled time. Runs use independent background browser sessions and remain in history; completion notifications link to their conversations. The host-local service must be running; closing the panel does not stop it. On restart or wake, missed periods coalesce into one run. An active or unconfirmed run is never overlapped or replayed; inspect the history before acknowledging an unknown outcome. A chat cannot schedule more tools or automatic approval than it has, and scheduled conversations cannot mutate or trigger schedules or rewrite library skills for future runs. Native acceptance and agent completion remain separate from verifying the requested page effect.
+
+Library imports never execute imported code. Names use lowercase letters,
+digits, hyphens or underscores. The entry file is limited to 96 KiB; an asset
+is limited to 4 MiB, and a skill to 16 MiB. Symbolic links in imported assets
+are refused. Git imports accept HTTPS repository URLs without embedded
+credentials; archives must use contained paths and regular files. Only the
+profile's library is writable. Selected skill assets can be read through the
+panel-bound skill MCP tool even when shell/file tools are unavailable.
+
+Codex `readFiles` uses `read-only`, `writeFiles` uses `workspace-write`, and
+`runCommands` uses `danger-full-access`. Claude/Pi receive explicit tool lists
+for restricted modes; their file tools do not constitute an OS sandbox.
+OpenCode supports the unrestricted built-in tool set with its CLI permission
+rules. Unsupported restrictions and options return errors.
+
+A schedule's rules use `{kind:"interval",minutes:60}`, `{kind:"daily",time:"09:00"}`,
+`{kind:"weekdays",time:"09:00"}` or `{kind:"cron",expression:"0 9 * * 1-5"}`.
+Cron accepts lists, ranges, steps and English month/weekday abbreviations.
+When both day fields are restricted, either matching day runs. A nonexistent
+local time during daylight-saving transition is skipped.
+
+Cross-adapter scheduling also preserves sandbox and approval boundaries.
+A Codex workspace-write conversation cannot schedule Claude/Pi unrestricted
+file writes. Pi's tools always run without per-call approval; a conversation
+that requires approvals cannot schedule automatic Pi work, regardless of its
+saved fullAccess flag.

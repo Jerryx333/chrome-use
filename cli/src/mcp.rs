@@ -271,7 +271,19 @@ fn tools_for(profile: Profile) -> Vec<Value> {
     if profile.is_all() {
         tools.extend(extended_tools());
     }
+    if crate::agent_panel::panel_mcp_context().is_some() {
+        tools.extend(panel_tools());
+    }
     tools
+}
+
+/// Extra tools exist only for a host-bound panel conversation; ordinary MCP
+/// clients keep the original browser surface and cannot select a caller.
+fn panel_tools() -> Vec<Value> {
+    vec![
+        json!({"name":"chrome_use_skills","description":"List skills, read a skill or a selected skill's relative text asset, or save a profile-library skill when the user asks. Asset reads need path; omit id for the active message's selected skill. Scheduled chats may only list and read.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","read","save"]},"id":{"type":"string"},"path":{"type":"string"},"name":{"type":"string"},"content":{"type":"string"}},"required":["action"],"additionalProperties":false}}),
+        json!({"name":"chrome_use_schedules","description":"Manage recurring prompts only at the user's request. Times are host-local. A schedule cannot gain tools or automatic approval beyond this conversation. Scheduled chats may only list. A dispatched run is not a completed task.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","save","delete","run"]},"id":{"type":"string"},"name":{"type":"string"},"prompt":{"type":"string"},"agentId":{"type":"string"},"model":{"type":["string","null"]},"options":{"type":"object","properties":{"effort":{"type":["string","null"]},"serviceTier":{"type":["string","null"]},"toolAccess":{"type":"string","enum":["browserOnly","readFiles","writeFiles","runCommands"]}},"additionalProperties":false},"fullAccess":{"type":"boolean"},"enabled":{"type":"boolean"},"skillId":{"type":["string","null"]},"rule":{"type":"object","properties":{"kind":{"type":"string","enum":["interval","daily","weekdays","cron"]},"minutes":{"type":"integer","minimum":1},"time":{"type":"string"},"expression":{"type":"string"}},"required":["kind"],"additionalProperties":false}},"required":["action"],"additionalProperties":false}}),
+    ]
 }
 
 /// Build a tool's `inputSchema`, merging in the fields every tool accepts
@@ -672,6 +684,11 @@ fn obj(pairs: &[(&str, Value)]) -> serde_json::Map<String, Value> {
 }
 
 fn is_known_tool(name: &str, profile: Profile) -> bool {
+    if crate::agent_panel::panel_mcp_context().is_some()
+        && ["chrome_use_skills", "chrome_use_schedules"].contains(&name)
+    {
+        return true;
+    }
     let core = matches!(
         name,
         TOOL_OPEN
@@ -731,6 +748,15 @@ fn call_tool(params: Option<&Value>, profile: Profile) -> Result<Value, Protocol
     }
 
     match name {
+        "chrome_use_skills" | "chrome_use_schedules" => {
+            let result = crate::agent_panel::call_panel_mcp(name, arguments);
+            Ok(match result {
+                Ok(value) => {
+                    json!({"content":[{"type":"text","text":value.to_string()}],"structuredContent":value,"isError":false})
+                }
+                Err(error) => json!({"content":[{"type":"text","text":error}],"isError":true}),
+            })
+        }
         TOOL_OPEN => call_open(arguments),
         TOOL_READ => call_read(arguments),
         TOOL_SNAPSHOT => call_snapshot(arguments),

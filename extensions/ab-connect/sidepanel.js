@@ -1,4 +1,5 @@
 import { PanelTimeline, phaseLabels } from './panel-state.js';
+import { prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
@@ -23,12 +24,15 @@ const agentNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode'
 const chatAgents = new Set(Object.keys(agentNames));
 const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
 
-export function createPanel({ document, runtime, storage, tabs, schedule = setTimeout, cancel = clearTimeout }) {
-  const ids = ['pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+export function createPanel({ document, runtime, storage, tabs, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage }) {
+  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
-  const pendingMessages = new Map(), drafts = new Map();
+  const pendingMessages = new Map(), drafts = new Map(), imageDrafts = new Map();
+  let convertingImages = false, skillCatalog = [], skillsEpoch = 0, skillChoice = null, visibleSkills = [], skillPickerIndex = 0;
+  let schedules = [], schedulesEpoch = 0, settingsSection = 'agents';
+  let optionsOwner = null;
   let modelEpoch = 0, newFullAccess = true, page = null, pageDetached = false, scope = 'site';
   let sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
   const rendered = new Map(), requestNodes = new Map(), queuedNodes = new Map();
@@ -72,6 +76,9 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.agent.replaceChildren(...supported.filter(id => chatAgents.has(id)).map(id => { const option = element('option', agentNames[id]); option.value = id; return option; }));
     nodes.agent.value = supported.includes(previousAgent) ? previousAgent : supported[0] || '';
     if (nodes.agent.value !== previousAgent) clearModels();
+    const scheduleAgent=nodes.scheduleAgent.value;
+    nodes.scheduleAgent.replaceChildren(...supported.filter(id => chatAgents.has(id)).map(id => {const node=element('option',agentNames[id]);node.value=id;return node;}));
+    nodes.scheduleAgent.value=supported.includes(scheduleAgent)?scheduleAgent:supported[0] || '';
     controls();
   }
   async function connectionStatus() {
@@ -89,13 +96,41 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.conversation.disabled = sending || !writable; nodes.conversationButton.disabled = sending || !writable; nodes.newChat.disabled = sending || !writable;
     nodes.message.disabled = !writable; nodes.inspectAgent.disabled = !connected || !writable || !panelSupport?.modelInspection;
     nodes.agent.disabled = !writable; nodes.model.disabled = !writable; nodes.customModel.disabled = !writable; nodes.executable.disabled = !writable;
+    nodes.skillsSettingsTab.hidden = !panelSupport?.skillLibrary;
+    nodes.schedulesSettingsTab.hidden = !panelSupport?.schedules;
+    nodes.localAgents.hidden = settingsSection !== 'agents';
+    nodes.skillLibrary.hidden = !panelSupport?.skillLibrary || settingsSection !== 'skills';
+    nodes.scheduleSettings.hidden = !panelSupport?.schedules || settingsSection !== 'schedules';
+    nodes.agentsView.dataset.section = settingsSection;
     nodes.newOptions.hidden = Boolean(selected); nodes.modelChip.hidden = Boolean(selected);
+    const optionAgent = conversation?.agentId || nodes.agent.value;
+    const optionOwner = `${selected}:${optionAgent}`;
+    if (optionsOwner !== optionOwner) {
+      optionsOwner = optionOwner;
+      const first = element('option', 'CLI default'); first.value = '';
+      const efforts = optionAgent === 'codex' ? ['minimal','low','medium','high','xhigh','max'] : optionAgent === 'claude' ? ['low','medium','high','max'] : [];
+      nodes.turnEffort.replaceChildren(first, ...efforts.map(value => { const node = element('option', value); node.value = value; return node; }));
+      const access = element('option','Follow permission switch'); access.value = '';
+      const modes = optionAgent === 'opencode' ? ['runCommands'] : optionAgent === 'codex' ? ['readFiles','writeFiles','runCommands'] : ['browserOnly','readFiles','writeFiles','runCommands'];
+      const labels = { browserOnly:'Browser only', readFiles: optionAgent === 'codex' ? 'Browser and file reads (Codex shell remains)' : 'Browser and file reads', writeFiles:'Browser, file reads and writes', runCommands:'Browser, files and commands' };
+      nodes.turnAccess.replaceChildren(access,...modes.map(value => { const node=element('option',labels[value]); node.value=value; return node; }));
+      nodes.turnAccess.value = conversation?.options?.toolAccess || '';
+      nodes.turnEffort.value = conversation?.options?.effort || '';
+      nodes.turnTier.value = conversation?.options?.serviceTier || '';
+    }
+    nodes.turnOptions.hidden = !panelSupport?.conversationOptions;
+    nodes.turnEffortLabel.hidden = !['codex','claude'].includes(optionAgent);
+    nodes.turnTierLabel.hidden = optionAgent !== 'codex';
+    const optionsLocked = !connected || sending || busyPhases.has(conversation?.phase) || conversation?.phase === 'recoveryRequired';
+    nodes.turnAccess.disabled = optionsLocked; nodes.turnEffort.disabled = optionsLocked; nodes.turnTier.disabled = optionsLocked;
+    nodes.saveTurnOptions.hidden = !selected; nodes.saveTurnOptions.disabled = optionsLocked;
     const full = selected ? conversation?.fullAccess === true : newFullAccess;
     nodes.access.hidden = !writable || !panelSupport?.fullAccess;
     nodes.access.disabled = !connected || sending || (Boolean(selected) && !conversation);
     const accessAgent = conversation?.agentId || nodes.agent.value;
     const cliPermissions = accessAgent === 'opencode', browserOnly = accessAgent === 'pi';
-    nodes.accessLabel.textContent = full ? 'Full access' : cliPermissions ? 'CLI permissions' : browserOnly ? 'Browser only' : 'Ask first';
+    if (browserOnly && conversation?.options?.toolAccess) nodes.access.hidden = true;
+    nodes.accessLabel.textContent = conversation?.options?.toolAccess ? (full ? 'Allow tools automatically' : 'Review tool approvals') : full ? 'Full access' : cliPermissions ? 'CLI permissions' : browserOnly ? 'Browser only' : 'Ask first';
     nodes.access.setAttribute('aria-pressed', String(full));
     nodes.access.title = full ? (browserOnly ? 'Pi runs browser tools, commands and file changes. Click for browser tools only.' : 'Automatically allows permission requests in this conversation. Click to turn this off.') : cliPermissions ? 'OpenCode uses its own permission rules and may allow tools without asking. Requests it does send appear here. Click to automatically allow those requests.' : browserOnly ? 'Pi never asks before a tool runs, so it gets only the browser tools: no shell or file changes. Click for full access.' : 'Asks before each tool, command or file change. Click for full access.';
     nodes.deleteChat.hidden = !selected || !writable || !panelSupport?.conversationDelete;
@@ -113,7 +148,8 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.resume.disabled = !connected || !writable || conversation?.phase === 'recoveryRequired';
     nodes.stop.disabled = !connected || !writable || !busy || conversation?.phase === 'stopping';
     nodes.stop.hidden = !busy;
-    nodes.send.disabled = !connected || !writable || sending || Boolean(pending) || conversation?.phase === 'recoveryRequired';
+    nodes.attachImages.hidden = !panelSupport?.imageAttachments; nodes.attachImages.disabled = !connected || sending || convertingImages;
+    nodes.send.disabled = convertingImages || !connected || !writable || sending || Boolean(pending) || conversation?.phase === 'recoveryRequired';
     nodes.sendDirect.hidden = !busyPhases.has(conversation?.phase) && !conversation?.queuePaused;
     nodes.sendDirect.disabled = nodes.send.disabled || Boolean(conversation?.directMessageId);
     nodes.sendDirect.textContent = busyPhases.has(conversation?.phase) ? 'Stop & send' : 'Send now';
@@ -162,7 +198,8 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.message.value = drafts.get(id) || '';
     nodes.conversation.value = id;
     nodes.deleteConfirm.hidden = true;
-    selected = id; selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
+    selected = id; skillChoice = null; renderImageDrafts(); selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
+    void loadSkills().catch(error);
     timeline = new PanelTimeline(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
     toolTail = null; toolGroups.clear();
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
@@ -191,6 +228,16 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
           const container = element('article', undefined, `message-row ${row.type}`);
           const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
           const content = element('div', undefined, 'content'); container.append(content, speaker); view = { container, content, speaker };
+          if (row.attachments?.length) {
+            const images = element('div', undefined, 'attachment-images'); container.append(images);
+            const chatId = selected;
+            for (const attachment of row.attachments) {
+              const image = element('img'); image.alt = 'Attached image'; images.append(image);
+              void api('conversationAttachmentRead', { conversationId: chatId, attachment }).then(result => {
+                image.src = `data:${result.attachment.mediaType};base64,${result.data}`;
+              }).catch(() => { image.alt = 'Saved image unavailable'; });
+            }
+          }
           if (row.page?.title) container.append(element('div', row.page.title, 'page-ref'));
           if (row.detail) { const raw = element('details'); raw.append(element('summary', 'Details'), element('pre', row.detail)); container.append(raw); }
           if (row.type === 'note' && row.failed && conversation?.agentId) {
@@ -385,7 +432,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         if (pendingMessages.get(id) === pending && status.message.known) {
           pendingMessages.delete(id);
           await savePending();
-          if (id === selected && epoch === selectionEpoch) { if (nodes.message.value === pending.text) nodes.message.value = ''; controls(); }
+          if (id === selected && epoch === selectionEpoch) { if (nodes.message.value === pending.text) { nodes.message.value = ''; imageDrafts.delete(id); renderImageDrafts(); } controls(); }
           if (drafts.get(id) === pending.text) drafts.delete(id);
         } else if (pendingMessages.get(id) === pending) {
           pending.unconfirmed = true;
@@ -397,7 +444,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   function loop() {
     if (closed) return;
     cancel(timer); timer = schedule(async () => {
-      try { await poll(); } catch (failure) { error(failure); }
+      try { await poll(); if (!nodes.agentsView.hidden && settingsSection === 'schedules') await loadSchedules(); } catch (failure) { error(failure); }
       loop();
     }, busyPhases.has(conversation?.phase) || pendingMessages.has(selected) ? 600 : 1800);
   }
@@ -408,7 +455,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     sending = true; controls();
     try {
       if (retry) {
-        await api(pending.direct ? 'conversationSendDirect' : 'conversationSend', {conversationId:id,messageId:pending.id,text:pending.text});
+        await api(pending.direct ? 'conversationSendDirect' : 'conversationSend', {conversationId:id,messageId:pending.id,text:pending.text, ...(pending.params || {})});
         if (selected === id && nodes.message.value === pending.text) nodes.message.value = '';
         if (drafts.get(id) === pending.text) drafts.delete(id);
       }
@@ -420,25 +467,43 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   nodes.clearPending.addEventListener('click', () => void recoverPending(false).catch(error));
   async function send(direct = false) {
     if (panelSupport?.mode !== 'full') throw new Error('Local agent conversations require a supported current CLI.');
-    if (!connected || sending || pendingMessages.has(selected) || conversation?.phase === 'recoveryRequired' || !nodes.message.value.trim()) return;
+    if (!connected || sending || convertingImages || pendingMessages.has(selected) || conversation?.phase === 'recoveryRequired' || !nodes.message.value.trim()) return;
     if (direct && conversation?.directMessageId) throw new Error('A direct message is already waiting for stop confirmation.');
-    sending = true; clearError(); controls(); const text = nodes.message.value;
+    const text = nodes.message.value, chosen = chosenSkill(text);
+    const images = [...(imageDrafts.get(selected) || [])];
+    sending = true; clearError(); controls();
     try {
       if (!selected) {
         const options = { agentId: nodes.agent.value };
         const model = nodes.customModel.value.trim() || nodes.model.value;
         if (model) options.model = model;
+        if (panelSupport?.conversationOptions) options.options = readTurnOptions();
         if (nodes.executable.value.trim()) options.executable = nodes.executable.value.trim();
         if (panelSupport?.fullAccess) options.fullAccess = newFullAccess;
         const result = await api('conversationCreate', options); conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
       }
-      const id = selected, pending = { id: crypto.randomUUID(), text, direct }; pendingMessages.set(id, pending); controls();
-      try { await savePending(); } catch (failure) { pendingMessages.delete(id); throw failure; }
+      const id = selected, pending = { id: crypto.randomUUID(), text, direct };
+      imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();
       const params = { conversationId: id, messageId: pending.id, text };
       const attached = attachedPage(); if (attached) params.page = attached;
+      if (images.length) {
+        params.attachments = [];
+        for (const image of images) {
+          const uploaded = await api('conversationAttachmentPut', { conversationId: id, data: image.data });
+          params.attachments.push(uploaded.attachment);
+        }
+      }
+      if (chosen) {
+        const snapshot = await api('conversationSkillSelect', { conversationId: id, skillId: chosen.id });
+        params.skillId = snapshot.skill.id;
+      }
+      pending.params = { ...params }; delete pending.params.conversationId; delete pending.params.messageId; delete pending.params.text;
+      pendingMessages.set(id, pending); controls();
+      try { await savePending(); } catch (failure) { pendingMessages.delete(id); throw failure; }
       const result = await api(direct ? 'conversationSendDirect' : 'conversationSend', params);
       pageDetached = false; renderPage();
       if (selected === id) { conversation = result.conversation; if (nodes.message.value === text) nodes.message.value = ''; }
+      imageDrafts.delete(id); if (images.length) imageDrafts.delete(''); renderImageDrafts();
       pendingMessages.delete(id); drafts.delete(id); await savePending(); await list(); await poll();
     } finally { sending = false; controls(); }
   }
@@ -449,7 +514,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     select(''); nodes.agent.value = agentId; nodes.model.value = ''; nodes.customModel.value = ''; clearModels(); nodes.message.value = prompt;
     await send();
   }
-  function showAgents() { view(true); }
+  function showAgents() { settingsTab('agents'); view(true); }
   // The tab beside the panel is what "this page" means. It is attached to the
   // next message unless the user removes it; only web pages are offered.
   function attachedPage() {
@@ -648,11 +713,148 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       if (!conversations.some(chat => chat.id === selected)) select('');
       else if (!conversation || conversation.id !== selected) select(selected);
     }
-    await poll(); loop(); loadModels(); void refreshPage().catch(() => {});
+    await poll(); loop(); loadModels(); void loadSkills().catch(error); void loadSchedules().catch(error); void refreshPage().catch(() => {});
   }
   nodes.composer.addEventListener('submit', event => { event.preventDefault(); void send().catch(error); });
-  nodes.message.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(event.ctrlKey || event.metaKey).catch(error); } });
-  nodes.sendDirect.addEventListener('click', () => void send(true).catch(error));
+  nodes.message.addEventListener('keydown', event => { if (skillPickerKey(event)) return; if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(event.ctrlKey || event.metaKey).catch(error); } });
+  function settingsTab(section) {
+    settingsSection = section;
+    for (const name of ['agents','skills','schedules']) nodes[`${name}SettingsTab`].setAttribute('aria-selected',String(name===section));
+    controls();
+    if (section==='skills') void loadSkills().catch(error);
+    if (section==='schedules') void loadSchedules().catch(error);
+  }
+  nodes.agentsSettingsTab.addEventListener('click',()=>settingsTab('agents'));
+  nodes.skillsSettingsTab.addEventListener('click',()=>settingsTab('skills'));
+  nodes.schedulesSettingsTab.addEventListener('click',()=>settingsTab('schedules'));
+  async function loadSchedules() {
+    if (!connected || !panelSupport?.schedules) return;
+    const epoch=++schedulesEpoch;
+    const result=await api('scheduleList');
+    if (epoch!==schedulesEpoch) return;
+    schedules=result.schedules;
+    nodes.scheduleEntries.replaceChildren(...schedules.map(task => {
+      const row=element('div',undefined,'skill-entry');
+      row.append(element('strong',task.name),element('small',`${task.enabled?'Enabled':'Disabled'} · ${agentNames[task.agentId]} · ${task.lastResult || 'Not run yet'} · Next: ${new Date(task.nextRun).toLocaleString()}`));
+      row.append(button('Edit',async()=>editSchedule(task)),button('Run now',async()=>{await api('scheduleRun',{id:task.id});await loadSchedules();await list();}),button(task.enabled?'Disable':'Enable',async()=>{await api('scheduleSave',{id:task.id,enabled:!task.enabled});await loadSchedules();}));
+      if(task.lastChat) row.append(button('Open run',async()=>{await list();select(task.lastChat);view(false);}));
+      if(task.lastResult==='unconfirmed') row.append(button('Acknowledge unknown outcome',async()=>{await api('scheduleSave',{id:task.id,acknowledgeUnconfirmed:true});await loadSchedules();}));
+      row.append(button('Delete schedule',async()=>{await api('scheduleDelete',{id:task.id});await loadSchedules();}));
+      return row;
+    }));
+  }
+  function editSchedule(task) {
+    nodes.scheduleId.value=task?.id || '';nodes.scheduleName.value=task?.name || '';nodes.schedulePrompt.value=task?.prompt || '';
+    nodes.scheduleAgent.value=task?.agentId || skillAgent();nodes.scheduleModel.value=task?.model || '';nodes.scheduleEffort.value=task?.options?.effort || '';nodes.scheduleTier.value=task?.options?.serviceTier || '';
+    nodes.scheduleAccess.value=task?.options?.toolAccess || (nodes.scheduleAgent.value==='opencode'?'runCommands':nodes.scheduleAgent.value==='codex'?'readFiles':'browserOnly');
+    nodes.scheduleAutomatic.checked=nodes.scheduleAgent.value==='pi' || task?.fullAccess===true;nodes.scheduleAutomatic.disabled=nodes.scheduleAgent.value==='pi';nodes.scheduleEnabled.checked=task?.enabled!==false;
+    nodes.scheduleKind.value=task?.rule?.kind || 'interval';nodes.scheduleTiming.value=task?.rule?.minutes || task?.rule?.time || task?.rule?.expression || '60';nodes.scheduleSkill.value=task?.skillId || '';
+  }
+  nodes.reloadSchedules.addEventListener('click',()=>void loadSchedules().catch(error));
+  nodes.newSchedule.addEventListener('click',()=>editSchedule(null));
+  nodes.scheduleAgent.addEventListener('change',()=>{nodes.scheduleEffort.value='';nodes.scheduleTier.value='';nodes.scheduleModel.value='';nodes.scheduleAccess.value=nodes.scheduleAgent.value==='opencode'?'runCommands':nodes.scheduleAgent.value==='codex'?'readFiles':'browserOnly';nodes.scheduleAutomatic.disabled=nodes.scheduleAgent.value==='pi';nodes.scheduleAutomatic.checked=nodes.scheduleAgent.value==='pi';});
+  nodes.saveSchedule.addEventListener('click',()=>void (async()=>{
+    nodes.saveSchedule.disabled=true;
+    try {
+      const kind=nodes.scheduleKind.value, value=nodes.scheduleTiming.value.trim();
+      const rule={kind,...(kind==='interval'?{minutes:Number(value)}:kind==='cron'?{expression:value}:{time:value})};
+      await api('scheduleSave',{...(nodes.scheduleId.value?{id:nodes.scheduleId.value}:{}),name:nodes.scheduleName.value,prompt:nodes.schedulePrompt.value,agentId:nodes.scheduleAgent.value,model:nodes.scheduleModel.value.trim() || null,rule,enabled:nodes.scheduleEnabled.checked,fullAccess:nodes.scheduleAutomatic.checked,skillId:nodes.scheduleSkill.value || null,options:{toolAccess:nodes.scheduleAccess.value,effort:nodes.scheduleEffort.value.trim() || null,serviceTier:nodes.scheduleTier.value || null}});
+      editSchedule(null);await loadSchedules();
+    } finally {nodes.saveSchedule.disabled=false;}
+  })().catch(error));
+  function skillAgent() { return conversation?.agentId || nodes.agent.value; }
+  async function loadSkills() {
+    if (!connected || !panelSupport?.skillLibrary) return;
+    const epoch = ++skillsEpoch, agentId = skillAgent();
+    const result = await api('skillList', { agentId });
+    if (epoch !== skillsEpoch || agentId !== skillAgent()) return;
+    skillCatalog = result.skills;
+    renderSkills(); renderSkillPicker();
+    const skill = nodes.scheduleSkill.value, none = element('option','No skill'); none.value='';
+    nodes.scheduleSkill.replaceChildren(none,...skillCatalog.filter(s=>s.enabled).map(s=>{const node=element('option',`${s.name} · ${s.source}`);node.value=s.id;return node;}));
+    nodes.scheduleSkill.value=skillCatalog.some(s=>s.id===skill)?skill:'';
+  }
+  function renderSkills() {
+    nodes.skillEntries.replaceChildren(...skillCatalog.map(skill => {
+      const row = element('div', undefined, 'skill-entry'); row.append(element('strong', skill.name), element('small', `${skill.source}${skill.enabled ? '' : ' · disabled'} · ${skill.description}`));
+      row.append(button('Use', async () => { skillChoice = skill; nodes.message.value = `/${skill.name} `; view(false); renderSkillPicker(); }));
+      if (skill.editable) row.append(button('Edit', async () => {
+        const result = await api('skillRead', { agentId: skillAgent(), id: skill.id });
+        nodes.skillName.value = skill.name; nodes.skillContent.value = result.skill.instructions;
+      }), button(skill.enabled ? 'Disable' : 'Enable', async () => {
+        await api('skillSetEnabled', { agentId: skillAgent(), id: skill.id, enabled: !skill.enabled }); await loadSkills();
+      }));
+      return row;
+    }));
+  }
+  function chosenSkill(text) {
+    const match = /^\/([^\s]+)(?:\s|$)/.exec(text);
+    if (!match || !panelSupport?.skillLibrary) return null;
+    if (skillChoice?.name === match[1] && skillChoice.enabled) return skillChoice;
+    const matches = skillCatalog.filter(skill => skill.enabled && skill.name === match[1]);
+    if (matches.length !== 1) throw new Error(matches.length ? 'Choose which skill source to use from the picker.' : 'Unknown or disabled skill. Refresh skills or choose an entry from the picker.');
+    return matches[0];
+  }
+  function renderSkillPicker() {
+    const match = /^\/([^\s]*)$/.exec(nodes.message.value);
+    const skills = match ? skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match[1].toLowerCase())).slice(0, 12) : [];
+    visibleSkills = skills; skillPickerIndex = Math.min(skillPickerIndex,Math.max(0,skills.length-1));
+    nodes.skillPicker.hidden = !skills.length;
+    nodes.skillPicker.replaceChildren(...skills.map(skill => button(`${skill.name} · ${skill.source} · ${skill.description}`, async () => {
+      skillChoice = skill; nodes.message.value = `/${skill.name} `; nodes.skillPicker.hidden = true; nodes.message.focus?.();
+    })));
+  }
+  function skillPickerKey(event) {
+    if (event.isComposing || nodes.skillPicker.hidden) return false;
+    if (event.key === 'Escape') { nodes.skillPicker.hidden = true; event.preventDefault(); return true; }
+    if (['ArrowDown','ArrowUp'].includes(event.key)) {
+      event.preventDefault(); skillPickerIndex = (skillPickerIndex + (event.key==='ArrowDown'?1:-1) + visibleSkills.length) % visibleSkills.length;
+      for (const [index,node] of [...nodes.skillPicker.children].entries()) { node.classList.toggle('selected',index===skillPickerIndex); node.setAttribute('aria-selected',String(index===skillPickerIndex)); if(index===skillPickerIndex)node.scrollIntoView?.({block:'nearest'}); }
+      return true;
+    }
+    if (['Tab','Enter'].includes(event.key) && !event.ctrlKey && !event.metaKey) {
+      const skill = visibleSkills[skillPickerIndex]; if(!skill)return false;
+      event.preventDefault(); skillChoice=skill; nodes.message.value=`/${skill.name} `;nodes.skillPicker.hidden=true;return true;
+    }
+    return false;
+  }
+  nodes.message.addEventListener('input', () => {skillPickerIndex=0;renderSkillPicker();});
+  nodes.reloadSkills.addEventListener('click', () => void loadSkills().catch(error));
+  nodes.saveSkill.addEventListener('click', () => void (async () => {
+    await api('skillSave', { agentId: skillAgent(), name: nodes.skillName.value.trim(), content: nodes.skillContent.value }); await loadSkills();
+  })().catch(error));
+  nodes.importSkill.addEventListener('click', () => void (async () => {
+    nodes.importSkill.disabled = true;
+    try { await api('skillImport', { agentId: skillAgent(), kind: nodes.skillImportKind.value, source: nodes.skillImportSource.value.trim() }); await loadSkills(); }
+    finally { nodes.importSkill.disabled = false; }
+  })().catch(error));
+  function renderImageDrafts() {
+    const images = imageDrafts.get(selected) || [];
+    nodes.attachmentDrafts.hidden = !images.length;
+    nodes.attachmentDrafts.replaceChildren(...images.map((image, index) => {
+      const item = element('div'); const preview = element('img'); preview.alt = image.name; preview.src = `data:${image.mediaType};base64,${image.data}`;
+      item.append(preview, button('Remove image', async () => { images.splice(index, 1); renderImageDrafts(); })); return item;
+    }));
+  }
+  async function addImages(files) {
+    if (!panelSupport?.imageAttachments || sending || convertingImages) return;
+    const id = selected, list = imageDrafts.get(id) || [];
+    if (list.length + files.length > 5) throw new Error('Attach up to five images per message.');
+    convertingImages = true; controls();
+    try {
+      const added = []; for (const file of files) added.push(await encodeImage(file));
+      imageDrafts.set(id, [...list, ...added]); if (id === selected) renderImageDrafts();
+    } finally { convertingImages = false; nodes.imageFiles.value = ''; controls(); }
+  }
+  nodes.attachImages.addEventListener('click', () => nodes.imageFiles.click());
+  nodes.imageFiles.addEventListener('change', () => void addImages([...nodes.imageFiles.files]).catch(error));
+  nodes.message.addEventListener('paste', event => {
+    const files = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith('image/'));
+    if (files.length && panelSupport?.imageAttachments) { event.preventDefault(); void addImages(files).catch(error); }
+  });
+  nodes.message.addEventListener('dragover', event => { if (panelSupport?.imageAttachments) event.preventDefault(); });
+  nodes.message.addEventListener('drop', event => { if (panelSupport?.imageAttachments) { event.preventDefault(); void addImages([...(event.dataTransfer?.files || [])]).catch(error); } });
+  nodes.sendDirect.addEventListener('click' , () => void send(true).catch(error));
   nodes.conversation.addEventListener('change', () => select(nodes.conversation.value));
   nodes.conversationButton.addEventListener('click', () => {
     if (sending) return;
@@ -676,12 +878,24 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   nodes.pageDetach.addEventListener('click', () => { pageDetached = true; renderPage(); });
   if (tabs?.onActivated) tabs.onActivated.addListener(() => void refreshPage().catch(() => {}));
   if (tabs?.onUpdated) tabs.onUpdated.addListener((id, change) => { if (change.title || change.url || change.status === 'complete') void refreshPage().catch(() => {}); });
-  nodes.access.addEventListener('click', () => void setAccess(!(selected ? conversation?.fullAccess === true : newFullAccess)).catch(error));
+  function readTurnOptions() {
+    return { toolAccess: nodes.turnAccess.value || null, effort: ['codex','claude'].includes(conversation?.agentId || nodes.agent.value) ? nodes.turnEffort.value || null : null, serviceTier: (conversation?.agentId || nodes.agent.value) === 'codex' ? nodes.turnTier.value || null : null };
+  }
+  nodes.saveTurnOptions.addEventListener('click', () => void (async () => {
+    const id = selected, epoch = selectionEpoch;
+    if (!id || nodes.saveTurnOptions.disabled) return;
+    nodes.saveTurnOptions.disabled = true;
+    try {
+      const result = await api('conversationSetOptions', { conversationId: id, options: readTurnOptions() });
+      if (selected === id && selectionEpoch === epoch) { conversation = result.conversation; optionsOwner = null; controls(); }
+    } finally { controls(); }
+  })().catch(error));
+  nodes.access.addEventListener('click' , () => void setAccess(!(selected ? conversation?.fullAccess === true : newFullAccess)).catch(error));
   nodes.deleteChat.addEventListener('click', () => { nodes.deleteConfirm.hidden = false; });
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
   nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
   nodes.inspectAgent.addEventListener('click', () => void inspectModels(true).catch(error));
-  nodes.agent.addEventListener('change', () => { clearModels(); loadModels(); controls(); });
+  nodes.agent.addEventListener('change', () => { clearModels(); loadModels(); skillChoice = null; void loadSkills().catch(error); controls(); });
   nodes.executable.addEventListener('change', () => { clearModels(); loadModels(); });
   nodes.discover.addEventListener('click', () => void discover().catch(error));
   nodes.settings.addEventListener('click', () => runtime?.openOptionsPage?.());
@@ -717,7 +931,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       }
       await refresh();
     } catch (failure) { error(failure); }
-  }, refresh, select, send, timeline: () => timeline, close() { closed = true; modelEpoch++; discoverEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
+  }, refresh, select, send, timeline: () => timeline, close() { closed = true; modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
 if (typeof document !== 'undefined') {

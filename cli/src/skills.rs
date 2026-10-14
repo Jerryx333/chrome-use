@@ -164,6 +164,14 @@ fn embedded_fingerprint() -> String {
 /// directory: an override the caller chose hides nothing, but an override
 /// pointing at a path that doesn't exist falls back to the package layout, where
 /// `skills/` must still be treated as the stub directory.
+/// Runtime guides exposed to the native panel's explicit skill picker.
+pub(crate) fn panel_skill_dirs() -> Vec<PathBuf> {
+    let (dirs, overridden) = find_skills_dirs();
+    dirs.into_iter()
+        .filter(|dir| overridden || dir.file_name().is_none_or(|name| name != "skills"))
+        .collect()
+}
+
 fn find_skills_dirs() -> (Vec<PathBuf>, bool) {
     // Env var override: single directory, used as-is
     if let Ok(dir) = env::var("AGENT_BROWSER_SKILLS_DIR") {

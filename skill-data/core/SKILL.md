@@ -29,6 +29,15 @@ execution access. Panel history stays local, but the selected CLI may send tasks
 and page content to its configured model service. Deletion removes the panel
 history, the agent session history and the conversation's browser session;
 Codex's SQLite cache is untouched. Details: [connection](references/connection.md).
+Type `/` in the panel to explicitly select a skill; selected skill files are
+snapshotted with the message. Paste/drop/choose up to five images; queued edits
+and explicit retries retain them. Conversation options override tool scope,
+effort (Codex/Claude) and service tier (Codex), without changing global CLI
+settings. Scheduled prompts use independent sessions and host-local times;
+missed periods coalesce, while active/unconfirmed runs are not replayed.
+Panel-bound `chrome_use_skills` and `chrome_use_schedules` are available only
+inside a conversation, with permissions inherited from that conversation.
+Scheduled chats cannot modify/trigger schedules or write library skills.
 Reconnect reads persisted events without resending a turn. Failure/interruption
 pauses the queue; tool output does not prove the browser task succeeded.
 Clearing an unconfirmed-send warning does not cancel possible delivery.

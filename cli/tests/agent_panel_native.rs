@@ -1834,3 +1834,269 @@ fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+#[cfg(unix)]
+fn panel_rich_messages_options_and_schedules_reach_the_real_native_service() {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use std::os::unix::fs::symlink;
+    let registry = tempfile::tempdir().unwrap();
+    let profile = "native-rich-panel-fixture";
+    let mut cleanup = ServiceFixture {
+        root: registry.path().into(),
+        profile: profile.into(),
+        chats: vec![],
+    };
+    let home = registry.path().join("home");
+    let bin = home.join(".local/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/panel_agent.py");
+    symlink(&fixture, bin.join("codex")).unwrap();
+    let proof = registry.path().join("protocol.jsonl");
+    let spawn = || {
+        Host(
+            Command::new(env!("CARGO_BIN_EXE_chrome-use"))
+                .args(["__nm-host", "chrome-extension://agent-panel-fixture/"])
+                .env("CHROME_USE_RELAY_DIR", registry.path())
+                .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+                .env("HOME", &home)
+                .env("CODEX_HOME", home.join(".codex"))
+                .env("CLAUDE_CONFIG_DIR", home.join(".claude"))
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:{}",
+                        bin.display(),
+                        std::env::var("PATH").unwrap_or_default()
+                    ),
+                )
+                .env("PANEL_FIXTURE_CAPTURE", &proof)
+                .env("PANEL_FIXTURE_IMAGES", "1")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
+    };
+    let mut host = spawn();
+    let rx = frames(&mut host);
+    send(
+        &mut host,
+        json!({"method":"hello","version":"fixture","profileId":profile}),
+    );
+    let call = |host: &mut Host, operation: &str, params: Value| -> Value {
+        let reply = panel_reply(host, &rx, operation, operation, params);
+        assert!(
+            reply.get("error").is_none(),
+            "{operation}: {}",
+            reply["error"]
+        );
+        reply["result"].clone()
+    };
+    let text="---\nname: synthetic-skill\ndescription: Isolated test skill\n---\nUse the browser tools to read the fixture. Do not run commands.";
+    let catalog = call(
+        &mut host,
+        "skillSave",
+        json!({"agentId":"codex","name":"synthetic-skill","content":text}),
+    );
+    let skill_id = catalog["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "synthetic-skill")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(2, 2)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    for agent in ["codex", "claude", "opencode", "pi"] {
+        let created = call(
+            &mut host,
+            "conversationCreate",
+            json!({"agentId":agent,"executable":fixture,"fullAccess":true,"options":{"effort":if ["codex","claude"].contains(&agent){Some("high")}else{None},"toolAccess":if agent=="opencode"{"runCommands"}else{"writeFiles"}}}),
+        );
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        cleanup.chats.push(id.clone());
+        let snapshot = call(
+            &mut host,
+            "conversationSkillSelect",
+            json!({"conversationId":id,"skillId":skill_id}),
+        );
+        let attachment = call(
+            &mut host,
+            "conversationAttachmentPut",
+            json!({"conversationId":id,"data":STANDARD.encode(png.get_ref())}),
+        )["attachment"]
+            .clone();
+        let read = call(
+            &mut host,
+            "conversationAttachmentRead",
+            json!({"conversationId":id,"attachment":attachment}),
+        );
+        assert_eq!(read["data"], STANDARD.encode(png.get_ref()));
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let message = json!({"conversationId":id,"messageId":message_id,"text":"rich-input","skillId":snapshot["skill"]["id"],"attachments":[attachment]});
+        call(&mut host, "conversationSend", message.clone());
+        conversation_poll(&mut host, &rx, &id, "idle");
+        // Changing the library cannot change an already selected skill snapshot.
+        call(
+            &mut host,
+            "skillSave",
+            json!({"agentId":agent,"name":"synthetic-skill","content":text.replace("read the fixture","read a different fixture")}),
+        );
+        assert_eq!(
+            call(&mut host, "conversationSend", message.clone())["message"]["accepted"],
+            false
+        );
+        let mut forged = message;
+        forged["attachments"] = json!([]);
+        assert!(panel_reply(
+            &mut host,
+            &rx,
+            "changed-rich-input",
+            "conversationSend",
+            forged
+        )
+        .get("error")
+        .is_some());
+        call(
+            &mut host,
+            "conversationSetOptions",
+            json!({"conversationId":id,"options":{"effort":if ["codex","claude"].contains(&agent){Some("low")}else{None},"toolAccess":if agent=="opencode"{"runCommands"}else{"readFiles"}}}),
+        );
+        call(
+            &mut host,
+            "conversationSend",
+            json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"policy"}),
+        );
+        conversation_poll(&mut host, &rx, &id, "idle");
+    }
+    let records: Vec<Value> = std::fs::read_to_string(&proof)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let starts: Vec<_> = records
+        .iter()
+        .filter(|r| {
+            ["thread/start", "thread/resume"]
+                .contains(&r["message"]["method"].as_str().unwrap_or(""))
+        })
+        .collect();
+    assert_eq!(starts.len(), 2);
+    assert_ne!(starts[0]["pid"], starts[1]["pid"]);
+    assert_eq!(
+        starts[0]["message"]["params"]["config"]["model_reasoning_effort"],
+        "high"
+    );
+    assert_eq!(starts[0]["message"]["params"]["sandbox"], "workspace-write");
+    assert_eq!(
+        starts[1]["message"]["params"]["config"]["model_reasoning_effort"],
+        "low"
+    );
+    assert_eq!(starts[1]["message"]["params"]["sandbox"], "read-only");
+    let codex_rich = records
+        .iter()
+        .find(|r| {
+            r["message"]["method"] == "turn/start"
+                && r["message"]["params"]["input"]
+                    .as_array()
+                    .is_some_and(|a| a.len() == 2)
+        })
+        .unwrap();
+    assert_eq!(
+        codex_rich["message"]["params"]["input"][1]["type"],
+        "localImage"
+    );
+    assert!(codex_rich["message"]["params"]["input"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("explicitly selected the skill synthetic-skill"));
+    let claude_rich = records
+        .iter()
+        .find(|r| r["message"]["type"] == "user" && r["message"]["message"]["content"].is_array())
+        .unwrap();
+    assert_eq!(
+        claude_rich["message"]["message"]["content"][1]["source"]["media_type"],
+        "image/png"
+    );
+    assert_eq!(
+        claude_rich["message"]["message"]["content"][1]["source"]["data"],
+        STANDARD.encode(png.get_ref())
+    );
+    assert!(records.iter().any(|r| r["argv"]
+        .as_array()
+        .unwrap()
+        .windows(2)
+        .any(|args| args == [json!("--effort"), json!("low")])));
+    let pi_rich = records
+        .iter()
+        .find(|r| {
+            r["message"]["type"] == "prompt"
+                && r["message"]["images"]
+                    .as_array()
+                    .is_some_and(|a| a.len() == 1)
+        })
+        .unwrap();
+    assert_eq!(pi_rich["message"]["images"][0]["mimeType"], "image/png");
+    let acp_rich = records
+        .iter()
+        .find(|r| {
+            r["message"]["method"] == "session/prompt"
+                && r["message"]["params"]["prompt"]
+                    .as_array()
+                    .is_some_and(|a| a.len() == 2)
+        })
+        .unwrap();
+    assert_eq!(acp_rich["message"]["params"]["prompt"][1]["type"], "image");
+    assert_eq!(
+        acp_rich["message"]["params"]["prompt"][1]["mimeType"],
+        "image/png"
+    );
+    let saved = call(
+        &mut host,
+        "scheduleSave",
+        json!({"name":"Synthetic schedule","prompt":"scheduled fixture","agentId":"codex","rule":{"kind":"interval","minutes":10},"enabled":false,"fullAccess":false,"options":{"toolAccess":"readFiles"}}),
+    );
+    let schedule_id = saved["schedule"]["id"].as_str().unwrap().to_string();
+    let next_run = saved["schedule"]["nextRun"].clone();
+    let run = call(&mut host, "scheduleRun", json!({"id":schedule_id}));
+    assert_eq!(run["run"]["completed"], false);
+    let run_id = run["run"]["conversationId"].as_str().unwrap().to_string();
+    cleanup.chats.push(run_id.clone());
+    let done = conversation_poll(&mut host, &rx, &run_id, "idle");
+    assert_eq!(done["conversation"]["scheduleId"], schedule_id);
+    for action in [
+        "agentScheduleSave",
+        "agentScheduleRun",
+        "agentScheduleDelete",
+    ] {
+        let reply = panel_reply(
+            &mut host,
+            &rx,
+            "recursive",
+            action,
+            json!({"callerConversation":run_id,"id":schedule_id}),
+        );
+        assert!(reply["error"]
+            .as_str()
+            .unwrap()
+            .contains("Scheduled conversations"));
+    }
+    let mut result = Value::Null;
+    for _ in 0..80 {
+        result = call(&mut host, "scheduleList", json!({}));
+        if result["schedules"][0]["lastResult"] == "completed" {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(result["schedules"][0]["lastResult"], "completed");
+    assert_eq!(result["schedules"][0]["nextRun"], next_run);
+    call(&mut host, "scheduleDelete", json!({"id":schedule_id}));
+}

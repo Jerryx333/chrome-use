@@ -3,7 +3,7 @@
 // replies must match the request's connection generation; no request is replayed.
 // Slow operations outlast the native host's own budget for them (32 s and 47 s),
 // so the host's answer arrives before this page gives up.
-const operationTimeouts = { agentInspect: 35000, conversationDelete: 50000 };
+const operationTimeouts = { agentInspect: 35000, conversationDelete: 50000, skillImport: 45000 };
 
 export class AgentPanelBridge {
   constructor({ send, schedule = (callback, delay) => globalThis.setTimeout(callback, delay), cancel = timer => globalThis.clearTimeout(timer), timeoutMs = 15000, maxPending = 16 }) {
@@ -19,7 +19,7 @@ export class AgentPanelBridge {
   }
 
   request(operation, params = {}) {
-    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess'].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
+    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun'].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
     if (this.pending.size >= this.maxPending) return Promise.reject(new Error('Too many pending agent panel requests'));
     const requestId = `${this.identity}:${this.generation}:${++this.sequence}`;
     return new Promise((resolve, reject) => {
@@ -31,7 +31,7 @@ export class AgentPanelBridge {
           ? 'The configuration outcome could not be confirmed. Read its current values before retrying; the request was not replayed.'
           : 'The native host did not answer the agent panel request. Check the host version and connection; the request was not replayed.'));
       }, operationTimeouts[operation] ?? this.timeoutMs);
-      this.pending.set(requestId, { resolve, reject, timeout, operation, agentId: params?.agentId, planId: params?.planId, conversationId: params?.conversationId, messageId: params?.messageId, replacementId: params?.replacementId });
+      this.pending.set(requestId, { resolve, reject, timeout, operation, agentId: params?.agentId, planId: params?.planId, conversationId: params?.conversationId, messageId: params?.messageId, replacementId: params?.replacementId, id: params?.id, skillId: params?.skillId, attachmentId: params?.attachment?.id, requestedOptions: params?.options });
       try { this.send({ method: 'agentPanel', requestId, operation, params }); }
       catch (error) {
         this.cancel(timeout);
@@ -67,12 +67,17 @@ export class AgentPanelBridge {
   }
 }
 
-function validResult({ operation, agentId, planId, conversationId, messageId, replacementId }, result) {
+function validResult({ operation, agentId, planId, conversationId, messageId, replacementId, id, skillId, attachmentId, requestedOptions }, result) {
   if (result?.schemaVersion !== 1) return false;
   if (operation === 'agentInspect') {
     const inspection = result.inspection;
     return inspection?.agentId === agentId && inspection.source === 'cliProtocol' && inspection.modelAccessVerified === false && inspection.processExitConfirmed === true && typeof inspection.complete === 'boolean' && Array.isArray(inspection.models) && inspection.models.length <= 256 && inspection.models.every(model => typeof model.id === 'string' && typeof model.label === 'string' && Array.isArray(model.efforts)) && ['reportedSignedIn','reportedSignedOut','reportedMetadata','unverified'].includes(inspection.account?.status);
   }
+  if (['skillList','skillSave','skillSetEnabled','skillImport'].includes(operation)) return Array.isArray(result.skills);
+  if (operation === 'skillRead') return result.skill?.id === id && typeof result.skill?.instructions === 'string';
+  if (operation === 'scheduleList') return Array.isArray(result.schedules) && result.timeZone === 'hostLocal';
+  if (['scheduleSave','scheduleRun'].includes(operation)) return typeof result.schedule?.id === 'string' && (!id || result.schedule.id === id) && (operation !== 'scheduleRun' || result.run?.dispatched === true && result.run.completed === false);
+  if (operation === 'scheduleDelete') return result.deleted?.id === id;
   if (operation === 'discover') return Array.isArray(result.agents);
   if (operation === 'serviceHealth') return typeof result.profile === 'string' && typeof result.binaryHash === 'string' && Number.isInteger(result.pid);
   if (operation === 'serviceStop') return result.service?.stopRequested === true;
@@ -85,6 +90,9 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
     const conversation = result.conversation;
     if (!conversation || typeof conversation.id !== 'string' || (operation === 'conversationCreate' ? conversation.agentId !== agentId : conversation.id !== conversationId)) return false;
     if (!['idle', 'starting', 'running', 'waitingInput', 'stopping', 'failed', 'interrupted', 'recoveryRequired'].includes(conversation.phase)) return false;
+    if (operation === 'conversationSetOptions') return result.conversation.options && Object.entries(requestedOptions || {}).every(([key,value]) => result.conversation.options[key] === value);
+    if (operation === 'conversationSkillSelect') return result.skill?.catalogId === skillId && typeof result.skill?.id === 'string' && typeof result.skill.name === 'string';
+    if (operation.startsWith('conversationAttachment')) return typeof result.attachment?.id === 'string' && ['image/png','image/jpeg','image/webp'].includes(result.attachment.mediaType) && Number.isInteger(result.attachment.bytes) && (operation === 'conversationAttachmentPut' || result.attachment.id === attachmentId && typeof result.data === 'string');
     if (operation === 'conversationRead') return Array.isArray(result.journal?.events) && Number.isInteger(result.journal.cursor) && Array.isArray(result.queuedMessages) && result.queuedMessages.length === conversation.queued && result.queuedMessages.length <= 64 && result.queuedMessages.every(message => typeof message.id === 'string' && typeof message.text === 'string' && typeof message.truncated === 'boolean');
     if (['conversationSend', 'conversationSendDirect'].includes(operation)) return result.message?.id === messageId && typeof result.message.accepted === 'boolean' && result.message.replayed === false;
     if (operation === 'conversationMessageStatus') return result.message?.id === messageId && typeof result.message.known === 'boolean' && (result.message.known ? ['active', 'queued', 'previouslyAccepted'].includes(result.message.status) : result.message.status === 'unconfirmed');
