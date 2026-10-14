@@ -327,19 +327,23 @@ function confirmCard(status) {
     if (state.launch) box.append(h('pre', { class: 'cmd', text: state.launch.command }));
     return box;
   }
+  // A candidate project without a running session can be shown but not
+  // confirmed; it carries a start hint instead.
   const key = p => p.fingerprint;
-  if (!state.chosenPair || !pairs.some(p => key(p) === state.chosenPair)) state.chosenPair = card.preselected ? key(card.preselected) : null;
-  const chosen = pairs.find(p => key(p) === state.chosenPair) || null;
+  const live = p => !!(p.sessionId && p.sessionCwd);
+  if (!state.chosenPair || !pairs.some(p => key(p) === state.chosenPair && live(p))) state.chosenPair = card.preselected && live(card.preselected) ? key(card.preselected) : null;
+  const chosen = pairs.find(p => key(p) === state.chosenPair && live(p)) || null;
   const expanded = state.expandPairs || !card.preselected;
   if (chosen) box.append(pairSummary(chosen));
   if (expanded) {
     box.append(h('div', { class: 'small muted', text: card.preselected ? 'Other matches:' : 'Choose where requests from this page go:' }),
       h('div', { class: 'list' }, pairs.map(p => h('label', {},
-        h('input', { type: 'radio', name: 'pair', checked: key(p) === state.chosenPair, onchange: () => { state.chosenPair = key(p); render(); } }),
-        h('span', {}, h('strong', { text: p.sessionLabel || p.sessionId }), ' ', h('span', { class: 'muted small', text: `${p.kind || ''}${p.status ? ' · ' + p.status : ''} · ${scopeLabel(p.origin, p.pathScope)}` }), h('br'),
+        h('input', { type: 'radio', name: 'pair', disabled: !live(p), checked: live(p) && key(p) === state.chosenPair, onchange: () => { state.chosenPair = key(p); render(); } }),
+        h('span', {}, h('strong', { text: live(p) ? p.sessionLabel || p.sessionId : 'no running session here' }), ' ', h('span', { class: 'muted small', text: `${p.kind || ''}${p.status ? ' · ' + p.status : ''} · ${scopeLabel(p.origin, p.pathScope)}` }), h('br'),
           h('span', { class: 'mono muted', text: p.root }), h('br'),
           h('span', { class: 'muted small', text: [...evidenceLabels(p), revisionText(p.revision)].filter(Boolean).join(' · ') }))))));
   }
+  if (pairs.some(p => !live(p))) box.append(h('div', { class: 'small muted' }, 'To use a project without a running session, start Claude Code or Codex there, or run ', h('span', { class: 'mono', text: `chrome-use inspect link ${state.ctx.pageUrl}` }), ' in the session that should receive requests.'));
   box.append(h('div', { class: 'actions' },
     h('button', { class: 'primary', disabled: !chosen, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'default'); } }, 'Hand over'),
     h('button', { disabled: !chosen, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'tab'); } }, 'Only this tab'),

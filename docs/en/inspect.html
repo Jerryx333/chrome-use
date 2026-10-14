@@ -85,9 +85,10 @@
         </div>
 <pre><code>{
   "version": 1,
+  "sourceRoots": ["../../packages/ui"],
   "sites": [
     { "origins": ["https://test-admin.x.com", "http://localhost:5173"] },
-    { "origins": ["https://*.preview.x.com"], "pathScope": "/admin", "sourceRoots": ["../../packages/ui"] }
+    { "origins": ["https://*.preview.x.com"], "pathScope": "/admin" }
   ]
 }</code></pre>
       </div>
@@ -95,7 +96,7 @@
         <li>The directory above <code>.chrome-use</code> is the app root, so a monorepo can have one per app.</li>
         <li><code>pathScope</code> matches whole path segments: <code>/admin</code> covers <code>/admin/orders</code>, not <code>/administrator</code>. Only needed when several apps share a domain.</li>
         <li>A single-label wildcard <code>https://*.preview.x.com</code> is supported: scheme and port must match, exact domains win, and a confirmation binds only the exact domain you are on.</li>
-        <li><code>sourceRoots</code> can list shared package directories (relative to the app root); they are shown on the card and count as the page's source only after you confirm.</li>
+        <li>A top-level <code>sourceRoots</code> can list shared package directories (relative to the app root); they are shown on the card and count as the page's source only after you confirm.</li>
         <li>Only git-tracked configs in the repositories of running sessions are read; a symlinked, oversized (over 64 KiB), unknown-version or unknown-field file is rejected with a note in the panel.</li>
       </ul>
       <h3 id="link">Claim a site from a session</h3>

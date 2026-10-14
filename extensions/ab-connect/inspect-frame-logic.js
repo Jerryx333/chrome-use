@@ -106,6 +106,7 @@ export function reasonText(reason, binding) {
     case 'sessionEnded': return `${who} is no longer running. Choose where requests go now.`;
     case 'sessionMoved': return `${who} now works in another folder. Choose where requests go now.`;
     case 'portMoved': return 'The dev server on this port now runs from another folder. Choose where requests go now.';
+    case 'rootMissing': return 'The bound project folder is gone or moved. Choose where requests go now.';
     default: return null;
   }
 }

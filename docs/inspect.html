@@ -83,9 +83,10 @@
         </div>
 <pre><code>{
   "version": 1,
+  "sourceRoots": ["../../packages/ui"],
   "sites": [
     { "origins": ["https://test-admin.x.com", "http://localhost:5173"] },
-    { "origins": ["https://*.preview.x.com"], "pathScope": "/admin", "sourceRoots": ["../../packages/ui"] }
+    { "origins": ["https://*.preview.x.com"], "pathScope": "/admin" }
   ]
 }</code></pre>
       </div>
@@ -93,7 +94,7 @@
         <li>文件所在的 <code>.chrome-use</code> 目录的上一级就是这个应用的根目录，monorepo 里可以每个应用放一份。</li>
         <li><code>pathScope</code> 按路径段匹配，<code>/admin</code> 包含 <code>/admin/orders</code>，不包含 <code>/administrator</code>；同一域名下多个应用时才需要写。</li>
         <li>支持一层子域名通配 <code>https://*.preview.x.com</code>：协议和端口必须一致，精确域名优先；确认时只绑定当前这个具体域名。</li>
-        <li><code>sourceRoots</code> 可以列出共享包目录（相对应用根目录），会显示在确认卡上，确认后才算作这个页面的源码。</li>
+        <li>文件顶层的 <code>sourceRoots</code> 可以列出共享包目录（相对应用根目录），会显示在确认卡上，确认后才算作这个页面的源码。</li>
         <li>只读取运行中会话所在的仓库里被 git 跟踪的配置；文件是符号链接、超过 64 KiB、版本不是 1 或有未知字段时会被拒绝，并在面板里说明。</li>
       </ul>
       <h3 id="link">在会话里认领站点</h3>
