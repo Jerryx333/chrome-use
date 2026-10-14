@@ -32,6 +32,11 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   let modelEpoch = 0, newFullAccess = true, page = null, pageDetached = false, scope = 'site';
   let sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
   const rendered = new Map(), requestNodes = new Map(), queuedNodes = new Map();
+  // Nodes added after the id list; looked up apart so the list stays stable.
+  const working = document.getElementById('working'), suggestions = document.getElementById('suggestions');
+  // Consecutive tool calls share one collapsible group; `toolTail` is the
+  // group the next tool joins while nothing else has been rendered after it.
+  let toolTail = null; const toolGroups = new Set();
 
   // Keep only correlation IDs in extension storage. Chat text lives in the
   // native journal; closing the view must not turn an uncertain send into a retry.
@@ -100,6 +105,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.phase.textContent = panelSupport?.mode === 'readOnly' ? 'Read-only discovery' : conversation ? phaseLabels[conversation.phase] || 'Unknown response state' : 'Ready';
     nodes.effectiveModel.textContent = conversation?.model || '';
     const busy = busyPhases.has(conversation?.phase);
+    renderWorking();
     nodes.status.classList.toggle('idle', !conversation || (conversation.phase === 'idle' && !conversation.model));
     nodes.status.classList.toggle('busy', busy);
     nodes.queue.textContent = pending ? 'Send unconfirmed; checking stored message' : conversation?.queued ? `${conversation.queued} queued${conversation.queuePaused ? ', paused' : ''}` : '';
@@ -158,6 +164,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.deleteConfirm.hidden = true;
     selected = id; selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
     timeline = new PanelTimeline(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
+    toolTail = null; toolGroups.clear();
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
     void poll().catch(error);
@@ -168,13 +175,18 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   function renderTimeline() {
     const follow = nodes.transcript.scrollHeight - nodes.transcript.scrollTop - nodes.transcript.clientHeight < 80;
     nodes.empty.hidden = timeline.rows.length > 0;
+    // A tool still open when the response ended is not running any more.
+    const live = busyPhases.has(conversation?.phase);
     for (const row of timeline.rows) {
       let view = rendered.get(row.key);
       if (!view) {
         if (row.type === 'tool') {
           const container = element('details', undefined, 'tool-row'); const title = element('summary');
           const name = element('span', undefined, 'tool-name'); const hint = element('span', undefined, 'tool-hint'); const state = element('span', undefined, 'tool-state'); title.append(name, hint, state);
-          const content = element('pre'); container.append(title, content); view = { container, name, hint, state, content };
+          const content = element('pre'); container.append(title, content); view = { container, name, hint, state, content, row };
+          if (!toolTail) toolTail = toolGroup();
+          toolTail.tools.push(view); toolTail.list.append(container); toolGroups.add(toolTail);
+          rendered.set(row.key, view);
         } else {
           const container = element('article', undefined, `message-row ${row.type}`);
           const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
@@ -190,7 +202,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
             else if (conversation.model) container.append(button('Change default model', async () => { showAgents(); await loadConfig(agentId, agentNames[agentId] || agentId); }, 'retry'));
           }
         }
-        rendered.set(row.key, view); nodes.transcript.append(view.container);
+        if (row.type !== 'tool') { toolTail = null; rendered.set(row.key, view); nodes.transcript.append(view.container); }
       }
       if (view.text !== row.text) {
         view.text = row.text;
@@ -199,10 +211,44 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         else view.content.textContent = row.text;
       }
       if (row.type === 'user') view.speaker.textContent = row.queueStatus || '';
-      if (row.type === 'tool') { view.name.textContent = row.name; view.hint.textContent = row.hint || ''; view.state.textContent = row.failed ? 'Error' : row.completed ? '' : 'Running…'; view.container.classList.toggle('failed', row.failed); }
+      if (row.type === 'tool') {
+        view.name.textContent = row.name; view.hint.textContent = row.hint || ''; view.row = row;
+        view.state.textContent = row.failed ? 'Failed' : ''; view.running = live && !row.failed && !row.completed;
+        view.state.title = row.failed ? 'Failed' : view.running ? 'Running' : '';
+        view.container.classList.toggle('failed', row.failed); view.container.classList.toggle('running', view.running);
+      }
     }
+    for (const group of toolGroups) renderToolGroup(group);
+    renderWorking();
     if (follow) nodes.transcript.scrollTop = nodes.transcript.scrollHeight;
     nodes.latest.hidden = follow || timeline.rows.length === 0;
+  }
+  function toolGroup() {
+    const container = element('details', undefined, 'tool-group'), summary = element('summary'), list = element('div', undefined, 'tool-list');
+    const group = { container, summary, list, tools: [], touched: false, wasRunning: null };
+    // Once the user opens a group or a step in it, it stays the way they left it.
+    container.addEventListener('click', () => { group.touched = true; });
+    container.append(summary, list); nodes.transcript.append(container); return group;
+  }
+  // A running group stays open; a finished group of several steps folds into
+  // one summary line so the reply below it stays in view.
+  function renderToolGroup(group) {
+    const count = group.tools.length, failed = group.tools.filter(t => t.row.failed).length;
+    const running = group.tools.some(t => t.running);
+    group.container.classList.toggle('single', count === 1); group.container.classList.toggle('running', running);
+    group.summary.textContent = `${running ? 'Working · ' : ''}${count} step${count === 1 ? '' : 's'}${failed ? ` · ${failed} failed` : ''}`;
+    if (count === 1) group.container.open = true;
+    else if (!group.touched && running !== group.wasRunning) group.container.open = running;
+    group.wasRunning = running;
+  }
+  // Three dots under the transcript while the agent works and nothing else
+  // (a running tool) already shows that it is busy.
+  function renderWorking() {
+    if (!working) return;
+    const last = timeline.rows[timeline.rows.length - 1];
+    const show = ['starting', 'running'].includes(conversation?.phase) && !(last?.type === 'tool' && !last.completed && !last.failed);
+    working.hidden = !show;
+    if (show && nodes.transcript.lastElementChild !== working) nodes.transcript.append(working);
   }
   function button(text, action, className = 'quiet') {
     const node = element('button', text, className); node.type = 'button'; node.addEventListener('click', () => void action().catch(error)); return node;
@@ -500,12 +546,23 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     if (selected || !nodes.agent.value || !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) return;
     void inspectModels(false).catch(() => {});
   }
-  let discoverEpoch = 0;
+  let discoverEpoch = 0; const agentRows = new Map();
+  // Suggested values for configuration fields; the inputs stay free text.
+  const effortChoices = { codex: ['minimal', 'low', 'medium', 'high', 'xhigh'], claude: ['low', 'medium', 'high', 'max'] };
+  const modelFields = new Set(['model', 'smallModel', 'opusModel', 'sonnetModel', 'haikuModel']);
+  function choiceList(input, id, values) {
+    if (!values?.length) return;
+    const list = element('datalist'); list.id = id;
+    list.append(...values.map(value => { const option = element('option'); option.value = value; return option; }));
+    input.setAttribute('list', id); return list;
+  }
   const accountLabels = { reportedSignedIn: 'Signed in', reportedSignedOut: 'Signed out', reportedMetadata: 'Account reported', unverified: 'Login unknown' };
   // One line per agent that answers "can I use this?" from the CLI's own report.
   // The report is not proof of model access; that is settled by the first turn.
-  async function agentStatus(agent, line, epoch) {
-    if (!agent.executable) { line.textContent = agent.configFiles?.length ? 'Configuration found; program not installed' : 'Not installed'; return; }
+  async function agentStatus(agent, line, epoch, row) {
+    const mark = state => { if (row) row.className = `agent-row ${state}${configuration?.agentId === agent.id && !nodes.configuration.hidden ? ' selected' : ''}`; };
+    if (!agent.executable) { mark('missing'); line.textContent = agent.configFiles?.length ? 'Configuration found; program not installed' : 'Not installed'; return; }
+    mark('installed');
     if (!(panelSupport?.chatAgents || ['codex', 'claude']).includes(agent.id)) { line.textContent = 'Installed · chat not supported in the panel yet'; return; }
     if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) { line.textContent = 'Installed'; return; }
     line.textContent = 'Installed · checking…';
@@ -517,17 +574,18 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       if (inspection.models?.length) parts.push(`${inspection.models.length} models`);
       line.textContent = parts.join(' · ');
       line.classList.toggle('signed-out', account.status === 'reportedSignedOut');
+      mark(account.status === 'reportedSignedOut' ? 'signed-out' : account.status === 'reportedSignedIn' ? 'ready' : 'installed');
       line.title = 'Reported by the CLI. Model access is confirmed when a conversation runs.';
     } catch { if (epoch === discoverEpoch) line.textContent = 'Installed · status unavailable'; }
   }
   async function discover() {
     const epoch = ++discoverEpoch;
-    const result = await api('discover'); if (epoch !== discoverEpoch) return; nodes.agentList.replaceChildren();
+    const result = await api('discover'); if (epoch !== discoverEpoch) return; nodes.agentList.replaceChildren(); agentRows.clear();
     for (const agent of result.agents) {
       const row = element('div', undefined, 'agent-row'), info = element('div', undefined, 'agent-info'), line = element('div', undefined, 'agent-evidence');
       info.append(element('div', agent.name, 'agent-name'), line);
-      row.append(info, button('Configure', () => loadConfig(agent.id, agent.name))); nodes.agentList.append(row);
-      if (nodes.agentsView.hidden) line.textContent = agent.executable ? 'Installed' : 'Not installed'; else void agentStatus(agent, line, epoch);
+      row.append(info, button('Configure', () => loadConfig(agent.id, agent.name))); nodes.agentList.append(row); agentRows.set(agent.id, row);
+      if (nodes.agentsView.hidden) line.textContent = agent.executable ? 'Installed' : 'Not installed'; else void agentStatus(agent, line, epoch, row);
     }
   }
   async function loadConfig(agentId, name) {
@@ -536,11 +594,23 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.configuration.hidden = false; nodes.configTitle.textContent = `${name} configuration`; nodes.configPath.textContent = configuration.path;
     nodes.configWarnings.textContent = (configuration.warnings || []).join('\n'); nodes.configFields.replaceChildren(); nodes.configPreview.hidden = true; nodes.restoreConfig.hidden = true; nodes.configResult.textContent = '';
     for (const button of nodes.configForm.querySelectorAll('button')) button.disabled = panelSupport?.mode !== 'full';
+    for (const [id, row] of agentRows) row.classList.toggle('selected', id === agentId);
+    const modelInputs = [];
     for (const field of configuration.fields) {
       const label = element('label', fieldLabels[field.id] || field.id); const input = element('input'); input.disabled = panelSupport?.mode !== 'full'; input.value = field.value || ''; input.placeholder = 'CLI default'; input.dataset.field = field.id;
       input.addEventListener('input', () => { input.dataset.changed = 'true'; preview = null; nodes.configPreview.hidden = true; });
-      label.append(input); if (field.validType === false) label.append(element('span', 'Stored value has an unsupported type; enter a replacement to repair it.', 'hint')); nodes.configFields.append(label);
+      const choices = field.id === 'effort' ? choiceList(input, `config-${field.id}-choices`, effortChoices[agentId]) : null;
+      if (modelFields.has(field.id)) modelInputs.push(input);
+      label.append(input); if (choices) label.append(choices); if (field.validType === false) label.append(element('span', 'Stored value has an unsupported type; enter a replacement to repair it.', 'hint')); nodes.configFields.append(label);
     }
+    nodes.configuration.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    // Model names come from the probe the agent list already started; the
+    // form does not wait for it and no new probe is run.
+    const cached = modelCache.get(`${agentId}\n`);
+    if (cached && modelInputs.length) void cached.then(inspection => {
+      if (epoch !== configEpoch) return;
+      for (const input of modelInputs) { const list = choiceList(input, `config-${input.dataset.field}-choices`, (inspection.models || []).map(m => m.id)); if (list) input.after?.(list); }
+    }, () => {});
   }
   function diffValue(value) { return value?.redacted ? 'Hidden structured or sensitive value' : value?.state === 'absent' ? 'CLI default' : typeof value?.value === 'string' ? value.value : JSON.stringify(value?.value); }
   async function previewConfig() {
@@ -549,7 +619,11 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     for (const input of nodes.configFields.querySelectorAll('input')) if (input.dataset.changed) changes[input.dataset.field] = input.value.trim() || null;
     if (!Object.keys(changes).length) throw new Error('Change a field before previewing.');
     const result = await api('configPlan', { agentId, changes }); if (epoch !== configEpoch) return; preview = result.configuration; nodes.configDiff.replaceChildren();
-    for (const file of preview.files) for (const change of file.changes) { const row = element('div', undefined, 'config-change'); row.append(element('div', change.path.join('.'), 'field'), element('div', `Before: ${diffValue(change.before)}`, 'before'), element('div', `After: ${diffValue(change.after)}`, 'after')); nodes.configDiff.append(row); }
+    for (const file of preview.files) for (const change of file.changes) {
+      const row = element('div', undefined, 'config-change'), values = element('div', undefined, 'values');
+      values.append(element('span', diffValue(change.before), 'before'), element('span', '→', 'arrow'), element('span', diffValue(change.after), 'after'));
+      row.append(element('div', fieldLabels[change.path.join('.')] || change.path.join('.'), 'field'), values); nodes.configDiff.append(row);
+    }
     nodes.configPreview.hidden = false; nodes.applyConfig.disabled = !preview.files.some(f => f.changes.length); nodes.configResult.textContent = '';
   }
   async function applyConfig() {
@@ -591,6 +665,12 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     document.addEventListener('keydown', event => { if (event.key === 'Escape') closeConversationMenu(); });
     document.addEventListener('click', event => { if (!nodes.conversationMenu.hidden && !nodes.conversationMenu.contains(event.target) && !nodes.conversationButton.contains(event.target)) closeConversationMenu(); });
   }
+  // Example tasks only fill the composer; the user still decides to send.
+  suggestions?.addEventListener('click', event => {
+    const prompt = event.target?.closest?.('[data-prompt]')?.dataset.prompt;
+    if (!prompt || nodes.message.disabled) return;
+    nodes.message.value = prompt; nodes.message.focus?.();
+  });
   nodes.newChat.addEventListener('click', () => { nodes.conversation.value = ''; select(''); loadModels(); });
   nodes.refresh.addEventListener('click', () => void refresh().catch(error));
   nodes.pageDetach.addEventListener('click', () => { pageDetached = true; renderPage(); });
