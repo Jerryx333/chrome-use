@@ -519,7 +519,7 @@ fn path_identity(path: &Path) -> Result<Identity, String> {
             .open(path)
             .map_err(|_| "Cannot inspect configuration identity")?;
         let (device, inode) = super::windows::identity(&file)?;
-        return Ok(Identity { device, inode });
+        Ok(Identity { device, inode })
     }
     #[cfg(not(windows))]
     {
