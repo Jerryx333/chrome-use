@@ -7,15 +7,26 @@ const dir = __dirname;
 const args = process.argv.slice(2);
 const log = entry => fs.appendFileSync(path.join(dir, 'fake-ocs.log'), JSON.stringify({ at: Date.now(), ...entry }) + '\n');
 if (args[0] === '--version') { console.log('ocs 0.8.3'); process.exit(0); }
-if (args[0] === 'who') {
+// Roster: fake-roster.json when present (scenarios rewrite it), else the
+// default React/Vue sessions. `whoami` answers as FAKE_OCS_SELF.
+function roster() {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, 'fake-roster.json'), 'utf8')); } catch {}
   const react = path.join(dir, 'react-app'), vue = path.join(dir, 'vue-app');
-  console.log(JSON.stringify({ entries: [
+  return [
     { kind: 'claude', name: 'react-main', id: 'claude-aaaa1111', cwd: react, status: 'idle', self: false },
     { kind: 'claude', name: 'react-second', id: 'claude-bbbb2222', cwd: react, status: 'busy', self: false },
     { kind: 'codex-task', target: 'codex-cccc3333', threadId: 'x', cwd: vue, self: false },
-    { kind: 'cmux', ref: 'surface:1', title: 'claude' },
-  ] }));
+  ];
+}
+if (args[0] === 'who') {
+  console.log(JSON.stringify({ entries: [...roster(), { kind: 'cmux', ref: 'surface:1', title: 'claude' }] }));
   process.exit(0);
+}
+if (args[0] === 'whoami') {
+  const id = process.env.FAKE_OCS_SELF || null;
+  const me = roster().find(e => (e.id || e.target) === id);
+  console.log(JSON.stringify({ host: me?.kind === 'codex-task' ? 'codex' : 'claude', id, name: me?.name || null, session: me?.name || null, addresses: id ? [id] : [] }));
+  process.exit(id ? 0 : 1);
 }
 if (args[0] === 'dm') {
   let mode = 'sent';
@@ -26,8 +37,10 @@ if (args[0] === 'dm') {
   if (mode === 'sent') out({ stored: true, wake: 'accepted', exit: 0 }, 0);
   if (mode === 'stored') out({ stored: true, wake: 'parked', exit: 2 }, 2);
   if (mode === 'unknown') out({ stored: true, wake: 'unknown', exit: 3 }, 3);
-  if (mode === 'hang') { setTimeout(() => out({ stored: true, wake: 'accepted', exit: 0 }, 0), 120000); return; }
+  if (mode === 'hang') setTimeout(() => out({ stored: true, wake: 'accepted', exit: 0 }, 0), 120000);
   if (mode === 'fail') { console.error('fake failure'); process.exit(1); }
 }
-console.error('fake-ocs: unsupported ' + args.join(' '));
-process.exit(64);
+if (args[0] !== 'dm') {
+  console.error('fake-ocs: unsupported ' + args.join(' '));
+  process.exit(64);
+}
