@@ -25,6 +25,16 @@ fn protect_fixture_endpoint(path: &std::path::Path) {
     );
 }
 
+// Independent cases each launch several services. Serialize case setup so a
+// cold hosted runner can honor the startup deadline; concurrency inside each
+// case (sibling chats, profiles, disconnects and upgrades) remains exercised.
+static NATIVE_CASES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn native_case() -> std::sync::MutexGuard<'static, ()> {
+    NATIVE_CASES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn test_binary() -> std::path::PathBuf {
     std::env::var_os("CHROME_USE_TEST_BIN")
         .map(std::path::PathBuf::from)
@@ -145,6 +155,7 @@ fn panel_reply(
 #[cfg(any(unix, windows))]
 #[test]
 fn configuration_preview_apply_and_restore_use_only_isolated_fixture_settings() {
+    let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
     let agent_dir = registry.path().join("synthetic-agent");
     std::fs::create_dir(&agent_dir).unwrap();
@@ -348,6 +359,7 @@ fn conversation_poll(
 #[test]
 #[cfg(any(unix, windows))]
 fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() {
+    let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-conversation-fixture";
     let mut cleanup = ServiceFixture {
@@ -944,6 +956,7 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
 
 #[test]
 fn discovery_and_errors_are_correlated_without_entering_browser_dispatch() {
+    let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
     let mut host = Host(
         Command::new(test_binary())
@@ -1054,6 +1067,7 @@ fn discovery_and_errors_are_correlated_without_entering_browser_dispatch() {
 #[cfg(any(unix, windows))]
 #[test]
 fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdown() {
+    let _case = native_case();
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::sync::{
@@ -1148,6 +1162,7 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
 #[test]
 #[cfg(any(unix, windows))]
 fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
+    let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-delete-fixture";
     let codex_home = tempfile::tempdir().unwrap();
@@ -1293,6 +1308,7 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
 #[test]
 #[cfg(any(unix, windows))]
 fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request() {
+    let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-full-access-fixture";
     let mut cleanup = ServiceFixture {
@@ -1428,6 +1444,7 @@ fn full_access_conversations_run_without_prompts_and_can_be_switched_mid_request
 #[cfg(any(unix, windows))]
 #[test]
 fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
+    let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-opencode-fixture";
     let mut cleanup = ServiceFixture {
@@ -1656,6 +1673,7 @@ fn opencode_acp_streams_tools_approvals_stop_resume_queue_and_delete() {
 #[test]
 #[cfg(any(unix, windows))]
 fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
+    let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-pi-fixture";
     let mut cleanup = ServiceFixture {
@@ -1792,6 +1810,7 @@ fn pi_conversations_use_rpc_mode_browser_only_tools_and_their_own_session_id() {
 #[test]
 #[cfg(any(unix, windows))]
 fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
+    let _case = native_case();
     let registry = tempfile::tempdir().unwrap();
     let profile = "native-slow-inspection-fixture";
     let _cleanup = ServiceFixture {
@@ -1838,6 +1857,7 @@ fn a_slow_cli_model_check_is_answered_instead_of_dropping_the_connection() {
 #[test]
 #[cfg(any(unix, windows))]
 fn panel_rich_messages_options_and_schedules_reach_the_real_native_service() {
+    let _case = native_case();
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
