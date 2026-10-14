@@ -233,10 +233,54 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     drop(ownership);
     let executable =
         std::env::current_exe().map_err(|_| "Cannot locate agent-service executable")?;
+    let arguments: Vec<std::ffi::OsString> = vec![
+        "__panel-service".into(),
+        "--profile".into(),
+        profile.into(),
+        "--data-dir".into(),
+        root.as_os_str().to_owned(),
+    ];
+    // Under Chrome every descendant inherits its process quarantine, so files
+    // an agent writes are quarantined. Bun-built CLIs extract and dlopen their
+    // native libraries, which Gatekeeper then blocks. launchd starts the
+    // service outside Chrome's process tree.
+    #[cfg(target_os = "macos")]
+    let launched = launchd_start(directory, &executable, &arguments).is_ok();
+    #[cfg(not(target_os = "macos"))]
+    let launched = false;
+    let mut child = if launched {
+        None
+    } else {
+        Some(spawn_detached(&executable, &arguments)?)
+    };
+    while Instant::now() < deadline {
+        if let Some(status) = match child.as_mut() {
+            Some(child) => child
+                .try_wait()
+                .map_err(|_| "Cannot inspect agent service startup")?,
+            None => None,
+        } {
+            return Err(format!("Agent service exited during startup ({status})"));
+        }
+        if let Ok(endpoint) = endpoint(directory, profile) {
+            if endpoint.binary_hash == *binary_hash
+                && exchange(&endpoint, "health", json!({})).is_ok()
+            {
+                return Ok(endpoint);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    Err("Agent-service startup has not been confirmed; its process was not restarted".into())
+}
+
+fn spawn_detached(
+    executable: &Path,
+    arguments: &[std::ffi::OsString],
+) -> Result<std::process::Child, String> {
     let mut command = std::process::Command::new(executable);
     command
-        .args(["__panel-service", "--profile", profile, "--data-dir"])
-        .arg(root)
+        .args(arguments)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -258,26 +302,121 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000 | 0x00000200);
     }
-    let mut child = command
+    command
         .spawn()
-        .map_err(|_| "Agent service could not be started")?;
-    while Instant::now() < deadline {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|_| "Cannot inspect agent service startup")?
-        {
-            return Err(format!("Agent service exited during startup ({status})"));
-        }
-        if let Ok(endpoint) = endpoint(directory, profile) {
-            if endpoint.binary_hash == *binary_hash
-                && exchange(&endpoint, "health", json!({})).is_ok()
-            {
-                return Ok(endpoint);
-            }
-        }
-        std::thread::sleep(Duration::from_millis(40));
+        .map_err(|_| "Agent service could not be started".into())
+}
+
+/// Load a one-shot launchd job for the service. The label is per data
+/// directory; a finished job stays loaded but idle, so it is booted out
+/// before each start. The plist carries this process's environment, so it
+/// lives only until launchd has read it.
+#[cfg(target_os = "macos")]
+fn launchd_start(
+    directory: &Path,
+    executable: &Path,
+    arguments: &[std::ffi::OsString],
+) -> Result<(), String> {
+    let digest = Sha256::digest(directory.as_os_str().as_encoded_bytes());
+    let label = format!(
+        "com.chrome-use.panel-service.{}",
+        &hex::encode(digest)[..16]
+    );
+    let domain = format!("gui/{}", unsafe { libc::getuid() });
+    let launchctl = |args: &[&std::ffi::OsStr]| {
+        std::process::Command::new("/bin/launchctl")
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    let plist = launchd_plist(&label, executable, arguments)?;
+    let path = directory.join("service.plist");
+    atomic_write(&path, plist.as_bytes(), None)?;
+    // A quarantined writer quarantines the plist too, and launchd refuses
+    // to load a quarantined job definition.
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let file = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| "Invalid agent-service plist path")?;
+        unsafe { libc::removexattr(file.as_ptr(), c"com.apple.quarantine".as_ptr(), 0) };
     }
-    Err("Agent-service startup has not been confirmed; its process was not restarted".into())
+    let target = format!("{domain}/{label}");
+    let _ = launchctl(&["bootout".as_ref(), target.as_ref()]);
+    // bootout returns before launchd forgets the label; retry briefly.
+    let mut loaded = false;
+    for _ in 0..20 {
+        if launchctl(&["bootstrap".as_ref(), domain.as_ref(), path.as_os_str()]) {
+            loaded = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = std::fs::remove_file(&path);
+    if loaded {
+        Ok(())
+    } else {
+        Err("launchd did not accept the agent service".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn launchd_plist(
+    label: &str,
+    executable: &Path,
+    arguments: &[std::ffi::OsString],
+) -> Result<String, String> {
+    fn text(value: &std::ffi::OsStr) -> Option<String> {
+        let value = value.to_str()?;
+        if value
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+        {
+            return None;
+        }
+        Some(
+            value
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;"),
+        )
+    }
+    let mut program = String::new();
+    for argument in
+        std::iter::once(executable.as_os_str()).chain(arguments.iter().map(|a| a.as_os_str()))
+    {
+        let argument = text(argument).ok_or("Agent-service arguments are not plist text")?;
+        program.push_str(&format!("<string>{argument}</string>"));
+    }
+    let mut environment = String::new();
+    for (key, value) in std::env::vars_os() {
+        if let (Some(key), Some(value)) = (text(&key), text(&value)) {
+            environment.push_str(&format!("<key>{key}</key><string>{value}</string>"));
+        }
+    }
+    let directory = std::env::current_dir()
+        .ok()
+        .and_then(|d| text(d.as_os_str()))
+        .unwrap_or_else(|| "/".into());
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+<key>Label</key><string>{label}</string>
+<key>ProgramArguments</key><array>{program}</array>
+<key>EnvironmentVariables</key><dict>{environment}</dict>
+<key>WorkingDirectory</key><string>{directory}</string>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><false/>
+<key>ProcessType</key><string>Interactive</string>
+<key>AbandonProcessGroup</key><true/>
+</dict>
+</plist>
+"#
+    ))
 }
 
 pub(super) fn call(
@@ -1299,6 +1438,32 @@ fn start<'a>(
     })
 }
 
+/// Bun-built agents extract native libraries to `$TMPDIR/.bun-<uid>-*` and
+/// may reuse them later. Ones extracted while the service still ran under
+/// Chrome carry its quarantine and would keep failing Gatekeeper.
+#[cfg(target_os = "macos")]
+fn release_bun_libraries() {
+    use std::os::unix::ffi::OsStrExt;
+    let prefix = format!(".bun-{}-", unsafe { libc::getuid() });
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_name().as_bytes().starts_with(prefix.as_bytes()) {
+            continue;
+        }
+        if let Ok(path) = std::ffi::CString::new(entry.path().as_os_str().as_bytes()) {
+            unsafe {
+                libc::removexattr(
+                    path.as_ptr(),
+                    c"com.apple.quarantine".as_ptr(),
+                    libc::XATTR_NOFOLLOW,
+                )
+            };
+        }
+    }
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     if args.len() != 4 || args[0] != "--profile" || args[2] != "--data-dir" {
         return Err("Invalid private agent-service startup arguments".into());
@@ -1310,6 +1475,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     ownership
         .try_lock()
         .map_err(|_| "Another agent service owns this profile")?;
+    #[cfg(target_os = "macos")]
+    release_bun_libraries();
     let store = Store::open(directory.join("conversations"))?;
     let engine = Arc::new(Mutex::new(Engine {
         store,

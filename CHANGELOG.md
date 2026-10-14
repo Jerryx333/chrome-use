@@ -1,8 +1,19 @@
 # Changelog
 
-## 1.5.207
+## 1.5.208
 
 <!-- release:start -->
+### Bug Fixes
+
+- **macOS no longer blocks an agent's `.bun-…dylib`.** Agents started from the side panel inherited Chrome's file quarantine, so every file they wrote was quarantined. OpenCode, Claude Code and other Bun-built CLIs unpack native libraries to `$TMPDIR/.bun-<uid>-*.dylib` and load them, and macOS refused with "Apple could not verify '.bun-501-….dylib' is free of malware". The panel's agent service now starts through launchd, outside Chrome's process tree, so its agents write ordinary files. On start it also clears the quarantine from `.bun-*` libraries that earlier runs left behind. (#613)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.207
+
 Requires extension ab-connect 0.5.52. Chrome Web Store publication follows Google review.
 
 ### Improvements
@@ -15,7 +26,6 @@ Requires extension ab-connect 0.5.52. Chrome Web Store publication follows Googl
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.206
 
