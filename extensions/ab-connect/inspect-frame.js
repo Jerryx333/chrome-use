@@ -187,9 +187,10 @@ function restoreNotes() {
 async function refreshStatus() {
   if (!state.ctx?.hostConnected) { state.statusError = 'The chrome-use native host is not connected. Copy still works.'; render(); return; }
   try {
-    const { status, legacy, tabTarget, pagePath } = await request('status');
+    const { status, legacy, tabTarget, pagePath, pageUrl } = await request('status');
     state.status = status;
     state.resolvedPath = pagePath || null;
+    if (pageUrl) state.ctx.pageUrl = pageUrl;
     state.legacy = !!legacy;
     state.tabTarget = tabTarget || null;
     state.statusError = null;
@@ -630,12 +631,16 @@ async function submit() {
     if (a) a.note = input.value;
   }
   const notes = Object.fromEntries(state.annotations.map(a => [a.id, a.note || '']));
+  // The receiver as shown at the click; a status refresh or tab-target change
+  // during the visibility check refuses instead of sending elsewhere.
+  const shown = shownTarget();
   if (!state.annotations.length || (!instruction.trim() && !state.annotations.some(a => a.note?.trim()))) return;
   const images = state.annotations.map((_, i) => (state.attach.get(i) === false ? null : state.edited.get(i) || state.images[i] || null)).map((dataUrl, index) => (dataUrl ? { index, dataUrl } : null)).filter(Boolean);
   await gated('send', async () => {
     if (state.selection !== selection) throw new Error('The selection changed while checking. Review it and send again.');
+    if (JSON.stringify(shownTarget()) !== JSON.stringify(shown)) throw new Error('The target changed while checking. Review it and send again.');
     state.deliveryId = state.deliveryId || newDeliveryId();
-    const { result } = await request('deliver', { deliveryId: state.deliveryId, revision: selection, instruction, images, notes, ...shownTarget() });
+    const { result } = await request('deliver', { deliveryId: state.deliveryId, revision: selection, instruction, images, notes, ...shown });
     state.delivery = result;
     if (!deliveryMessage(result).locked) state.deliveryId = null;
     if (['noBinding', 'sessionChanged', 'noSession', 'targetChanged', 'upgradeRequired'].includes(result?.state)) await refreshStatus();

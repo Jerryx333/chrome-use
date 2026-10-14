@@ -290,3 +290,21 @@ test('matching: a route change clears the tab target and tells the panel', async
   lastListeners.history[0]({ tabId: 7, frameId: 3, url: 'http://localhost:5173/x' });
   assert.equal(real.sent.at(-1).url, 'http://localhost:5173/shop', 'subframe history is ignored');
 });
+
+test('matching: a refused precheck never records the batch as sending', async () => {
+  const { controller, chrome, real, calls, instance, store } = await authorized();
+  controller.resolveReady = () => true;
+  chrome.tabs.get = async () => ({ id: 7, url: 'http://localhost:5173/shop' });
+  instance.annotations = [{ id: '0:0', element, probe: null, note: 'n' }];
+  instance.selectionRevision = 0;
+  const id = '11111111-2222-3333-4444-555555555563';
+  real.msg[0]({ type: 'deliver', requestId: 61, deliveryId: id, revision: 0, instruction: 'x', expectedPath: '/admin', expectedTarget: 'a'.repeat(32) });
+  await flush(); await flush(); await flush();
+  assert.equal(real.sent.find(m => m.requestId === 61).result.reason, 'pageChanged');
+  assert.notEqual(store.inspectDrafts?.['http://localhost:5173']?.state, 'sending', 'not stuck as sending');
+  // Reopened and re-checked: the same id may now be sent.
+  real.msg[0]({ type: 'deliver', requestId: 62, deliveryId: id, revision: 0, instruction: 'x', expectedPath: '/shop', expectedTarget: 'a'.repeat(32) });
+  await flush(); await flush(); await flush();
+  assert.equal(real.sent.find(m => m.requestId === 62).result.state, 'sent');
+  assert.equal(calls.filter(c => c[0] === 'inspectDeliver').length, 1);
+});

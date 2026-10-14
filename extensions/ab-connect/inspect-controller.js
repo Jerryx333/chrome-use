@@ -385,7 +385,7 @@ export class InspectController {
         if (!this.resolveReady()) return answer({ status: await this.host('inspectStatus', params), legacy: true });
         params.pagePath = await this.pagePath(instance);
         if (instance.revision && /^[0-9a-f]{7,40}$/.test(instance.revision)) params.revision = instance.revision;
-        return answer({ status: await this.host('inspectResolve', params), tabTarget: instance.tabTarget || null, pagePath: params.pagePath });
+        return answer({ status: await this.host('inspectResolve', params), tabTarget: instance.tabTarget || null, pagePath: params.pagePath, pageUrl: (await this.pageNow(instance)).pageUrl });
       }
       case 'confirm': {
         if (!this.resolveReady()) throw new Error('This chrome-use CLI is too old for this choice; upgrade it with `chrome-use upgrade`.');
@@ -483,9 +483,8 @@ export class InspectController {
       const base64 = pngBase64(item.dataUrl);
       if (base64) images.push({ index: item.index, pngBase64: base64 });
     }
-    const notes = Object.fromEntries(annotations.filter(a => a.note).map(a => [a.element.selector, a.note]));
-    await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state: 'sending' });
-    // The panel names the page path and the target it showed; if either moved
+    // Checked before anything is recorded as sending, so a refusal here
+    // leaves the batch editable. The panel names the page path and the target it showed; if either moved
     // since (route change, claim accepted elsewhere, rebinding), nothing is sent.
     const page = await this.pageNow(instance);
     let scoped = {};
@@ -496,6 +495,8 @@ export class InspectController {
       if (typeof message.expectedTarget !== 'string' || !message.expectedTarget) return { state: 'targetChanged', reason: 'bindingChanged' };
       scoped = { pagePath: page.pagePath, expectedTarget: message.expectedTarget, ...(instance.tabTarget && kind === 'edit' ? { target: tabTargetPayload(instance.tabTarget) } : {}) };
     }
+    const notes = Object.fromEntries(annotations.filter(a => a.note).map(a => [a.element.selector, a.note]));
+    await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state: 'sending' });
     let result;
     try {
       result = await this.host('inspectDeliver', {
