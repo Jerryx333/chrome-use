@@ -19,6 +19,7 @@ use tokio::{
 
 static PROBES: Semaphore = Semaphore::const_new(2);
 const MAX_OUTPUT: usize = 2 * 1024 * 1024;
+const BLOCKED: &str = "The system stopped this CLI as soon as it started. On macOS this usually means Gatekeeper or XProtect blocked an outdated or damaged build; update or reinstall it";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -68,6 +69,20 @@ impl OwnedProbe {
             .map_err(|_| "Cannot start the selected CLI metadata probe")?;
         let pid = child.id().ok_or("CLI probe has no process identity")?;
         Ok(Self { child, pid })
+    }
+    // True when the process is already gone because something outside the
+    // probe sent SIGKILL. Checked before `finish`, which kills a live probe
+    // itself and would make its own kill indistinguishable from this one.
+    // The output pipe can close a moment before the exit is reapable, so a
+    // short wait covers that gap; a probe still running after it is not this.
+    async fn killed_by_system(&mut self) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            matches!(tokio::time::timeout(Duration::from_millis(100), self.child.wait()).await, Ok(Ok(status)) if status.signal() == Some(libc::SIGKILL))
+        }
+        #[cfg(not(unix))]
+        false
     }
     pub(super) async fn finish(&mut self) -> Result<std::process::ExitStatus, String> {
         if self
@@ -489,7 +504,12 @@ pub(super) async fn inspect(params: &Value, root: &Path) -> Result<Value, String
             let mut probe=OwnedProbe::spawn(&executable,&["--version"],&workspace)?;
             let mut output=probe.child.stdout.take().ok_or("CLI version output unavailable")?;
             let version_result=tokio::time::timeout(Duration::from_secs(2),async {let mut bytes=Vec::new();(&mut output).take(1025).read_to_end(&mut bytes).await.ok()?;version(std::str::from_utf8(&bytes).ok()?)}).await.ok().flatten();
+            // macOS Gatekeeper and XProtect stop a flagged program with SIGKILL
+            // the moment it starts, and show their own dialog; say so instead
+            // of reporting a vague probe failure.
+            let blocked=version_result.is_none()&&probe.killed_by_system().await;
             let version_exit=probe.finish().await?;
+            if blocked {return Err(BLOCKED.into());}
             let version_result=if version_exit.success() {version_result} else {None};
             if request.agent_id == "opencode" {
                 let mut probe = OwnedProbe::spawn(&executable, &["acp"], &workspace)?;
@@ -537,5 +557,22 @@ mod tests {
         assert_eq!(version("codex-cli 0.162.1"), Some("0.162.1".into()));
         assert_eq!(version("2.1.296 (Claude Code)"), Some("2.1.296".into()));
         assert!(version("0.162.1 token=synthetic-secret").is_none());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn a_cli_killed_on_start_is_reported_as_blocked() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join("codex");
+        std::fs::write(&cli, "#!/bin/sh\nkill -9 $$\n").unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = inspect(
+            &json!({"agentId":"codex","executable":cli}),
+            &dir.path().join("scratch"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, BLOCKED);
     }
 }

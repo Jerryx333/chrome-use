@@ -562,3 +562,29 @@ test('a failed image upload never sends the text alone or creates an uncertain m
   f.nodes.get('message').value='Keep image';f.nodes.get('composer').fire('submit');await settle();await settle();
   assert.equal(f.calls.some(c=>c.operation==='conversationSend'),false);assert.equal(f.nodes.get('send').disabled,false);assert.equal(f.nodes.get('message').value,'Keep image');assert.equal(f.nodes.get('attachmentDrafts').hidden,false);f.panel.close();
 });
+
+test('opening the panel never starts a CLI the user has not picked', async () => {
+  const f=await fixture({agentInspect:()=>{throw new Error('probe started');}});
+  assert.equal(f.calls.filter(call=>call.operation==='agentInspect').length,0);
+  assert.match(f.nodes.get('modelStatus').textContent,/not been checked/);f.panel.close();
+});
+
+test('the saved agent is restored and only its CLI is read', async () => {
+  const f=await fixture({agentInspect:params=>({success:true,result:{inspection:{agentId:params.agentId,models:[],account:{status:'unverified'},complete:true}}})},{ab_panel_agent:'claude'});
+  assert.equal(f.nodes.get('agent').value,'claude');
+  assert.deepEqual(f.calls.filter(call=>call.operation==='agentInspect').map(call=>call.params.agentId),['claude']);
+  f.nodes.get('agent').value='codex';f.nodes.get('agent').fire('change');await settle();
+  assert.ok(f.writes.some(write=>write.ab_panel_agent==='codex'));f.panel.close();
+});
+
+test('without a saved choice the agent of the latest conversation is used', async () => {
+  const f=await fixture({conversationList:()=>({success:true,result:{conversations:[{...chat('old'),agentId:'codex',updated:1},{...chat('new'),agentId:'claude',updated:2}]}}),
+    agentInspect:params=>({success:true,result:{inspection:{agentId:params.agentId,models:[],account:{status:'unverified'},complete:true}}})});
+  assert.equal(f.nodes.get('agent').value,'claude');
+  assert.deepEqual(f.calls.filter(call=>call.operation==='agentInspect').map(call=>call.params.agentId),['claude']);f.panel.close();
+});
+
+test('a failed CLI read says why', async () => {
+  const f=await fixture({agentInspect:()=>({success:false,error:'The system stopped this CLI as soon as it started'})},{ab_panel_agent:'codex'});
+  assert.match(f.nodes.get('modelStatus').textContent,/stopped this CLI as soon as it started/);f.panel.close();
+});
