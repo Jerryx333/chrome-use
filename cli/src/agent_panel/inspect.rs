@@ -281,11 +281,13 @@ fn run(program: &Path, args: &[&OsStr], timeout: Duration) -> Result<Run, String
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    // Windows has no process groups: the child starts suspended inside a
+    // kill-on-close job, so a timeout (or dropping the job) ends everything
+    // it started, as the process-group kill does on Unix.
     #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
+    let job = super::windows::ProcessJob::new()?;
+    #[cfg(windows)]
+    super::windows::ProcessJob::prepare(&mut command);
     let name = program
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -293,6 +295,13 @@ fn run(program: &Path, args: &[&OsStr], timeout: Duration) -> Result<Run, String
     let mut child = command
         .spawn()
         .map_err(|e| format!("Cannot start {name}: {e}"))?;
+    #[cfg(windows)]
+    if let Err(error) = job.attach_std(&child) {
+        let _ = job.terminate();
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
     // Chunks are kept as they arrive, so output written before the program
     // exited survives a descendant that keeps the pipe open afterwards.
     type Sink = std::sync::Arc<std::sync::Mutex<Vec<u8>>>;
@@ -339,6 +348,8 @@ fn run(program: &Path, args: &[&OsStr], timeout: Duration) -> Result<Run, String
                 unsafe {
                     libc::kill(-(child.id() as i32), libc::SIGKILL);
                 }
+                #[cfg(windows)]
+                let _ = job.terminate();
                 let _ = child.kill();
                 let _ = child.wait();
                 result.timed_out = true;

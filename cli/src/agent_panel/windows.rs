@@ -79,6 +79,14 @@ impl ProcessJob {
             .raw_handle()
             .ok_or("Agent process handle is unavailable")? as HANDLE;
         let pid = child.id().ok_or("Agent process identity is unavailable")?;
+        self.attach_process(handle, pid)
+    }
+    /// The same for a child started with `std::process` (after `prepare`).
+    pub fn attach_std(&self, child: &std::process::Child) -> Result<(), String> {
+        use std::os::windows::io::AsRawHandle;
+        self.attach_process(child.as_raw_handle() as HANDLE, child.id())
+    }
+    fn attach_process(&self, handle: HANDLE, pid: u32) -> Result<(), String> {
         unsafe {
             if AssignProcessToJobObject(self.0 .0, handle) == 0 {
                 return Err(failure("Cannot own the agent process tree"));
