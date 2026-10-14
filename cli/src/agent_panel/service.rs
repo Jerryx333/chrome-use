@@ -1438,6 +1438,32 @@ fn start<'a>(
     })
 }
 
+/// Bun-built agents extract native libraries to `$TMPDIR/.bun-<uid>-*` and
+/// may reuse them later. Ones extracted while the service still ran under
+/// Chrome carry its quarantine and would keep failing Gatekeeper.
+#[cfg(target_os = "macos")]
+fn release_bun_libraries() {
+    use std::os::unix::ffi::OsStrExt;
+    let prefix = format!(".bun-{}-", unsafe { libc::getuid() });
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_name().as_bytes().starts_with(prefix.as_bytes()) {
+            continue;
+        }
+        if let Ok(path) = std::ffi::CString::new(entry.path().as_os_str().as_bytes()) {
+            unsafe {
+                libc::removexattr(
+                    path.as_ptr(),
+                    c"com.apple.quarantine".as_ptr(),
+                    libc::XATTR_NOFOLLOW,
+                )
+            };
+        }
+    }
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     if args.len() != 4 || args[0] != "--profile" || args[2] != "--data-dir" {
         return Err("Invalid private agent-service startup arguments".into());
@@ -1449,6 +1475,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     ownership
         .try_lock()
         .map_err(|_| "Another agent service owns this profile")?;
+    #[cfg(target_os = "macos")]
+    release_bun_libraries();
     let store = Store::open(directory.join("conversations"))?;
     let engine = Arc::new(Mutex::new(Engine {
         store,
