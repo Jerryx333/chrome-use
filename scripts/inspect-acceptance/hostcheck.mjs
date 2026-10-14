@@ -94,7 +94,8 @@ await check('h15-legacy-caller-refused-on-scoped-origin', async h => {
   const result = await h.call('inspectDeliver', deliverParams({}));
   assert.equal(result.state, 'upgradeRequired');
   assert.equal(dms().length, before, 'nothing sent for a legacy caller');
-  const scoped = await h.call('inspectDeliver', deliverParams({ pagePath: '/admin/orders' }));
+  const shown = (await h.call('inspectResolve', { origin: ORIGIN, pagePath: '/admin/orders' })).binding.fingerprint;
+  const scoped = await h.call('inspectDeliver', deliverParams({ pagePath: '/admin/orders', expectedTarget: shown }));
   assert.equal(scoped.state, 'sent');
   return { legacy: result.state, scoped: scoped.state };
 });
@@ -187,7 +188,7 @@ await check('h24-forged-tab-target-refused', async h => {
   setRoster([S('claude-a', 'A', react), S('claude-b', 'B', react)]);
   assert.equal(cli(['link', ORIGIN + '/'], 'claude-a').code, 0);
   const before = dms().length;
-  const wide = await h.call('inspectDeliver', deliverParams({ pagePath: '/', target: { root: react, sourceRoots: [react, '/'], sessionId: 'claude-b', sessionCwd: react, fingerprint: '0'.repeat(32) } }));
+  const wide = await h.call('inspectDeliver', deliverParams({ pagePath: '/', target: { root: react, sourceRoots: [react, '/'], sessionId: 'claude-b', sessionCwd: react, fingerprint: '0'.repeat(32) }, expectedTarget: '0'.repeat(32) }));
   assert.equal(wide.state, 'targetChanged');
   assert.equal(dms().length, before);
   return { state: wide.state };
