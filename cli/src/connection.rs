@@ -1366,7 +1366,7 @@ pub fn get_port_for_session(session: &str) -> u16 {
     }
     // Take the absolute modulo first, then cast to u16.
     // `unsigned_abs()` handles i32::MIN safely.
-    21000 + ((hash.unsigned_abs() as u32 % 11000) as u16)
+    21000 + ((hash.unsigned_abs() % 11000) as u16)
 }
 
 /// The port a daemon for `session` has ANNOUNCED, from the `.port` file it
