@@ -27,7 +27,7 @@ impl ModelOptions {
         }
         if let Some(effort) = self.effort.as_deref() {
             let supported: &[&str] = match agent {
-                "codex" => &["minimal", "low", "medium", "high", "xhigh", "max"],
+                "codex" => &["minimal", "low", "medium", "high", "xhigh"],
                 "claude" => &["low", "medium", "high", "max"],
                 _ => return Err("This adapter has no conversation effort override".into()),
             };
@@ -60,6 +60,9 @@ mod tests {
             tool_access: None,
         };
         assert!(options.validate("codex").is_ok());
+        let mut unsupported = options.clone();
+        unsupported.effort = Some("max".into());
+        assert!(unsupported.validate("codex").is_err());
         assert!(options.validate("claude").is_err());
         assert!(options.validate("pi").is_err());
         assert!(ModelOptions::default().validate("opencode").is_ok());

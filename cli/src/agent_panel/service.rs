@@ -1927,6 +1927,7 @@ struct ScheduleRequest {
 /// Capability names alone do not establish equal authority across adapters:
 /// Codex workspace writes are narrower than Claude/Pi file writes, and Pi
 /// has no approval mechanism even when its saved fullAccess flag is false.
+/// Codex also retains command execution in its read-only sandbox.
 fn schedule_permissions_fit(schedule: &super::schedules::Schedule, caller: &Conversation) -> bool {
     use super::options::ToolAccess;
     let requested = schedule
@@ -1943,6 +1944,9 @@ fn schedule_permissions_fit(schedule: &super::schedules::Schedule, caller: &Conv
             && allowed == ToolAccess::WriteFiles
             && schedule.agent_id != "codex"
             && requested >= ToolAccess::WriteFiles)
+        && !(schedule.agent_id == "codex"
+            && caller.agent_id != "codex"
+            && allowed < ToolAccess::RunCommands)
 }
 
 async fn schedule_dispatch(
@@ -1995,6 +1999,12 @@ async fn schedule_dispatch(
     uuid::Uuid::parse_str(&id).map_err(|_| "Invalid schedule ID")?;
     if operation.ends_with("Delete") {
         let schedule = e.schedules.get(&id).ok_or("Schedule not found")?;
+        if caller
+            .as_ref()
+            .is_some_and(|caller| !schedule_permissions_fit(schedule, caller))
+        {
+            return Err("A more powerful schedule can only be deleted in the user panel".into());
+        }
         if schedule.active_chat.is_some() {
             return Err("Stop and confirm the active run before deleting this schedule".into());
         }
@@ -2378,6 +2388,41 @@ mod schedule_tests {
         assert!(schedule_dispatch(&engine, "agentScheduleSave", &pi)
             .await
             .is_err());
+    }
+    #[tokio::test]
+    async fn restricted_callers_cannot_grant_codex_shell_or_delete_stronger_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        for agent in ["claude", "pi"] {
+            let created = dispatch(
+                &engine,
+                "conversationCreate",
+                &json!({"agentId":agent,"options":{"toolAccess":"readFiles"}}),
+            )
+            .await
+            .unwrap();
+            let caller = created["conversation"]["id"].as_str().unwrap();
+            let rejected = schedule_dispatch(&engine, "agentScheduleSave", &json!({"callerConversation":caller,"name":"Shell escalation","prompt":"Read","agentId":"codex","options":{"toolAccess":"readFiles"},"rule":{"kind":"interval","minutes":10}})).await;
+            assert!(rejected.is_err(), "{agent} granted a Codex shell");
+            let saved = schedule_dispatch(&engine, "scheduleSave", &json!({"name":"Powerful task","prompt":"Run","agentId":"codex","options":{"toolAccess":"runCommands"},"rule":{"kind":"interval","minutes":10}})).await.unwrap();
+            let id = saved["schedule"]["id"].as_str().unwrap();
+            assert!(schedule_dispatch(
+                &engine,
+                "agentScheduleDelete",
+                &json!({"callerConversation":caller,"id":id})
+            )
+            .await
+            .is_err());
+            assert!(engine.lock().await.schedules.contains_key(id));
+            assert!(super::super::schedules::load(dir.path())
+                .unwrap()
+                .contains_key(id));
+            assert!(
+                schedule_dispatch(&engine, "scheduleDelete", &json!({"id":id}))
+                    .await
+                    .is_ok()
+            );
+        }
     }
     #[tokio::test]
     async fn missing_run_history_disables_only_that_schedule_without_replaying() {

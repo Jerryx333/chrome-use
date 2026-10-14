@@ -14,7 +14,7 @@ Requires extension ab-connect 0.5.53. Chrome Web Store publication follows Googl
 
 ### Bug Fixes
 
-- **CLI default effort is restored on resume.** Codex retains a rollout's old effort when the override is omitted. The panel now restores the configured effort or the model catalog's reported default explicitly. Missing run history disables its own schedule without stalling other tasks; wrapped skill archives import correctly and symbolic-link assets are refused. (#614)
+- **CLI default effort is restored on resume.** Codex retains a rollout's old effort when the override is omitted. The panel now restores the configured effort or the model catalog's reported default explicitly. Missing run history disables its own schedule without stalling other tasks; wrapped skill archives import correctly and symbolic-link assets are refused. Skill snapshot instructions are verified, and restricted chats cannot grant Codex shell access or delete stronger schedules. (#614)
 
 ### Contributors
 

@@ -108,7 +108,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     if (optionsOwner !== optionOwner) {
       optionsOwner = optionOwner;
       const first = element('option', 'CLI default'); first.value = '';
-      const efforts = optionAgent === 'codex' ? ['minimal','low','medium','high','xhigh','max'] : optionAgent === 'claude' ? ['low','medium','high','max'] : [];
+      const efforts = optionAgent === 'codex' ? ['minimal','low','medium','high','xhigh'] : optionAgent === 'claude' ? ['low','medium','high','max'] : [];
       nodes.turnEffort.replaceChildren(first, ...efforts.map(value => { const node = element('option', value); node.value = value; return node; }));
       const access = element('option','Follow permission switch'); access.value = '';
       const modes = optionAgent === 'opencode' ? ['runCommands'] : optionAgent === 'codex' ? ['readFiles','writeFiles','runCommands'] : ['browserOnly','readFiles','writeFiles','runCommands'];

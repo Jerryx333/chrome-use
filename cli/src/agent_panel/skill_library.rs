@@ -188,6 +188,8 @@ pub(super) fn snapshot(
     let mut files = BTreeMap::new();
     collect_files(&skill.folder, &skill.folder, &mut files, 0)?;
     let mut hash = Sha256::new();
+    hash.update(selected.name.as_bytes());
+    hash.update([0]);
     for (path, data) in &files {
         hash.update(path.to_string_lossy().as_bytes());
         hash.update([0]);
@@ -197,15 +199,23 @@ pub(super) fn snapshot(
     selected.id = hex::encode(hash.finalize());
     let assets = workspace.join("skills").join(&selected.id);
     private_tree(&assets)?;
+    let body = files
+        .get(Path::new("SKILL.md"))
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .ok_or("Selected skill is invalid")?;
+    selected.instructions = snapshot_instructions(body, &assets);
     for (path, data) in files {
         let destination = assets.join(path);
         private_tree(destination.parent().ok_or("Invalid asset path")?)?;
         atomic_write(&destination, &data, None)?;
     }
-    selected.instructions.push_str(&format!("\n\nSkill assets directory: {}. Read or run referenced assets only within this conversation's existing permissions. If an asset requires a tool that is unavailable, report that limitation and ask the user rather than inventing its contents.",assets.display()));
+
     let data = serde_json::to_vec(&selected).map_err(|_| "Cannot encode selected skill")?;
     atomic_write(&assets.join(".selection.json"), &data, None)?;
     Ok(selected)
+}
+fn snapshot_instructions(body: &str, assets: &Path) -> String {
+    format!("{body}\n\nSkill assets directory: {}. Read or run referenced assets only within this conversation's existing permissions. If an asset requires a tool that is unavailable, report that limitation and ask the user rather than inventing its contents.",assets.display())
 }
 pub(super) fn load_snapshot(workspace: &Path, id: &str) -> Result<SelectedSkill, String> {
     if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -221,6 +231,8 @@ pub(super) fn load_snapshot(workspace: &Path, id: &str) -> Result<SelectedSkill,
     let mut files = BTreeMap::new();
     collect_files(&assets, &assets, &mut files, 0)?;
     let mut hash = Sha256::new();
+    hash.update(skill.name.as_bytes());
+    hash.update([0]);
     for (path, data) in &files {
         hash.update(path.to_string_lossy().as_bytes());
         hash.update([0]);
@@ -229,6 +241,13 @@ pub(super) fn load_snapshot(workspace: &Path, id: &str) -> Result<SelectedSkill,
     }
     if hex::encode(hash.finalize()) != id {
         return Err("Selected skill assets changed; no turn was sent".into());
+    }
+    let body = files
+        .get(Path::new("SKILL.md"))
+        .and_then(|b| std::str::from_utf8(b).ok())
+        .ok_or("Saved skill is invalid")?;
+    if skill.instructions != snapshot_instructions(body, &assets) {
+        return Err("Saved skill instructions changed; no turn was sent".into());
     }
     Ok(skill)
 }
@@ -612,4 +631,42 @@ pub(super) fn read_asset(
         return Err("Skill asset escaped its folder".into());
     }
     read_text(&target, MAX_TEXT)
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+    #[test]
+    fn saved_selection_rejects_instruction_name_and_asset_tampering() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        save(
+            dir.path(),
+            "integrity-fixture",
+            "---\nname: integrity-fixture\n---\nRead the fixture.",
+        )
+        .unwrap();
+        let entry = catalog(dir.path(), "codex")
+            .unwrap()
+            .into_iter()
+            .find(|s| s.name == "integrity-fixture" && s.editable)
+            .unwrap();
+        let selected = snapshot(dir.path(), "codex", &entry.id, &workspace).unwrap();
+        let assets = workspace.join("skills").join(&selected.id);
+        let path = assets.join(".selection.json");
+        let original = std::fs::read(&path).unwrap();
+        assert!(load_snapshot(&workspace, &selected.id).is_ok());
+        for field in ["instructions", "name"] {
+            let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            changed[field] = "Tampered content".into();
+            std::fs::write(&path, serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert!(
+                load_snapshot(&workspace, &selected.id).is_err(),
+                "accepted changed {field}"
+            );
+        }
+        std::fs::write(&path, original).unwrap();
+        std::fs::write(assets.join("SKILL.md"), "Changed asset").unwrap();
+        assert!(load_snapshot(&workspace, &selected.id).is_err());
+    }
 }
