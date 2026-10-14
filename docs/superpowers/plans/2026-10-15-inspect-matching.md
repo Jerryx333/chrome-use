@@ -28,8 +28,11 @@ unchanged. Test domains are the main case.
   page matches the binding whose scope has the same origin and the longest
   `pathScope` that is a segment prefix of the page path (`/admin` matches
   `/admin` and `/admin/orders`, not `/administrator`).
-- **Target**: `{root, sessionId, sessionCwd}`. `root` is canonical: a worktree
-  toplevel or an app directory inside it.
+- **Target**: `{root, sourceRoots, sessionId, sessionCwd}`. `root` is canonical:
+  a worktree toplevel or an app directory inside it. `sourceRoots` defaults to
+  `[root]`; extra entries (shared packages) come only from a config's
+  `sourceRoots` and are listed on the confirmation card. Source paths never
+  resolve outside `sourceRoots`, even inside the same worktree.
 - **Related**: a session is related to a root when both resolve to the same
   worktree toplevel (`git rev-parse --show-toplevel`) and one contains the other.
   Sessions in another worktree of the same repo are never related.
@@ -38,12 +41,13 @@ unchanged. Test domains are the main case.
 
 ```json
 {"version": 2,
- "bindings": [{"origin": "https://test-admin.x.com", "pathScope": "/", "root": "/w/admin",
+ "bindings": [{"origin": "https://test-admin.x.com", "pathScope": "/", "root": "/w/admin", "sourceRoots": ["/w/admin"],
    "sessionId": "claude-…", "sessionCwd": "/w/admin", "sessionLabel": "admin-main",
    "source": "confirmed|linked", "evidence": {"kind": "port", "port": 5173, "cwd": "/w/admin"},
    "consents": {"plugin": false, "testEnv": false}, "updatedAt": 0}],
- "pendingClaims": [{"origin": "…", "pathScope": "/", "root": "…", "sessionId": "…",
-   "sessionCwd": "…", "requestedAt": 0}]}
+ "pendingClaims": [{"claimId": "<128-bit hex>", "origin": "…", "pathScope": "/", "root": "…",
+   "sessionId": "…", "sessionCwd": "…", "replaces": "<fingerprint of the binding it would replace, or null>",
+   "requestedAt": 0}]}
 ```
 
 Version 1 files migrate on first write: each entry becomes `pathScope: "/"`,
@@ -58,12 +62,23 @@ Version 1 files migrate on first write: each entry becomes `pathScope: "/"`,
 ```
 
 - The file's directory's parent is the app root (`apps/admin/.chrome-use/inspect.json`
-  → root `apps/admin`).
+  → root `apps/admin`); the page never names a root. Optional `"sourceRoots"`
+  (paths relative to the app root, staying inside the worktree, no `..` escaping
+  it) names shared packages; they are shown on the card and stored only when the
+  user confirms.
+- Constraints: the file and each parent component must not be symlinks
+  (`symlink_metadata`), at most 64 KiB, strict schema (unknown fields or a
+  `version` other than 1 reject the file with a visible reason), at most 32 sites.
 - Read only inside known worktrees (toplevels of ocs session cwds and of
-  existing binding roots) via `git ls-files '*.chrome-use/inspect.json'`, at most
-  50 files, 3 s timeout. Never a filesystem-wide search.
-- Origins are exact; `https://*.domain` matches exactly one extra DNS label
-  (decision point for the user, see end).
+  existing binding roots, at most 16 worktrees) via
+  `git ls-files '*.chrome-use/inspect.json'`, at most 50 files. All git and lsof
+  calls of one resolve share a total budget of 8 s (3 s per call); what does not
+  fit is reported as skipped, never guessed. Never a filesystem-wide search.
+- Origins are exact, or an explicit single-label wildcard `https://*.preview.x.com`:
+  scheme and port must match exactly, `*` matches exactly one DNS label. An
+  exact origin outranks a wildcard; equal matches in more than one worktree are
+  never preselected. A binding always stores the page's exact origin, so one
+  confirmation never covers other subdomains.
 - A match proposes and preselects; it never authorizes on its own.
 
 ## Resolution (`inspectResolve`, read-only)
@@ -71,21 +86,26 @@ Version 1 files migrate on first write: each entry becomes `pathScope: "/"`,
 Input: `origin`, `pagePath` (no query/fragment), `sourcePaths`, `revision?`,
 `port?` (loopback only). Output: `{state, binding?, card?, candidates[], pendingClaim?}`.
 
-1. **Bound scope**: longest-matching binding. Check the bound session is in the
-   roster with the same canonical cwd; for bindings with port evidence on
-   loopback, check the port is still owned by a process whose cwd is the root.
-   All hold: `state: "bound"`. Otherwise `state: "needsConfirm"` with the reason
-   (`sessionEnded`, `sessionMoved`, `portMoved`) and a card.
-2. **Pending claim** for this scope: `state: "claimPending"` with old and new
-   targets; the frame shows it before anything else.
-3. **Unbound**: build candidate roots from config matches (`config`), loopback
+1. **Scope**: pick the longest-matching scope among bindings and pending
+   claims for this origin and path.
+2. **Pending claim** on that scope: always returned (`pendingClaim`), also when
+   the scope is bound; the frame shows it before anything else, with the current
+   and the claimed target. While a claim is pending the bound target still
+   receives sends; the claimant receives nothing until accepted.
+3. **Bound**: check the bound session is in the roster with the same canonical
+   cwd, and, for bindings with port evidence on loopback, that the port's owner
+   cwd is in the same worktree as the root and equal to, inside, or containing
+   it. All hold: `state: "bound"`. Otherwise `state: "needsConfirm"` with the
+   reason (`sessionEnded`, `sessionMoved`, `portMoved`) and a card.
+4. **Unbound**: build candidate roots from config matches (`config`), loopback
    port owner cwd (`dev-server-port`, keeps app subdirectories), previous
-   binding roots, and ocs session cwds (worktree toplevel). Rank by evidence
-   (config > port > previous > session), then CI source-path suffix matches,
-   then revision relation. Pair each root with its related live sessions.
-4. **Preselect** the top pair only when the root has config or port evidence and
-   exactly one related live session. Otherwise no preselection; the card lists
-   root × session pairs.
+   binding roots, and ocs session cwds (worktree toplevel); at most 12. Rank by
+   evidence (exact config > wildcard config > port > previous > session), then
+   CI source-path suffix matches, then revision relation. Pair each root with
+   its related live sessions.
+5. **Preselect** the top pair only when the root has config or port evidence,
+   is not tied with another worktree, and has exactly one related live session.
+   Otherwise no preselection; the card lists root × session pairs.
 
 Revision relation per candidate: page revision must match `^[0-9a-f]{7,40}$`;
 `git cat-file -e <rev>^{commit}` then `git rev-list --left-right --count <rev>...HEAD`,
@@ -95,7 +115,7 @@ ranking only.
 ## Confirmation card (frame)
 
 One card, one decision: "Send requests from `<scope>` to `<session>` (`<kind>`,
-`<status>`) in `<root>`", with evidence chips (config, dev server, CI paths
+`<status>`, cwd `<sessionCwd>`) in `<root>`", listing any extra `sourceRoots`, with evidence chips (config, dev server, CI paths
 matched N, deployed `abc123`: local ahead 3 / behind / diverged / unknown).
 
 - **Hand over**: persist as the scope default (`source: confirmed`).
@@ -111,15 +131,21 @@ previous target and preselect only under rule 4.
 ## Session-side linking (CLI)
 
 `chrome-use inspect link <url> [--root <dir>] [--path-scope </seg>]`,
-`chrome-use inspect unlink <url>`, `chrome-use inspect list`.
+`chrome-use inspect unlink <url> [--path-scope </seg>]`, `chrome-use inspect list`.
+
+- `unlink` removes only the scope it names (longest match for the URL unless
+  `--path-scope` is given), and only when that scope is bound to the calling
+  session; it also withdraws that session's pending claims. Other sessions'
+  bindings are removed from the extension options page.
 
 - Identity: `ocs whoami --json` gives the id; the cwd comes from the matching
   `ocs who --json` entry. No roster entry or a non-absolute cwd: refuse.
 - Root: `--root`, else the app root of a config in the session's worktree that
   matches the URL, else the session cwd.
 - Scope unbound or bound to the same session: write it (`source: linked`).
-  Bound to another session: write a pending claim and print that the browser
-  panel will ask; no `--force`.
+  Bound to another session: write a pending claim (new `claimId`, `replaces` =
+  fingerprint of the current binding) and print that the browser panel will
+  ask; no `--force`. A newer claim on the same scope supersedes the older one.
 - Skill reference tells agents to run it when the user says to hand a site to
   them.
 
@@ -128,14 +154,17 @@ previous target and preselect only under rule 4.
 | op | change |
 |---|---|
 | `inspectResolve` | new, above |
-| `inspectStatus` | kept for 0.5.56 extensions (unchanged behaviour) |
+| `inspectStatus` | kept for 0.5.56 extensions, origin-level only: when the origin has any path-scoped binding or pending claim it returns `upgradeRequired` instead of a binding, and the legacy `inspectDeliver` (no `pagePath`) refuses with `upgradeRequired`; it never picks a scope for an unknown path |
 | `inspectBind` | adds `pathScope`, `source: confirmed`, records evidence; clears consents when root or session changes (as now) |
-| `inspectClaimDecide` | `{origin, pathScope, accept}`; accept replaces the binding, reject drops the claim |
+| `inspectClaimDecide` | `{claimId, expectedBinding, accept}`; refused unless the claim is still the current one for its scope and the scope's binding still has the fingerprint the card showed (stale cards cannot accept a newer claim or a changed binding) |
 | `inspectDeliver` | adds `pagePath` for scope matching and optional `target {root, sessionId}` for a tab target; the host re-validates any target (live, related, canonical root) and re-runs the port check |
-| capabilities | `"inspectResolve": true`; a new extension on an older host falls back to `inspectStatus` |
+| capabilities | `"inspectResolve": true`; a new extension on an older host falls back to `inspectStatus` and says that path scopes, tab targets and claims need the newer CLI |
 
-Source paths resolve inside the root first, then inside its worktree toplevel
-(monorepo builds that record repo-relative paths), never outside the worktree.
+Source paths resolve only inside `sourceRoots`. A repo-relative path
+(`apps/admin/src/x.tsx`) is matched by stripping the confirmed root's path
+relative to the worktree toplevel, then canonicalized inside the root; absolute
+CI paths use the existing suffix matching inside `sourceRoots`. Anything else is
+unverified, even when it exists elsewhere in the same worktree.
 
 ## Extension
 
@@ -165,8 +194,25 @@ Source paths resolve inside the root first, then inside its worktree toplevel
 12. Monorepo: dev server in `apps/admin`, session at repo root → root
     `apps/admin`; repo-relative and absolute CI paths resolve.
 13. Forged `data-insp-path` and revision cannot change a bound target or
-    preselect without config/port evidence.
-14. New extension on a host without `inspectResolve`: old flow works.
+    preselect without config/port evidence; an admin page carrying
+    `apps/shop/...` or `../../shared/...` marks stays unverified unless that
+    directory is a confirmed source root.
+14. New extension on a host without `inspectResolve`: old flow works, with the
+    stated limits.
+15. Extension 0.5.56 on the new host: origin-level binding works; with a
+    path-scoped binding or a pending claim on the origin, status and deliver
+    return `upgradeRequired` and nothing is sent.
+16. Version 1 bindings migrate to version 2 unchanged in effect; a v2 file with
+    two scopes on one origin round-trips.
+17. Pending claim on a bound scope is shown (scenario 10 with an active
+    binding); accepting from a stale card after a second claim, or after the
+    binding changed, is refused.
+18. Wildcard config: `a.preview.x.com` matches `*.preview.x.com`,
+    `a.b.preview.x.com` and another port do not; the stored binding is the
+    exact origin; an exact-origin config in another worktree outranks it.
+19. `inspect.json` that is a symlink, oversized, unknown version or unknown
+    field is rejected with a visible reason; the resolve budget is respected.
+20. `inspect unlink` from session B cannot remove session A's binding.
 
 Also: the existing 14 scenarios, the headed real-shortcut check, a real-ocs run
 of `inspect link` plus delivery, unit tests for every rule above, and the stealth
@@ -179,5 +225,5 @@ reference (`inspect link`), CLI help, privacy note for `inspect.json` reading.
 
 ## Decision for the user
 
-- Wildcard origins (`https://*.preview.x.com`, one label) in `inspect.json`:
-  include (proposed, common for preview deployments) or exact origins only.
+- Wildcard origins in `inspect.json`: included in this release as explicit
+  single-label patterns under the rules above, unless the user declines.
