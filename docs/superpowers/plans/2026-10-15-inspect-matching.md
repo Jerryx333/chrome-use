@@ -84,7 +84,7 @@ Version 1 files migrate on first write: each entry becomes `pathScope: "/"`,
 ## Resolution (`inspectResolve`, read-only)
 
 Input: `origin`, `pagePath` (no query/fragment), `sourcePaths`, `revision?`,
-`port?` (loopback only). Output: `{state, binding?, card?, candidates[], pendingClaim?}`.
+`port?` (loopback only). Output: `{state, binding?, card?, candidates[], pendingClaims[]}`.
 
 1. **Effective binding**: the longest-matching scope among confirmed bindings
    only. Pending claims never take part in this match, so an unaccepted claim
@@ -168,7 +168,7 @@ previous target and preselect only under rule 4.
 | `inspectResolve` | new, above |
 | `inspectStatus` | kept for 0.5.56 extensions, origin-level only: when the origin has any path-scoped binding or pending claim it returns `upgradeRequired` instead of a binding, and the legacy `inspectDeliver` (no `pagePath`) refuses with `upgradeRequired`; it never picks a scope for an unknown path |
 | `inspectBind` | adds `pathScope`, `source: confirmed`, records evidence; clears consents when root or session changes (as now) |
-| `inspectClaimDecide` | `{claimId, expectedAffects, accept}`; refused unless the claim is still current for its scope and every affected binding still has the fingerprint the card showed (a stale card cannot accept a newer claim or a changed binding) |
+| `inspectClaimDecide` | `{claimId, expectedAffects, accept}`; under the bindings lock, recompute the complete set of bindings overlapping the claim's scope with a different target and refuse unless it equals `expectedAffects` exactly (a changed, removed or newly added overlapping binding makes the card stale) and the claim is still current; check, decision and write happen in that one lock |
 | `inspectDeliver` | adds `pagePath` for scope matching and an optional tab target `{root, sourceRoots, sessionId, sessionCwd, confirmedFingerprint}` from the card the user clicked; the host recomputes the fingerprint from live data and refuses a mismatch, never widens `sourceRoots` beyond what that card showed, re-validates live/related/canonical root and re-runs the port check |
 | capabilities | `"inspectResolve": true`; a new extension on an older host falls back to `inspectStatus` and says that path scopes, tab targets and claims need the newer CLI |
 
