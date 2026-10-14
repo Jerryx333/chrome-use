@@ -2414,9 +2414,11 @@ mod schedule_tests {
             .await
             .is_err());
             assert!(engine.lock().await.schedules.contains_key(id));
-            assert!(super::super::schedules::load(dir.path())
-                .unwrap()
-                .contains_key(id));
+            assert!(
+                super::super::schedules::load(&dir.path().join("conversations"))
+                    .unwrap()
+                    .contains_key(id)
+            );
             assert!(
                 schedule_dispatch(&engine, "scheduleDelete", &json!({"id":id}))
                     .await
