@@ -13298,9 +13298,8 @@ async fn handle_tab_list(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         let endpoint = match crate::connection::session_relay_profile(&state.session_id)? {
             Some(id) => crate::connect::relay_endpoint_for_profile(&id)
                 .map_err(|e| format!("tab list --all: bound profile {id}: {e}"))?,
-            None => {
-                env::var("AGENT_BROWSER_CDP").map_err(|_| "Browser not launched".to_string())?
-            }
+            None => env::var("AGENT_BROWSER_CDP")
+                .map_err(|_| super::browser::ALL_TABS_NO_BOUND_BROWSER.to_string())?,
         };
         passive = Some(BrowserManager::connect_cdp_for_inventory(&endpoint).await?);
     }
@@ -26128,7 +26127,11 @@ mod tests {
         )
         .await;
         assert_eq!(result["success"], false);
-        assert_eq!(result["error"], "Browser not launched");
+        // The CLI reads this as "fall back to passive inventory" (#610).
+        assert_eq!(
+            result["error"],
+            super::super::browser::ALL_TABS_NO_BOUND_BROWSER
+        );
         assert!(state.browser.is_none());
     }
 
