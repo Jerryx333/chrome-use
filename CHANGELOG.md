@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.210
+## 1.5.211
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.55. Chrome Web Store publication follows Google review.
+
+### Bug Fixes
+
+- **Opening the side panel no longer starts Codex for Claude Code users.** A new chat defaulted to Codex and read its model list, so the Codex CLI ran every time the panel opened, even for people who only use Claude Code. On a Mac with an outdated Codex build, macOS answered each open with "codex contains malware". The panel now remembers the agent you chose (or the one from your latest conversation) and reads models only for that agent. (#623)
+- **A CLI blocked by macOS is named as blocked.** When a CLI is killed the moment it starts, as Gatekeeper and XProtect do, the panel now says the system stopped it and suggests updating or reinstalling, instead of "Model metadata unavailable". Agents & models shows the reason too. (#623)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.210
+
 Requires extension ab-connect 0.5.54. Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -19,7 +33,6 @@ Requires extension ab-connect 0.5.54. Chrome Web Store publication follows Googl
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.209
 
