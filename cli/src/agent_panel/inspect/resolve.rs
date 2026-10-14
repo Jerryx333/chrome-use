@@ -182,6 +182,7 @@ impl Inspect<'_> {
                 None => json!({"installed": false}),
             },
             "pendingClaims": claims,
+            "pagePath": page,
         });
         if let (Some(error), Some(_)) = (&roster_error, &ocs) {
             out["rosterError"] = error.clone().into();

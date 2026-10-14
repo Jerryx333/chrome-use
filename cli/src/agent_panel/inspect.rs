@@ -1280,6 +1280,10 @@ struct DeliverParams {
     page_path: Option<String>,
     /// A target this tab's picker holds instead of the scope default.
     target: Option<TabTarget>,
+    /// Fingerprint of the target the panel showed (the tab target's, or the
+    /// effective binding's). Required with `pagePath`; a delivery whose
+    /// target differs now is refused.
+    expected_target: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2001,6 +2005,9 @@ impl Inspect<'_> {
                 if url_path.as_deref() != Some(path.as_str()) {
                     return Err("pagePath does not match pageUrl".into());
                 }
+                if p.expected_target.is_none() {
+                    return Err("expectedTarget is required with pagePath".into());
+                }
                 Some(path)
             }
             None if p.target.is_some() => {
@@ -2079,19 +2086,42 @@ impl Inspect<'_> {
             return Ok(duplicate(&record));
         }
 
-        let store = self.load()?;
-        let facts = Facts::new(self.sys);
         // The binding (scope default) or the tab's own target. Without
         // pagePath the caller is extension 0.5.56: only an origin-level
         // binding is used, and only when nothing scoped could apply instead.
-        let binding = match &page_path {
-            None if store.needs_upgrade(&origin) => {
-                return Ok(json!({ "state": "upgradeRequired" }));
+        // The choice is made, and compared with the target the panel showed,
+        // under the bindings lock, so a binding replaced since then (claim
+        // accepted, unlink and relink, a narrower scope added) is refused,
+        // never sent to.
+        let picked = self.locked(|| {
+            let store = self.load()?;
+            let binding = match &page_path {
+                None if store.needs_upgrade(&origin) => {
+                    return Ok(Err(json!({ "state": "upgradeRequired" })));
+                }
+                None => store.binding(&origin, "/").cloned(),
+                Some(_) if p.target.is_some() => None,
+                Some(page) => store.effective(&origin, page).cloned(),
+            };
+            if let Some(expected) = &p.expected_target {
+                let actual = match (&p.target, &binding) {
+                    (Some(tab), _) => Some(tab.fingerprint.clone()),
+                    (None, Some(b)) => Some(b.fingerprint()),
+                    (None, None) => None,
+                };
+                if actual.as_ref() != Some(expected) {
+                    return Ok(Err(
+                        json!({ "state": "targetChanged", "reason": "bindingChanged" }),
+                    ));
+                }
             }
-            None => store.binding(&origin, "/").cloned(),
-            Some(_) if p.target.is_some() => None,
-            Some(page) => store.effective(&origin, page).cloned(),
+            Ok(Ok(binding))
+        })?;
+        let binding = match picked {
+            Ok(binding) => binding,
+            Err(state) => return Ok(state),
         };
+        let facts = Facts::new(self.sys);
         if p.target.is_some() && p.kind != DeliverKind::Edit {
             // Consent belongs to a persisted binding, never to a tab.
             return Err("Setup requests go to the site's bound project, not a tab target".into());

@@ -68,6 +68,18 @@ fn deliver(
     });
     if let Some(page) = page {
         p["pagePath"] = page.into();
+        // What the panel would quote: the tab target it holds, else the
+        // effective binding it just resolved.
+        p["expectedTarget"] = match extra.get("target") {
+            Some(t) => t["fingerprint"].clone(),
+            None => {
+                let r = resolve(w, sys, origin, page, json!({}));
+                match r["binding"]["fingerprint"].as_str() {
+                    Some(f) => f.into(),
+                    None => "0".repeat(32).into(),
+                }
+            }
+        };
     }
     for (k, v) in extra.as_object().unwrap() {
         p[k] = v.clone();
@@ -402,7 +414,7 @@ fn path_scoped_apps_on_one_origin_resolve_to_their_own_roots() {
             Some("/administrator"),
             json!({})
         )["state"],
-        "noBinding"
+        "targetChanged"
     );
     // pagePath must be the page URL's own path.
     let mismatch = call(
@@ -1488,4 +1500,113 @@ fn capabilities_advertise_resolve_and_the_new_operations_dispatch() {
         json!({"claimId": "x", "expectedAffects": [], "accept": true})
     )
     .is_err());
+}
+
+#[test]
+fn delivery_goes_only_to_the_target_the_panel_showed() {
+    let w = world();
+    let a = mono(&w, "a");
+    let b = mono(&w, "b");
+    let c = mono(&w, "c");
+    let sys = Fake {
+        installed: true,
+        sessions: vec![
+            session("claude-aaaaaaaa", &a.top),
+            session("claude-bbbbbbbb", &b.top),
+            session("claude-cccccccc", &c.top),
+        ],
+        tops: vec![a.top.clone(), b.top.clone(), c.top.clone()],
+        ..Fake::default()
+    };
+    let o = "https://t.x.com";
+    let url = "https://t.x.com/admin/x";
+    let send = |expected: &str, extra: Value| {
+        let mut e = json!({"expectedTarget": expected});
+        for (k, v) in extra.as_object().unwrap() {
+            e[k] = v.clone();
+        }
+        deliver(&w, &sys, o, url, Some("/admin/x"), e)
+    };
+    let changed = json!({"state": "targetChanged", "reason": "bindingChanged", "schemaVersion": 1});
+    cli(&w, &sys, "claude-aaaaaaaa", &["link", "https://t.x.com/"]).unwrap();
+    let shown = resolve(&w, &sys, o, "/admin/x/", json!({}));
+    assert_eq!(shown["pagePath"], "/admin/x");
+    let shown_a = shown["binding"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The binding is replaced by an accepted claim after the panel resolved.
+    cli(&w, &sys, "claude-bbbbbbbb", &["link", "https://t.x.com/"]).unwrap();
+    let claim = resolve(&w, &sys, o, "/", json!({}))["pendingClaims"][0].clone();
+    call(&w, &sys, "inspectClaimDecide", json!({"claimId": claim["claimId"], "expectedAffects": claim["expectedAffects"], "accept": true})).unwrap();
+    assert_eq!(send(&shown_a, json!({})), changed);
+    // Setup requests are held to the same check, before consent.
+    let mut setup = json!({"origin": o, "kind": "setupPlugin", "pageUrl": url, "pagePath": "/admin/x",
+        "env": "test", "expectedTarget": shown_a, "deliveryId": uuid::Uuid::new_v4().to_string()});
+    assert_eq!(
+        call(&w, &sys, "inspectDeliver", setup.clone()).unwrap(),
+        changed
+    );
+    let shown_b = resolve(&w, &sys, o, "/admin/x", json!({}))["binding"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    setup["expectedTarget"] = shown_b.clone().into();
+    assert!(call(&w, &sys, "inspectDeliver", setup)
+        .unwrap_err()
+        .contains("consented"));
+
+    // Unlinked and relinked by another session.
+    cli(&w, &sys, "claude-bbbbbbbb", &["unlink", "https://t.x.com/"]).unwrap();
+    cli(&w, &sys, "claude-cccccccc", &["link", "https://t.x.com/"]).unwrap();
+    assert_eq!(send(&shown_b, json!({})), changed);
+
+    // A more specific scope added for the same session still changes what
+    // this page resolves to.
+    let shown_c = resolve(&w, &sys, o, "/admin/x", json!({}))["binding"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    cli(
+        &w,
+        &sys,
+        "claude-cccccccc",
+        &["link", url, "--path-scope", "/admin"],
+    )
+    .unwrap();
+    assert_eq!(send(&shown_c, json!({})), changed);
+    assert!(sys.sent.borrow().is_empty());
+    let current = resolve(&w, &sys, o, "/admin/x", json!({}))["binding"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(send(&current, json!({}))["state"], "sent");
+    assert_eq!(sys.sent.borrow()[0].0, "claude-cccccccc");
+
+    // A tab target is checked against its own fingerprint: a changed default
+    // does not affect it, and quoting the default for it is refused.
+    let tab = scope::fingerprint(
+        o,
+        "/",
+        &Target {
+            root: a.top.clone(),
+            source_roots: vec![a.top.clone()],
+            session_id: Some("claude-aaaaaaaa".into()),
+            session_cwd: Some(a.top.clone()),
+        },
+    );
+    let target = json!({"target": {"root": a.top, "sourceRoots": [a.top], "sessionId": "claude-aaaaaaaa", "sessionCwd": a.top, "fingerprint": tab}});
+    cli(&w, &sys, "claude-cccccccc", &["unlink", url]).unwrap();
+    assert_eq!(send(&tab, target.clone())["state"], "sent");
+    assert_eq!(sys.sent.borrow()[1].0, "claude-aaaaaaaa");
+    assert_eq!(send(&current, target), changed);
+    assert_eq!(sys.sent.borrow().len(), 2);
+
+    // pagePath without expectedTarget is refused.
+    let bare = json!({"origin": o, "kind": "edit", "pageUrl": url, "pagePath": "/admin/x", "env": "test",
+        "annotations": [{"label": "x", "selector": "x", "markdown": "x"}], "deliveryId": uuid::Uuid::new_v4().to_string()});
+    assert!(call(&w, &sys, "inspectDeliver", bare)
+        .unwrap_err()
+        .contains("expectedTarget"));
 }
