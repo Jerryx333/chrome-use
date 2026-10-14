@@ -311,6 +311,24 @@ await scenario('stored-and-wake-shown-apart', async () => {
   return { ok: true };
 });
 
+await scenario('note-only-immediate-send', async () => {
+  const page = await A.openPage('http://localhost:5173/?note');
+  await startOn(page);
+  await pick(page, '.save-button');
+  const frame = await A.realFrame();
+  await waitFor(async () => /→/.test(await frameText(frame)), { label: 'bound target' });
+  await A.clickInFrame(page.sid, frame.sid, 'document.querySelector("input[data-annotation]")');
+  await b.send('Input.insertText', { text: 'Only a note: make this green' }, page.sid);
+  // No pause for the note debounce: Send must already be enabled and carry the note.
+  assert.equal(await A.evaluate(frame.sid, 'document.getElementById("send").disabled'), false, 'Send enabled by a note alone');
+  const before = dms().length;
+  await A.clickInFrame(page.sid, frame.sid, 'document.getElementById("send")');
+  await waitFor(() => dms().length === before + 1, { label: 'note-only dm' });
+  const ctx = /([^\s]*context\.md)/.exec(dms().at(-1).text)?.[1];
+  assert.match(fs.readFileSync(ctx, 'utf8'), /Only a note: make this green/);
+  return { ok: true };
+});
+
 await scenario('vue-source-and-session', async () => {
   const page = await A.openPage('http://localhost:5174/');
   await startOn(page);

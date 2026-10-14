@@ -10,7 +10,7 @@
 
 Files:
 
-- `results.json`: 13 headless scenarios, all passed. Uses the acceptance copy of the extension (host_permissions in place of the activeTab grant) and the fake ocs, so delivery here is mocked.
+- `results.json`: 14 headless scenarios, all passed (extension at the final commit; host binary as above). Uses the acceptance copy of the extension (host_permissions in place of the activeTab grant) and the fake ocs, so delivery here is mocked.
 - `headed-results.json`: headed Chrome for Testing on the build host's GUI session with the unmodified manifest (activeTab, no host permissions). A real Alt+Shift+C keystroke sent by peekaboo opened the picker; the screenshot was taken through the activeTab grant.
 - `real-ocs.json`: the same host binary driven over native messaging on the maintainer's machine, delivering through the real ocs 0.8.3 to a live Claude Code session: state sent, stored true, wake accepted; the same delivery id sent again returned duplicate without calling ocs. The session received the message.
 

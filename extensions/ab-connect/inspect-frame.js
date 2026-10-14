@@ -162,6 +162,14 @@ function saveDraft(stateOverride) {
   void request('draft', { draft: { instruction: state.instruction, notes, deliveryId: state.deliveryId, state: stateOverride || (locked() ? state.delivery.state : 'editing') } }).catch(() => {});
 }
 
+// The note is live in the panel at once; the background copy (used for Copy
+// and drafts) follows after a short pause. Send carries its own snapshot.
+const noteTimers = new Map();
+function syncNote(a) {
+  clearTimeout(noteTimers.get(a.id));
+  noteTimers.set(a.id, setTimeout(() => { void request('note', { annotationId: a.id, note: a.note }).catch(() => {}); saveDraft(); }, 300));
+}
+
 function restoreNotes() {
   if (!state.draftNotes) return;
   for (const a of state.annotations) {
@@ -347,7 +355,7 @@ function cardsView() {
         h('div', { class: 'row small' },
           h('span', { class: 'mono ' + (a.sourceKind === 'none' ? 'muted' : ''), text: a.source }),
           link ? h('a', { href: link, onclick: event => { event.preventDefault(); openExternal(link); } }, 'Open in editor') : null),
-        h('input', { type: 'text', 'data-annotation': a.id, disabled: state.busy || locked(), placeholder: 'Note for this element (optional)', value: a.note || '', oninput: debounce(event => { a.note = event.target.value; refreshSend(); void request('note', { annotationId: a.id, note: a.note }).catch(() => {}); saveDraft(); }, 300) }),
+        h('input', { type: 'text', 'data-annotation': a.id, disabled: state.busy || locked(), placeholder: 'Note for this element (optional)', value: a.note || '', oninput: event => { a.note = event.target.value; refreshSend(); syncNote(a); } }),
         h('div', { class: 'row small muted' },
           image ? h('label', {}, h('input', { type: 'checkbox', checked: attach, onchange: event => { state.attach.set(i, event.target.checked); } }), ' attach screenshot') : null,
           h('button', { class: 'link', onclick: () => pickerPort?.postMessage({ type: 'remove', index: i }) }, 'remove'))));
@@ -469,7 +477,6 @@ async function submit() {
   if (state.busy || locked()) return;
   const instruction = $('instruction')?.value ?? state.instruction;
   state.instruction = instruction;
-  if (!state.annotations.length || (!instruction.trim() && !state.annotations.some(a => a.note))) return;
   // Freeze the batch as reviewed: the selection revision, screenshots, the
   // instruction and every note as typed now (no pending debounce is relied on).
   const selection = state.selection;
@@ -478,6 +485,7 @@ async function submit() {
     if (a) a.note = input.value;
   }
   const notes = Object.fromEntries(state.annotations.map(a => [a.id, a.note || '']));
+  if (!state.annotations.length || (!instruction.trim() && !state.annotations.some(a => a.note?.trim()))) return;
   const images = state.annotations.map((_, i) => (state.attach.get(i) === false ? null : state.edited.get(i) || state.images[i] || null)).map((dataUrl, index) => (dataUrl ? { index, dataUrl } : null)).filter(Boolean);
   await gated('send', async () => {
     if (state.selection !== selection) throw new Error('The selection changed while checking. Review it and send again.');
