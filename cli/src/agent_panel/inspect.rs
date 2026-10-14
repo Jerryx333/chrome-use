@@ -30,6 +30,7 @@ const MAX_IMAGE: usize = 4 * 1024 * 1024;
 const MESSAGE_BUDGET: usize = 4000;
 const CANDIDATE_LIMIT: usize = 12;
 const CONTEXT_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const TOMBSTONE_MAX_AGE: Duration = Duration::from_secs(365 * 24 * 60 * 60);
 const QUICK: Duration = Duration::from_secs(3);
 const ROSTER_TIMEOUT: Duration = Duration::from_secs(8);
 // A wake can take several seconds; past this the message may be stored, so
@@ -609,6 +610,7 @@ fn delivery_view(record: &Value) -> Value {
         "contextDir",
         "warning",
         "error",
+        "expired",
     ] {
         if let Some(v) = record.get(key).filter(|v| !v.is_null()) {
             view[key] = v.clone();
@@ -1792,8 +1794,10 @@ fn duplicate(record: &Value) -> Value {
     view
 }
 
-/// Remove delivery records older than seven days: regular `<uuid>.json`
-/// files only, symlinks untouched.
+/// Delivery records older than seven days become tombstones: the outcome
+/// without the context path, page origin or session. A tombstone still blocks
+/// its delivery id, so an old batch is never sent again; it is removed only
+/// after a year. Regular `<uuid>.json` files only, symlinks untouched.
 fn cleanup_records(directory: &Path, now: SystemTime) {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
@@ -1813,13 +1817,47 @@ fn cleanup_records(directory: &Path, now: SystemTime) {
         if meta.file_type().is_symlink() || !meta.is_file() {
             continue;
         }
-        let old = meta
+        let Some(age) = meta
             .modified()
             .ok()
             .and_then(|m| now.duration_since(m).ok())
-            .is_some_and(|age| age > CONTEXT_MAX_AGE);
-        if old {
-            let _ = fs::remove_file(&path);
+        else {
+            continue;
+        };
+        if age <= CONTEXT_MAX_AGE {
+            continue;
+        }
+        let record = read_regular(&path, MAX_RECORD)
+            .ok()
+            .flatten()
+            .and_then(|data| serde_json::from_slice::<Value>(&data).ok())
+            .filter(Value::is_object);
+        if record.as_ref().is_some_and(|r| r["expired"] == true) {
+            if age > TOMBSTONE_MAX_AGE {
+                let _ = fs::remove_file(&path);
+            }
+            continue;
+        }
+        let record = record.unwrap_or_else(|| json!({}));
+        let mut tombstone = json!({ "deliveryId": stem, "expired": true });
+        for key in [
+            "state",
+            "stored",
+            "wake",
+            "exit",
+            "channel",
+            "seq",
+            "startedAt",
+        ] {
+            if let Some(v) = record.get(key).filter(|v| !v.is_null()) {
+                tombstone[key] = v.clone();
+            }
+        }
+        if tombstone["state"] == "started" || !tombstone["state"].is_string() {
+            tombstone["state"] = "unknown".into();
+        }
+        if let Ok(data) = serde_json::to_vec(&tombstone) {
+            let _ = atomic_write(&path, &data, None);
         }
     }
 }
@@ -2717,6 +2755,69 @@ mod tests {
             "noSession"
         );
         assert!(moved.sent.borrow().is_empty() && gone.sent.borrow().is_empty());
+    }
+
+    #[test]
+    fn expired_records_become_tombstones_that_still_block_the_id() {
+        let w = world();
+        let sys = Fake {
+            installed: true,
+            sessions: vec![session("claude-11111111", &w.project)],
+            ..Fake::default()
+        };
+        call(
+            &w,
+            &sys,
+            "inspectBind",
+            json!({"origin": ORIGIN, "root": w.project, "sessionId": "claude-11111111"}),
+        )
+        .unwrap();
+        let id = "00000000-0000-4000-8000-0000000000aa";
+        let p = json!({"origin": ORIGIN, "kind": "edit", "pageUrl": "http://localhost:5173/", "env": "local",
+            "annotations": [{"label": "x", "selector": "x", "markdown": "x"}], "deliveryId": id});
+        assert_eq!(
+            call(&w, &sys, "inspectDeliver", p.clone()).unwrap()["state"],
+            "sent"
+        );
+        let records = w.data.join("deliveries");
+        let path = records.join(format!("{id}.json"));
+        let started = "00000000-0000-4000-8000-0000000000bb";
+        fs::write(
+            records.join(format!("{started}.json")),
+            json!({"deliveryId": started, "state": "started", "startedAt": 1, "origin": ORIGIN, "sessionId": "claude-11111111", "contextDir": "/x"}).to_string(),
+        )
+        .unwrap();
+        let day = Duration::from_secs(24 * 3600);
+        cleanup_records(&records, SystemTime::now() + 6 * day);
+        assert!(fs::read_to_string(&path).unwrap().contains("contextDir"));
+        cleanup_records(&records, SystemTime::now() + 8 * day);
+        let tombstone: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(tombstone["expired"], true);
+        assert_eq!(tombstone["state"], "sent");
+        assert_eq!(tombstone["seq"], 7);
+        assert_eq!(tombstone["wake"], "delivered");
+        assert!(tombstone["startedAt"].is_u64());
+        for gone in ["contextDir", "origin", "sessionId", "error", "warning"] {
+            assert!(tombstone.get(gone).is_none(), "{gone} kept");
+        }
+        let interrupted: Value =
+            serde_json::from_slice(&fs::read(records.join(format!("{started}.json"))).unwrap())
+                .unwrap();
+        assert_eq!(interrupted["state"], "unknown");
+        assert!(interrupted.get("contextDir").is_none());
+        // The same batch id is never sent again.
+        let again = call(&w, &sys, "inspectDeliver", p).unwrap();
+        assert_eq!(
+            (again["duplicate"].as_bool(), again["expired"].as_bool()),
+            (Some(true), Some(true))
+        );
+        assert_eq!(again["state"], "sent");
+        assert_eq!(sys.sent.borrow().len(), 1);
+        // A tombstone stays for a year after it was written, then goes.
+        cleanup_records(&records, SystemTime::now() + 300 * day);
+        assert!(path.exists());
+        cleanup_records(&records, SystemTime::now() + 366 * day);
+        assert!(!path.exists());
     }
 
     #[cfg(unix)]
