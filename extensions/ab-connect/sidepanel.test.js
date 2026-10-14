@@ -503,18 +503,24 @@ test('main domains group subdomains and keep two-level public suffixes', async (
 });
 
 test('consecutive tool calls fold into one group that stays open only while a tool runs', async () => {
-  const tool = (sequence, id, extra = {}) => ({ sequence, kind: 'tool', data: { messageId: 'm', completed: true, item: { id, type: 'mcpToolCall', tool: 'chrome_use_open', arguments: { url: 'https://example.com' }, ...extra } } });
-  const events = [{ sequence: 1, kind: 'user', data: { messageId: 'm', text: 'go' } }, tool(2, 't1'), tool(3, 't2', { error: 'boom' }), tool(4, 't3'), { sequence: 5, kind: 'textFinal', data: { messageId: 'm', itemId: 'a', part: 0, text: 'done' } }, tool(6, 't4')];
-  events[5].data.completed = false;
+  const tool = (sequence, id, extra = {}, completed = true) => ({ sequence, kind: 'tool', data: { messageId: 'm', completed, item: { id, type: 'mcpToolCall', tool: 'chrome_use_open', arguments: { url: 'https://example.com' }, ...extra } } });
+  const events = [{ sequence: 1, kind: 'user', data: { messageId: 'm', text: 'go' } }, tool(2, 't1'), tool(3, 't2', { error: 'boom' }), tool(4, 't3'), { sequence: 5, kind: 'textFinal', data: { messageId: 'm', itemId: 'a', part: 0, text: 'done' } }, tool(6, 't4'), tool(7, 't5', {}, false)];
+  let read = { events, cursor: 7 };
   const f = await fixture({
-    conversationRead: () => ({ success: true, result: { conversation: chat('a', 'running'), journal: { events, cursor: 6, more: false } } }),
+    conversationRead: params => { const page = { events: read.events.filter(e => e.sequence > params.after), cursor: read.cursor, more: false }; return { success: true, result: { conversation: chat('a', read.cursor > 7 ? 'idle' : 'running'), journal: page } }; },
   }, { ab_panel_conversation: 'a' });
   await settle();
-  const groups = f.nodes.get('transcript').querySelectorAll('details').filter(node => node.className === 'tool-group');
-  assert.equal(groups.length, 2);
-  assert.equal(groups[0].children[0].textContent, '3 steps · 1 failed');
-  assert.equal(groups[0].open, false);
-  assert.equal(groups[1].children[1].children.length, 1);
-  assert.equal(groups[1].open, true);
+  const groups = () => f.nodes.get('transcript').querySelectorAll('details').filter(node => node.className === 'tool-group');
+  assert.equal(groups().length, 2);
+  assert.equal(groups()[0].children[0].textContent, '3 steps · 1 failed');
+  assert.equal(groups()[0].open, false);
+  assert.equal(groups()[1].children[0].textContent, 'Working · 2 steps');
+  assert.equal(groups()[1].open, true);
+  // The same group folds once its last step completes on a later read.
+  read = { events: [...events, tool(8, 't5')], cursor: 8 };
+  await f.panel.refresh(); await settle();
+  assert.equal(groups().length, 2);
+  assert.equal(groups()[1].children[0].textContent, '2 steps');
+  assert.equal(groups()[1].open, false);
   f.panel.close();
 });

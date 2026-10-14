@@ -226,8 +226,8 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   function toolGroup() {
     const container = element('details', undefined, 'tool-group'), summary = element('summary'), list = element('div', undefined, 'tool-list');
     const group = { container, summary, list, tools: [], touched: false, wasRunning: null };
-    // Once the user opens or closes a group, it stays the way they left it.
-    summary.addEventListener('click', () => { group.touched = true; });
+    // Once the user opens a group or a step in it, it stays the way they left it.
+    container.addEventListener('click', () => { group.touched = true; });
     container.append(summary, list); nodes.transcript.append(container); return group;
   }
   // A running group stays open; a finished group of several steps folds into
@@ -609,7 +609,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     const cached = modelCache.get(`${agentId}\n`);
     if (cached && modelInputs.length) void cached.then(inspection => {
       if (epoch !== configEpoch) return;
-      for (const input of modelInputs) { const list = choiceList(input, `config-${input.dataset.field}-choices`, inspection.models.map(m => m.id)); if (list) input.after?.(list); }
+      for (const input of modelInputs) { const list = choiceList(input, `config-${input.dataset.field}-choices`, (inspection.models || []).map(m => m.id)); if (list) input.after?.(list); }
     }, () => {});
   }
   function diffValue(value) { return value?.redacted ? 'Hidden structured or sensitive value' : value?.state === 'absent' ? 'CLI default' : typeof value?.value === 'string' ? value.value : JSON.stringify(value?.value); }
