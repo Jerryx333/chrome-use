@@ -349,6 +349,40 @@ await scenario('m18-wildcard-config', async () => {
   return { ok: true };
 });
 
+await scenario('m19-spa-route-change', async () => {
+  resetBindings();
+  setRoster([S('claude-adm1', 'admin', path.join(mono, 'apps/admin')), S('claude-shp1', 'shop', path.join(mono, 'apps/shop'))]);
+  const shop = await pickOn('http://apps.inspect.example/shop/', '.shop-buy');
+  await click(shop, 'Hand over');
+  const admin = await pickOn('http://apps.inspect.example/admin/', '.admin-save');
+  await click(admin, 'Hand over');
+  // Same document, new path: the panel re-resolves and says so.
+  await A.evaluate(admin.page.sid, "history.pushState({}, '', '/shop/cart'); 1");
+  await waitText(admin, /The page moved to another path/, 'route change notice');
+  await waitText(admin, /→ shop/, 'target follows the new path');
+  assert.equal((await send(admin, 'after route change')).target, 'claude-shp1');
+  return { ok: true };
+});
+
+await scenario('m20-target-changed-after-panel-showed-it', async () => {
+  resetBindings();
+  setRoster([S('claude-aaaa1111', 'react-main', react), S('claude-bbbb2222', 'react-second', react)]);
+  assert.equal(cli(['link', 'http://test.inspect.example/'], 'claude-aaaa1111').code, 0);
+  const ctx = await pickOn('http://test.inspect.example/?m20', '.save-button');
+  await waitText(ctx, /→ react-main/, 'panel shows A');
+  // Elsewhere: A unlinks, B links (no claim needed now) while the panel still shows A.
+  assert.equal(cli(['unlink', 'http://test.inspect.example/'], 'claude-aaaa1111').code, 0);
+  assert.equal(cli(['link', 'http://test.inspect.example/'], 'claude-bbbb2222').code, 0);
+  const before = dms().length;
+  await A.clickInFrame(ctx.page.sid, ctx.frame.sid, 'document.getElementById("instruction")');
+  await b.send('Input.insertText', { text: 'meant for A' }, ctx.page.sid);
+  await A.clickInFrame(ctx.page.sid, ctx.frame.sid, 'document.getElementById("send")');
+  await waitText(ctx, /target changed since the panel showed it/, 'refused');
+  assert.equal(dms().length, before, 'nothing sent to B without the user seeing B');
+  await waitText(ctx, /→ react-second/, 'panel now shows B');
+  return { ok: true };
+});
+
 results.finishedAt = new Date().toISOString();
 fs.writeFileSync(path.join(dir, 'results-matching.json'), JSON.stringify(results, null, 2));
 const failed = results.scenarios.filter(s => !s.ok);
