@@ -54,6 +54,8 @@ export function deliveryMessage(result) {
     case 'noBinding': return { tone: 'bad', locked: false, text: 'Pick a project for this site first.' };
     case 'noSession': return { tone: 'bad', locked: false, text: 'No running agent session for this project. Start one, then press Check again.' };
     case 'sessionChanged': return { tone: 'bad', locked: false, text: 'The bound session is gone or moved to another folder. Pick the session again.' };
+    case 'upgradeRequired': return { tone: 'bad', locked: false, text: 'This site has path-specific targets or a pending claim that this chrome-use version cannot apply. Nothing was sent. Upgrade with `chrome-use upgrade`.' };
+    case 'targetChanged': return { tone: 'bad', locked: false, text: 'The chosen target changed (session, folder or dev server). Nothing was sent. Confirm the target again.' };
     case 'noOcs': return { tone: 'bad', locked: false, text: 'ocs is not installed. Install it with the command above, then send again.' };
     case 'failed': return { tone: 'bad', locked: false, text: `Delivery failed${result?.error ? `: ${result.error}` : ''}. Nothing was stored.` };
     default: return { tone: 'warn', locked: true, text: 'Unrecognized delivery result. Not resent.' };
@@ -62,4 +64,52 @@ export function deliveryMessage(result) {
 
 export function newDeliveryId() {
   return crypto.randomUUID();
+}
+
+// ---- matching (inspectResolve) labels -------------------------------------
+
+export function scopeLabel(origin, pathScope) {
+  let host = origin;
+  try { host = new URL(origin).host; } catch {}
+  return host + (pathScope && pathScope !== '/' ? pathScope : '');
+}
+
+const EVIDENCE = {
+  config: 'project config',
+  'config-wildcard': 'project config (wildcard)',
+  'dev-server-port': 'dev server',
+  'previous-binding': 'used before',
+  'ocs-session': 'agent session folder',
+};
+
+export function evidenceLabels(pair) {
+  const out = (pair?.evidence || []).map(e => EVIDENCE[e] || e);
+  if (pair?.matchedPaths) out.push(`${pair.matchedPaths} source file${pair.matchedPaths === 1 ? '' : 's'} matched`);
+  return out;
+}
+
+// Page revision is a hint; the relation is reported as git sees it locally.
+export function revisionText(revision) {
+  switch (revision?.relation) {
+    case 'same': return 'deployed build is your local HEAD';
+    case 'ahead': return `local is ${revision.ahead} commit${revision.ahead === 1 ? '' : 's'} ahead of the deployed build`;
+    case 'behind': return `local is ${revision.behind} commit${revision.behind === 1 ? '' : 's'} behind the deployed build`;
+    case 'diverged': return `local and deployed build diverged (${revision.ahead} ahead, ${revision.behind} behind)`;
+    case 'unknown': return 'deployed build not found in this checkout';
+    default: return null;
+  }
+}
+
+export function reasonText(reason, binding) {
+  const who = binding?.sessionLabel || binding?.sessionId || 'The session';
+  switch (reason) {
+    case 'sessionEnded': return `${who} is no longer running. Choose where requests go now.`;
+    case 'sessionMoved': return `${who} now works in another folder. Choose where requests go now.`;
+    case 'portMoved': return 'The dev server on this port now runs from another folder. Choose where requests go now.';
+    default: return null;
+  }
+}
+
+export function targetLabel(t) {
+  return `${t?.sessionLabel || t?.sessionId || 'session'} @ ${t?.root || '?'}`;
 }

@@ -201,3 +201,57 @@ test('a note edited after send started does not change the frozen batch', async 
   const sent = calls.find(c => c[0] === 'inspectDeliver')[1];
   assert.equal(sent.annotations[0].note, 'reviewed note');
 });
+
+test('matching: status uses inspectResolve with the page path, falls back on old hosts', async () => {
+  const ctx = await authorized();
+  const { controller, chrome, real, calls, instance } = ctx;
+  chrome.tabs.get = async () => ({ id: 7, url: 'http://localhost:5173/admin/orders?x=1' });
+  controller.resolveReady = () => true;
+  controller.request = async (op, params) => { calls.push([op, params]); return { schemaVersion: 1, state: 'unbound', pendingClaims: [], ocs: { installed: true } }; };
+  instance.revision = 'abc1234';
+  real.msg[0]({ type: 'status', requestId: 21 });
+  await flush(); await flush(); await flush();
+  const resolve = calls.find(c => c[0] === 'inspectResolve')[1];
+  assert.equal(resolve.pagePath, '/admin/orders');
+  assert.equal(resolve.revision, 'abc1234');
+  controller.resolveReady = () => false;
+  real.msg[0]({ type: 'status', requestId: 22 });
+  await flush(); await flush();
+  assert.ok(calls.some(c => c[0] === 'inspectStatus'));
+  assert.equal(real.sent.find(m => m.requestId === 22).legacy, true);
+});
+
+test('matching: a tab-only target is held locally and sent with each delivery', async () => {
+  const { controller, chrome, real, calls, instance } = await authorized();
+  chrome.tabs.get = async () => ({ id: 7, url: 'http://localhost:5173/shop' });
+  controller.resolveReady = () => true;
+  const pair = { root: '/w/shop', sourceRoots: ['/w/shop'], sessionId: 'claude-1', sessionCwd: '/w/shop', sessionLabel: 'shop', pathScope: '/shop', fingerprint: 'f'.repeat(32), origin: 'http://localhost:5173', evidence: ['config'] };
+  real.msg[0]({ type: 'confirm', requestId: 31, pair, mode: 'tab' });
+  await flush();
+  assert.equal(calls.filter(c => c[0] === 'inspectBind').length, 0, 'tab target is not persisted');
+  assert.equal(instance.tabTarget.fingerprint, pair.fingerprint);
+  instance.annotations = [{ id: '0:0', element, probe: null, note: '' }];
+  instance.selectionRevision = 0;
+  real.msg[0]({ type: 'deliver', requestId: 32, deliveryId: '11111111-2222-3333-4444-555555555559', revision: 0, instruction: 'x' });
+  await flush(); await flush(); await flush();
+  const deliver = calls.find(c => c[0] === 'inspectDeliver')[1];
+  assert.equal(deliver.pagePath, '/shop');
+  assert.deepEqual(deliver.target, { root: '/w/shop', sourceRoots: ['/w/shop'], sessionId: 'claude-1', sessionCwd: '/w/shop', fingerprint: 'f'.repeat(32) });
+  real.msg[0]({ type: 'confirm', requestId: 33, pair, mode: 'default' });
+  await flush(); await flush();
+  const bind = calls.find(c => c[0] === 'inspectBind')[1];
+  assert.equal(bind.pathScope, '/shop');
+  assert.equal(bind.fingerprint, pair.fingerprint);
+  assert.equal(instance.tabTarget, null, 'site default replaces the tab override');
+});
+
+test('matching: malformed pairs and claims are refused before the host', async () => {
+  const { controller, real, calls } = await authorized();
+  controller.resolveReady = () => true;
+  real.msg[0]({ type: 'confirm', requestId: 41, pair: { root: '/w', sessionId: 'x', sourceRoots: [] }, mode: 'default' });
+  real.msg[0]({ type: 'claimDecide', requestId: 42, claimId: 5 });
+  await flush(); await flush();
+  assert.match(real.sent.find(m => m.requestId === 41).error, /Unknown target/);
+  assert.match(real.sent.find(m => m.requestId === 42).error, /Unknown claim/);
+  assert.equal(calls.filter(c => ['inspectBind', 'inspectClaimDecide'].includes(c[0])).length, 0);
+});

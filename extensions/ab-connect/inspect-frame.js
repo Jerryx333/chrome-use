@@ -5,7 +5,7 @@
 // access to page context or delivery.
 
 import { plain, inlineCode } from './inspect-format.js';
-import { visibilityVerdict, editorUrl, deliveryMessage, LOCKED_STATES, newDeliveryId } from './inspect-frame-logic.js';
+import { visibilityVerdict, editorUrl, deliveryMessage, LOCKED_STATES, newDeliveryId, scopeLabel, evidenceLabels, revisionText, reasonText, targetLabel } from './inspect-frame-logic.js';
 
 const $ = id => document.getElementById(id);
 const view = $('view');
@@ -181,8 +181,10 @@ function restoreNotes() {
 async function refreshStatus() {
   if (!state.ctx?.hostConnected) { state.statusError = 'The chrome-use native host is not connected. Copy still works.'; render(); return; }
   try {
-    const { status } = await request('status');
+    const { status, legacy, tabTarget } = await request('status');
     state.status = status;
+    state.legacy = !!legacy;
+    state.tabTarget = tabTarget || null;
     state.statusError = null;
   } catch (error) {
     state.statusError = error.message;
@@ -255,6 +257,7 @@ function setupView() {
       h('div', { class: 'actions' }, h('button', { onclick: () => copy(command) }, 'Copy command'), h('button', { onclick: refreshStatus }, 'Check again'))));
     return box;
   }
+  if (!state.legacy) return matchingView(status, box);
   const binding = status.binding;
   if (!binding || state.choosing) { box.append(projectChooser(status)); return box; }
   const sessions = status.sessions || [];
@@ -266,6 +269,103 @@ function setupView() {
     else box.append(h('div', { class: 'notice small', text: consent === 'plugin' ? 'Source mapping setup was requested. After the agent adds code-inspector-plugin and the dev server restarts, elements show file:line here.' : 'Test-build source mapping was requested. It takes effect after the next test deployment.' }));
   }
   return box.childElementCount ? box : null;
+}
+
+// ---- matching (hosts with inspectResolve) ---------------------------------
+
+function matchingView(status, box) {
+  for (const claim of status.pendingClaims || []) box.append(claimBanner(claim));
+  for (const e of status.configErrors || []) box.append(h('div', { class: 'notice warn small', text: `Project config ignored: ${e.path}: ${e.reason}` }));
+  if (status.skipped?.length) box.append(h('div', { class: 'small muted', text: `Some checks were skipped (time budget): ${status.skipped.join(', ')}` }));
+  if (status.state === 'bound' && !state.choosing) {
+    const binding = status.binding;
+    if (!hasMarks() && state.annotations.length) {
+      const consent = state.ctx.env === 'local' ? 'plugin' : 'testEnv';
+      if (!binding.consents?.[consent]) box.append(consentCard(consent));
+      else box.append(h('div', { class: 'notice small', text: consent === 'plugin' ? 'Source mapping setup was requested. After the agent adds code-inspector-plugin and the dev server restarts, elements show file:line here.' : 'Test-build source mapping was requested. It takes effect after the next test deployment.' }));
+    }
+  } else {
+    box.append(confirmCard(status));
+  }
+  return box.childElementCount ? box : null;
+}
+
+function claimBanner(claim) {
+  const now = claim.affects?.length ? claim.affects.map(a => `${targetLabel(a)} (${scopeLabel(a.origin, a.pathScope)})`).join(', ') : 'no other session';
+  return h('div', { class: 'notice warn stack small' },
+    h('strong', { text: `${claim.sessionLabel || claim.sessionId} asks to take over ${scopeLabel(claim.origin, claim.pathScope)}` }),
+    h('div', {}, 'Requested target: ', h('span', { class: 'mono', text: claim.root })),
+    h('div', {}, 'Requests go to: ', h('span', { class: 'mono', text: now }), ' until you decide.'),
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', onclick: event => { if (event.isTrusted) void decideClaim(claim, true); } }, 'Replace'),
+      h('button', { onclick: event => { if (event.isTrusted) void decideClaim(claim, false); } }, 'Keep current')));
+}
+
+async function decideClaim(claim, accept) {
+  await gated('claim', async () => {
+    const { result } = await request('claimDecide', { claimId: claim.claimId, expectedAffects: claim.expectedAffects || [], accept });
+    state.notice = { tone: 'ok', text: result.decided === 'accepted' ? 'Claim accepted.' : 'Kept the current target.' };
+    await refreshStatus();
+  });
+}
+
+function confirmCard(status) {
+  const card = status.card || { pairs: [] };
+  const pairs = card.pairs || [];
+  const reason = reasonText(status.reason, status.binding);
+  const box = h('div', { class: 'notice stack' });
+  if (reason) box.append(h('div', { class: 'small', text: reason }));
+  if (!pairs.length) {
+    const url = state.ctx.pageUrl;
+    box.append(h('strong', { text: 'No running agent session matches this page' }),
+      h('div', { class: 'small', text: 'Start Claude Code, Codex or Pi in the project, then press Check again. Or, in the session that should receive requests, run:' }),
+      h('pre', { class: 'cmd', text: `chrome-use inspect link ${url}` }),
+      h('div', { class: 'actions' },
+        h('button', { onclick: () => copy(`chrome-use inspect link ${url}`) }, 'Copy command'),
+        h('button', { onclick: () => launch('claude') }, 'Claude Code start command'),
+        h('button', { onclick: refreshStatus }, 'Check again')));
+    if (state.launch) box.append(h('pre', { class: 'cmd', text: state.launch.command }));
+    return box;
+  }
+  const key = p => p.fingerprint;
+  if (!state.chosenPair || !pairs.some(p => key(p) === state.chosenPair)) state.chosenPair = card.preselected ? key(card.preselected) : null;
+  const chosen = pairs.find(p => key(p) === state.chosenPair) || null;
+  const expanded = state.expandPairs || !card.preselected;
+  if (chosen) box.append(pairSummary(chosen));
+  if (expanded) {
+    box.append(h('div', { class: 'small muted', text: card.preselected ? 'Other matches:' : 'Choose where requests from this page go:' }),
+      h('div', { class: 'list' }, pairs.map(p => h('label', {},
+        h('input', { type: 'radio', name: 'pair', checked: key(p) === state.chosenPair, onchange: () => { state.chosenPair = key(p); render(); } }),
+        h('span', {}, h('strong', { text: p.sessionLabel || p.sessionId }), ' ', h('span', { class: 'muted small', text: `${p.kind || ''}${p.status ? ' · ' + p.status : ''} · ${scopeLabel(p.origin, p.pathScope)}` }), h('br'),
+          h('span', { class: 'mono muted', text: p.root }), h('br'),
+          h('span', { class: 'muted small', text: [...evidenceLabels(p), revisionText(p.revision)].filter(Boolean).join(' · ') }))))));
+  }
+  box.append(h('div', { class: 'actions' },
+    h('button', { class: 'primary', disabled: !chosen, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'default'); } }, 'Hand over'),
+    h('button', { disabled: !chosen, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'tab'); } }, 'Only this tab'),
+    card.preselected && !state.expandPairs ? h('button', { class: 'link', onclick: () => { state.expandPairs = true; render(); } }, 'Choose another') : null,
+    state.choosing ? h('button', { class: 'link', onclick: () => { state.choosing = false; render(); } }, 'Cancel') : null));
+  return box;
+}
+
+function pairSummary(p) {
+  const extra = (p.sourceRoots || []).filter(r => r !== p.root);
+  return h('div', { class: 'stack' },
+    h('strong', { text: `Send requests from ${scopeLabel(p.origin, p.pathScope)} to ${p.sessionLabel || p.sessionId}` }),
+    h('div', { class: 'small' }, `${p.kind || 'session'}${p.status ? ' · ' + p.status : ''} · session folder `, h('span', { class: 'mono', text: p.sessionCwd })),
+    h('div', { class: 'small' }, 'Project: ', h('span', { class: 'mono', text: p.root })),
+    extra.length ? h('div', { class: 'small' }, 'Also counts as this page\u2019s source: ', h('span', { class: 'mono', text: extra.join(', ') })) : null,
+    h('div', { class: 'small muted', text: [...evidenceLabels(p), revisionText(p.revision)].filter(Boolean).join(' · ') }));
+}
+
+async function confirmPair(pair, mode) {
+  await gated('bind', async () => {
+    await request('confirm', { pair, mode });
+    state.choosing = false;
+    state.expandPairs = false;
+    state.notice = { tone: 'ok', text: mode === 'tab' ? `This tab sends to ${targetLabel(pair)} until it reloads.` : `Requests from ${scopeLabel(pair.origin, pair.pathScope)} now go to ${targetLabel(pair)}.` };
+    await refreshStatus();
+  });
 }
 
 function projectChooser(status) {
@@ -331,7 +431,7 @@ function consentCard(kind) {
       h('button', { class: 'primary', onclick: async event => {
         if (!event.isTrusted) return;
         await gated('setup', async () => {
-          await request('consent', { kind, granted: true });
+          await request('consent', { kind, granted: true, pathScope: state.status?.binding?.pathScope });
           const deliveryId = newDeliveryId();
           const { result } = await request('setup', { kind: plugin ? 'setupPlugin' : 'setupTestEnv', deliveryId });
           state.notice = deliveryMessage(result);
@@ -387,6 +487,14 @@ function instructionView() {
 }
 
 function targetView() {
+  if (!state.legacy && state.status) {
+    if (state.tabTarget) return h('div', { class: 'target' }, '→ ', h('strong', { text: state.tabTarget.sessionLabel || state.tabTarget.sessionId }), ' @ ', h('span', { class: 'mono', text: state.tabTarget.root }), ' (this tab only) ',
+      h('button', { class: 'link', onclick: async () => { await request('clearTabTarget'); await refreshStatus(); } }, 'use site default'));
+    const b = state.status.binding;
+    if (state.status.state !== 'bound' || !b) return h('div', { class: 'target', text: 'Target: not confirmed yet' });
+    return h('div', { class: 'target' }, '→ ', h('strong', { text: b.sessionLabel || b.sessionId }), ' @ ', h('span', { class: 'mono', text: b.root }), ` · ${scopeLabel(b.origin, b.pathScope)} `,
+      h('button', { class: 'link', onclick: () => { state.choosing = true; state.expandPairs = true; render(); } }, 'change'));
+  }
   const binding = state.status?.binding;
   if (!binding) return h('div', { class: 'target', text: 'Target: not chosen yet' });
   const session = (state.status.sessions || []).find(s => s.id === binding.sessionId);
@@ -397,7 +505,9 @@ function targetView() {
 // Recomputed on every keystroke without re-rendering, so typing keeps focus.
 function sendable() {
   const binding = state.status?.binding;
-  const ready = !!(binding?.sessionId && (state.status.sessions || []).some(s => s.id === binding.sessionId) && state.status.ocs?.installed);
+  const ready = !state.legacy && state.status
+    ? !!(state.status.ocs?.installed && (state.tabTarget || state.status.state === 'bound'))
+    : !!(binding?.sessionId && (state.status.sessions || []).some(s => s.id === binding.sessionId) && state.status.ocs?.installed);
   return ready && !locked() && !state.busy && state.annotations.length > 0 && !!(state.instruction.trim() || state.annotations.some(a => a.note?.trim()));
 }
 
@@ -411,8 +521,6 @@ function locked() {
 }
 
 function actionsView() {
-  const binding = state.status?.binding;
-  const ready = !!(binding?.sessionId && (state.status.sessions || []).some(s => s.id === binding.sessionId) && state.status.ocs?.installed);
   const canSend = sendable();
   const row = h('div', { class: 'actions' },
     h('button', { id: 'send', class: 'primary', disabled: !canSend, onclick: event => { if (event.isTrusted) void submit(); } }, state.busy ? 'Sending…' : 'Send'),
@@ -493,7 +601,7 @@ async function submit() {
     const { result } = await request('deliver', { deliveryId: state.deliveryId, revision: selection, instruction, images, notes });
     state.delivery = result;
     if (!deliveryMessage(result).locked) state.deliveryId = null;
-    if (['noBinding', 'sessionChanged', 'noSession'].includes(result?.state)) await refreshStatus();
+    if (['noBinding', 'sessionChanged', 'noSession', 'targetChanged', 'upgradeRequired'].includes(result?.state)) await refreshStatus();
   });
 }
 

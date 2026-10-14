@@ -33,3 +33,16 @@ test('delivery messages keep stored and wake apart and lock what may have landed
   assert.equal(deliveryMessage({ state: 'weird' }).locked, true);
   for (const state of ['sent', 'stored', 'unknown', 'unconfirmed']) assert.ok(LOCKED_STATES.includes(state));
 });
+
+test('matching labels', async () => {
+  const { scopeLabel, evidenceLabels, revisionText, reasonText, deliveryMessage } = await import('./inspect-frame-logic.js');
+  assert.equal(scopeLabel('https://test.x.com', '/'), 'test.x.com');
+  assert.equal(scopeLabel('http://localhost:5173', '/admin'), 'localhost:5173/admin');
+  assert.deepEqual(evidenceLabels({ evidence: ['config', 'dev-server-port'], matchedPaths: 2 }), ['project config', 'dev server', '2 source files matched']);
+  assert.equal(revisionText({ relation: 'ahead', ahead: 3 }), 'local is 3 commits ahead of the deployed build');
+  assert.equal(revisionText({ relation: 'diverged', ahead: 1, behind: 2 }), 'local and deployed build diverged (1 ahead, 2 behind)');
+  assert.equal(revisionText(null), null);
+  assert.match(reasonText('sessionEnded', { sessionLabel: 'admin-main' }), /admin-main is no longer running/);
+  assert.equal(deliveryMessage({ state: 'upgradeRequired' }).locked, false);
+  assert.match(deliveryMessage({ state: 'targetChanged' }).text, /Nothing was sent/);
+});

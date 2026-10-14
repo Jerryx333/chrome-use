@@ -3,11 +3,11 @@
 // replies must match the request's connection generation; no request is replayed.
 // Slow operations outlast the native host's own budget for them (32 s and 47 s),
 // so the host's answer arrives before this page gives up.
-const operationTimeouts = { agentInspect: 35000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000 };
+const operationTimeouts = { agentInspect: 35000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000, inspectResolve: 20000 };
 
 // Inspect & Ask host operations. inspectDeliver is never replayed: a timeout
 // leaves the batch unconfirmed and the caller asks inspectDeliveryStatus.
-export const INSPECT_OPERATIONS = ['inspectStatus', 'inspectBind', 'inspectUnbind', 'inspectBindings', 'inspectConsent', 'inspectDeliver', 'inspectDeliveryStatus', 'inspectLaunchCommand'];
+export const INSPECT_OPERATIONS = ['inspectStatus', 'inspectResolve', 'inspectClaimDecide', 'inspectBind', 'inspectUnbind', 'inspectBindings', 'inspectConsent', 'inspectDeliver', 'inspectDeliveryStatus', 'inspectLaunchCommand'];
 
 export class AgentPanelBridge {
   constructor({ send, schedule = (callback, delay) => globalThis.setTimeout(callback, delay), cancel = timer => globalThis.clearTimeout(timer), timeoutMs = 15000, maxPending = 16 }) {
@@ -85,11 +85,13 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
   if (['scheduleSave','scheduleRun'].includes(operation)) return typeof result.schedule?.id === 'string' && (!id || result.schedule.id === id) && (operation !== 'scheduleRun' || result.run?.dispatched === true && result.run.completed === false);
   if (operation === 'scheduleDelete') return result.deleted?.id === id;
   if (operation === 'discover') return Array.isArray(result.agents);
+  if (operation === 'inspectResolve') return ['bound', 'needsConfirm', 'unbound'].includes(result.state) && Array.isArray(result.pendingClaims) && typeof result.ocs?.installed === 'boolean';
+  if (operation === 'inspectClaimDecide') return ['accepted', 'rejected'].includes(result.decided);
   if (operation === 'inspectStatus') return typeof result.ocs?.installed === 'boolean' && Array.isArray(result.sessions) && Array.isArray(result.candidates);
   if (operation === 'inspectBind' || operation === 'inspectConsent') return typeof result.binding?.origin === 'string' && typeof result.binding.root === 'string';
   if (operation === 'inspectUnbind') return result.unbound === true && typeof result.existed === 'boolean';
   if (operation === 'inspectBindings') return Array.isArray(result.bindings);
-  if (operation === 'inspectDeliver') return ['sent', 'stored', 'unknown', 'failed', 'noBinding', 'noSession', 'sessionChanged', 'noOcs'].includes(result.state);
+  if (operation === 'inspectDeliver') return ['sent', 'stored', 'unknown', 'failed', 'noBinding', 'noSession', 'sessionChanged', 'noOcs', 'upgradeRequired', 'targetChanged'].includes(result.state);
   if (operation === 'inspectDeliveryStatus') return result.delivery === null || typeof result.delivery?.state === 'string';
   if (operation === 'inspectLaunchCommand') return typeof result.command === 'string' && typeof result.shell === 'string';
   if (operation === 'serviceHealth') return typeof result.profile === 'string' && typeof result.binaryHash === 'string' && Number.isInteger(result.pid);

@@ -78,16 +78,33 @@ export function pruneDrafts(drafts, now) {
   return Object.fromEntries(kept.slice(0, Math.max(30, kept.filter(([, d]) => UNCERTAIN.includes(d.state)).length)));
 }
 
+// Pure: a target pair as the frame quotes it from inspectResolve. Only the
+// fields the host re-validates travel on; the host recomputes the fingerprint.
+export function validPair(pair) {
+  if (!pair || typeof pair !== 'object') return null;
+  const str = (v, max = 4096) => typeof v === 'string' && v.length > 0 && v.length <= max;
+  if (!str(pair.root) || !str(pair.sessionId, 200) || !str(pair.sessionCwd) || !str(pair.fingerprint, 128) || !str(pair.pathScope, 2000) || !pair.pathScope.startsWith('/')) return null;
+  if (!Array.isArray(pair.sourceRoots) || !pair.sourceRoots.length || pair.sourceRoots.length > 16 || !pair.sourceRoots.every(r => str(r))) return null;
+  return { root: pair.root, sourceRoots: [...pair.sourceRoots], sessionId: pair.sessionId, sessionCwd: pair.sessionCwd, sessionLabel: str(pair.sessionLabel, 200) ? pair.sessionLabel : null, pathScope: pair.pathScope, fingerprint: pair.fingerprint };
+}
+
+export function tabTargetPayload(target) {
+  return { root: target.root, sourceRoots: target.sourceRoots, sessionId: target.sessionId, sessionCwd: target.sessionCwd, fingerprint: target.fingerprint };
+}
+
 // Pure: which delivery states may never be sent again under the same id.
 export function deliveryLocked(state) {
   return ['sending', 'sent', 'stored', 'unknown', 'unconfirmed'].includes(state);
 }
 
 export class InspectController {
-  constructor({ chrome, request, hostReady }) {
+  constructor({ chrome, request, hostReady, resolveReady = () => false }) {
     this.chrome = chrome;
     this.request = request;
     this.hostReady = hostReady;
+    // Hosts from v1.5.214 resolve path-scoped bindings, claims and tab
+    // targets; older hosts only know one binding per origin.
+    this.resolveReady = resolveReady;
     this.registry = new InspectRegistry({ runtimeId: chrome.runtime.id });
   }
 
@@ -207,6 +224,17 @@ export class InspectController {
     const selection = instance.selectionRevision;
     instance.captureChain = (instance.captureChain || Promise.resolve()).then(() => this.capture(instance, selection)).catch(() => {});
     return instance.captureChain;
+  }
+
+  // The page's current path (single-page apps move without a new document),
+  // falling back to the path the picker started on. Only the path is sent.
+  async pagePath(instance) {
+    try {
+      const tab = await this.chrome.tabs.get(instance.tabId);
+      const url = new URL(tab.url);
+      if (url.origin === instance.origin) return url.pathname || '/';
+    } catch {}
+    try { return new URL(instance.pageUrl).pathname || '/'; } catch { return '/'; }
   }
 
   // Bounded: a frozen or hidden page must not stall the capture queue.
@@ -333,17 +361,40 @@ export class InspectController {
         return answer({ settings: await this.saveSettings({ enabled: true }) });
       }
       case 'status': {
-        // Page-supplied paths only rank candidates; the user still binds explicitly.
+        // Page-supplied paths and revision only rank candidates; a target is
+        // made by the user's click, a session's own link, or local config.
         const marks = instance.annotations.map(a => chooseSource(a.element.source, a.probe)).filter(s => s?.path && s.path.length <= 300 && !/[\u0000-\u001f]/.test(s.path)).map(s => s.path);
         const params = { origin: instance.origin, sourcePaths: [...new Set(marks)].slice(0, 16) };
         if (isLocalOrigin(instance.origin)) params.port = originPort(instance.origin);
-        return answer({ status: await this.host('inspectStatus', params) });
+        if (!this.resolveReady()) return answer({ status: await this.host('inspectStatus', params), legacy: true });
+        params.pagePath = await this.pagePath(instance);
+        if (instance.revision && /^[0-9a-f]{7,40}$/.test(instance.revision)) params.revision = instance.revision;
+        return answer({ status: await this.host('inspectResolve', params), tabTarget: instance.tabTarget || null });
+      }
+      case 'confirm': {
+        if (!this.resolveReady()) throw new Error('This chrome-use CLI is too old for this choice; upgrade it with `chrome-use upgrade`.');
+        const pair = validPair(message.pair);
+        if (!pair) throw new Error('Unknown target');
+        if (message.mode === 'tab') {
+          // Held by this picker only; the host re-validates it on every send.
+          instance.tabTarget = pair;
+          return answer({ tabTarget: pair });
+        }
+        instance.tabTarget = null;
+        return answer({ result: await this.host('inspectBind', { origin: instance.origin, pathScope: pair.pathScope, root: pair.root, sourceRoots: pair.sourceRoots, sessionId: pair.sessionId, sessionLabel: pair.sessionLabel || undefined, fingerprint: pair.fingerprint }) });
+      }
+      case 'clearTabTarget':
+        instance.tabTarget = null;
+        return answer({ ok: true });
+      case 'claimDecide': {
+        if (typeof message.claimId !== 'string' || !Array.isArray(message.expectedAffects)) throw new Error('Unknown claim');
+        return answer({ result: await this.host('inspectClaimDecide', { claimId: message.claimId, expectedAffects: message.expectedAffects.filter(f => typeof f === 'string').slice(0, 64), accept: message.accept === true }) });
       }
       case 'bind':
         return answer({ result: await this.host('inspectBind', { origin: instance.origin, root: String(message.root || ''), sessionId: message.sessionId || undefined, sessionLabel: message.sessionLabel || undefined }) });
       case 'consent':
         if (!['plugin', 'testEnv'].includes(message.kind)) throw new Error('Unknown consent');
-        return answer({ result: await this.host('inspectConsent', { origin: instance.origin, kind: message.kind, granted: message.granted === true }) });
+        return answer({ result: await this.host('inspectConsent', { origin: instance.origin, ...(this.resolveReady() && typeof message.pathScope === 'string' ? { pathScope: message.pathScope } : {}), kind: message.kind, granted: message.granted === true }) });
       case 'launchCommand':
         return answer({ result: await this.host('inspectLaunchCommand', { origin: instance.origin, agent: message.agent === 'codex' ? 'codex' : 'claude' }) });
       case 'note': {
@@ -417,9 +468,11 @@ export class InspectController {
     }
     const notes = Object.fromEntries(annotations.filter(a => a.note).map(a => [a.element.selector, a.note]));
     await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state: 'sending' });
+    const scoped = this.resolveReady() ? { pagePath: await this.pagePath(instance), ...(instance.tabTarget ? { target: tabTargetPayload(instance.tabTarget) } : {}) } : {};
     let result;
     try {
       result = await this.host('inspectDeliver', {
+        ...scoped,
         deliveryId, origin: instance.origin, kind,
         instruction: kind === 'edit' ? instruction : undefined,
         pageUrl: sanitizedPageUrl(instance.pageUrl), env: isLocalOrigin(instance.origin) ? 'local' : 'test',
@@ -431,7 +484,7 @@ export class InspectController {
       await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state: 'unconfirmed' });
       return { state: 'unconfirmed', deliveryId, error: String(error.message || error) };
     }
-    const state = ['noBinding', 'noSession', 'sessionChanged', 'noOcs', 'failed'].includes(result?.state) ? 'editing' : result?.state || 'unconfirmed';
+    const state = ['noBinding', 'noSession', 'sessionChanged', 'noOcs', 'failed', 'upgradeRequired', 'targetChanged'].includes(result?.state) ? 'editing' : result?.state || 'unconfirmed';
     await this.saveDraft(instance.origin, { instruction, notes, deliveryId, state });
     return result;
   }
