@@ -153,7 +153,18 @@ fn a_dev_server_in_a_monorepo_app_preselects_that_app_and_binds_in_one_click() {
     assert_eq!(bound["binding"]["fingerprint"], pre["fingerprint"]);
     let again = resolve(&w, &sys, ORIGIN, "/settings", json!({}));
     assert_eq!(again["state"], "bound");
-    assert!(again.get("card").is_none());
+    // A bound scope still offers its candidates so the target can be
+    // changed (or held for one tab), but preselects none of them.
+    assert!(again["card"].get("preselected").is_none());
+    let offered = again["card"]["pairs"].as_array().unwrap();
+    assert_eq!(offered.len(), pairs.len());
+    let same = offered
+        .iter()
+        .find(|p| p["root"] == json!(m.admin))
+        .unwrap();
+    assert_eq!(same["fingerprint"], pre["fingerprint"]);
+    assert!(offered.iter().any(|p| p["root"] == json!(m.top)));
+    assert_eq!(again["sessions"][0]["id"], "claude-aaaaaaaa");
     assert_eq!(again["binding"]["session"]["id"], "claude-aaaaaaaa");
 
     // Source paths resolve only inside the bound app: repo-relative with the

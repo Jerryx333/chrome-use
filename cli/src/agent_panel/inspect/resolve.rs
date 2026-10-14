@@ -196,16 +196,9 @@ impl Inspect<'_> {
                 .and_then(|id| live.iter().find(|l| &l.session.id == id))
                 .map_or(Value::Null, |l| session_info(&l.session));
             match reason {
-                None => {
-                    out["state"] = "bound".into();
-                    out["sessions"] = live
-                        .iter()
-                        .filter(|l| facts.related(&l.cwd, &b.root))
-                        .map(|l| session_info(&l.session))
-                        .collect::<Vec<_>>()
-                        .into();
-                    return Ok(finish(out, &facts));
-                }
+                // Still build the card: the frame offers it to change the
+                // target or to hold another one for this tab only.
+                None => out["state"] = "bound".into(),
                 Some(reason) => {
                     out["state"] = "needsConfirm".into();
                     out["reason"] = reason.into();
@@ -216,6 +209,7 @@ impl Inspect<'_> {
         }
 
         // ---- candidates
+        let bound = out["state"] == "bound";
         let mut worktrees: Vec<PathBuf> = Vec::new();
         let mut note = |dir: &Path| {
             if let Worktree::Git(top) = facts.worktree(dir) {
@@ -332,7 +326,8 @@ impl Inspect<'_> {
                 .iter()
                 .enumerate()
                 .any(|(j, other)| j != i && other.key() == c.key());
-            if i == 0 && c.local_evidence() && related.len() == 1 && !tied {
+            // A bound scope already has its target; nothing is preselected.
+            if !bound && i == 0 && c.local_evidence() && related.len() == 1 && !tied {
                 preselected = Some(pairs.len());
             }
             let sessions: Vec<Option<&Live>> = if related.is_empty() {
