@@ -48,6 +48,7 @@ async function fixture(overrides = {}, saved = {}) {
     },
   };
   const document = { createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); } };
+  for (const id of overrides.hiddenNodes || []) document.getElementById(id).hidden = true;
   const panel = createPanel({ document, runtime, encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
   return { panel, nodes, calls, chats, writes, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
@@ -561,4 +562,31 @@ test('a failed image upload never sends the text alone or creates an uncertain m
   f.panel.select('b');await settle();f.nodes.get('imageFiles').files=[{type:'image/png'}];f.nodes.get('imageFiles').fire('change');await settle();
   f.nodes.get('message').value='Keep image';f.nodes.get('composer').fire('submit');await settle();await settle();
   assert.equal(f.calls.some(c=>c.operation==='conversationSend'),false);assert.equal(f.nodes.get('send').disabled,false);assert.equal(f.nodes.get('message').value,'Keep image');assert.equal(f.nodes.get('attachmentDrafts').hidden,false);f.panel.close();
+});
+
+test('opening the panel never starts a CLI the user has not picked', async () => {
+  const installed=[{id:'codex',name:'Codex',executable:'/usr/local/bin/codex'},{id:'claude',name:'Claude Code',executable:'/usr/local/bin/claude'}];
+  const f=await fixture({hiddenNodes:['agentsView'],discover:()=>({success:true,result:{agents:installed}}),agentInspect:()=>{throw new Error('probe started');}});
+  assert.equal(f.calls.filter(call=>call.operation==='agentInspect').length,0);
+  assert.match(f.nodes.get('modelStatus').textContent,/not been checked/);f.panel.close();
+});
+
+test('the saved agent is restored and only its CLI is read', async () => {
+  const f=await fixture({agentInspect:params=>({success:true,result:{inspection:{agentId:params.agentId,models:[],account:{status:'unverified'},complete:true}}})},{ab_panel_agent:'claude'});
+  assert.equal(f.nodes.get('agent').value,'claude');
+  assert.deepEqual(f.calls.filter(call=>call.operation==='agentInspect').map(call=>call.params.agentId),['claude']);
+  f.nodes.get('agent').value='codex';f.nodes.get('agent').fire('change');await settle();
+  assert.ok(f.writes.some(write=>write.ab_panel_agent==='codex'));f.panel.close();
+});
+
+test('without a saved choice the agent of the latest conversation is used', async () => {
+  const f=await fixture({conversationList:()=>({success:true,result:{conversations:[{...chat('old'),agentId:'codex',updated:1},{...chat('new'),agentId:'claude',updated:2}]}}),
+    agentInspect:params=>({success:true,result:{inspection:{agentId:params.agentId,models:[],account:{status:'unverified'},complete:true}}})});
+  assert.equal(f.nodes.get('agent').value,'claude');
+  assert.deepEqual(f.calls.filter(call=>call.operation==='agentInspect').map(call=>call.params.agentId),['claude']);f.panel.close();
+});
+
+test('a failed CLI read says why', async () => {
+  const f=await fixture({agentInspect:()=>({success:false,error:'The system stopped this CLI as soon as it started'})},{ab_panel_agent:'codex'});
+  assert.match(f.nodes.get('modelStatus').textContent,/stopped this CLI as soon as it started/);f.panel.close();
 });

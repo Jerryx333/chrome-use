@@ -33,6 +33,9 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   let convertingImages = false, skillCatalog = [], skillsEpoch = 0, skillChoice = null, visibleSkills = [], skillPickerIndex = 0;
   let schedules = [], schedulesEpoch = 0, settingsSection = 'agents';
   let optionsOwner = null;
+  // The agent the user picked, sent with, or last chatted with. Only that
+  // agent's CLI is started on its own; others wait for an explicit check.
+  let preferredAgent = '';
   let modelEpoch = 0, newFullAccess = true, page = null, pageDetached = false, scope = 'site';
   let sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
   const rendered = new Map(), requestNodes = new Map(), queuedNodes = new Map();
@@ -71,7 +74,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     nodes.connection.textContent = connected ? 'Local bridge connected' : state?.connectionState === 'connecting' ? 'Waiting for local bridge…' : state?.connectionError || 'Local bridge unavailable. Run chrome-use extension install, then refresh.';
     if (connected && !panelSupport) nodes.connection.textContent = 'Bridge connected. Update the chrome-use CLI, then refresh to enable the agent panel.';
     if (connected && panelSupport?.mode === 'readOnly') nodes.connection.textContent = 'Connected. This Windows panel is read-only; browser CLI automation remains available.';
-    const previousAgent = nodes.agent.value;
+    const previousAgent = nodes.agent.value || preferredAgent;
     const supported = panelSupport?.chatAgents || ['codex', 'claude'];
     nodes.agent.replaceChildren(...supported.filter(id => chatAgents.has(id)).map(id => { const option = element('option', agentNames[id]); option.value = id; return option; }));
     nodes.agent.value = supported.includes(previousAgent) ? previousAgent : supported[0] || '';
@@ -208,7 +211,12 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   }
   async function list() {
     const result = await api('conversationList'); conversations = result.conversations; conversationChoices();
+    if (preferredAgent) return;
+    const latest = conversations.filter(chat => [...nodes.agent.querySelectorAll('option')].some(option => option.value === chat.agentId)).sort((a, b) => (b.updated || 0) - (a.updated || 0))[0];
+    if (latest && !selected && nodes.agent.value !== latest.agentId) { nodes.agent.value = latest.agentId; clearModels(); }
+    if (latest) preferredAgent = latest.agentId;
   }
+  function rememberAgent(agentId) { preferredAgent = agentId; storage?.local?.set({ ab_panel_agent: agentId }).catch(() => {}); }
   function renderTimeline() {
     const follow = nodes.transcript.scrollHeight - nodes.transcript.scrollTop - nodes.transcript.clientHeight < 80;
     nodes.empty.hidden = timeline.rows.length > 0;
@@ -480,7 +488,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         if (panelSupport?.conversationOptions) options.options = readTurnOptions();
         if (nodes.executable.value.trim()) options.executable = nodes.executable.value.trim();
         if (panelSupport?.fullAccess) options.fullAccess = newFullAccess;
-        const result = await api('conversationCreate', options); conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        const result = await api('conversationCreate', options); rememberAgent(options.agentId); conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
       }
       const id = selected, pending = { id: crypto.randomUUID(), text, direct };
       imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();
@@ -602,13 +610,13 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       const inspection = await readInspection(agentId, executable, force);
       if (closed || epoch !== modelEpoch || agentId !== nodes.agent.value || executable !== nodes.executable.value.trim() || inspection.agentId !== agentId) return;
       showInspection(inspection);
-    } catch (failure) { if (epoch === modelEpoch) nodes.modelStatus.textContent = 'Model metadata unavailable. No fallback list was substituted; you can still enter a custom model ID.'; throw failure; }
+    } catch (failure) { if (epoch === modelEpoch) nodes.modelStatus.textContent = `Model metadata unavailable: ${failure?.message || 'the CLI did not answer'}. No fallback list was substituted; you can still enter a custom model ID.`; throw failure; }
     finally { if (epoch === modelEpoch) nodes.inspectAgent.disabled = false; }
   }
   // Read the menu automatically for a new conversation; failures stay in the
   // status line instead of interrupting the panel.
   function loadModels() {
-    if (selected || !nodes.agent.value || !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) return;
+    if (selected || !nodes.agent.value || nodes.agent.value !== preferredAgent || !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) return;
     void inspectModels(false).catch(() => {});
   }
   let discoverEpoch = 0; const agentRows = new Map();
@@ -641,7 +649,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
       line.classList.toggle('signed-out', account.status === 'reportedSignedOut');
       mark(account.status === 'reportedSignedOut' ? 'signed-out' : account.status === 'reportedSignedIn' ? 'ready' : 'installed');
       line.title = 'Reported by the CLI. Model access is confirmed when a conversation runs.';
-    } catch { if (epoch === discoverEpoch) line.textContent = 'Installed · status unavailable'; }
+    } catch (failure) { if (epoch === discoverEpoch) { line.textContent = `Installed · status unavailable${failure?.message ? `: ${failure.message}` : ''}`; } }
   }
   async function discover() {
     const epoch = ++discoverEpoch;
@@ -895,7 +903,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
   nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
   nodes.inspectAgent.addEventListener('click', () => void inspectModels(true).catch(error));
-  nodes.agent.addEventListener('change', () => { clearModels(); loadModels(); skillChoice = null; void loadSkills().catch(error); controls(); });
+  nodes.agent.addEventListener('change', () => { rememberAgent(nodes.agent.value); clearModels(); loadModels(); skillChoice = null; void loadSkills().catch(error); controls(); });
   nodes.executable.addEventListener('change', () => { clearModels(); loadModels(); });
   nodes.discover.addEventListener('click', () => void discover().catch(error));
   nodes.settings.addEventListener('click', () => runtime?.openOptionsPage?.());
@@ -922,7 +930,8 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   controls(); closeConversationMenu();
   return { async start() {
     try {
-      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access', 'ab_panel_conversation_scope']);
+      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access', 'ab_panel_conversation_scope', 'ab_panel_agent']);
+      if (chatAgents.has(saved?.ab_panel_agent)) preferredAgent = saved.ab_panel_agent;
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
       selected = saved?.ab_panel_conversation || '';
       if (saved?.ab_panel_full_access === false) newFullAccess = false;
