@@ -229,7 +229,26 @@ pub(super) fn open_options(options: &mut std::fs::OpenOptions, private: bool) {
 }
 /// Set a protected owner-only DACL through the open handle, never a path alias.
 /// SYSTEM is retained for OS maintenance, equivalent to privileged Unix access.
+/// Protect through the handle, then read the ACL back. A first-use race can
+/// clear the protection between the two: when two requests create a private
+/// store at once, protecting a directory re-propagates its inheritable
+/// entries onto children a concurrent request has just protected. Only that
+/// readback failure is retried; a foreign owner, a non-file handle or any
+/// unexpected ACL entry still fails at once.
 pub(super) fn protect(file: &File) -> Result<(), String> {
+    let mut attempt = 0;
+    loop {
+        match protect_once(file) {
+            Err(error) if error == NOT_PROTECTED && attempt < 5 => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(10 * attempt));
+            }
+            result => return result,
+        }
+    }
+}
+const NOT_PROTECTED: &str = "Windows private ACL is not protected";
+fn protect_once(file: &File) -> Result<(), String> {
     info(file)?;
     let user = token_sid(TokenUser)?;
     let default_owner = token_sid(TokenOwner)?;
@@ -469,7 +488,7 @@ pub(super) fn verify_private(file: &File) -> Result<(), String> {
             || control & SE_DACL_PROTECTED == 0
             || dacl.is_null()
         {
-            return Err("Windows private ACL is not protected".into());
+            return Err(NOT_PROTECTED.into());
         }
         let mut details: ACL_SIZE_INFORMATION = std::mem::zeroed();
         if GetAclInformation(
