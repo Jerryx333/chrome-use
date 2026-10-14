@@ -123,3 +123,33 @@ export function api(b) {
 
 // Find a button in the frame by its text.
 export const byText = text => `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === ${JSON.stringify(text)})`;
+
+// Branded Chrome (stable) ignores --load-extension; it loads unpacked
+// extensions through CDP Extensions.loadUnpacked, which needs the pipe
+// transport and --enable-unsafe-extension-debugging. Same interface as launch().
+export async function launchPipe({ chrome, userDataDir, args = [], env = {} }) {
+  const proc = spawn(chrome, ['--remote-debugging-pipe', '--enable-unsafe-extension-debugging', `--user-data-dir=${userDataDir}`, '--no-first-run', '--no-default-browser-check', '--window-size=1280,900', ...args, 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
+  const toChrome = proc.stdio[3], fromChrome = proc.stdio[4];
+  let id = 0;
+  const pending = new Map();
+  const listeners = [];
+  let buf = '';
+  fromChrome.on('data', chunk => {
+    buf += chunk.toString('utf8');
+    let i;
+    while ((i = buf.indexOf('\0')) >= 0) {
+      const message = JSON.parse(buf.slice(0, i));
+      buf = buf.slice(i + 1);
+      if (message.id && pending.has(message.id)) { pending.get(message.id)(message); pending.delete(message.id); continue; }
+      for (const fn of listeners) fn(message);
+    }
+  });
+  const send = (method, params = {}, sessionId) => new Promise((resolve, reject) => {
+    const i = ++id;
+    const timer = setTimeout(() => { pending.delete(i); reject(new Error(`${method}: no reply in 30 s`)); }, 30000);
+    pending.set(i, m => { clearTimeout(timer); m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result); });
+    toChrome.write(JSON.stringify({ id: i, method, params, sessionId }) + '\0');
+  });
+  const version = await waitFor(() => send('Browser.getVersion'), { timeout: 20000, label: 'chrome over pipe' });
+  return { proc, send, listeners, version: version.product, close: () => { try { proc.kill('SIGKILL'); } catch {} } };
+}
