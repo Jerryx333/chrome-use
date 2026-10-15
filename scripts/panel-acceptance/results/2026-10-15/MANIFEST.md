@@ -37,4 +37,4 @@ Build host 192.168.0.190, 2026-10-15. Driver, fixtures and method: `scripts/pane
 | 20 | Late Begin across Stop | pass | 52 | results.json |  |
 | R | Real backends: scenarios 1, 4 and 12 | pass | 487.3 | results.json |  |
 
-Evidence per check: `checks[].evidence` in the result files. Side-panel screenshots: `panel-*.png` (the real side panel, not a tab).
+Evidence per check: `checks[].evidence` in the result files. Side-panel screenshots (`panel-*.png`, the real side panel, not a tab) are not committed (`*.png` is git-ignored); they stay next to the results on the build host (`~/panel-accept/repo/scripts/panel-acceptance/results/<date>/`).

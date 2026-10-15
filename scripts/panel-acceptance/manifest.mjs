@@ -35,7 +35,7 @@ for (const id of order) {
   const msg = (c.error || c.note || '').split('\n')[0].replace(/\|/g, '\\|').slice(0, 400);
   lines.push(`| ${id} | ${c.name} | ${c.status} | ${c.seconds} | ${c.file} | ${msg} |`);
 }
-lines.push('', 'Evidence per check: `checks[].evidence` in the result files. Side-panel screenshots: `panel-*.png` (the real side panel, not a tab).');
+lines.push('', 'Evidence per check: `checks[].evidence` in the result files. Side-panel screenshots (`panel-*.png`, the real side panel, not a tab) are not committed (`*.png` is git-ignored); they stay next to the results on the build host (`~/panel-accept/repo/scripts/panel-acceptance/results/<date>/`).');
 const findings = path.join(dir, 'findings.md');
 if (fs.existsSync(findings)) lines.push('', fs.readFileSync(findings, 'utf8').trim());
 fs.writeFileSync(path.join(dir, 'MANIFEST.md'), lines.join('\n') + '\n');
