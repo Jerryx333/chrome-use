@@ -193,17 +193,13 @@ pub(super) fn rebuild<'a>(
                 }
             }
             "turnEnded" => {
+                // Every lease of the ended turn still open was closed then;
+                // `openLeases` is only a bounded display list.
                 let message = d["messageId"].as_str().unwrap_or("");
-                let open: Vec<&str> = d["openLeases"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .collect();
-                for (id, lease) in leases.iter_mut() {
+                for lease in leases.values_mut() {
                     if lease.message_id == message {
                         lease.turn_ended = true;
-                        if lease.state == LeaseState::Open && open.contains(&id.as_str()) {
+                        if lease.state == LeaseState::Open {
                             lease.state = LeaseState::Unreported;
                         }
                     }
