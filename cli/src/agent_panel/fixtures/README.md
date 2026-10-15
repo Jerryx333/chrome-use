@@ -242,12 +242,19 @@ The only protocol trace is the error text (Codex "timed out awaiting
 tools/call", Claude "timed out after", Pi "MCP request timed out").
 
 Verdict for the generation-reuse allowlist (`GENERATION_REUSE` in
-`service.rs`): **no version qualifies.** Codex 0.162.1, Claude 2.1.300 and
-Pi 1.1.0 complete a turn with a chrome_use call still in flight past the
-client timeout, and the guard does not detect it. Pi also reports no version
-in its handshake. OpenCode 2.0.25 did not end a turn early in 150 s, but its
-limit, if any, is unknown and the panel cannot set it, and the service already
-retires any backend without a client timeout (`mcpToolTimeoutSecs: null`). The tests
-`mcp_client_timeouts_complete_the_turn_with_the_call_still_running` and
-`opencode_waits_for_a_slow_mcp_call` in `backend.rs` check these facts against
-the fixtures.
+`service.rs`): Codex 0.162.1, Claude 2.1.300 and Pi 1.1.0 complete a turn with
+a chrome_use call still in flight past the client timeout, and the open-tool
+guard alone does not detect it. The service therefore also retires a
+generation (reason `clientTimeout`) when a chrome_use call in the turn was
+closed by the client timeout, recognised by the error texts above
+(`client_timed_out`). With that check, Codex 0.162.1 and Claude 2.1.300 are
+allowlisted. Pi reports no version in its handshake, so it cannot be listed.
+OpenCode 2.0.25 did not end a turn early in 150 s, but its limit, if any, is
+unknown and the panel cannot set it, and the service retires any backend
+without a client timeout (`mcpToolTimeoutSecs: null`).
+
+Tests against these fixtures: `mcp_client_timeouts_complete_the_turn_with_the_call_still_running`
+and `opencode_waits_for_a_slow_mcp_call` in `backend.rs`;
+`only_versions_whose_timeouts_are_recognised_are_allowlisted` and
+`a_call_closed_by_the_client_timeout_retires_even_an_allowlisted_version` in
+`service.rs`.
