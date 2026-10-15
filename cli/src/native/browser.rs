@@ -2831,7 +2831,7 @@ pub(crate) static FAIL_NEXT_TAB_SWITCH_AFTER_PIN: std::sync::atomic::AtomicBool 
     std::sync::atomic::AtomicBool::new(false);
 
 /// The Chrome tab id a relay session id (`cb-tab-<tabId>`) belongs to.
-fn relay_chrome_tab_id(session_id: &str) -> Option<i64> {
+pub(crate) fn relay_chrome_tab_id(session_id: &str) -> Option<i64> {
     session_id.strip_prefix("cb-tab-")?.parse().ok()
 }
 
@@ -2934,6 +2934,37 @@ pub struct PageInfo {
     pub url: String,
     pub title: String,
     pub target_type: String, // "page" or "webview"
+}
+
+/// A page named in a side-panel action's `actionContext`. `provenance` says
+/// where it came from: `daemonState` is the page this session's tools were
+/// pointed at, which is not proof of an effect; `actionReply` is a page the
+/// command's own reply named (where a navigation landed, an adopted pop-up, a
+/// confirmed tab switch).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActingTarget {
+    /// Chrome's own tab id, from a relay session id (`cb-tab-<id>`). Null on
+    /// a browser chrome-use launched.
+    pub chrome_tab_id: Option<i64>,
+    pub tab_ref: String,
+    pub target_id: String,
+    pub url: String,
+    pub title: Option<String>,
+    pub provenance: &'static str,
+}
+
+impl ActingTarget {
+    fn of(page: &PageInfo) -> Self {
+        Self {
+            chrome_tab_id: relay_chrome_tab_id(&page.session_id),
+            tab_ref: format_tab_id(page.tab_id),
+            target_id: page.target_id.clone(),
+            url: page.url.clone(),
+            title: Some(page.title.clone()).filter(|t| !t.is_empty()),
+            provenance: "daemonState",
+        }
+    }
 }
 
 /// Canonical string form of a stable tab id: `t1`, `t2`, ... The `t` prefix
@@ -7101,6 +7132,54 @@ impl BrowserManager {
             page.target_id.clone(),
             page.url.clone(),
         ))
+    }
+
+    /// The page this session's tools are pointed at, read from the manager's
+    /// own fields: no CDP call. See [`ActingTarget`].
+    pub fn acting_target(&self) -> Option<ActingTarget> {
+        self.pages
+            .get(self.resolved_active_index())
+            .map(ActingTarget::of)
+    }
+
+    /// A manager on `url` (see [`fake_cdp`]) holding `pages`, pinned to the
+    /// first one.
+    #[cfg(test)]
+    pub(crate) async fn for_test(url: &str, pages: Vec<PageInfo>) -> Self {
+        Self {
+            client: Arc::new(CdpClient::connect(url).await.unwrap()),
+            browser_process: None,
+            ws_url: url.to_string(),
+            next_tab_id: pages.iter().map(|p| p.tab_id + 1).max().unwrap_or(1),
+            active_target_id: pages.first().map(|p| p.target_id.clone()),
+            pages,
+            active_page_index: 0,
+            default_timeout_ms: 25_000,
+            download_path: None,
+            ignore_https_errors: false,
+            visited_origins: HashSet::new(),
+            created_targets: HashSet::new(),
+            adopted_targets: HashSet::new(),
+            forced_targets: HashMap::new(),
+            dropped_chrome_tabs: HashMap::new(),
+            relay_target_misses: HashMap::new(),
+            relay_scoped: false,
+            lost_tab_refs: Vec::new(),
+            capture_console: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_active_for_test(&mut self, target_id: &str) {
+        self.active_target_id = Some(target_id.to_string());
+    }
+
+    /// The session's page with this tab ref (`t3`), from its own fields.
+    pub fn tab_target(&self, tab_ref: &str) -> Option<ActingTarget> {
+        self.pages
+            .iter()
+            .find(|p| format_tab_id(p.tab_id) == tab_ref)
+            .map(ActingTarget::of)
     }
 
     pub fn tab_list(&self) -> Vec<Value> {
@@ -12735,11 +12814,7 @@ mod first_tab_custody_tests {
                         if let Some(sid) = req.get("sessionId") {
                             out["sessionId"] = sid.clone();
                         }
-                        if ws
-                            .send(Message::Text(out.to_string().into()))
-                            .await
-                            .is_err()
-                        {
+                        if ws.send(Message::Text(out.to_string())).await.is_err() {
                             return;
                         }
                     }
@@ -13514,5 +13589,117 @@ mod relay_upload_tests {
         want.sort();
         assert_eq!(got, want);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// A CDP endpoint for unit tests: answers every command with `{}` and logs
+/// each method it was sent, so a test can assert on the traffic a change adds.
+#[cfg(test)]
+pub(crate) mod fake_cdp {
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use std::sync::{Arc, Mutex};
+    use tokio_tungstenite::tungstenite::Message;
+
+    pub(crate) type Log = Arc<Mutex<Vec<String>>>;
+
+    /// The endpoint's ws url, and its log of received methods.
+    pub(crate) async fn start() -> (String, Log) {
+        let log: Log = Arc::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let seen = log.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let seen = seen.clone();
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        let Message::Text(text) = msg else { continue };
+                        let req: Value = serde_json::from_str(&text).unwrap();
+                        seen.lock()
+                            .unwrap()
+                            .push(req["method"].as_str().unwrap_or("").to_string());
+                        let mut out = json!({"id": req["id"], "result": {}});
+                        if let Some(sid) = req.get("sessionId") {
+                            out["sessionId"] = sid.clone();
+                        }
+                        if ws
+                            .send(Message::Text(out.to_string().into()))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (url, log)
+    }
+}
+
+#[cfg(test)]
+mod acting_target_tests {
+    use super::*;
+
+    fn page(tab_id: u32, session_id: &str, title: &str) -> PageInfo {
+        PageInfo {
+            tab_id,
+            label: None,
+            target_id: format!("T{tab_id}"),
+            session_id: session_id.to_string(),
+            url: format!("https://example.test/{tab_id}"),
+            title: title.to_string(),
+            target_type: "page".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_relay_session_names_its_chrome_tab() {
+        let (url, log) = fake_cdp::start().await;
+        let mgr = BrowserManager::for_test(
+            &url,
+            vec![
+                page(1, "cb-tab-1655536344", "Shop"),
+                page(2, "cb-tab-7", ""),
+            ],
+        )
+        .await;
+        assert_eq!(
+            mgr.acting_target(),
+            Some(ActingTarget {
+                chrome_tab_id: Some(1655536344),
+                tab_ref: "t1".into(),
+                target_id: "T1".into(),
+                url: "https://example.test/1".into(),
+                title: Some("Shop".into()),
+                provenance: "daemonState",
+            })
+        );
+        let other = mgr.tab_target("t2").unwrap();
+        assert_eq!(other.chrome_tab_id, Some(7));
+        assert_eq!(other.title, None, "an empty title is unknown, not \"\"");
+        assert!(mgr.tab_target("t9").is_none());
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "reading the target sent CDP"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_launched_browser_has_no_chrome_tab_id() {
+        let (url, _) = fake_cdp::start().await;
+        let mgr = BrowserManager::for_test(&url, vec![page(1, "8F3A2C", "x")]).await;
+        let target = mgr.acting_target().unwrap();
+        assert_eq!(target.chrome_tab_id, None);
+        assert_eq!(
+            serde_json::to_value(&target).unwrap()["chromeTabId"],
+            Value::Null
+        );
+        let empty = BrowserManager::for_test(&url, Vec::new()).await;
+        assert!(empty.acting_target().is_none());
     }
 }

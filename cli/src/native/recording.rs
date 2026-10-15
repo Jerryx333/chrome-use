@@ -46,6 +46,24 @@ pub fn recording_start(state: &mut RecordingState, path: &str) -> Result<Value, 
     Ok(json!({ "started": true, "path": path }))
 }
 
+/// `record stop --expect-path <p>`: refuse unless the active recording writes
+/// to exactly `p` (byte for byte, no path normalization).
+pub fn check_expected_path(state: &RecordingState, expected: Option<&str>) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    if !state.active {
+        return Err("No recording in progress".to_string());
+    }
+    if state.output_path != expected {
+        return Err(format!(
+            "The active recording writes to {}, not {expected}; it was not stopped",
+            state.output_path
+        ));
+    }
+    Ok(())
+}
+
 pub fn recording_stop(state: &mut RecordingState) -> Result<Value, String> {
     if !state.active {
         return Err("No recording in progress".to_string());
@@ -253,6 +271,23 @@ mod tests {
         assert!(state.active);
         assert_eq!(state.output_path, "/tmp/test.mp4");
         assert_eq!(state.frame_count, 0);
+    }
+
+    #[test]
+    fn a_stop_for_another_recording_leaves_this_one_running() {
+        let mut state = RecordingState::new();
+        assert!(check_expected_path(&state, None).is_ok());
+        assert!(check_expected_path(&state, Some("/w/a/recording.webm"))
+            .unwrap_err()
+            .contains("No recording in progress"));
+        recording_start(&mut state, "/w/b/recording.webm").unwrap();
+        let err = check_expected_path(&state, Some("/w/a/recording.webm")).unwrap_err();
+        assert!(err.contains("not stopped"), "{err}");
+        // Byte for byte: an equivalent spelling of the path is a different path.
+        assert!(check_expected_path(&state, Some("/w/b/./recording.webm")).is_err());
+        assert!(state.active);
+        assert!(check_expected_path(&state, Some("/w/b/recording.webm")).is_ok());
+        assert!(check_expected_path(&state, None).is_ok());
     }
 
     #[test]
