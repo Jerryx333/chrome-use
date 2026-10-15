@@ -594,7 +594,10 @@ impl From<&str> for StartFailure {
 /// and what happens when the MCP client times out a chrome_use call (plan
 /// D1a rule 3). Only these keep their process after a cleanly completed
 /// turn; every other version, or a missing version, retires its generation
-/// after every turn. No fixture records the client-timeout behaviour yet.
+/// after every turn. The `*-mcp-timeout` fixtures show that none qualifies:
+/// Codex 0.162.1, Claude 2.1.300 and Pi 1.1.0 close a timed-out call as a
+/// failed tool and complete the turn while the MCP server still runs it, so
+/// the open-tool guard cannot see it (`fixtures/README.md`).
 const GENERATION_REUSE: &[(&str, &str)] = &[];
 
 const NOT_RESUMABLE: &str =
@@ -4500,5 +4503,12 @@ mod turn_tests {
         c.notice("terminal", json!({"status":"interrupted","error":null}))
             .await;
         assert!(c.engine.lock().await.admits(&c.id, 0).is_err(), "retired");
+    }
+
+    #[test]
+    fn versions_seen_completing_with_a_call_in_flight_are_not_allowlisted() {
+        for entry in [("codex", "0.162.1"), ("claude", "2.1.300")] {
+            assert!(!GENERATION_REUSE.contains(&entry), "{entry:?}");
+        }
     }
 }

@@ -1808,12 +1808,15 @@ mod tests {
     }
 
     // OpenCode 2.0.25 takes no client timeout from the ACP server entry and
-    // ignored `experimental.mcp_timeout`: the turn waited for the slow call.
+    // ignored `experimental.mcp_timeout`: the turn waited for the slow call,
+    // both with 5 s configured (20 s call) and with nothing set (150 s call).
     #[test]
     fn opencode_waits_for_a_slow_mcp_call() {
-        let s = slow_call("opencode-mcp-timeout.mcp.jsonl");
-        assert!(s.cancelled.is_none());
-        assert!(s.call < s.reply && s.reply < s.turn_ended);
+        for name in ["opencode-mcp-timeout", "opencode-mcp-timeout-default"] {
+            let s = slow_call(&format!("{name}.mcp.jsonl"));
+            assert!(s.cancelled.is_none(), "{name}");
+            assert!(s.call < s.reply && s.reply < s.turn_ended, "{name}");
+        }
         let lines = fixture("opencode-mcp-timeout.jsonl");
         assert_eq!(lines[0]["result"]["agentInfo"]["version"], "2.0.25");
     }

@@ -1,0 +1,14 @@
+{"at":1792029821119,"direction":"in","value":{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"elicitation":{"form":{"applyDefaults":true},"url":{}},"roots":{}},"clientInfo":{"name":"opencode","version":"2.0.25"}},"jsonrpc":"2.0","id":0}}
+{"at":1792029821119,"direction":"out","value":{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"chrome_use","version":"0.0.0-fixture"}}}}
+{"at":1792029821121,"direction":"in","value":{"jsonrpc":"2.0","method":"notifications/initialized"}}
+{"at":1792029821121,"direction":"in","value":{"method":"tools/list","jsonrpc":"2.0","id":1}}
+{"at":1792029821121,"direction":"out","value":{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"chrome_use_read","description":"Read the current page text. Returns a chrome-use action marker.","inputSchema":{"type":"object","properties":{}}},{"name":"chrome_use_shot","description":"Take a screenshot of the current page. Returns an image.","inputSchema":{"type":"object","properties":{}}},{"name":"chrome_use_wait","description":"Wait for the page to settle. Returns a chrome-use action marker.","inputSchema":{"type":"object","properties":{}}}]}}}
+{"at":1792029838442,"direction":"in","value":{"method":"tools/call","params":{"name":"chrome_use_read","arguments":{},"_meta":{"ai.opencode/sessionID":"ses_ec2b2f76fffeHAlYeK2v5lqElh","progressToken":2}},"jsonrpc":"2.0","id":2}}
+{"at":1792029838444,"direction":"out","value":{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"chrome-use action 11111111-2222-4333-8444-555555555555"},{"type":"text","text":"Page title: Fixture page. Body: hello from the stub."}],"structuredContent":{"chromeUseAction":{"actionId":"11111111-2222-4333-8444-555555555555"}},"isError":false}}}
+{"at":1792029844108,"direction":"in","value":{"method":"tools/call","params":{"name":"chrome_use_wait","arguments":{},"_meta":{"ai.opencode/sessionID":"ses_ec2b2f76fffeHAlYeK2v5lqElh","progressToken":3}},"jsonrpc":"2.0","id":3}}
+{"at":1792029994116,"direction":"out","value":{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"chrome-use action 77777777-6666-4555-8444-333333333333"},{"type":"text","text":"The page settled."}],"structuredContent":{"chromeUseAction":{"actionId":"77777777-6666-4555-8444-333333333333"}},"isError":false}}}
+{"at":1792030048054,"direction":"driver","value":"turn ended (turn)"}
+{"at":1792030203065,"direction":"driver","value":"second turn sent"}
+{"at":1792030210166,"direction":"driver","value":"turn ended (second)"}
+{"at":1792030213174,"direction":"driver","value":"finish: timeout run done"}
+{"at":1792030214755,"direction":"event","value":"stdin closed"}
