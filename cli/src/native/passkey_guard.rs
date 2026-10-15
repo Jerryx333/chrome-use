@@ -41,6 +41,17 @@
 //! (`navigator`, its `credentials`, `CredentialsContainer`), or hid `create`
 //! under too many proxies, the restore reports a guard may be left rather
 //! than calling the document clean.
+//!
+//! The guard is looked for on every object of the `[[Prototype]]` chains of
+//! `navigator.credentials` and of `CredentialsContainer.prototype`, not only
+//! where it was put: the page can move it deeper (onto a new object it puts
+//! between the prototype and `Object.prototype`). A chain the page reshaped
+//! is not itself a guard left: what fails the restore is a chain that cannot
+//! be walked through CDP (a proxy in it, more than 64 objects, an accessor
+//! `create`) or a `create` that, looked up from either root afterwards, still
+//! resolves to a guard of ours. A `create` that resolves to the page's own
+//! function is left as the page made it; a function of the page's that kept
+//! a guard of ours to call is beyond what CDP can see.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -533,22 +544,106 @@ async fn sweep_frame(
     if !secure {
         return Outcome::Clean;
     }
-    let holders = match holders(client, session, frame, root).await {
-        Ok(Some(h)) => h,
+    let roots = match holders(client, session, frame, root).await {
+        Ok(Some(r)) => r,
         Ok(None) => return Outcome::Clean,
         Err(e) if gone(&e) => return Outcome::Gone,
         Err(e) => return Outcome::Failed(e),
     };
-    let mut out = Outcome::Clean;
-    for holder in holders {
-        match restore_slot(client, session, &holder, &[], key).await {
-            Ok(true) => out = Outcome::Restored,
-            Ok(false) => {}
-            Err(e) if gone(&e) => return Outcome::Gone,
-            Err(e) => return Outcome::Failed(e),
+    match sweep_chains(client, session, &roots, key).await {
+        Ok(true) => Outcome::Restored,
+        Ok(false) => Outcome::Clean,
+        Err(e) if gone(&e) => Outcome::Gone,
+        Err(e) => Outcome::Failed(e),
+    }
+}
+
+/// Take our guards off every object on the `[[Prototype]]` chains of
+/// `roots` (`navigator.credentials` and `CredentialsContainer.prototype`),
+/// then check that `create`, looked up from each root the way the page
+/// would, is no guard of ours. Ok(true) when one was taken off.
+///
+/// Round 9: the page can move the guard deeper, where none of the objects
+/// we know has an own `create` (a new object between the prototype and
+/// `Object.prototype` holding it, `delete` on the prototype). The whole chain
+/// is walked instead. A chain the page reshaped is not a guard left: it
+/// fails only when it cannot be walked (a proxy in it, more than [`CHAIN`]
+/// objects, an accessor `create`) or `create` still resolves to ours.
+async fn sweep_chains(
+    client: &CdpClient,
+    session: &str,
+    roots: &[String],
+    key: &str,
+) -> Result<bool, String> {
+    let mut restored = false;
+    for r in roots {
+        for holder in chain(client, session, r).await? {
+            restored |= restore_slot(client, session, &holder, &[], key).await?;
         }
     }
-    out
+    for r in roots {
+        if let Some(top) = resolve_create(client, session, r).await? {
+            if find_ours(client, session, &top, &[], key).await?.is_some() {
+                return Err(
+                    "create() still resolves to a guard of ours; reload the page to \
+                            get the original back"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    Ok(restored)
+}
+
+/// How many objects of a `[[Prototype]]` chain are walked. A longer chain
+/// may hide a guard: reported, never taken for clean.
+const CHAIN: usize = 64;
+
+/// `start` and every object on its `[[Prototype]]` chain, through CDP (no
+/// `getPrototypeOf` trap or builtin of the page's runs). Err when the chain
+/// has a proxy, whose traps decide what `create` is, or is longer than
+/// [`CHAIN`].
+async fn chain(client: &CdpClient, session: &str, start: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut next = Some(start.to_string());
+    while let Some(object) = next {
+        if out.len() == CHAIN {
+            return Err(format!(
+                "the credentials prototype chain is longer than {CHAIN} objects, so a \
+                 create() guard there cannot be looked for; reload the page to get the \
+                 original back"
+            ));
+        }
+        let props = own_props(client, session, &object, false).await?;
+        if internal(&props, "[[Target]]").is_some() {
+            return Err(
+                "the page put a proxy in the credentials prototype chain, so a create() \
+                 guard there cannot be looked for; reload the page to get the original back"
+                    .to_string(),
+            );
+        }
+        next = internal(&props, "[[Prototype]]");
+        out.push(object);
+    }
+    Ok(out)
+}
+
+/// What `create` on `start` resolves to, found the way a property lookup
+/// goes but through CDP: the first own `create` along the chain. Ok(None)
+/// when there is none or it is no object. Err as for [`chain`] and
+/// [`own_create`].
+async fn resolve_create(
+    client: &CdpClient,
+    session: &str,
+    start: &str,
+) -> Result<Option<String>, String> {
+    for holder in chain(client, session, start).await? {
+        let props = own_props(client, session, &holder, false).await?;
+        if prop(&props, "create").is_some() {
+            return own_create(client, session, &holder).await;
+        }
+    }
+    Ok(None)
 }
 
 /// Own properties of `object` through CDP (no getter of the page's runs).
@@ -589,17 +684,17 @@ fn internal(props: &Value, name: &str) -> Option<String> {
 /// `Object.getPrototypeOf` after the install hid them): the global object
 /// from a function of our own, `navigator` and `CredentialsContainer` as
 /// Chrome's own values on it, `navigator.credentials` through Chrome's own
-/// getter, and the `[[Prototype]]`s from CDP. Returns
-/// `CredentialsContainer.prototype` (by the interface, and the instance's
-/// `[[Prototype]]` in case the page changed it) and the instance; Ok(None)
-/// when the frame has no document here. Err when the page replaced one of
+/// getter. Returns the instance and `CredentialsContainer.prototype` (by
+/// the interface, in case the page took it off the instance's chain), the
+/// roots of the chains [`sweep_chains`] walks; Ok(None) when the frame has
+/// no document here. Err when the page replaced one of
 /// them, since then a guard may be where we cannot look.
 async fn holders(
     client: &CdpClient,
     session: &str,
     frame: &str,
     root: bool,
-) -> Result<Option<Vec<String>>, String> {
+) -> Result<Option<[String; 2]>, String> {
     const GLOBAL: &str = "function () { return (function () { return this; })(); }";
     let replaced = |what: &str| {
         format!(
@@ -707,15 +802,7 @@ async fn holders(
     let Some(instance) = object_id(&r) else {
         return Err(replaced("navigator.credentials"));
     };
-    let mut out = vec![prototype];
-    if let Some(p) = internal(
-        &own_props(client, session, &instance, false).await?,
-        "[[Prototype]]",
-    ) {
-        out.push(p);
-    }
-    out.push(instance);
-    Ok(Some(out))
+    Ok(Some([instance, prototype]))
 }
 
 /// The current own data value of `create` on `holder`, read through CDP
@@ -812,11 +899,44 @@ async fn restore_slot(
     let Some(top) = own_create(client, session, holder).await? else {
         return Ok(false);
     };
-    // Every guard of ours on top comes off (a navigation between registering
-    // the new-document script and the install on the current page wraps
-    // twice); one of ours under a proxy of the page's is still in effect and
-    // not ours to unwrap.
-    let mut current = top;
+    let Some(original) = find_ours(client, session, &top, mine, key).await? else {
+        return Ok(false);
+    };
+    let put = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": holder,
+                // A plain assignment first: it needs no builtin the page may
+                // have replaced since.
+                "functionDeclaration": "function (original) { try { this.create = original; } catch (e) {} if (this.create === original) return; try { const d = Object.getOwnPropertyDescriptor(this, 'create'); Object.defineProperty(this, 'create', { __proto__: null, ...d, value: original }); } catch (e) {} }",
+                "arguments": [{ "objectId": original }],
+            })),
+            Some(session),
+        )
+        .await?;
+    if let Some(e) = threw(&put) {
+        return Err(e);
+    }
+    match own_create(client, session, holder).await? {
+        Some(now) if same(client, session, &original, &now).await? => Ok(true),
+        _ => Err("the page kept the create() guard".to_string()),
+    }
+}
+
+/// The `[[Target]]` of the guard of ours on top of `top`, looked through
+/// every proxy (a navigation between registering the new-document script
+/// and the install on the current page wraps twice). Ok(None) when none of
+/// ours is there; Err when one is under a proxy of the page's, so still in
+/// effect and not ours to unwrap, or may be (under more than [`DEPTH`]).
+async fn find_ours(
+    client: &CdpClient,
+    session: &str,
+    top: &str,
+    mine: &[&str],
+    key: &str,
+) -> Result<Option<String>, String> {
+    let mut current = top.to_string();
     let mut original = None;
     let mut wrapped = false;
     let mut depth = 0;
@@ -841,29 +961,7 @@ async fn restore_slot(
         }
         current = target;
     }
-    let Some(original) = original else {
-        return Ok(false);
-    };
-    let put = client
-        .send_command(
-            "Runtime.callFunctionOn",
-            Some(json!({
-                "objectId": holder,
-                // A plain assignment first: it needs no builtin the page may
-                // have replaced since.
-                "functionDeclaration": "function (original) { try { this.create = original; } catch (e) {} if (this.create === original) return; try { const d = Object.getOwnPropertyDescriptor(this, 'create'); Object.defineProperty(this, 'create', { __proto__: null, ...d, value: original }); } catch (e) {} }",
-                "arguments": [{ "objectId": original }],
-            })),
-            Some(session),
-        )
-        .await?;
-    if let Some(e) = threw(&put) {
-        return Err(e);
-    }
-    match own_create(client, session, holder).await? {
-        Some(now) if same(client, session, &original, &now).await? => Ok(true),
-        _ => Err("the page kept the create() guard".to_string()),
-    }
+    Ok(original)
 }
 
 #[cfg(test)]
@@ -1264,11 +1362,7 @@ process.stdout.write(JSON.stringify({{
         let client = CdpClient::connect(&url).await.unwrap();
         assert_eq!(
             holders(&client, "S", "F", true).await,
-            Ok(Some(vec![
-                "PROTO".to_string(),
-                "PROTO".to_string(),
-                "C".to_string()
-            ]))
+            Ok(Some(["C".to_string(), "PROTO".to_string()]))
         );
         for page in [
             json!({ "type": "function", "description": "get() { return {}; }" }),
@@ -1372,6 +1466,134 @@ process.stdout.write(JSON.stringify({{
         let mut seen = released.lock().unwrap().clone();
         seen.sort();
         assert_eq!(seen, vec![format!("S1:{GROUP}"), format!("S2:{GROUP}")]);
+    }
+
+    /// How the page arranged the chain for [`moved_guard`].
+    #[derive(Clone, Copy, PartialEq)]
+    enum Moved {
+        /// `C → PROTO → HIDDEN → OP`, our guard `G` (around `N`) on HIDDEN.
+        Deeper,
+        /// The same, with `create` an accessor on HIDDEN.
+        Accessor,
+        /// PROTO's `[[Prototype]]` a proxy around HIDDEN.
+        ProxyInChain,
+        /// 70 empty objects under C.
+        Long,
+        /// Deeper, and once HIDDEN is put back the page has put another
+        /// guard of ours, `G2`, on C.
+        Again,
+    }
+
+    /// A heap of objects for [`fake_cdp`] (round 9): the page moved our
+    /// guard off `CredentialsContainer.prototype` (PROTO) onto a new object
+    /// under it. Putting `N` back on HIDDEN takes.
+    fn moved_guard(how: Moved, key: &str) -> (Respond, Arc<std::sync::atomic::AtomicBool>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let key = key.to_string();
+        let put = Arc::new(AtomicBool::new(false));
+        let done = put.clone();
+        let respond: Respond = Arc::new(move |req| {
+            let id = req["params"]["objectId"].as_str().unwrap_or("");
+            let internal = |pairs: &[(&str, &str)]| -> Vec<Value> {
+                pairs
+                    .iter()
+                    .map(|(n, o)| json!({ "name": n, "value": { "objectId": o } }))
+                    .collect()
+            };
+            let object = |create: Option<Value>, proto: Option<&str>| {
+                json!({
+                    "result": create.map(|c| vec![c]).unwrap_or_default(),
+                    "internalProperties": internal(&proto.map(|p| vec![("[[Prototype]]", p)]).unwrap_or_default()),
+                })
+            };
+            let data = |o: &str| json!({ "name": "create", "value": { "objectId": o } });
+            let proxy = |target: &str, handler: &str| {
+                json!({ "result": [], "internalProperties":
+                    internal(&[("[[Target]]", target), ("[[Handler]]", handler)]) })
+            };
+            let put_now = put.load(Ordering::SeqCst);
+            Ok(match req["method"].as_str().unwrap_or("") {
+                "Runtime.getProperties" => match id {
+                    "C" if how == Moved::Long => object(None, Some("L1")),
+                    "C" if how == Moved::Again && put_now => {
+                        object(Some(data("G2")), Some("PROTO"))
+                    }
+                    "C" => object(None, Some("PROTO")),
+                    o if o.starts_with('L') => {
+                        let i: usize = o[1..].parse().unwrap();
+                        object(None, (i < 70).then(|| format!("L{}", i + 1)).as_deref())
+                    }
+                    "PROTO" if how == Moved::ProxyInChain => object(None, Some("PX")),
+                    "PROTO" => object(None, Some("HIDDEN")),
+                    "PX" => proxy("HIDDEN", "page"),
+                    "HIDDEN" if how == Moved::Accessor => object(
+                        Some(json!({ "name": "create",
+                            "get": { "type": "function", "objectId": "g" }, "set": { "type": "undefined" } })),
+                        Some("OP"),
+                    ),
+                    "HIDDEN" => object(Some(data(if put_now { "N" } else { "G" })), Some("OP")),
+                    "OP" => object(None, None),
+                    "G" | "G2" => proxy("N", "ours"),
+                    "ours" => {
+                        json!({ "result": [{ "name": key.as_str(), "value": { "value": 0 } }] })
+                    }
+                    _ => json!({ "result": [] }),
+                },
+                "Runtime.callFunctionOn" => {
+                    let f = req["params"]["functionDeclaration"].as_str().unwrap_or("");
+                    let arg = &req["params"]["arguments"][0]["objectId"];
+                    if f.contains("this.create = original") {
+                        if id == "HIDDEN" && *arg == "N" {
+                            put.store(true, Ordering::SeqCst);
+                        }
+                        json!({ "result": { "type": "undefined" } })
+                    } else {
+                        json!({ "result": { "value": *arg == req["params"]["objectId"] } })
+                    }
+                }
+                _ => json!({}),
+            })
+        });
+        (respond, done)
+    }
+
+    /// Round 9: a guard the page moved deeper in the prototype chain, where
+    /// none of the objects we know has an own `create`, is still found and
+    /// taken off; a chain that cannot be walked, or that still resolves to
+    /// a guard of ours afterwards, is reported, never clean.
+    #[tokio::test]
+    async fn a_guard_moved_down_the_prototype_chain_is_found() {
+        let key = new_key();
+        let roots = ["C".to_string(), "PROTO".to_string()];
+        let (respond, put) = moved_guard(Moved::Deeper, &key);
+        let (url, _) = fake_cdp(respond).await;
+        let client = CdpClient::connect(&url).await.unwrap();
+        assert_eq!(sweep_chains(&client, "S", &roots, &key).await, Ok(true));
+        assert!(put.load(std::sync::atomic::Ordering::SeqCst));
+        // Another install's key: nothing of ours, nothing written.
+        let (respond, put) = moved_guard(Moved::Deeper, &key);
+        let (url, _) = fake_cdp(respond).await;
+        let client = CdpClient::connect(&url).await.unwrap();
+        assert_eq!(
+            sweep_chains(&client, "S", &roots, &new_key()).await,
+            Ok(false)
+        );
+        assert!(!put.load(std::sync::atomic::Ordering::SeqCst));
+        for (how, want) in [
+            (Moved::Accessor, "accessor"),
+            (
+                Moved::ProxyInChain,
+                "proxy in the credentials prototype chain",
+            ),
+            (Moved::Long, "longer than 64 objects"),
+            (Moved::Again, "still resolves to a guard of ours"),
+        ] {
+            let (respond, _) = moved_guard(how, &key);
+            let (url, _) = fake_cdp(respond).await;
+            let client = CdpClient::connect(&url).await.unwrap();
+            let err = sweep_chains(&client, "S", &roots, &key).await.unwrap_err();
+            assert!(err.contains(want), "{want}: {err}");
+        }
     }
 
     #[test]

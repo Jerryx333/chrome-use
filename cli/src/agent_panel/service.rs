@@ -2804,6 +2804,21 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if args.len() != 4 || args[0] != "--profile" || args[2] != "--data-dir" {
         return Err("Invalid private agent-service startup arguments".into());
     }
+    // launchd starts a job as its own process-group leader inside launchd's
+    // session (sid 1), where `setsid` is refused. Its process records would
+    // then carry no session, and recovery could never prove an agent's group
+    // (plan 5.3). Start again detached in a session of its own and let the
+    // launchd job end; the new process takes the profile.
+    #[cfg(unix)]
+    if super::recovery::current_session().is_none() {
+        let executable =
+            std::env::current_exe().map_err(|_| "Cannot locate agent-service executable")?;
+        let arguments: Vec<std::ffi::OsString> = std::iter::once("__panel-service".into())
+            .chain(args.iter().map(Into::into))
+            .collect();
+        spawn_detached(&executable, &arguments)?;
+        return Ok(());
+    }
     let profile = args[1].clone();
     let root = PathBuf::from(&args[3]);
     let directory = profile_directory(&root, &profile)?;
