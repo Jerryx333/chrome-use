@@ -1,6 +1,8 @@
 //! OpenCode ACP v1 adapter. A private server belongs to this process group;
 //! only the prompt response confirms a turn's terminal outcome.
-use super::backend::{emit_text, notice, short, write, Command, Notice, Setup};
+use super::backend::{
+    compacted, emit_text, notice, opencode_tool_notice, short, write, Command, Notice, Setup,
+};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::Path, time::Duration};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -49,6 +51,7 @@ pub(super) async fn protocol(
     pid: u32,
     browser_env: Value,
     instructions: &str,
+    process: Value,
 ) -> Result<(), String> {
     write(input, initialize()).await?;
     let env: Vec<Value> = browser_env
@@ -62,6 +65,8 @@ pub(super) async fn protocol(
     let mut requests = HashMap::from([(1u64, "initialize".to_string())]);
     let mut next_id = 1u64;
     let mut images_supported = false;
+    let mut backend_version = Value::Null;
+    let mut resumable = false;
     let mut ready = false;
     let mut queued = None;
     let mut active: Option<u64> = None;
@@ -141,13 +146,17 @@ pub(super) async fn protocol(
                                 if item.get("rawOutput").is_some() { item["input"] = item["rawOutput"].clone(); }
                                 else if item.get("content").is_some() { item["input"] = item["content"].clone(); }
                                 let completed = ["completed","failed"].contains(&item["status"].as_str().unwrap_or(""));
-                                emit(events,"tool",json!({"completed":completed,"item":short(item)})).await?;
+                                events.send(opencode_tool_notice(completed,item)).await.map_err(|_| "Event consumer closed")?;
                                 if completed && update["toolCallId"].is_string() {
                                     let resolved: Vec<_> = permissions.iter().filter(|(_, (_, tool, sent))| *sent && *tool == update["toolCallId"]).map(|(key, (id, _, _))| (key.clone(),id.clone())).collect();
                                     for (key,id) in resolved { permissions.remove(&key); emit(events,"requestResolved",json!({"requestId":id})).await?; }
                                 }
                             }
-                            Some("session_info_update") => if let Some(title) = update["title"].as_str() { emit(events,"title",json!({"title":title})).await?; },
+                            Some("session_info_update") => {
+                                if let Some(title) = update["title"].as_str() { emit(events,"title",json!({"title":title})).await?; }
+                                let compaction = &update["_meta"]["opencode/compaction"];
+                                if compaction["status"] == "completed" { events.send(compacted("opencode",compaction["reason"].clone())).await.map_err(|_| "Event consumer closed")?; }
+                            }
                             _ => {}
                         }
                     }
@@ -169,6 +178,8 @@ pub(super) async fn protocol(
                     match method.as_str() {
                         "initialize" => {
                             images_supported = result["agentCapabilities"]["promptCapabilities"]["image"] == true;
+                            backend_version = result["agentInfo"]["version"].as_str().filter(|v| v.len() <= 64).map_or(Value::Null, |v| json!(v));
+                            resumable = result["agentCapabilities"]["sessionCapabilities"].get("resume").is_some_and(Value::is_object) || result["agentCapabilities"]["loadSession"] == true;
                             if result["protocolVersion"] != 1 { return Err("OpenCode did not negotiate ACP v1".into()); }
                             let method = if let Some(id) = &session {
                                 session_params["sessionId"] = json!(id);
@@ -202,7 +213,9 @@ pub(super) async fn protocol(
                         _ => {}
                     }
                     if ready && ["session/new","session/resume","session/load","session/set_config_option"].contains(&method.as_str()) {
-                        emit(events,"ready",json!({"sessionId":session,"model":selected_model,"pid":pid})).await?;
+                        let mut ready = json!({"sessionId":session,"model":selected_model,"pid":pid,"backendVersion":backend_version,"resumable":resumable});
+                        for (key, value) in process.as_object().into_iter().flatten() { ready[key] = value.clone(); }
+                        emit(events,"ready",ready).await?;
                     }
                 }
             }

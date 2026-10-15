@@ -25,6 +25,7 @@ mod native;
 mod opencli;
 mod output;
 mod ownership;
+mod panel_evidence;
 mod profiles;
 mod read;
 mod report;

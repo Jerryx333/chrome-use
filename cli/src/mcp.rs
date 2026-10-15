@@ -58,6 +58,10 @@ const TOOL_DOWNLOAD_URL: &str = "chrome_use_download_url";
 const TOOL_DOWNLOADS: &str = "chrome_use_downloads";
 const TOOL_DIAG_PAGES: &str = "chrome_use_diag_pages";
 
+// Panel conversations only (see `panel_tools`).
+const TOOL_TASK: &str = "chrome_use_task";
+const TOOL_RECORD: &str = "chrome_use_record";
+
 /// Which set of `chrome_use_*` tools this server instance exposes, chosen at
 /// startup via `chrome-use mcp --tools <core|all>` (default `core`).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -271,6 +275,14 @@ fn tools_for(profile: Profile) -> Vec<Value> {
     if profile.is_all() {
         tools.extend(extended_tools());
     }
+    for tool in &mut tools {
+        if crate::panel_evidence::OBSERVE_TOOLS.contains(&tool["name"].as_str().unwrap_or("")) {
+            tool["inputSchema"]["properties"]["observe"] = json!({
+                "type": "boolean",
+                "description": "Observe the action's effect (--observe): a page snapshot before and after, the change, and whether the page now waits for a person. Use it when the action should submit, save, pay or send, then confirm the effect with chrome_use_expect.",
+            });
+        }
+    }
     if crate::agent_panel::panel_mcp_context().is_some() {
         tools.extend(panel_tools());
     }
@@ -282,6 +294,8 @@ fn tools_for(profile: Profile) -> Vec<Value> {
 fn panel_tools() -> Vec<Value> {
     vec![
         json!({"name":"chrome_use_skills","description":"List skills, read a skill or a selected skill's relative text asset, or save a profile-library skill when the user asks. Asset reads need path; omit id for the active message's selected skill. Scheduled chats may only list and read.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","read","save"]},"id":{"type":"string"},"path":{"type":"string"},"name":{"type":"string"},"content":{"type":"string"}},"required":["action"],"additionalProperties":false}}),
+        json!({"name":TOOL_TASK,"description":"Before your final answer, record how the user's request went. List each thing the user asked for as a requirement marked met, unmet or unknown. A requirement marked met needs a check from a browser action of this request: an expect (its predicate text and action id), a readBack (the field and the fill/type action id), a urlMatch (the URL and the navigation's action id) or a downloadType (the expected MIME type and the artifact id). Never mark met what no check showed. If you cannot continue, set status blocked and give the blocker.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["assess"]},"status":{"type":"string","enum":["complete","partial","blocked","failed"]},"reason":{"type":"string"},"requirements":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string"},"status":{"type":"string","enum":["met","unmet","unknown"]},"check":{"type":"object","properties":{"kind":{"type":"string","enum":["expect","readBack","urlMatch","downloadType"]},"predicate":{"type":"string"},"evidence":{"type":"string","description":"The action id (chrome-use action <id>) or artifact id that ran the check."}},"required":["kind","predicate","evidence"],"additionalProperties":false}},"required":["text","status"],"additionalProperties":false}},"blocker":{"type":"object","properties":{"kind":{"type":"string","enum":["humanCheck","login","permission","missingInput","siteError","other"]},"text":{"type":"string"}},"required":["kind","text"],"additionalProperties":false}},"required":["action","status","requirements"],"additionalProperties":false}}),
+        json!({"name":TOOL_RECORD,"description":"Record the browser while you work, only when the user turned on recording for this message. start returns the recording's artifact id; stop finishes it. A finished answer does not mean the recording is ready.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["start","stop"]},"artifactId":{"type":"string"}},"required":["action"],"additionalProperties":false}}),
         json!({"name":"chrome_use_schedules","description":"Manage recurring prompts only at the user's request. Times are host-local. A schedule cannot gain tools or automatic approval beyond this conversation. Scheduled chats may only list. A dispatched run is not a completed task.","inputSchema":{"type":"object","properties":{"action":{"type":"string","enum":["list","save","delete","run"]},"id":{"type":"string"},"name":{"type":"string"},"prompt":{"type":"string"},"agentId":{"type":"string"},"model":{"type":["string","null"]},"options":{"type":"object","properties":{"effort":{"type":["string","null"]},"serviceTier":{"type":["string","null"]},"toolAccess":{"type":"string","enum":["browserOnly","readFiles","writeFiles","runCommands"]}},"additionalProperties":false},"fullAccess":{"type":"boolean"},"enabled":{"type":"boolean"},"skillId":{"type":["string","null"]},"rule":{"type":"object","properties":{"kind":{"type":"string","enum":["interval","daily","weekdays","cron"]},"minutes":{"type":"integer","minimum":1},"time":{"type":"string"},"expression":{"type":"string"}},"required":["kind"],"additionalProperties":false}},"required":["action"],"additionalProperties":false}}),
     ]
 }
@@ -685,7 +699,13 @@ fn obj(pairs: &[(&str, Value)]) -> serde_json::Map<String, Value> {
 
 fn is_known_tool(name: &str, profile: Profile) -> bool {
     if crate::agent_panel::panel_mcp_context().is_some()
-        && ["chrome_use_skills", "chrome_use_schedules"].contains(&name)
+        && [
+            "chrome_use_skills",
+            "chrome_use_schedules",
+            TOOL_TASK,
+            TOOL_RECORD,
+        ]
+        .contains(&name)
     {
         return true;
     }
@@ -757,6 +777,34 @@ fn call_tool(params: Option<&Value>, profile: Profile) -> Result<Value, Protocol
                 Err(error) => json!({"content":[{"type":"text","text":error}],"isError":true}),
             })
         }
+        TOOL_TASK | TOOL_RECORD => {
+            let Some(context) = crate::panel_evidence::context() else {
+                return Ok(
+                    json!({"content":[{"type":"text","text":"This tool is available only in a bound agent-panel conversation"}],"isError":true}),
+                );
+            };
+            if name == TOOL_TASK {
+                return Ok(crate::panel_evidence::call_task(&context, arguments));
+            }
+            crate::panel_evidence::call_record(&context, arguments, |args| {
+                run_tool(arguments, args)
+            })
+        }
+        // In a panel conversation every browser tool runs under an action
+        // lease (panel_evidence); elsewhere it runs as before.
+        _ => match crate::panel_evidence::context() {
+            Some(context) => {
+                crate::panel_evidence::run_leased(&context, name, arguments, |arguments, env| {
+                    with_cli_env(env, || call_browser_tool(name, arguments))
+                })
+            }
+            None => call_browser_tool(name, arguments),
+        },
+    }
+}
+
+fn call_browser_tool(name: &str, arguments: &Value) -> Result<Value, ProtocolError> {
+    match name {
         TOOL_OPEN => call_open(arguments),
         TOOL_READ => call_read(arguments),
         TOOL_SNAPSHOT => call_snapshot(arguments),
@@ -766,9 +814,9 @@ fn call_tool(params: Option<&Value>, profile: Profile) -> Result<Value, Protocol
         TOOL_PRESS => call_press(arguments),
         TOOL_EVAL => call_eval(arguments),
         TOOL_WAIT => call_wait(arguments),
-        TOOL_BACK => call_literal(arguments, &["back"]),
-        TOOL_FORWARD => call_literal(arguments, &["forward"]),
-        TOOL_RELOAD => call_literal(arguments, &["reload"]),
+        TOOL_BACK => call_observed(arguments, "back"),
+        TOOL_FORWARD => call_observed(arguments, "forward"),
+        TOOL_RELOAD => call_observed(arguments, "reload"),
         TOOL_HOVER => call_hover(arguments),
         TOOL_SELECT => call_select(arguments),
         TOOL_SCREENSHOT => call_screenshot(arguments),
@@ -789,8 +837,19 @@ fn call_tool(params: Option<&Value>, profile: Profile) -> Result<Value, Protocol
     }
 }
 
-fn call_literal(arguments: &Value, parts: &[&str]) -> Result<Value, ProtocolError> {
-    run_tool(arguments, parts.iter().map(|s| s.to_string()).collect())
+/// `back`, `forward`, `reload`: a bare command that may observe its effect.
+fn call_observed(arguments: &Value, command: &str) -> Result<Value, ProtocolError> {
+    let mut args = vec![command.to_string()];
+    push_observe(&mut args, arguments)?;
+    run_tool(arguments, args)
+}
+
+/// `observe: true` on an acting tool maps to `--observe`.
+fn push_observe(args: &mut Vec<String>, arguments: &Value) -> Result<(), ProtocolError> {
+    if optional_bool(arguments, "observe")?.unwrap_or(false) {
+        args.push("--observe".to_string());
+    }
+    Ok(())
 }
 
 fn call_open(arguments: &Value) -> Result<Value, ProtocolError> {
@@ -816,6 +875,7 @@ fn call_open(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push(label);
         }
     }
+    push_observe(&mut args, arguments)?;
     run_tool(arguments, args)
 }
 
@@ -938,6 +998,7 @@ fn call_click(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push("--force".to_string());
         }
     }
+    push_observe(&mut args, arguments)?;
     run_tool(arguments, args)
 }
 
@@ -952,6 +1013,7 @@ fn call_fill(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push("--force".to_string());
         }
     }
+    push_observe(&mut args, arguments)?;
     run_tool(arguments, args)
 }
 
@@ -983,6 +1045,7 @@ fn call_type(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push("--force".to_string());
         }
     }
+    push_observe(&mut args, arguments)?;
     run_tool(arguments, args)
 }
 
@@ -1000,6 +1063,7 @@ fn call_press(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push("--force".to_string());
         }
     }
+    push_observe(&mut args, arguments)?;
     run_tool(arguments, args)
 }
 
@@ -1086,6 +1150,7 @@ fn call_hover(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push("--force".to_string());
         }
     }
+    push_observe(&mut args, arguments)?;
     run_tool(arguments, args)
 }
 
@@ -1102,6 +1167,7 @@ fn call_select(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push("--force".to_string());
         }
     }
+    push_observe(&mut args, arguments)?;
     run_tool(arguments, args)
 }
 
@@ -1979,10 +2045,32 @@ fn optional_replacements(
     }
 }
 
+thread_local! {
+    /// Extra environment for the CLI children of the tool call running on
+    /// this thread: a leased panel action passes its action id this way.
+    static CLI_ENV: std::cell::RefCell<Vec<(String, String)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Run `body` with `env` added to every CLI child it starts.
+fn with_cli_env<T>(env: &[(&str, String)], body: impl FnOnce() -> T) -> T {
+    CLI_ENV.with(|current| {
+        *current.borrow_mut() = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+    });
+    let result = body();
+    CLI_ENV.with(|current| current.borrow_mut().clear());
+    result
+}
+
 fn run_cli(args: &[String], timeout_ms: u64) -> Result<CliRun, String> {
     let exe = env::current_exe().map_err(|e| e.to_string())?;
+    let extra = CLI_ENV.with(|current| current.borrow().clone());
     let mut child = Command::new(exe)
         .args(args)
+        .envs(extra)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null())
@@ -2313,6 +2401,51 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn only_acting_tools_take_observe() {
+        let all = tools_for(Profile::All);
+        for tool in &all {
+            let name = tool["name"].as_str().unwrap();
+            let observe = &tool["inputSchema"]["properties"]["observe"];
+            assert_eq!(
+                observe.is_object(),
+                crate::panel_evidence::OBSERVE_TOOLS.contains(&name),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            crate::panel_evidence::OBSERVE_TOOLS
+                .iter()
+                .filter(|name| all.iter().any(|t| t["name"] == **name))
+                .count(),
+            crate::panel_evidence::OBSERVE_TOOLS.len()
+        );
+        let mut args = vec!["back".to_string()];
+        assert!(push_observe(&mut args, &json!({"observe": true})).is_ok());
+        assert_eq!(args, ["back", "--observe"]);
+        assert!(push_observe(&mut args, &json!({"observe": false})).is_ok());
+        assert_eq!(args.len(), 2);
+        assert!(push_observe(&mut args, &json!({"observe": "yes"})).is_err());
+    }
+
+    #[test]
+    fn panel_evidence_tools_stay_hidden_outside_a_panel() {
+        let names: Vec<String> = tools_for(Profile::All)
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(!names.iter().any(|n| n == TOOL_TASK || n == TOOL_RECORD));
+        assert!(!is_known_tool(TOOL_TASK, Profile::All));
+        assert!(!is_known_tool(TOOL_RECORD, Profile::All));
+        let schemas = panel_tools();
+        let task = schemas.iter().find(|t| t["name"] == TOOL_TASK).unwrap();
+        assert_eq!(
+            task["inputSchema"]["properties"]["requirements"]["maxItems"],
+            12
+        );
+        assert!(schemas.iter().any(|t| t["name"] == TOOL_RECORD));
     }
 
     #[test]
