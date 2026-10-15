@@ -128,7 +128,6 @@ pub(crate) struct CaptureRequest {
     pub requested_destination: Option<String>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // MCP-side helper; panel_evidence.rs has its own copy for now.
 pub(crate) fn capture_request(tool: &str, arguments: &Value) -> Option<CaptureRequest> {
     let path = arguments["path"]
         .as_str()
@@ -166,7 +165,6 @@ pub(crate) fn capture_request(tool: &str, arguments: &Value) -> Option<CaptureRe
 
 /// The tool arguments the CLI runs with: the caller's `path` replaced by the
 /// lease's capture path. The original stays in `requested_destination`.
-#[cfg_attr(not(test), allow(dead_code))] // MCP-side helper; panel_evidence.rs has its own copy for now.
 pub(crate) fn rewrite_capture_arguments(arguments: &Value, capture_path: &Path) -> Value {
     let mut rewritten = arguments.clone();
     if let Some(object) = rewritten.as_object_mut() {
@@ -1369,7 +1367,6 @@ pub(crate) struct Delivery {
 /// the MCP process with the rights the CLI would have used for that path;
 /// destination rules follow `prepare_download_destination`. `delivered` only
 /// when the read-back digest equals the artifact digest.
-#[cfg_attr(not(test), allow(dead_code))] // MCP-side helper; panel_evidence.rs has its own copy for now.
 pub(crate) fn deliver(capture: &Path, requested: &str, artifact_digest: &str) -> Delivery {
     let failed = |detail: &str, path: Option<PathBuf>| Delivery {
         state: DeliveryState::Failed,

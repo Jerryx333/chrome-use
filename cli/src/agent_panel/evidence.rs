@@ -55,6 +55,9 @@ pub(super) struct Lease {
     /// the raw predicate while this service has it in memory.
     pub check: Option<(CheckKind, String, Option<String>)>,
     pub delivery: Option<Value>,
+    /// The page the tool named (`{tabHandle, url}`), journaled as
+    /// `browserActionTarget.requested`.
+    pub requested: Option<Value>,
 }
 
 impl Lease {
@@ -79,6 +82,7 @@ impl Lease {
             verdict: None,
             check: None,
             delivery: None,
+            requested: None,
         }
     }
     /// Whether the report computes the verdict from the artifacts.
@@ -146,16 +150,15 @@ pub(super) fn rebuild<'a>(
                     .flatten()
                     .filter_map(|o| Output::from_admitted(agent_cwd, action, Some(action), o))
                     .collect();
-                leases.insert(
-                    action.into(),
-                    Lease::new(
-                        d["messageId"].as_str().unwrap_or(""),
-                        d["generation"].as_u64().unwrap_or(0),
-                        d["tool"].as_str().unwrap_or(""),
-                        parse(&d["toolClass"]).unwrap_or(ToolClass::Act),
-                        outputs,
-                    ),
+                let mut lease = Lease::new(
+                    d["messageId"].as_str().unwrap_or(""),
+                    d["generation"].as_u64().unwrap_or(0),
+                    d["tool"].as_str().unwrap_or(""),
+                    parse(&d["toolClass"]).unwrap_or(ToolClass::Act),
+                    outputs,
                 );
+                lease.requested = d.get("requested").filter(|r| r.is_object()).cloned();
+                leases.insert(action.into(), lease);
             }
             "browserActionTarget" => {
                 if let Some(lease) = leases.get_mut(action) {

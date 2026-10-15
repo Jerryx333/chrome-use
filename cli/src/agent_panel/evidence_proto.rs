@@ -243,6 +243,12 @@ pub(crate) struct ActionBegin {
     /// is journaled.
     pub requested_destination: Option<String>,
     pub outputs: Vec<OutputRequest>,
+    /// The page the tool names: `{tabHandle, url}` from its own arguments
+    /// (a tab id, the URL it opens), when it names one. Journaled as
+    /// `browserActionTarget.requested` so the panel can say "asked for X,
+    /// landed on Y".
+    #[serde(default)]
+    pub requested: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -538,6 +544,7 @@ mod tests {
                 kind: ArtifactKind::Screenshot,
                 name: "shot.png".into(),
             }],
+            requested: None,
         };
         let wire = encode(&begin).unwrap();
         assert_eq!(wire["callerConversation"], "c");

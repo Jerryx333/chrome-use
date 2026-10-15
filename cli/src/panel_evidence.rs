@@ -10,6 +10,7 @@
 //! Nothing here reads the panel environment by itself: callers pass a
 //! [`PanelContext`], so tests drive the whole path with a fake client.
 
+use crate::agent_panel::artifacts;
 use crate::agent_panel::evidence_proto::{
     self as proto, ActionBegin, ActionReport, AllocatedOutput, ArtifactKind, ArtifactOutcome,
     Basis, BeginReply, Check, CheckKind, Deadline, DeliveryReply, DeliveryReport, DeliveryState,
@@ -19,8 +20,7 @@ use crate::agent_panel::evidence_proto::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -110,57 +110,42 @@ fn safe_to_repeat(tool: &str, arguments: &Value) -> bool {
         )
 }
 
-/// The caller's own output path and what the lease must allocate instead.
+/// The caller's own output path and what the lease must allocate instead,
+/// as `artifacts::capture_request` decides both.
 fn capture_plan(tool: &str, arguments: &Value) -> (Option<String>, Vec<OutputRequest>) {
-    let requested = str_arg(arguments, "path")
-        .filter(|p| !p.is_empty())
-        .map(str::to_string);
-    let from_requested = || requested.as_deref().and_then(file_name);
-    let output = |kind, name: String| vec![OutputRequest { kind, name }];
-    match tool {
-        "chrome_use_screenshot" => (
-            requested.clone(),
-            output(
-                ArtifactKind::Screenshot,
-                from_requested().unwrap_or_else(|| "screenshot.png".into()),
-            ),
+    match artifacts::capture_request(tool, arguments) {
+        Some(capture) => (
+            capture.requested_destination,
+            vec![OutputRequest {
+                kind: wire_kind(capture.kind),
+                name: capture.name,
+            }],
         ),
-        "chrome_use_download" => (
-            requested.clone(),
-            output(
-                ArtifactKind::Download,
-                from_requested().unwrap_or_else(|| "download".into()),
-            ),
-        ),
-        "chrome_use_download_url" => {
-            let from_url = || {
-                str_arg(arguments, "url")
-                    .and_then(|u| url::Url::parse(u).ok())
-                    .and_then(|u| {
-                        u.path_segments()
-                            .and_then(|mut s| s.next_back().map(str::to_string))
-                    })
-                    .and_then(|s| file_name(&s))
-            };
-            (
-                requested.clone(),
-                output(
-                    ArtifactKind::Download,
-                    from_requested()
-                        .or_else(from_url)
-                        .unwrap_or_else(|| "download".into()),
-                ),
-            )
-        }
-        _ => (None, Vec::new()),
+        None => (None, Vec::new()),
     }
 }
 
-/// The last path component when it is an ordinary file name.
-fn file_name(path: &str) -> Option<String> {
-    let name = path.rsplit(['/', '\\']).next()?;
-    let name: String = name.chars().filter(|c| !c.is_control()).take(200).collect();
-    (!name.is_empty() && name != "." && name != "..").then_some(name)
+fn wire_kind(kind: artifacts::Kind) -> ArtifactKind {
+    match kind {
+        artifacts::Kind::Screenshot => ArtifactKind::Screenshot,
+        artifacts::Kind::Download => ArtifactKind::Download,
+        artifacts::Kind::Recording => ArtifactKind::Recording,
+    }
+}
+
+/// The page a tool names in its own arguments: the tab it targets and the
+/// URL it opens. `None` when it names neither.
+pub(crate) fn requested_target(tool: &str, arguments: &Value) -> Option<Value> {
+    let tab = str_arg(arguments, "tabId").filter(|t| !t.is_empty());
+    let url = match tool {
+        "chrome_use_open" => str_arg(arguments, "url"),
+        "chrome_use_tabs" if str_arg(arguments, "action") == Some("new") => {
+            str_arg(arguments, "url")
+        }
+        _ => None,
+    }
+    .filter(|u| !u.is_empty());
+    (tab.is_some() || url.is_some()).then(|| json!({"tabHandle": tab, "url": url}))
 }
 
 /// A per-process key: argument digests compare equal within one MCP process
@@ -602,67 +587,6 @@ fn send_report(
 
 const NOT_RECORDED: &str = "browser evidence was not recorded";
 
-/// Copy the capture to the caller's path: a temporary file in the destination
-/// folder, synced, renamed over the target, then read back and hashed.
-fn deliver(source: &Path, requested: &str) -> Result<(PathBuf, String), String> {
-    let raw = Path::new(requested);
-    let destination = if raw.is_absolute() {
-        raw.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(|e| format!("no current directory: {e}"))?
-            .join(raw)
-    };
-    let folder = destination
-        .parent()
-        .ok_or("the requested path has no folder")?;
-    let name = destination
-        .file_name()
-        .ok_or("the requested path has no file name")?;
-    std::fs::create_dir_all(folder).map_err(|e| format!("cannot create its folder: {e}"))?;
-    let temporary = folder.join(format!(
-        ".{}.{}.part",
-        name.to_string_lossy(),
-        uuid::Uuid::new_v4()
-    ));
-    let copy = || -> Result<(), String> {
-        let mut from =
-            std::fs::File::open(source).map_err(|e| format!("cannot read the capture: {e}"))?;
-        let mut to = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|e| format!("cannot write there: {e}"))?;
-        std::io::copy(&mut from, &mut to).map_err(|e| format!("copy failed: {e}"))?;
-        to.flush()
-            .and_then(|_| to.sync_all())
-            .map_err(|e| format!("cannot sync: {e}"))?;
-        std::fs::rename(&temporary, &destination)
-            .map_err(|e| format!("cannot replace the file: {e}"))
-    };
-    if let Err(error) = copy() {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
-    }
-    let mut hash = Sha256::new();
-    let mut file =
-        std::fs::File::open(&destination).map_err(|e| format!("cannot read it back: {e}"))?;
-    let mut buffer = [0u8; 65536];
-    loop {
-        let n = file
-            .read(&mut buffer)
-            .map_err(|e| format!("cannot read it back: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        hash.update(&buffer[..n]);
-    }
-    Ok((
-        destination,
-        format!("sha256:{}", hex::encode(hash.finalize())),
-    ))
-}
-
 /// Run one browser tool under a lease. `run` receives the arguments with any
 /// output path replaced by the lease's allocation and the environment the CLI
 /// child must get; it is never called when the lease is refused.
@@ -697,6 +621,7 @@ pub(crate) fn run_leased<E>(
         arguments_digest: digest.clone(),
         requested_destination: requested.clone(),
         outputs: outputs.clone(),
+        requested: requested_target(tool, arguments),
     };
     let reply = proto::encode(&begin).and_then(|params| {
         context
@@ -730,13 +655,17 @@ pub(crate) fn run_leased<E>(
         ));
     }
 
-    let mut effective = arguments.clone();
-    if let Some(output) = lease.outputs.first() {
-        if !effective.is_object() {
-            effective = json!({});
-        }
-        effective["path"] = json!(output.path);
-    }
+    let effective = match lease.outputs.first() {
+        Some(output) => artifacts::rewrite_capture_arguments(
+            &if arguments.is_object() {
+                arguments.clone()
+            } else {
+                json!({})
+            },
+            Path::new(&output.path),
+        ),
+        None => arguments.clone(),
+    };
     let started = Instant::now();
     let environment = [(proto::ACTION_ID_ENV, action_id.clone())];
     let ran = run(&effective, &environment);
@@ -872,21 +801,23 @@ fn after_capture(
             Some("the capture was not ready".to_string()),
             not_written(),
         ),
-        Some(expected) => match deliver(Path::new(&output.path), requested) {
-            Ok((path, digest)) if digest == expected => (
-                DeliveryState::Delivered,
-                Some(digest),
-                None,
-                format!("saved to {}", path.display()),
-            ),
-            Ok((_, digest)) => (
-                DeliveryState::Failed,
-                Some(digest),
-                Some("the written file differs from the capture".to_string()),
-                not_written(),
-            ),
-            Err(error) => (DeliveryState::Failed, None, Some(error), not_written()),
-        },
+        Some(expected) => {
+            let delivery = artifacts::deliver(Path::new(&output.path), requested, expected);
+            match (delivery.state, &delivery.path) {
+                (artifacts::DeliveryState::Delivered, Some(path)) => (
+                    DeliveryState::Delivered,
+                    delivery.digest.clone(),
+                    None,
+                    format!("saved to {}", path.display()),
+                ),
+                _ => (
+                    DeliveryState::Failed,
+                    delivery.digest.clone(),
+                    Some(delivery.detail.clone()),
+                    not_written(),
+                ),
+            }
+        }
     };
     notes.push(note);
     let delivery = DeliveryReport {
@@ -1608,7 +1539,14 @@ mod tests {
         assert_eq!(delivery["state"], "delivered");
         assert_eq!(delivery["digest"], sha256_hex(bytes));
         let notes = &result["structuredContent"]["chromeUseAction"]["notes"];
-        assert_eq!(notes[0], format!("saved to {}", requested.display()));
+        // The folder is resolved before writing (`/var` → `/private/var`).
+        let saved = requested
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join("shot.png");
+        assert_eq!(notes[0], format!("saved to {}", saved.display()));
     }
 
     #[test]
@@ -1648,6 +1586,40 @@ mod tests {
             "notAttempted"
         );
         assert!(!notes.iter().any(|n| n.starts_with("saved to")));
+    }
+
+    #[test]
+    fn begin_names_the_page_the_tool_asks_for() {
+        assert_eq!(
+            requested_target(
+                "chrome_use_open",
+                &json!({"url": "https://a.test/x", "tabId": "t1"})
+            ),
+            Some(json!({"tabHandle": "t1", "url": "https://a.test/x"}))
+        );
+        assert_eq!(
+            requested_target(
+                "chrome_use_tabs",
+                &json!({"action": "new", "url": "https://a.test/"})
+            )
+            .unwrap()["url"],
+            "https://a.test/"
+        );
+        assert_eq!(
+            requested_target(
+                "chrome_use_tabs",
+                &json!({"action": "switch", "tabId": "chrome-tab:4"})
+            )
+            .unwrap(),
+            json!({"tabHandle": "chrome-tab:4", "url": null})
+        );
+        assert!(requested_target("chrome_use_click", &json!({"selector": "#a"})).is_none());
+        // A download URL is a file, not the page the action lands on.
+        assert!(requested_target(
+            "chrome_use_download_url",
+            &json!({"url": "https://a.test/f.pdf"})
+        )
+        .is_none());
     }
 
     #[test]

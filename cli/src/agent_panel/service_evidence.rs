@@ -62,6 +62,18 @@ fn wire_kind(kind: artifacts::Kind) -> proto::ArtifactKind {
     }
 }
 
+/// The tool's named page, bounded: a tab handle and the URL it opens.
+fn requested_target(requested: Option<&Value>) -> Option<Value> {
+    let requested = requested?;
+    let field = |key: &str, max: usize| {
+        requested[key]
+            .as_str()
+            .map(|v| v.chars().take(max).collect::<String>())
+    };
+    let (tab, url) = (field("tabHandle", 256), field("url", 2048));
+    (tab.is_some() || url.is_some()).then(|| json!({"tabHandle": tab, "url": url}))
+}
+
 fn evaluator(basis: Basis) -> &'static str {
     match basis {
         Basis::Expect | Basis::ReadBack | Basis::Navigation | Basis::TabVerified => "browser",
@@ -276,6 +288,7 @@ impl Engine {
             .entry(id.into())
             .or_default()
             .admit(&message.id, &outputs);
+        let requested = requested_target(p.requested.as_ref());
         let entries: Vec<Value> = outputs
             .iter()
             .zip(&reserved)
@@ -284,7 +297,7 @@ impl Engine {
         self.record(
             id,
             "actionAdmitted",
-            json!({"v":1,"messageId":message.id,"generation":p.generation,"actionId":action,"tool":p.tool,"toolClass":p.tool_class,"argumentsDigest":p.arguments_digest,"outputs":entries,"quotaReserved":reserved.iter().sum::<u64>()}),
+            json!({"v":1,"messageId":message.id,"generation":p.generation,"actionId":action,"tool":p.tool,"toolClass":p.tool_class,"argumentsDigest":p.arguments_digest,"outputs":entries,"quotaReserved":reserved.iter().sum::<u64>(),"requested":requested}),
         )?;
         let allocated: Vec<proto::AllocatedOutput> = outputs
             .iter()
@@ -295,10 +308,13 @@ impl Engine {
                 path: o.path().to_string_lossy().into_owned(),
             })
             .collect();
-        self.evidence.leases.entry(id.into()).or_default().insert(
-            action,
-            Lease::new(&message.id, p.generation, &p.tool, p.tool_class, outputs),
-        );
+        let mut lease = Lease::new(&message.id, p.generation, &p.tool, p.tool_class, outputs);
+        lease.requested = requested;
+        self.evidence
+            .leases
+            .entry(id.into())
+            .or_default()
+            .insert(action, lease);
         proto::encode(&proto::BeginReply {
             admitted: true,
             reason: None,
@@ -420,7 +436,7 @@ impl Engine {
         self.record(
             id,
             "browserActionTarget",
-            json!({"v":1,"messageId":lease.message_id,"generation":lease.generation,"actionId":p.action_id,"tool":lease.tool,"toolClass":lease.tool_class,"requested":null,"observed":observed,"outcome":p.outcome,"errorCode":p.error_code,"durationMs":p.duration_ms,"resultDigest":p.result_digest,"afterStop":lease.after_stop,"afterTurnEnd":lease.turn_ended || late,"afterRecoveryRequired":recovery,"lateReported":late}),
+            json!({"v":1,"messageId":lease.message_id,"generation":lease.generation,"actionId":p.action_id,"tool":lease.tool,"toolClass":lease.tool_class,"requested":lease.requested,"observed":observed,"outcome":p.outcome,"errorCode":p.error_code,"durationMs":p.duration_ms,"resultDigest":p.result_digest,"afterStop":lease.after_stop,"afterTurnEnd":lease.turn_ended || late,"afterRecoveryRequired":recovery,"lateReported":late}),
         )
     }
 
@@ -1437,6 +1453,9 @@ mod tests {
                 arguments_digest: format!("sha256:{tool}"),
                 requested_destination: destination.map(String::from),
                 outputs,
+                requested: Some(
+                    json!({"tabHandle":"chrome-tab:7","url":"https://shop.example/cart?token=SYNTH_TOKEN_REQ"}),
+                ),
             };
             let reply = self
                 .op(proto::OP_ACTION_BEGIN, proto::encode(&begin).unwrap())
@@ -1620,6 +1639,10 @@ mod tests {
         assert_eq!(late_reply["bound"], true);
         let targets = c.kinds("browserActionTarget").await;
         let late_target = targets.iter().find(|t| t["actionId"] == late).unwrap();
+        assert_eq!(
+            late_target["requested"],
+            json!({"tabHandle":"chrome-tab:7","url":"https://shop.example/cart?token=[redacted]"})
+        );
         assert_eq!(late_target["messageId"], first);
         assert_eq!(late_target["afterTurnEnd"], true);
         assert_eq!(late_target["lateReported"], true);
