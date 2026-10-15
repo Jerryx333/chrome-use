@@ -98,7 +98,10 @@ export const checks = [
       ev.assessment = t.final;
       h.assert.equal(t.final.status, 'someChecksPassed');
       h.assert.equal(t.final.declaredStatus, 'complete');
-      h.assert.deepEqual(t.final.requirements.map(r => r.computed), ['checked', 'claimed', 'checkFailed']);
+      // Requirement 3 cites a confirmed check of something else (#title, not
+      // #total = 42): an unrelated check never satisfies a requirement.
+      h.assert.deepEqual(t.final.requirements.map(r => r.computed), ['checked', 'claimed', 'claimed']);
+      h.assert.equal(t.final.requirements[2].because, 'the cited check records something else');
       h.assert.ok(t.final.downgradedBecause.length >= 1, 'the done declaration is downgraded with reasons');
       ev.panel = await h.screenshot('check3', conv.id);
       h.panelCheck(ev, /Some checks passed/.test(ev.panel.text), 'panel shows /Some checks passed/');
