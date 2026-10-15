@@ -996,7 +996,7 @@ pub(super) fn strip_images(value: &Value) -> Value {
 }
 
 /// A `tool` notice: ids extracted from the raw item first, then images
-/// stripped, then the size bound of `short()`.
+/// stripped, then the structure-keeping size bound of [`bounded`].
 pub(super) fn tool_notice(
     completed: bool,
     tool_call_id: Option<&str>,
@@ -1009,9 +1009,97 @@ pub(super) fn tool_notice(
             "completed": completed,
             "toolCallId": tool_call_id.filter(|id| !id.is_empty() && id.len() <= 1024),
             "actionIds": action_ids,
-            "item": short(&strip_images(item)),
+            "item": bounded(&strip_images(item)),
         }),
     )
+}
+
+/// The size `short` allows for one item.
+const ITEM_BUDGET: usize = 24000;
+
+/// Bound a tool item without losing its structure: long strings are cut and
+/// long arrays shortened, so the service's redaction still sees the tool
+/// name and keys such as `selector` and `value`. A plain-string preview, as
+/// `short` makes, would hide a password typed in a large item.
+pub(super) fn bounded(value: &Value) -> Value {
+    if value.to_string().len() <= ITEM_BUDGET {
+        return value.clone();
+    }
+    for cap in [6000, 2000, 500, 100] {
+        let cut = cut_to(value, cap, 0);
+        if cut.to_string().len() <= ITEM_BUDGET {
+            return cut;
+        }
+    }
+    // Too wide or deep even then: keep what identifies the call and its
+    // arguments, each bounded, and say the rest was dropped.
+    let mut skeleton = serde_json::Map::new();
+    if let Some(object) = value.as_object() {
+        for key in [
+            "type",
+            "id",
+            "name",
+            "tool",
+            "server",
+            "toolName",
+            "tool_name",
+            "title",
+            "toolCallId",
+            "tool_use_id",
+            "status",
+            "is_error",
+            "isError",
+        ] {
+            if let Some(field) = object.get(key) {
+                skeleton.insert(key.into(), cut_to(field, 200, 18));
+            }
+        }
+        for key in ["input", "arguments", "rawInput", "args"] {
+            if let Some(field) = object.get(key) {
+                let args = cut_to(field, 200, 16);
+                if args.to_string().len() <= ITEM_BUDGET / 2 {
+                    skeleton.insert(key.into(), args);
+                }
+            }
+        }
+    }
+    skeleton.insert(
+        "output".into(),
+        "[The tool output was too large to keep]".into(),
+    );
+    Value::Object(skeleton)
+}
+
+fn cut_to(value: &Value, cap: usize, depth: usize) -> Value {
+    match value {
+        Value::String(text) if text.chars().count() > cap => {
+            let mut short: String = text.chars().take(cap).collect();
+            short.push_str("…[shortened]");
+            Value::String(short)
+        }
+        Value::Array(items) => {
+            let keep = (cap / 100).clamp(5, 50);
+            let mut out: Vec<Value> = items
+                .iter()
+                .take(keep)
+                .map(|item| cut_to(item, cap, depth + 1))
+                .collect();
+            if items.len() > keep {
+                out.push(format!("[{} more items]", items.len() - keep).into());
+            }
+            Value::Array(out)
+        }
+        Value::Object(map) if depth >= 20 => {
+            let _ = map;
+            "[nested data shortened]".into()
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), cut_to(v, cap, depth + 1)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 pub(super) fn compacted(backend: &str, trigger: Value) -> Notice {
@@ -1922,5 +2010,38 @@ mod tests {
             "Backend protocol initialization timed out".into()
         )));
         assert!(!leave_running_after(&Ok(())));
+    }
+
+    #[test]
+    fn a_large_tool_item_keeps_its_structure_for_redaction() {
+        let item = json!({"type":"tool_use","id":"t1","name":"mcp__chrome_use__chrome_use_fill",
+            "input":{"selector":"#password","value":"plain-SYNTH-pass"},
+            "observation":"x".repeat(40_000)});
+        let notice = tool_notice(false, Some("t1"), Vec::new(), &item);
+        let kept = &notice.data["item"];
+        assert!(kept.to_string().len() <= ITEM_BUDGET);
+        assert_eq!(kept["input"]["selector"], "#password");
+        assert!(kept["observation"]
+            .as_str()
+            .unwrap()
+            .ends_with("…[shortened]"));
+        let redacted = super::super::redact::event(
+            "tool",
+            notice.data.clone(),
+            &mut super::super::redact::Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(!redacted.to_string().contains("plain-SYNTH-pass"));
+        // Even an item too wide to cut keeps the call and its arguments.
+        let wide: serde_json::Map<String, Value> =
+            (0..5000).map(|i| (format!("k{i}"), json!("v"))).collect();
+        let mut huge = json!({"type":"tool_use","id":"t2","name":"mcp__chrome_use__chrome_use_fill",
+            "input":{"selector":"#password","value":"plain-SYNTH-pass"}});
+        huge["extra"] = Value::Object(wide);
+        let kept = bounded(&huge);
+        assert!(kept.to_string().len() <= ITEM_BUDGET);
+        assert_eq!(kept["name"], "mcp__chrome_use__chrome_use_fill");
+        assert_eq!(kept["input"]["value"], "plain-SYNTH-pass");
     }
 }
