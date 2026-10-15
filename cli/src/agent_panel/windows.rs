@@ -135,26 +135,29 @@ impl ProcessJob {
         }
         Ok(())
     }
+    /// Processes still in the job, read through the held handle.
+    pub fn active_processes(&self) -> Result<u32, String> {
+        let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            QueryInformationJobObject(
+                self.0 .0,
+                JobObjectBasicAccountingInformation,
+                &mut accounting as *mut _ as _,
+                std::mem::size_of_val(&accounting) as u32,
+                ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(failure(
+                "Cannot confirm the owned agent process tree exited",
+            ));
+        }
+        Ok(accounting.ActiveProcesses)
+    }
     pub async fn confirm_empty(&self) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
-                unsafe { std::mem::zeroed() };
-            let ok = unsafe {
-                QueryInformationJobObject(
-                    self.0 .0,
-                    JobObjectBasicAccountingInformation,
-                    &mut accounting as *mut _ as _,
-                    std::mem::size_of_val(&accounting) as u32,
-                    ptr::null_mut(),
-                )
-            };
-            if ok == 0 {
-                return Err(failure(
-                    "Cannot confirm the owned agent process tree exited",
-                ));
-            }
-            if accounting.ActiveProcesses == 0 {
+            if self.active_processes()? == 0 {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {

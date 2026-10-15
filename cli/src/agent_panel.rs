@@ -23,6 +23,7 @@ mod inspect;
 mod inspection;
 mod options;
 mod progress;
+mod recovery;
 mod schedules;
 mod service;
 mod skill_library;
