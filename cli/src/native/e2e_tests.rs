@@ -7797,6 +7797,101 @@ async fn e2e_auth_login_bwu_create_guard_covers_frames_and_restores_by_identity(
     assert!(err.contains("wrapped the create() guard"), "{err}");
 }
 
+/// Round 7: an attached out-of-process frame is guarded through its own
+/// session (now and on its next document) and restored with the rest.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_create_guard_covers_out_of_process_frames() {
+    use super::passkey_guard::{install, report_result, restore, CreateGuard, Outcome};
+    let (oopif_port, oopif_server) =
+        spawn_html_server("<!doctype html><p>out of process</p>".to_string()).await;
+    let page = format!(
+        "<!doctype html><title>OOPIF</title><iframe id=\"x\" src=\"http://localhost:{oopif_port}/x\"></iframe>"
+    );
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    wait_for_evaluation(
+        &mut state,
+        "document.readyState === 'complete'",
+        "page should load",
+    )
+    .await;
+    let mut iframes = std::collections::HashMap::new();
+    for _ in 0..50 {
+        assert_evaluate(&mut state, "drain", "1", json!(1)).await;
+        iframes = state.iframe_sessions.clone();
+        if !iframes.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(iframes.len(), 1, "the cross-site frame should attach");
+    let (frame, oopif) = iframes
+        .iter()
+        .next()
+        .map(|(f, s)| (f.clone(), s.clone()))
+        .unwrap();
+    let (client, sid) = {
+        let mgr = state.browser.as_ref().unwrap();
+        (
+            mgr.client.clone(),
+            mgr.active_session_id().unwrap().to_string(),
+        )
+    };
+    let in_frame = |expr: &'static str| {
+        let client = client.clone();
+        let oopif = oopif.clone();
+        async move {
+            client
+                .send_command(
+                    "Runtime.evaluate",
+                    Some(
+                        json!({ "expression": expr, "awaitPromise": true, "returnByValue": true }),
+                    ),
+                    Some(&oopif),
+                )
+                .await
+                .unwrap()["result"]["value"]
+                .clone()
+        }
+    };
+    let probe = "(async () => { try { await navigator.credentials.create({ publicKey: {} }); return 'resolved'; } \
+                  catch (e) { return [e.name, Function.prototype.toString.call(navigator.credentials.create)].join('|'); } })()";
+    assert_eq!(
+        in_frame(probe).await,
+        json!("TypeError|function create() { [native code] }")
+    );
+
+    let mut guard = CreateGuard::new();
+    install(&client, &sid, &iframes, &mut guard).await.unwrap();
+    assert_eq!(
+        in_frame(probe).await,
+        json!("NotAllowedError|function () { [native code] }")
+    );
+    // The frame's next document gets it from the script on its session.
+    in_frame("location.reload(), 1").await;
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    assert_eq!(
+        in_frame(probe).await,
+        json!("NotAllowedError|function () { [native code] }")
+    );
+
+    let report = restore(&client, &sid, &iframes, &mut guard).await;
+    assert_eq!(report_result(&report), Ok(()), "{report:?}");
+    assert_eq!(
+        report.iter().find(|(f, _)| *f == frame).map(|(_, r)| r),
+        Some(&Outcome::Restored),
+        "{report:?}"
+    );
+    assert_eq!(
+        in_frame(probe).await,
+        json!("TypeError|function create() { [native code] }")
+    );
+    server.abort();
+    oopif_server.abort();
+}
+
 /// #482: a submit that navigates is judged by where the page ends up.
 #[tokio::test]
 #[ignore]

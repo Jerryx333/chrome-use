@@ -305,6 +305,13 @@ pub(super) async fn install(
     let source = no_create_js(&guard.key);
     for session in sessions(page_session, iframe_sessions, &[]) {
         let page = session == page_session;
+        if !page {
+            // Without the Page domain on, a frame target never runs its
+            // new-document scripts (the page session has it on already).
+            let _ = client
+                .send_command_no_params("Page.enable", Some(&session))
+                .await;
+        }
         match client
             .send_command(
                 "Page.addScriptToEvaluateOnNewDocument",
