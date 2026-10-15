@@ -72,19 +72,51 @@ export async function startRig({ dir, work, hostBin, chrome, extDir, sitePort = 
   return rig;
 }
 
+// The extension's native host may start the profile's service (through
+// launchd) before the driver does, and the first one owns the profile: the
+// driver's own then exits ("Another agent service owns this profile") and
+// the run talks to a service with another environment and process tree. So
+// a service the driver did not start is stopped first, and a start that
+// lost the race again is retried until the driver's process owns the
+// profile.
 export async function startService(rig, { bin = rig.hostBin, env = {} } = {}) {
-  fs.rmSync(rig.serviceJson, { force: true });
   const out = fs.openSync(path.join(rig.work, 'service.log'), 'a');
-  const proc = spawn(bin, ['__panel-service', '--profile', rig.profile, '--data-dir', rig.root], { env: { ...rig.serviceEnv, ...env }, stdio: ['ignore', out, out], detached: true });
-  proc.unref();
+  let proc;
+  for (let attempt = 1; ; attempt++) {
+    await stopOtherService(rig);
+    proc = spawn(bin, ['__panel-service', '--profile', rig.profile, '--data-dir', rig.root], { env: { ...rig.serviceEnv, ...env }, stdio: ['ignore', out, out], detached: true });
+    proc.unref();
+    let exited = false;
+    proc.once('exit', () => { exited = true; });
+    const owner = await waitFor(() => exited ? 'lost' : ownerPid(rig) === proc.pid && 'ours', { timeout: 20000, label: 'service.json' });
+    if (owner === 'ours') break;
+    if (attempt === 5) throw new Error('another service kept the profile after five starts');
+    await sleep(200);
+  }
   rig.servicePid = proc.pid;
-  await waitFor(() => fs.existsSync(rig.serviceJson), { timeout: 20000, label: 'service.json' });
   rig.proxy?.stop();
   rig.proxy = new Proxy(rig.serviceJson, path.join(rig.work, 'proxy.jsonl'));
   await rig.proxy.start();
   rig.service = new Service(rig.serviceJson);
   await waitFor(async () => (await rig.service.call('health', {})) && true, { label: 'service health' });
   return proc;
+}
+
+function ownerPid(rig) {
+  try { return JSON.parse(fs.readFileSync(rig.serviceJson, 'utf8')).pid; } catch { return null; }
+}
+
+const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+// Stop the profile's service when it is not the driver's (or a stale file
+// names a process that is gone), and wait until it released the profile.
+async function stopOtherService(rig) {
+  const pid = ownerPid(rig);
+  if (pid && alive(pid)) {
+    await new Service(rig.serviceJson).tryCall('serviceStop', {}, 10000);
+    await waitFor(() => !alive(pid), { timeout: 20000, label: 'the other service to exit' }).catch(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
+  }
+  fs.rmSync(rig.serviceJson, { force: true });
 }
 
 export async function stopService(rig) {

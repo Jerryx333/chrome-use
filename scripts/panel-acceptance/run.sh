@@ -28,6 +28,18 @@ export OLD_EXT_DIR="${OLD_EXT_DIR:-$HOME/panel-accept/old/ext}"
 export REAL_CODEX_HOME="${REAL_CODEX_HOME:-$HOME/.codex}"
 export REAL_OPENCODE_BIN="${REAL_OPENCODE_BIN:-/private/tmp/chrome-use-opencode-2.0.25}"
 export REAL_OPENCODE_AUTH="${REAL_OPENCODE_AUTH:-$HOME/.local/share/opencode/auth.json}"
+# The native host loads a launchd job per profile directory for the panel
+# service; they stay loaded after a run. Unload those of acceptance runs only
+# (their program lives under /tmp/pa), never the host's other services.
+unload_run_jobs() {
+  [ "$(uname)" = Darwin ] || return 0
+  for label in $(launchctl list | awk '/com\.chrome-use\.panel-service\./ {print $3}'); do
+    case "$(launchctl print "gui/$(id -u)/$label" 2>/dev/null | awk '/^\tprogram = / {print $3; exit}')" in
+      /tmp/pa/*|/private/tmp/pa/*) launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true ;;
+    esac
+  done
+}
+unload_run_jobs
 # A run interrupted earlier (dropped SSH) can still hold the fixture ports.
 pkill -f "panel-acceptance/site/server.mjs" 2>/dev/null || true
 pkill -f "user-data-dir=/tmp/pa/" 2>/dev/null || true
@@ -35,5 +47,6 @@ sleep 1
 status=0
 node accept.mjs "$@" || status=$?
 pkill -f "user-data-dir=$WORK/" 2>/dev/null || true
+unload_run_jobs
 echo "work: $WORK"
 exit $status
