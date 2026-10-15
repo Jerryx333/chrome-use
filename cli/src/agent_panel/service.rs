@@ -810,16 +810,10 @@ impl Engine {
         redact::event(kind, data, self.secrets.entry(id.into()).or_default())
     }
     fn record_redacted(&mut self, id: &str, kind: &str, data: Redacted) -> Result<(), String> {
-        // Only the redacted text may become a notification preview. A message
-        // split into parts is previewed from its first part.
-        if matches!(kind, "textFinal" | "textRole")
-            && data.value()["part"].as_u64().unwrap_or(0) == 0
-        {
-            let line = data.value()["text"]
-                .as_str()
-                .and_then(|text| text.lines().map(str::trim).find(|line| !line.is_empty()));
-            if let (Some(line), Some(turn)) = (line, self.turns.get_mut(id)) {
-                turn.preview = Some(line.chars().take(120).collect());
+        // Only the redacted text may become a notification preview.
+        if let Some(line) = super::conversation::answer_preview(kind, data.value()) {
+            if let Some(turn) = self.turns.get_mut(id) {
+                turn.preview = Some(line);
             }
         }
         let chat = self.chats.get_mut(id).ok_or("Conversation was not found")?;
@@ -4220,17 +4214,60 @@ mod turn_tests {
         assert_eq!(ended["lastTurn"]["outcome"], "completed");
         assert_eq!(ended["lastTurn"]["preview"], "All 3 checks passed.");
         assert!(ended["lastTurn"]["ended"].as_u64().unwrap() > 0);
-        // The persisted state round-trips the field; old state has none.
-        let saved = c.engine.lock().await.chat(&c.id).unwrap().clone();
-        let state = serde_json::to_value(saved).unwrap();
-        let mut old = state.clone();
-        old.as_object_mut().unwrap().remove("lastTurn");
-        assert!(serde_json::from_value::<Conversation>(old)
-            .unwrap()
-            .last_turn
-            .is_none());
-        let back: Conversation = serde_json::from_value(state).unwrap();
-        assert_eq!(back.last_turn.unwrap().message_id, message);
+        // The state keeps the v1.5.214 shape, which refuses unknown fields.
+        let saved = std::fs::read(
+            c._dir
+                .path()
+                .join(format!("conversations/{}/state.json", c.id)),
+        )
+        .unwrap();
+        let state: serde_json::Map<String, Value> = serde_json::from_slice(&saved).unwrap();
+        let v1_5_214 = [
+            "schemaVersion",
+            "id",
+            "agentId",
+            "title",
+            "created",
+            "updated",
+            "phase",
+            "generation",
+            "sessionId",
+            "model",
+            "requestedModel",
+            "options",
+            "active",
+            "queue",
+            "queuePaused",
+            "directMessageId",
+            "directReady",
+            "activeDirect",
+            "accepted",
+            "nextSequence",
+            "lastError",
+            "executable",
+            "fullAccess",
+            "site",
+            "scheduleId",
+        ];
+        for key in state.keys() {
+            assert!(v1_5_214.contains(&key.as_str()), "{key}");
+        }
+        // A restarted service rebuilds the last turn from the journal.
+        let restarted = Arc::new(Mutex::new(Engine::new(
+            Store::open(c._dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )));
+        let reloaded = restarted.lock().await.chat(&c.id).unwrap().summary();
+        for field in ["messageId", "outcome", "preview"] {
+            assert_eq!(
+                reloaded["lastTurn"][field], ended["lastTurn"][field],
+                "{field}"
+            );
+        }
+        // `ended` is the journaled event's time, within a moment of the live one.
+        let at = |row: &Value| row["lastTurn"]["ended"].as_u64().unwrap();
+        assert!(at(&reloaded).abs_diff(at(&ended)) < 5000);
     }
 
     #[tokio::test]

@@ -185,16 +185,31 @@ pub(super) struct Event {
 }
 
 /// The most recent turn that ended, for notifications: what a client keys a
-/// finished turn on without reading the journal.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// finished turn on without reading the journal. Rebuilt from the journal on
+/// load, never persisted in the state.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct LastTurn {
     pub message_id: String,
     pub outcome: String,
     pub ended: u64,
     /// First line of the turn's last redacted answer, at most 120 characters.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+}
+
+/// The preview line of a journaled answer event. A message split into parts
+/// is previewed from its first part.
+pub(super) fn answer_preview(kind: &str, data: &Value) -> Option<String> {
+    if !matches!(kind, "textFinal" | "textRole") || data["part"].as_u64().unwrap_or(0) != 0 {
+        return None;
+    }
+    let line = data["text"]
+        .as_str()?
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    Some(line.chars().take(120).collect())
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -235,7 +250,8 @@ pub(super) struct Conversation {
     pub site: Option<String>,
     #[serde(default)]
     pub schedule_id: Option<String>,
-    #[serde(default)]
+    /// Older builds refuse unknown state fields, so this lives in the journal.
+    #[serde(skip)]
     pub last_turn: Option<LastTurn>,
     /// Revision of the newest unanswered approval request; live only.
     #[serde(skip)]
@@ -607,7 +623,26 @@ impl Store {
         if chat.schema_version != 1 || chat.id != id {
             return Err("Conversation identity does not match its state".into());
         }
-        let cursor = self.last_sequence(id)?;
+        // One pass finds the journal's end and its last ended turn.
+        let mut preview: Option<(String, String)> = None;
+        let mut last_turn = None;
+        let cursor = self.scan(id, |event| {
+            let message = event.data["messageId"].as_str().unwrap_or("");
+            if let Some(line) = answer_preview(&event.kind, &event.data) {
+                preview = Some((message.into(), line));
+            } else if event.kind == "turnEnded" {
+                last_turn = Some(LastTurn {
+                    message_id: message.into(),
+                    outcome: event.data["outcome"].as_str().unwrap_or("unknown").into(),
+                    ended: event.at,
+                    preview: preview
+                        .take()
+                        .filter(|(id, _)| id == message)
+                        .map(|(_, line)| line),
+                });
+            }
+        })?;
+        chat.last_turn = last_turn;
         if chat.next_sequence > cursor + 1 {
             return Err(
                 "Conversation state is ahead of its journal; history cannot be assumed complete"
@@ -865,10 +900,6 @@ impl Store {
             }
         })?;
         Ok(blocked)
-    }
-
-    fn last_sequence(&self, id: &str) -> Result<u64, String> {
-        self.scan(id, |_| {})
     }
 
     /// Visit every event in order; refuses a gap, a torn line or corruption
