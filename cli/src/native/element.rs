@@ -51,6 +51,10 @@ impl GroupRelease {
         }
     }
 
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+
     pub async fn release(mut self) {
         // Disarmed only once the release went through: cancelled before
         // that (say, waiting for the CDP writer), `Drop` releases instead.

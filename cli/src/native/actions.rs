@@ -22610,12 +22610,18 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     }
     if passkey_first {
         webauthn_events = mgr.client.subscribe();
-        authenticator = install_passkeys(&mgr.client, &session_id, &passkeys, &host)
-            .await?
-            .ok_or_else(|| {
-                format!("auth login --bwu --passkey: the vault item has no passkey for {host}")
-            })?
-            .into();
+        authenticator = install_passkeys(
+            &mgr.client,
+            &session_id,
+            &state.iframe_sessions,
+            &passkeys,
+            &host,
+        )
+        .await?
+        .ok_or_else(|| {
+            format!("auth login --bwu --passkey: the vault item has no passkey for {host}")
+        })?
+        .into();
     }
     let user_selectors: Vec<&str> = AUTH_USER_SELECTORS
         .iter()
@@ -22901,7 +22907,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             && page_asks_for_passkey(&mgr.client, &session_id, &origin, &current).await
         {
             webauthn_events = mgr.client.subscribe();
-            match install_passkeys(&mgr.client, &session_id, &passkeys, &host).await {
+            match install_passkeys(&mgr.client, &session_id, &state.iframe_sessions, &passkeys, &host).await {
                 Ok(Some(a)) => {
                     authenticator = Some(a);
                     let at = mgr.get_url().await.unwrap_or_default();
@@ -22996,8 +23002,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     // The ceremony is over (check_passkey_accepted waited for its result):
     // the private key does not outlive the login. A cleanup that cannot be
     // confirmed is an error even when the login itself went through.
-    let cleanup = match &authenticator {
-        Some(a) => remove_passkeys(&mgr.client, &session_id, a).await,
+    let cleanup = match &mut authenticator {
+        Some(a) => remove_passkeys(&mgr.client, &session_id, &state.iframe_sessions, a).await,
         None => Ok(()),
     };
     match (outcome, cleanup) {
@@ -23366,8 +23372,9 @@ const PASSKEY_COUNTER_REFUSAL: &str = "this vault passkey keeps a signature coun
 /// A virtual authenticator installed for one `auth login --bwu`.
 struct PasskeyAuthenticator {
     id: String,
-    /// The new-document script that refuses `navigator.credentials.create`.
-    no_create_script: Option<String>,
+    /// The guard that refuses `navigator.credentials.create` (see
+    /// [`super::passkey_guard`]).
+    create_guard: super::passkey_guard::CreateGuard,
     /// Credential ids we imported (base64): their own `credentialAdded`
     /// events are not the page registering one.
     imported: Vec<String>,
@@ -23386,182 +23393,15 @@ const PASSKEY_ADDED_ERROR: &str =
     the temporary authenticator. Stopped; if the site says a passkey was added, remove it from the \
     account's security settings (its private key no longer exists).";
 
-/// While the temporary authenticator is installed, the page cannot register
-/// a passkey with it: every `create()` is refused before it reaches Chrome,
-/// with the error Chrome itself gives for a refused ceremony. A passkey
-/// sign-in has no business creating any credential, so nothing is passed
-/// through and the original is never called from the page's realm.
-///
-/// The guard is a `Proxy` around the original on `CredentialsContainer`'s
-/// prototype (so `CredentialsContainer.prototype.create.call(...)` is
-/// refused too). Page script has no way to read a proxy's target or
-/// handler, so it cannot get the original back; only CDP can, through the
-/// proxy's `[[Target]]` (see [`restore_create`]). The page can still tell a
-/// guard is there: `Function.prototype.toString` gives
-/// `function () { [native code] }`, without the native's name.
-pub(super) fn no_create_js() -> String {
-    format!(
-        r#"(() => {{
-    'use strict';
-    const c = navigator.credentials;
-    const p = c && Object.getPrototypeOf(c);
-    const d = p && Object.getOwnPropertyDescriptor(p, 'create');
-    if (!d || typeof d.value !== 'function') return false;
-    const reject = Promise.reject.bind(Promise), E = DOMException;
-    const msg = 'The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.';
-    const guard = new Proxy(d.value, {{ {trap} }});
-    try {{
-        Object.defineProperty(p, 'create', {{ ...d, value: guard }});
-    }} catch (e) {{
-        return false;
-    }}
-    // True only when the guard really replaced create().
-    return p.create === guard;
-}})()"#,
-        trap = NO_CREATE_TRAP,
-    )
-}
-
-/// The `apply` trap of [`no_create_js`]'s proxy, also how [`restore_create`]
-/// tells that proxy from one the page made.
-const NO_CREATE_TRAP: &str = "apply() { return reject(new E(msg, 'NotAllowedError')); }";
-
-/// Object group of the handles [`restore_create`] holds.
-const NO_CREATE_GROUP: &str = "chrome-use-passkey-guard";
-
-/// Undo [`no_create_js`] on the current document, through CDP only: the
-/// original comes from the guard's `[[Target]]`, never from anything the
-/// page can call. Ok(true) when `create()` is no longer a guard of ours.
-pub(super) async fn restore_create(
-    client: &super::cdp::client::CdpClient,
-    session_id: &str,
-) -> Result<bool, String> {
-    let out = restore_create_handles(client, session_id).await;
-    super::element::release_object_group(client, session_id, NO_CREATE_GROUP).await;
-    out
-}
-
-async fn restore_create_handles(
-    client: &super::cdp::client::CdpClient,
-    session_id: &str,
-) -> Result<bool, String> {
-    let object_id = |v: &Value| v["result"]["objectId"].as_str().map(str::to_string);
-    let threw = |v: &Value| {
-        v.get("exceptionDetails")
-            .map(|e| format!("page script threw: {}", e["text"].as_str().unwrap_or("?")))
-    };
-    let proto = client
-        .send_command(
-            "Runtime.evaluate",
-            Some(json!({
-                "expression": "(() => { const c = navigator.credentials; return c ? Object.getPrototypeOf(c) : null; })()",
-                "objectGroup": NO_CREATE_GROUP,
-            })),
-            Some(session_id),
-        )
-        .await?;
-    if let Some(e) = threw(&proto) {
-        return Err(e);
-    }
-    let Some(proto) = object_id(&proto) else {
-        return Ok(true);
-    };
-    let current = client
-        .send_command(
-            "Runtime.callFunctionOn",
-            Some(json!({
-                "objectId": proto,
-                "functionDeclaration": "function () { const d = Object.getOwnPropertyDescriptor(this, 'create'); return d && d.value; }",
-                "objectGroup": NO_CREATE_GROUP,
-            })),
-            Some(session_id),
-        )
-        .await?;
-    if let Some(e) = threw(&current) {
-        return Err(e);
-    }
-    let Some(mut current) = object_id(&current) else {
-        return Ok(true);
-    };
-    // Unwrap every guard of ours on top: a navigation between registering the
-    // new-document script and running it on the current page wraps twice.
-    let mut unwrapped = false;
-    for _ in 0..8 {
-        let props = client
-            .send_command(
-                "Runtime.getProperties",
-                Some(json!({ "objectId": current, "ownProperties": true })),
-                Some(session_id),
-            )
-            .await?;
-        let internal = |name: &str| {
-            props["internalProperties"]
-                .as_array()
-                .and_then(|a| a.iter().find(|p| p["name"] == name))
-                .and_then(|p| p["value"]["objectId"].as_str().map(str::to_string))
-        };
-        let (Some(target), Some(handler)) = (internal("[[Target]]"), internal("[[Handler]]"))
-        else {
-            break;
-        };
-        // The handler is out of the page's reach; one that only looks like
-        // ours was made by the page around a function of its choosing. Read
-        // through CDP, which runs no page code (no getters, no patched
-        // `toString`).
-        let handler = client
-            .send_command(
-                "Runtime.getProperties",
-                Some(json!({ "objectId": handler, "ownProperties": true })),
-                Some(session_id),
-            )
-            .await?;
-        let own: Vec<&Value> = handler["result"]
-            .as_array()
-            .map(|a| a.iter().filter(|p| p["name"] != "__proto__").collect())
-            .unwrap_or_default();
-        let ours = match own.as_slice() {
-            [apply] => {
-                apply["name"] == "apply"
-                    && apply["value"]["type"] == "function"
-                    && apply["value"]["description"] == NO_CREATE_TRAP
-            }
-            _ => false,
-        };
-        if !ours {
-            break;
-        }
-        current = target;
-        unwrapped = true;
-    }
-    if !unwrapped {
-        return Ok(true);
-    }
-    let put = client
-        .send_command(
-            "Runtime.callFunctionOn",
-            Some(json!({
-                "objectId": proto,
-                "functionDeclaration": "function (original) { const d = Object.getOwnPropertyDescriptor(this, 'create'); try { Object.defineProperty(this, 'create', { ...d, value: original }); } catch (e) {} return this.create === original; }",
-                "arguments": [{ "objectId": current }],
-                "returnByValue": true,
-            })),
-            Some(session_id),
-        )
-        .await?;
-    if let Some(e) = threw(&put) {
-        return Err(e);
-    }
-    Ok(put["result"]["value"] == json!(true))
-}
-
 /// Load the item's passkeys for this site into a virtual authenticator on the
 /// tab (Chrome's WebAuthn domain). The site's own `navigator.credentials.get`
 /// is then answered by Chrome, signed with the vault key. Only passkeys whose
 /// rpId is the page's host or a parent of it. Ok(None) when none fits; Err
 /// when WebAuthn is unavailable or a passkey keeps a signature counter.
 async fn install_passkeys(
-    client: &super::cdp::client::CdpClient,
+    client: &Arc<super::cdp::client::CdpClient>,
     session_id: &str,
+    iframe_sessions: &HashMap<String, String>,
     passkeys: &[Value],
     host: &str,
 ) -> Result<Option<PasskeyAuthenticator>, String> {
@@ -23632,30 +23472,24 @@ async fn install_passkeys(
     };
     let mut a = PasskeyAuthenticator {
         id,
-        no_create_script: None,
+        create_guard: super::passkey_guard::CreateGuard::new(),
         imported: fits
             .iter()
             .filter_map(|p| p["credentialId"].as_str().map(str::to_string))
             .collect(),
     };
-    // Fail closed: without the create() guard on this page and the next ones,
-    // no authenticator stays installed.
-    a.no_create_script = client
-        .send_command(
-            "Page.addScriptToEvaluateOnNewDocument",
-            Some(json!({ "source": no_create_js() })),
-            Some(session_id),
-        )
-        .await
-        .ok()
-        .and_then(|v| v["identifier"].as_str().map(str::to_string));
-    let guard_now = auth_eval(client, session_id, no_create_js()).await;
-    if a.no_create_script.is_none() || guard_now != Ok(Some(Value::Bool(true))) {
-        let cleanup = remove_passkeys(client, session_id, &a).await;
+    // Fail closed: without the create() guard on this page, its frames and
+    // the next documents, no authenticator stays installed.
+    if let Err(e) =
+        super::passkey_guard::install(client, session_id, iframe_sessions, &mut a.create_guard)
+            .await
+    {
+        let cleanup = remove_passkeys(client, session_id, iframe_sessions, &mut a).await;
         return Err(with_cleanup(
-            "auth login --bwu: could not guard the page against registering a passkey, so the \
-             passkey was not used"
-                .to_string(),
+            format!(
+                "auth login --bwu: could not guard the page against registering a passkey ({e}), \
+                 so the passkey was not used"
+            ),
             cleanup,
         ));
     }
@@ -23678,7 +23512,7 @@ async fn install_passkeys(
             )
             .await
         {
-            let cleanup = remove_passkeys(client, session_id, &a).await;
+            let cleanup = remove_passkeys(client, session_id, iframe_sessions, &mut a).await;
             return Err(with_cleanup(
                 format!("auth login --bwu: Chrome refused the passkey ({e})"),
                 cleanup,
@@ -23691,9 +23525,10 @@ async fn install_passkeys(
 /// Remove the authenticator, its no-create script, and the WebAuthn
 /// environment, so later passkey logins on this tab use the real ones.
 async fn remove_passkeys(
-    client: &super::cdp::client::CdpClient,
+    client: &Arc<super::cdp::client::CdpClient>,
     session_id: &str,
-    a: &PasskeyAuthenticator,
+    iframe_sessions: &HashMap<String, String>,
+    a: &mut PasskeyAuthenticator,
 ) -> Result<(), String> {
     // Every step runs; any failure is reported, so nothing claims the key is
     // gone when that is not confirmed.
@@ -23708,25 +23543,13 @@ async fn remove_passkeys(
     {
         failed.push(format!("removing the virtual authenticator: {e}"));
     }
-    if let Some(script) = &a.no_create_script {
-        if let Err(e) = client
-            .send_command(
-                "Page.removeScriptToEvaluateOnNewDocument",
-                Some(json!({ "identifier": script })),
-                Some(session_id),
-            )
-            .await
-        {
-            failed.push(format!("removing the create() guard script: {e}"));
-        }
-    }
-    // A page that navigated away took the guard with it.
-    match restore_create(client, session_id).await {
-        Ok(true) => {}
-        Err(e) if page_went_away(&e) => {}
-        Ok(false) => failed
-            .push("restoring navigator.credentials.create: the page kept the guard".to_string()),
-        Err(e) => failed.push(format!("restoring navigator.credentials.create: {e}")),
+    // Every document guarded, the main one and its frames: a document that
+    // navigated away took its guard with it.
+    let report =
+        super::passkey_guard::restore(client, session_id, iframe_sessions, &mut a.create_guard)
+            .await;
+    if let Err(e) = super::passkey_guard::report_result(&report) {
+        failed.push(format!("restoring navigator.credentials.create: {e}"));
     }
     if let Err(e) = client
         .send_command("WebAuthn.disable", None, Some(session_id))
@@ -27495,87 +27318,6 @@ mod tests {
                 "`{action}` mutates the page but does not observe"
             );
         }
-    }
-    /// Round 6: the old wrapper carried its unlock token in its own source,
-    /// so a page read it with `toString` and called the wrapper for the
-    /// original. The guard must leave page script no way back to `create`.
-    /// Runs the real guard against a stub `navigator.credentials` in node
-    /// (V8, like Chrome); skipped where node is missing.
-    #[test]
-    fn no_create_guard_gives_the_page_no_way_back_to_create() {
-        let Ok(dir) = tempfile::tempdir() else {
-            return;
-        };
-        let script = dir.path().join("guard.js");
-        std::fs::write(
-            &script,
-            format!(
-                r#"'use strict';
-let calls = 0;
-const original = function create() {{ calls++; return 'ORIGINAL'; }};
-class CredentialsContainer {{}}
-Object.defineProperty(CredentialsContainer.prototype, 'create', {{
-    value: original, writable: true, enumerable: true, configurable: true,
-}});
-Object.defineProperty(globalThis, 'navigator', {{ value: {{ credentials: new CredentialsContainer() }}, configurable: true }});
-const installed = {guard};
-const c = navigator.credentials, p = CredentialsContainer.prototype;
-const src = Function.prototype.toString.call(c.create);
-const leaks = [];
-const refusals = [];
-// Every page-reachable lever: the old attack (a token lifted from the
-// source), odd arguments, a patched Function.prototype.call/apply and
-// Reflect.apply that would see the original if the guard used them.
-const tokens = src.match(/[0-9a-f]{{16,}}/g) || [];
-const saved = [Function.prototype.call, Function.prototype.apply, Reflect.apply];
-Function.prototype.call = function () {{ if (this === original) leaks.push('call'); }};
-Function.prototype.apply = function () {{ if (this === original) leaks.push('apply'); }};
-Reflect.apply = function (f) {{ if (f === original) leaks.push('Reflect.apply'); }};
-const args = [undefined, null, {{}}, src, original, {{ publicKey: {{}} }}, ...tokens];
-const pending = [];
-for (const a of args) {{
-    for (const call of [() => c.create(a), () => p.create(a), () => new Function('c', 'a', 'return c.create(a)')(c, a)]) {{
-        let r;
-        try {{ r = call(); }} catch (e) {{ refusals.push('threw ' + e.name); continue; }}
-        if (r === original || typeof r === 'function') leaks.push('returned a function');
-        pending.push(Promise.resolve(r).then(() => leaks.push('resolved'), (e) => refusals.push(e.name)));
-    }}
-}}
-Promise.all(pending).then(() => {{
-    [Function.prototype.call, Function.prototype.apply, Reflect.apply] = saved;
-    process.stdout.write(JSON.stringify({{
-        installed, src, tokens, leaks, calls,
-        refusals: [...new Set(refusals)],
-        name: c.create.name, length: c.create.length,
-        own: Object.prototype.hasOwnProperty.call(c, 'create'),
-        enumerable: Object.getOwnPropertyDescriptor(p, 'create').enumerable,
-    }}));
-}});
-"#,
-                guard = super::no_create_js(),
-            ),
-        )
-        .unwrap();
-        let Ok(out) = std::process::Command::new("node").arg(&script).output() else {
-            eprintln!("node not found; skipping");
-            return;
-        };
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        assert_eq!(r["installed"], true, "{r}");
-        assert_eq!(r["src"], "function () { [native code] }", "{r}");
-        assert_eq!(r["tokens"], serde_json::json!([]), "{r}");
-        assert_eq!(r["leaks"], serde_json::json!([]), "{r}");
-        assert_eq!(r["calls"], 0, "{r}");
-        assert_eq!(r["refusals"], serde_json::json!(["NotAllowedError"]), "{r}");
-        assert_eq!(r["name"], "create", "{r}");
-        assert_eq!(r["length"], 0, "{r}");
-        assert_eq!(r["own"], false, "{r}");
-        assert_eq!(r["enumerable"], true, "{r}");
     }
 }
 

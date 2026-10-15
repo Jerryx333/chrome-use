@@ -7598,13 +7598,16 @@ async fn e2e_auth_login_bwu_presses_the_button_when_enter_is_lost() {
     .await;
 }
 
-/// Round 6: while a passkey login runs, the page cannot create a credential
-/// by any path it has (the instance, the prototype, a fresh `about:blank`
-/// frame), its source names no token, and only CDP puts the original back,
-/// on documents guarded by the new-document script and twice-guarded ones.
+/// Rounds 6–7: while a passkey login runs, the page cannot create a
+/// credential by any path it has: the prototype, an own `create` it had put
+/// on the instance, a frame that existed before the install, a fresh
+/// `about:blank` frame, the next document. Restore puts every one back, by
+/// identity: a proxy with the guard's exact trap text that the page made is
+/// left alone, and a guard the page wrapped is reported, not called restored.
 #[tokio::test]
 #[ignore]
-async fn e2e_auth_login_bwu_create_guard_only_cdp_restores() {
+async fn e2e_auth_login_bwu_create_guard_covers_frames_and_restores_by_identity() {
+    use super::passkey_guard::{install, report_result, restore, CreateGuard, Outcome};
     let (base_url, _server) = start_echo_server().await;
     let mut state = DaemonState::new();
     let launch = execute_command(
@@ -7622,91 +7625,176 @@ async fn e2e_auth_login_bwu_create_guard_only_cdp_restores() {
             mgr.active_session_id().unwrap().to_string(),
         )
     };
-    let script = client
-        .send_command(
-            "Page.addScriptToEvaluateOnNewDocument",
-            Some(json!({ "source": super::actions::no_create_js() })),
-            Some(&sid),
-        )
-        .await
-        .unwrap()["identifier"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let guard = format!("JSON.stringify({})", super::actions::no_create_js());
-    assert_evaluate(&mut state, "g", &guard, json!("true")).await;
+    let none = std::collections::HashMap::new();
+    // The page ran first: an own create on the instance (a polyfill's
+    // shape) and a frame of its own.
+    assert_evaluate(
+        &mut state,
+        "pre",
+        "(() => { const c = navigator.credentials, o = c.create; \
+           c.create = function create(o2) { return o.call(c, o2); }; \
+           const f = document.createElement('iframe'); f.id = 'pre'; f.srcdoc = '<p>pre</p>'; \
+           document.body.appendChild(f); return true; })()",
+        json!(true),
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let mut guard = CreateGuard::new();
+    install(&client, &sid, &none, &mut guard).await.unwrap();
 
     let probe = r#"(async () => {
         const c = navigator.credentials, p = CredentialsContainer.prototype;
         const how = async (f) => { try { await f(); return 'resolved'; } catch (e) { return e.name; } };
-        const f = document.createElement('iframe');
-        document.body.appendChild(f);
-        const src = Function.prototype.toString.call(c.create);
-        const out = [src, c.create.name,
+        const pre = document.getElementById('pre');
+        const fresh = document.createElement('iframe');
+        document.body.appendChild(fresh);
+        const out = [Function.prototype.toString.call(p.create),
             await how(() => c.create({ publicKey: {} })),
             await how(() => p.create.call(c, { publicKey: {} })),
-            await how(() => f.contentWindow.navigator.credentials.create({ publicKey: {} })),
-            /[0-9a-f]{16,}/.test(src)];
-        f.remove();
+            await how(() => fresh.contentWindow.navigator.credentials.create({ publicKey: {} })),
+            pre ? await how(() => pre.contentWindow.CredentialsContainer.prototype.create.call(pre.contentWindow.navigator.credentials, { publicKey: {} })) : 'none',
+            /[0-9a-f]{16,}/.test(Function.prototype.toString.call(c.create))];
+        fresh.remove();
         return JSON.stringify(out);
     })()"#;
-    let guarded = json!(json!([
-        "function () { [native code] }",
-        "create",
-        "NotAllowedError",
-        "NotAllowedError",
-        "NotAllowedError",
-        false
-    ])
-    .to_string());
-    assert_evaluate(&mut state, "p1", probe, guarded.clone()).await;
+    let guarded = |pre: &str| {
+        json!(json!([
+            "function () { [native code] }",
+            "NotAllowedError",
+            "NotAllowedError",
+            "NotAllowedError",
+            pre,
+            false
+        ])
+        .to_string())
+    };
+    assert_evaluate(&mut state, "p1", probe, guarded("NotAllowedError")).await;
 
-    // A new document gets the guard from the script; guarding it again on
-    // top (the navigation race at install) still restores in one go.
-    assert_success(&execute_command(&nav("n2"), &mut state).await);
-    assert_evaluate(&mut state, "p2", probe, guarded).await;
-    assert_evaluate(&mut state, "g2", &guard, json!("true")).await;
-    client
-        .send_command(
-            "Page.removeScriptToEvaluateOnNewDocument",
-            Some(json!({ "identifier": script })),
-            Some(&sid),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        super::actions::restore_create(&client, &sid).await,
-        Ok(true)
+    // Restore on this document: the main world, the instance, the frame.
+    let report = restore(&client, &sid, &none, &mut guard).await;
+    assert_eq!(report_result(&report), Ok(()), "{report:?}");
+    assert!(
+        report
+            .iter()
+            .filter(|(_, r)| *r == Outcome::Restored)
+            .count()
+            >= 2,
+        "{report:?}"
     );
     let native = r#"(async () => {
-        const c = navigator.credentials;
-        let how;
-        try { await c.create({ publicKey: {} }); how = 'resolved'; } catch (e) { how = e.name; }
-        return JSON.stringify([Function.prototype.toString.call(c.create), c.create === CredentialsContainer.prototype.create, how]);
+        const c = navigator.credentials, pre = document.getElementById('pre');
+        const how = async (f) => { try { await f(); return 'resolved'; } catch (e) { return e.name; } };
+        return JSON.stringify([Function.prototype.toString.call(CredentialsContainer.prototype.create),
+            Function.prototype.toString.call(c.create).startsWith('function create(o2)'),
+            await how(() => c.create({ publicKey: {} })),
+            pre ? Function.prototype.toString.call(pre.contentWindow.CredentialsContainer.prototype.create) : 'none']);
     })()"#;
-    let restored =
-        json!(json!(["function create() { [native code] }", true, "TypeError"]).to_string());
-    assert_evaluate(&mut state, "r1", native, restored).await;
-
-    // A proxy the page made itself is not ours to take off.
     assert_evaluate(
         &mut state,
-        "own",
-        "const o = CredentialsContainer.prototype.create; CredentialsContainer.prototype.create = new Proxy(o, { apply() { return Promise.reject(new TypeError('page')); } }); true",
+        "r1",
+        native,
+        json!(json!([
+            "function create() { [native code] }",
+            true,
+            "TypeError",
+            "function create() { [native code] }"
+        ])
+        .to_string()),
+    )
+    .await;
+
+    // After a navigation the guard came from the new-document script (no
+    // handle of ours); a frame added since got it too. Restore still finds
+    // both, by the key.
+    let mut guard = CreateGuard::new();
+    install(&client, &sid, &none, &mut guard).await.unwrap();
+    assert_success(&execute_command(&nav("n2"), &mut state).await);
+    assert_evaluate(
+        &mut state,
+        "late",
+        "(() => { const f = document.createElement('iframe'); f.id = 'pre'; f.srcdoc = '<p>late</p>'; document.body.appendChild(f); return true; })()",
         json!(true),
     )
     .await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_evaluate(&mut state, "p2", probe, guarded("NotAllowedError")).await;
+    let report = restore(&client, &sid, &none, &mut guard).await;
+    assert_eq!(report_result(&report), Ok(()), "{report:?}");
+    assert!(
+        report
+            .iter()
+            .filter(|(_, r)| *r == Outcome::Restored)
+            .count()
+            >= 2,
+        "{report:?}"
+    );
+    let native_after_nav = r#"(() => { const pre = document.getElementById('pre');
+        return JSON.stringify([Function.prototype.toString.call(navigator.credentials.create),
+            Function.prototype.toString.call(pre.contentWindow.navigator.credentials.create)]); })()"#;
+    assert_evaluate(
+        &mut state,
+        "r2",
+        native_after_nav,
+        json!(json!([
+            "function create() { [native code] }",
+            "function create() { [native code] }"
+        ])
+        .to_string()),
+    )
+    .await;
+
+    // The page puts its own proxy, with the guard's exact trap text and no
+    // prototype, over our guard: restore does not take it off (nor write
+    // back its target), and says nothing was restored there.
+    let mut guard = CreateGuard::new();
+    install(&client, &sid, &none, &mut guard).await.unwrap();
+    assert_evaluate(
+        &mut state,
+        "forge",
+        "(() => { const reject = Promise.reject.bind(Promise), E = DOMException; \
+           const msg = 'x'; window.__mine = function create() { return Promise.resolve('PAGE'); }; \
+           window.__forged = new Proxy(window.__mine, { __proto__: null, apply() { return reject(new E(msg, 'NotAllowedError')); } }); \
+           CredentialsContainer.prototype.create = window.__forged; return true; })()",
+        json!(true),
+    )
+    .await;
+    let report = restore(&client, &sid, &none, &mut guard).await;
+    assert_eq!(report_result(&report), Ok(()), "{report:?}");
+    let top = client
+        .send_command_no_params("Page.getFrameTree", Some(&sid))
+        .await
+        .unwrap()["frameTree"]["frame"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(
-        super::actions::restore_create(&client, &sid).await,
-        Ok(true)
+        report.iter().find(|(f, _)| *f == top).map(|(_, r)| r),
+        Some(&Outcome::Clean),
+        "{report:?}"
     );
     assert_evaluate(
         &mut state,
-        "own2",
-        "Function.prototype.toString.call(navigator.credentials.create)",
-        json!("function () { [native code] }"),
+        "forged",
+        "CredentialsContainer.prototype.create === window.__forged",
+        json!(true),
     )
     .await;
+
+    // The page wraps a live guard of ours: still in effect, so not restored.
+    assert_success(&execute_command(&nav("n3"), &mut state).await);
+    let mut guard = CreateGuard::new();
+    install(&client, &sid, &none, &mut guard).await.unwrap();
+    assert_evaluate(
+        &mut state,
+        "wrap",
+        "(() => { const g = CredentialsContainer.prototype.create; \
+           CredentialsContainer.prototype.create = new Proxy(g, {}); return true; })()",
+        json!(true),
+    )
+    .await;
+    let report = restore(&client, &sid, &none, &mut guard).await;
+    let err = report_result(&report).unwrap_err();
+    assert!(err.contains("wrapped the create() guard"), "{err}");
 }
 
 /// #482: a submit that navigates is judged by where the page ends up.

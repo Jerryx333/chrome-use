@@ -33,6 +33,7 @@ pub mod login_wall;
 pub mod network;
 mod observation;
 pub(crate) mod panel_action;
+mod passkey_guard;
 #[allow(dead_code)]
 pub mod policy;
 pub mod popup_guard;
