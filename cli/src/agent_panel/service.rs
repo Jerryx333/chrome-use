@@ -4643,6 +4643,9 @@ mod turn_tests {
 
     /// A conversation whose backend job has a real notice pump, and whose
     /// next process is a script that idles (so a start can really spawn).
+    /// The idle script is a shell script, so these tests are Unix-only; the
+    /// pump ordering they check does not depend on the platform.
+    #[cfg(unix)]
     struct Pumped {
         _dir: tempfile::TempDir,
         engine: Arc<Mutex<Engine>>,
@@ -4651,11 +4654,11 @@ mod turn_tests {
         events: mpsc::Sender<Notice>,
     }
 
+    #[cfg(unix)]
     async fn pumped() -> Pumped {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("agent");
         std::fs::write(&script, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -4695,6 +4698,7 @@ mod turn_tests {
         }
     }
 
+    #[cfg(unix)]
     impl Pumped {
         async fn send(&self, operation: &str, text: &str) -> String {
             let message = uuid::Uuid::new_v4().to_string();
@@ -4753,6 +4757,7 @@ mod turn_tests {
 
     // Starting a process reads the environment that other tests change.
     #[allow(clippy::await_holding_lock)]
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_queued_message_starts_on_a_new_process_once_the_retired_one_exits() {
         let _env = crate::test_utils::EnvGuard::new(&[]);
@@ -4780,6 +4785,7 @@ mod turn_tests {
 
     // Starting a process reads the environment that other tests change.
     #[allow(clippy::await_holding_lock)]
+    #[cfg(unix)]
     #[tokio::test]
     async fn stop_and_send_starts_on_a_new_process_once_the_stopped_one_exits() {
         let _env = crate::test_utils::EnvGuard::new(&[]);
