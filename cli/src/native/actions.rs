@@ -2621,7 +2621,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "profiler_start" => handle_profiler_start(cmd, state).await,
             "profiler_stop" => handle_profiler_stop(cmd, state).await,
             "recording_start" => handle_recording_start(cmd, state).await,
-            "recording_stop" => handle_recording_stop(state).await,
+            "recording_stop" => handle_recording_stop(cmd, state).await,
             "recording_restart" => handle_recording_restart(cmd, state).await,
             "pdf" => handle_pdf(cmd, state).await,
             "tab_list" => handle_tab_list(cmd, state).await,
@@ -14982,7 +14982,13 @@ async fn handle_recording_start(cmd: &Value, state: &mut DaemonState) -> Result<
     Ok(result)
 }
 
-async fn handle_recording_stop(state: &mut DaemonState) -> Result<Value, String> {
+async fn handle_recording_stop(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    // Checked before anything stops: a stop meant for another recording
+    // leaves this one running.
+    recording::check_expected_path(
+        &state.recording_state,
+        cmd.get("expectPath").and_then(Value::as_str),
+    )?;
     state.stop_recording_task().await?;
     let result = recording::recording_stop(&mut state.recording_state);
 

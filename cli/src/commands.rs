@@ -3520,7 +3520,21 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
-                Some("stop") => Ok(json!({ "id": id, "action": "recording_stop" })),
+                Some("stop") => {
+                    let mut cmd = json!({ "id": id, "action": "recording_stop" });
+                    // `--expect-path <p>`: stop only the recording writing to
+                    // `p`, so a late stop never ends a newer recording.
+                    if let Some(i) = rest.iter().position(|a| *a == "--expect-path") {
+                        let path = rest
+                            .get(i + 1)
+                            .ok_or_else(|| ParseError::MissingArguments {
+                                context: "record stop --expect-path".to_string(),
+                                usage: "record stop [--expect-path <path>]",
+                            })?;
+                        cmd["expectPath"] = json!(path);
+                    }
+                    Ok(cmd)
+                }
                 Some("restart") => {
                     let path = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                         context: "record restart".to_string(),
@@ -8404,6 +8418,22 @@ mod tests {
     fn test_record_stop() {
         let cmd = parse_command(&args("record stop"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "recording_stop");
+        assert!(cmd.get("expectPath").is_none());
+    }
+
+    #[test]
+    fn test_record_stop_expect_path() {
+        let cmd = parse_command(
+            &args("record stop --expect-path /w/.chrome-use-out/a1/recording.webm"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "recording_stop");
+        assert_eq!(cmd["expectPath"], "/w/.chrome-use-out/a1/recording.webm");
+        assert!(matches!(
+            parse_command(&args("record stop --expect-path"), &default_flags()),
+            Err(ParseError::MissingArguments { .. })
+        ));
     }
 
     #[test]

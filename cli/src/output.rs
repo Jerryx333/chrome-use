@@ -4873,7 +4873,7 @@ The output file can be viewed in:
 chrome-use record - Record browser session to video
 
 Usage: chrome-use record start <path.webm> [url]
-       chrome-use record stop
+       chrome-use record stop [--expect-path <path>]
        chrome-use record restart <path.webm> [url]
 
 Record the browser to a WebM video file.
@@ -4885,6 +4885,9 @@ If no URL is provided, recording starts from the current page.
 Operations:
   start <path> [url]     Start recording (defaults to current URL if omitted)
   stop                   Stop recording and save video
+                         --expect-path <path>: stop only if the active
+                         recording writes to exactly <path>; otherwise
+                         refuse and leave it running
   restart <path> [url]   Stop current recording (if any) and start a new one
 
 Global Options:
@@ -6285,7 +6288,7 @@ Debug:
   trace start|stop [path]    Record Chrome DevTools trace
   profiler start|stop [path] Record Chrome DevTools profile
   record start <path> [url]  Start video recording (WebM)
-  record stop                Stop and save video
+  record stop [--expect-path <p>]  Stop and save video
   console [--clear] [--limit N]  View console logs (--limit tails last N)
   errors [--clear]           View page errors
   highlight <sel>            Highlight element
