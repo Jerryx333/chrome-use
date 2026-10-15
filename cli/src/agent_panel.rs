@@ -22,6 +22,7 @@ mod conversation;
 mod inspect;
 mod inspection;
 mod options;
+mod progress;
 mod schedules;
 mod service;
 mod skill_library;
