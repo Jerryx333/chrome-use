@@ -142,8 +142,8 @@ test('chat adapters are validated and capability-only changes are observable', (
 test('new panel features survive the real native handshake and are cleared on disconnect', () => {
   const state = new HostConnectionState(), port = {};
   state.begin(port);
-  const agentPanel = {schemaVersion:1,mode:'full',modelInspection:true,conversationOptions:true,imageAttachments:true,skillLibrary:true,schedules:true};
+  const agentPanel = {schemaVersion:1,mode:'full',modelInspection:true,conversationOptions:true,imageAttachments:true,heicConvert:true,skillLibrary:true,schedules:true};
   assert.equal(state.receive(port,{method:'pong',params:{agentPanel}}),true);
-  for(const key of ['conversationOptions','imageAttachments','skillLibrary','schedules']) assert.equal(state.snapshot().agentPanel[key],true);
+  for(const key of ['conversationOptions','imageAttachments','heicConvert','skillLibrary','schedules']) assert.equal(state.snapshot().agentPanel[key],true);
   state.end(port,'disconnected');assert.equal(state.snapshot().agentPanel,null);
 });

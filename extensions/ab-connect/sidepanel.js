@@ -1,5 +1,5 @@
 import { PanelTimeline, phaseLabels } from './panel-state.js';
-import { prepareImage } from './image-attachment.js';
+import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
@@ -66,6 +66,7 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     if (!reply?.success) throw new Error(reply?.error || 'The local host did not confirm this operation.');
     return reply.result;
   }
+  const convertHeif = heifConverter(api);
   function renderConnection(state) {
     connected = state?.connected === true;
     panelSupport = state?.agentPanel?.schemaVersion === 1 ? state.agentPanel : null;
@@ -873,14 +874,14 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
     if (list.length + files.length > 5) throw new Error('Attach up to five images per message.');
     convertingImages = true; controls();
     try {
-      const added = []; for (const file of files) added.push(await encodeImage(file));
+      const added = []; for (const file of files) added.push(await encodeImage(file, { convertHeif: panelSupport?.heicConvert ? convertHeif : null }));
       imageDrafts.set(id, [...list, ...added]); if (id === selected) renderImageDrafts();
     } finally { convertingImages = false; nodes.imageFiles.value = ''; controls(); }
   }
   nodes.attachImages.addEventListener('click', () => nodes.imageFiles.click());
   nodes.imageFiles.addEventListener('change', () => void addImages([...nodes.imageFiles.files]).catch(error));
   nodes.message.addEventListener('paste', event => {
-    const files = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith('image/'));
+    const files = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith('image/') || isHeif(file));
     if (files.length && panelSupport?.imageAttachments) { event.preventDefault(); void addImages(files).catch(error); }
   });
   nodes.message.addEventListener('dragover', event => { if (panelSupport?.imageAttachments) event.preventDefault(); });

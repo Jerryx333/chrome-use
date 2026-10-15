@@ -83,7 +83,7 @@
       <p>历史保存在本机。所选 CLI 可能把任务和网页内容发送给它配置的模型服务，该服务的隐私政策适用。侧栏没有新增网页 content script，打开时仍可能改变页面视口。<strong>Agents &amp; models</strong> 可发现程序和预览配置改动，写入后读回，恢复时保留后来的修改。</p>
             <h3>技能和图片</h3>
       <p>输入 <code>/</code> 选择技能。在 <strong>Agents &amp; models → Skill library</strong> 编辑、启停库内条目，或从本机目录、ZIP/.skill 压缩包、HTTPS Git 仓库导入。用户和 CLI 原有技能目录在这里只读。发送前保存所选技能及文件的副本，队列编辑和明确重试保留同一份内容。面板 agent 可通过 <code>chrome_use_skills</code> 列出、读取技能或保存库内说明。</p>
-      <p>通过 <strong>Attach images</strong> 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP。最长边缩到 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入。附件会交给配置的模型服务。</p>
+      <p>通过 <strong>Attach images</strong> 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP/HEIC。HEIC 由本地 CLI 用系统编解码器转成 JPEG：macOS 用 <code>sips</code>，Windows 需要从 Microsoft Store 安装 HEIF 图像扩展和 HEVC 视频扩展，Linux 需要 <code>heif-convert</code> 或带 HEIF 支持的 ImageMagick。最长边缩到 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入。附件会交给配置的模型服务。</p>
       <h3>会话参数和定时提示</h3>
       <p><strong>Conversation options</strong> 设置允许的工具、Codex/Claude 推理强度和 Codex 服务等级。空闲时保存，下一次回复生效，不改 CLI 全局配置。Codex 无法移除可以读文件的 shell，OpenCode ACP 无法保证限制内置工具。审批开关只决定是否自动处理当前工具范围内的请求，Pi 没有逐次审批。</p>
       <p><strong>Agents &amp; models → Scheduled prompts</strong> 支持间隔、每天或工作日的本地时间、五字段 cron，并保存 agent、模型、会话参数、技能和明确的工具范围。每次运行使用独立后台浏览器 session，保留历史并在完成时通知。<strong>Run now</strong> 不改变下次到期时间。关闭侧栏不会停掉本地服务，停止服务则不再调度。重启或唤醒后，错过的周期只补跑一次；上次仍在执行或结果未确认时不会重叠执行或重放，确认未知结果前先看历史。</p>

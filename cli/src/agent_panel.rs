@@ -19,6 +19,7 @@ mod config_edit;
 mod config_transaction;
 mod configuration;
 mod conversation;
+mod heic;
 mod inspect;
 mod inspection;
 mod options;
@@ -570,7 +571,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"requestRevision":1,"chatAgents":CHAT_AGENTS})
+    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"heicConvert":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"requestRevision":1,"chatAgents":CHAT_AGENTS})
 }
 
 /// `chrome-use inspect link|unlink|list`; returns the process exit code.
@@ -591,6 +592,7 @@ pub fn handle_for_profile(
             let context = DiscoveryContext::current()?;
             Ok(json!({ "schemaVersion": 1, "agents": discover_in(&context) }))
         }
+        "imageConvert" => heic::handle(params),
         "configRead" | "configPlan" | "configApply" | "configRestore" => {
             configuration::handle(operation, params, profile)
         }
@@ -663,6 +665,7 @@ mod tests {
             "pageContext",
             "conversationOptions",
             "imageAttachments",
+            "heicConvert",
             "skillLibrary",
             "schedules",
             "inspect",

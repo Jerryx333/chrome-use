@@ -557,6 +557,21 @@ test('image uploads complete before delivery and explicit retry preserves the sa
   assert.equal(f.calls.filter(c=>c.operation==='conversationAttachmentPut').length,1);f.panel.close();
 });
 
+test('HEIC files reach the host converter only when the CLI advertises it', async () => {
+  for (const heicConvert of [true, false]) {
+    const seen=[];
+    const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,imageAttachments:true,...(heicConvert?{heicConvert}:{})}}),encodeImage:async(file,{convertHeif})=>{seen.push(convertHeif);if(!convertHeif)throw new Error('Update the chrome-use CLI to attach HEIC photos, or export them as JPEG first.');await convertHeif(file);return {name:file.name,mediaType:'image/jpeg',data:'converted'};},imageConvert:async()=>({success:true,result:{schemaVersion:1,mediaType:'image/jpeg',data:btoa('JPEG')}})});
+    f.panel.select('b');await settle();
+    const file={name:'IMG_0001.HEIC',type:'',size:4,async arrayBuffer(){return new Uint8Array([1,2,3,4]).buffer;}};
+    f.nodes.get('message').fire('paste',{clipboardData:{files:[file]}});await settle();await settle();
+    assert.equal(seen.length,1,'an untyped .heic paste is not dropped');
+    assert.equal(typeof seen[0]==='function',heicConvert);
+    assert.equal(f.calls.filter(c=>c.operation==='imageConvert').length,heicConvert?1:0);
+    if(!heicConvert)assert.match(f.nodes.get('notice').textContent,/Update the chrome-use CLI/);
+    f.panel.close();
+  }
+});
+
 test('a failed image upload never sends the text alone or creates an uncertain message', async () => {
   const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,imageAttachments:true}}),encodeImage:async()=>({name:'fixture.png',mediaType:'image/png',data:'synthetic'}),conversationAttachmentPut:async()=>{throw new Error('image save failed');}});
   f.panel.select('b');await settle();f.nodes.get('imageFiles').files=[{type:'image/png'}];f.nodes.get('imageFiles').fire('change');await settle();
