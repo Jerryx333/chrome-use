@@ -25,6 +25,7 @@ into one release. Six capabilities ship together; none is staged for a later ver
 | P2-3 crash points and concurrent duplicate reports | Agreed. A capture verdict is now written last, after the artifact outcome; duplicate reports during ingest get `pending`. | 3.2, 3.3, 14.1 |
 | P2-4 pidfd kill and macOS proof | Agreed. Kill loops until the group is empty; the macOS loop test is observation only; proof comes from kernel source or the probe answers `unknown`. | 5.3, 5.4, risk 8 |
 | P2-5 naming | Agreed: `sentProjection`; the `sent` dispatched flag keeps its meaning. | 7.3 |
+| Approval (seq 26) implementation P2s | Folded in: an explicit lease state machine with a one-time `LateReported` transition; `bootId` plus a capped `notAfter`, monotonic values never stored or used as proof; a dequeued message is kept through a failed retirement (`turnStartFailed`), and non-resumable backends refuse to continue instead of starting a history-less session; generation reuse after clean completion only for fixture-backed CLI versions; step 0 marked landed (`ea4dd857`); fixtures kept as regressions. | D1a, 2.2, 3.3, 11, 13 step 0, 14.1 |
 | Fixture findings (step 1, `cli/src/agent_panel/fixtures/README.md`) | Claude drops all text blocks of an MCP result that has `structuredContent`: the actionId and every note now live in `structuredContent.chromeUseAction`, which chrome-use already returns. OpenCode runs MCP calls inside a codemode `execute` wrapper: a step is the wrapper, linked to several actionIds when they survive, otherwise unlinked; the lease still puts the evidence in the right turn. Pi provider failure ends `agent_settled {aborted: false}` after three errored retries: outcome follows the last assistant message. The Codex full-access approval bug is a prerequisite fix. | 3.2, 3.4, 4.4, 11, 13 steps 0 and 3 |
 
 ## Review response (seq 22)
@@ -104,6 +105,27 @@ on the same process. Four rules close that:
    `session/load`, `acp.rs:173-177`, which already refuses when neither is offered). The generation
    counter lives in `state.json` (`Conversation.generation`) and only grows, so a retired
    generation is refused forever, including after a service restart.
+
+   The next message is never lost on this path. `begin_next` has already moved it to
+   `chat.active` and `Engine::begin` journaled `turnStarted` when `start()` waits for the old
+   process. If that process does not confirm its exit within the existing 10 s
+   (`service.rs:1566-1583`), or the new process fails to start, the service journals
+   `turnStartFailed {messageId, retiredGeneration, reason, delivered: false}`, keeps the message as
+   `chat.active` in `state.json`, and sets `RecoveryRequired` as `start()` errors do today
+   (`service.rs:1696-1704`). The message was never written to any backend, so recovery review
+   shows it as "not delivered" next to the old process's `alive`/`unknown` state. After a
+   confirmed terminate or a fork, the panel puts its text back in the composer as a draft for the
+   user to send; nothing re-sends it automatically.
+
+   Backends that cannot resume: a new generation without the old session would silently start a
+   history-less agent, so it is not done. Each `ready` records `resumable` (Codex, Claude and Pi
+   always resume a session id or session file; OpenCode only when `initialize` offers
+   `session/resume` or `loadSession`, `acp.rs:173-177`). When a turn on a non-resumable process
+   ends in a way that retires it, the service journals `generationRetired {resumable: false}`,
+   pauses the queue, and refuses further messages for this conversation with "This agent cannot
+   continue after an interrupted request. Start a new conversation." The turn card shows that text
+   and a "New conversation from this page" button, which creates an ordinary conversation (no
+   fork context). Queued messages stay visible and can be copied out; none is sent.
 3. For a turn that completed cleanly the same generation stays live, and this is safe: Begin
    runs inside the MCP tool call before the CLI, so the backend cannot report the turn completed
    until the tool call, and therefore its Begin, has returned. The open-tool guard in rule 2
@@ -115,11 +137,29 @@ on the same process. Four rules close that:
    Step 1 checks this for every backend with a fixture whose MCP call outlives the client; any
    backend where the timeout cannot be set, or the fixture shows a completed turn with a call
    still running, retires its generation after every turn instead.
-4. Begin carries `notAfter`, the MCP's send time plus its 5 s client budget, read from a
-   machine-wide monotonic clock (`CLOCK_MONOTONIC` on Unix, `QueryUnbiasedInterruptTime` on
-   Windows) so a wall-clock change cannot move it. The service refuses a Begin it processes after
-   `notAfter`, and the MCP never runs a tool whose Begin reply it did not receive by `notAfter`.
-   A Begin the MCP gave up on can therefore never be admitted later.
+
+   Binding condition (plan review seq 26): reusing a generation after a clean completion is
+   allowed only for a backend CLI version that has committed protocol fixtures showing both the
+   clean completion lifecycle and the client-timeout behaviour. The service reads the version the
+   backend reports in its handshake (Codex `initialize` `userAgent`, Claude `system/init`
+   `claude_code_version`, OpenCode `initialize` `agentInfo.version`; all three seen in the step 1
+   fixtures; Pi's field is settled in step 1) and checks it against a compiled allowlist of
+   fixture-backed versions. An unknown version, a missing version field, or unknown timeout
+   semantics retire the generation after every turn. This is the one place the code looks at a
+   version, and unknown always takes the conservative path. A single happy-path run does not
+   add a version to the allowlist.
+4. Begin carries `{bootId, notAfter}`. `notAfter` is the MCP's send time plus its 5 s client
+   budget, read from a machine-wide monotonic clock (`CLOCK_MONOTONIC` on Unix,
+   `QueryUnbiasedInterruptTime` on Windows) so a wall-clock change cannot move it. Monotonic
+   values only mean something within one boot, so `bootId` names the boot (Linux
+   `/proc/sys/kernel/random/boot_id`, macOS `kern.bootsessionuuid`, Windows the boot time from
+   `NtQuerySystemInformation(SystemTimeOfDayInformation)`). The service refuses a Begin whose
+   `bootId` differs from its own, whose `notAfter` has passed, or whose `notAfter` lies more than
+   5 s plus 250 ms skew in the future, so a client cannot hand in an arbitrarily distant
+   deadline. The MCP never runs a tool whose Begin reply it did not receive by `notAfter`. A Begin
+   the MCP gave up on can therefore never be admitted later. Monotonic values are used only for
+   this deadline: they are never stored as identity, never compared across boots, and never used
+   as exit proof (5.3 uses kernel process start times and session ids for that).
 
 Admission then requires: the job is live with exactly the caller's generation and not retiring,
 the phase admits leases, `chat.active` is `Some`, and `notAfter` has not passed. With a live,
@@ -223,13 +263,14 @@ browserActionTarget{v, messageId, generation, actionId, tool, toolClass,
                     requested: null|{tabHandle, url},
                     observed: null|{before: Target|null, after: Target|null},
                     outcome: "ok"|"error"|"timeout", errorCode, durationMs, resultDigest,
-                    afterStop: bool, afterTurnEnd: bool, afterRecoveryRequired: bool}
+                    afterStop: bool, afterTurnEnd: bool, afterRecoveryRequired: bool,
+                    lateReported: bool}
                     Target = {chromeTabId|null, tabRef, targetId, url, title|null,
                               provenance: "actionReply"|"daemonState"}
 actionObserved     {v, messageId, actionId, verdict: "confirmed"|"failed"|"uncertain",
                     evaluator: "browser"|"host"|"none", basis: "expect"|"readBack"|"navigation"|"tabVerified"|
                     "download"|"capture"|"toolError"|"pageChanged"|"none", detail, possiblyExecuted: bool,
-                    check: null|{kind, predicate, target: Target, observedSequence}}
+                    check: null|{kind, predicate, target: Target, observedSequence}, lateReported: bool}
 unboundActionReport{v, generation|null, actionId|null, tool, reason: "noLease"|"otherConversation"|
                     "malformed"}                                    (quarantine, never cited)
 fileDelivered      {v, messageId, actionId, artifactId, requestedDestination, state: "delivered"|
@@ -260,6 +301,9 @@ turnSummary        {v, messageId, sourceSequences: [first, last], steps, failedS
                     actions: {confirmed, failed, uncertain, unlinked, admittedNotReported},
                     artifacts: {ready, unavailable}, assessment: status, stalls}
 contextCompacted   {v, messageId, backend, trigger|null, sourceSequences: [first, last]}
+turnStartFailed    {v, messageId, retiredGeneration, reason, delivered: false}
+generationRetired  {v, generation, reason: "notCompleted"|"openTool"|"openLease"|"unlistedVersion",
+                    resumable: bool}
 recoveryTerminated {v, messageId, method: "jobObject"|"processGroup", confirmed, detail}
 recoveryForked     {v, messageId, forkedTo}                         (original conversation)
 recoveryContext    {v, fromConversationId, fromMessageId, fromSequence, outcome: "unknown",
@@ -393,13 +437,34 @@ through `call_panel_mcp`/`report_panel_evidence`, to `service::call`'s existing-
 
 `Engine` gains `leases: HashMap<conversation, HashMap<actionId, Lease>>`,
 `Lease {messageId, generation, admittedSequence, afterStop: bool,
-state: Open|Reporting|Reported(reply)|Unreported, outputs, quotaReserved}`. Leases are rebuilt at
-load from `actionAdmitted` and the report events in the same pass that computes `last_sequence`
-(`conversation.rs:692-728`). At most 256 open leases per conversation; beyond that new leases
-are refused.
+state: Open|Reporting|Reported(reply)|Unreported|LateReported(reply), outputs, quotaReserved}`.
+Leases are rebuilt at load from `actionAdmitted` and the report events in the same pass that
+computes `last_sequence` (`conversation.rs:692-728`). At most 256 open leases per conversation;
+beyond that new leases are refused.
 
-- `agentActionBegin {callerConversation, generation, notAfter, actionId, tool, arguments}`
-  (5 s). Under the engine lock, in this order: `notAfter` not passed; the conversation exists;
+The lease state machine. Every transition happens under the engine lock and is recoverable from
+the journal; no other transition exists.
+
+| from | event | to | journaled | reply to this report |
+|---|---|---|---|---|
+| (none) | Begin admitted | `Open` | `actionAdmitted` | n/a |
+| `Open` | report, lock 1 | `Reporting` | `browserActionTarget` | (after lock 2) |
+| `Reporting` | report, lock 2 | `Reported(reply)` | artifact terminal events, then `actionObserved` | `reply` |
+| `Reporting` | load after a crash | `Reported(reply)` | missing artifact terminals (`interrupted`, `load`), then `actionObserved` | n/a |
+| `Reporting` | duplicate report | `Reporting` | nothing | `{state: "pending"}` |
+| `Reporting` | `turnEnded` | `Reporting` | nothing (lock 2 completes it with `afterTurnEnd`) | n/a |
+| `Open` | `turnEnded` | `Unreported` | `turnEnded.openLeases`, artifact terminals (`interrupted`, `turnEnd`) | n/a |
+| `Unreported` | first late report | `LateReported(reply)` | `browserActionTarget` and `actionObserved`, both with `lateReported: true` and `afterTurnEnd: true`, under the original `messageId`; no ingest, no artifact event | `reply` (artifact states as recorded at `turnEnded`) |
+| `Reported(reply)` / `LateReported(reply)` | any later report | unchanged | nothing | the stored `reply` |
+
+So a lease's first report is recorded once; a late report is recorded once and always stays in
+the original turn; artifact terminal states are written once and never changed; repeated
+reports, late or not, add nothing. At load, `LateReported` is recognised by `lateReported: true`
+on its `actionObserved`, and the stored reply is rebuilt from those events.
+
+- `agentActionBegin {callerConversation, generation, bootId, notAfter, actionId, tool,
+  arguments}` (5 s). Under the engine lock, in this order: `bootId` is this boot's and
+  `notAfter` is neither passed nor beyond the cap (D1a rule 4); the conversation exists;
   the job is live with exactly this `generation` and not retiring (D1a); `chat.active` is
   `Some`; the phase is `Starting`, `Running` or `WaitingInput`; `actionId` is a UUID not seen in
   this conversation. Otherwise refused with a reason the MCP shows the agent. On admission:
@@ -412,8 +477,9 @@ are refused.
   attribution; the lease decides.
   - Lock 1: look up the lease in this conversation. None → journal `unboundActionReport`
     (`noLease`, or `otherConversation` when the id is leased elsewhere), reply `{bound: false}`.
-    `Reported` or `Unreported` → reply the stored answer unchanged (idempotent retry; recorded
-    terminal states are returned, never recomputed or dropped). `Reporting` → reply
+    `Reported` or `LateReported` → reply the stored answer unchanged (idempotent retry; recorded
+    terminal states are returned, never recomputed or dropped). `Unreported` → the first late
+    report, per the table above. `Reporting` → reply
     `{state: "pending"}` without touching anything; the MCP polls with the same `actionId` until
     its budget ends, so a concurrent duplicate never starts a second ingest. `Open` → mark it
     `Reporting` and journal `browserActionTarget` (target and outcome, no verdict) with the
@@ -445,11 +511,10 @@ are refused.
     when its artifact ends unavailable and settled to the real size at `Ready`.
 - At `turnEnded`, every lease of that turn still `Open` becomes `Unreported` (journaled in
   `turnEnded.openLeases`, `executed: "unknown"`), its reservations are released, and allocated
-  artifacts get `artifactUnavailable {reason: "interrupted", detectedBy: "turnEnd"}`. A report
-  arriving later for an `Unreported` lease still journals its `browserActionTarget` under the
-  original turn with `afterTurnEnd`, but cannot change those artifact states.
-- `agentTaskAssess {callerConversation, generation, notAfter, ...}` (10 s) and
-  `agentRecordingAuthorize {callerConversation, generation, notAfter, ...}` (20 s): sections 4.3
+  artifacts get `artifactUnavailable {reason: "interrupted", detectedBy: "turnEnd"}`. A later
+  report for that lease follows the `Unreported` row of the state machine.
+- `agentTaskAssess {callerConversation, generation, bootId, notAfter, ...}` (10 s) and
+  `agentRecordingAuthorize {callerConversation, generation, bootId, notAfter, ...}` (20 s): sections 4.3
   and 6.4. Same admission rules as Begin: generation from the MCP's environment, live and not
   retiring, `notAfter` not passed, phase admits leases.
 
@@ -1118,7 +1183,11 @@ new extension).
 "Host" means the service produces it independently of the backend. Items marked *verify*
 are confirmed in implementation step 1 against the CLI versions on the build host by
 capturing raw protocol fixtures; the code reads fields and never sniffs versions, and the UI
-shows "unknown" whenever an event lacks the field.
+shows "unknown" whenever an event lacks the field. The one exception is D1a's binding condition:
+reusing a generation after a clean completion requires a backend version on the fixture-backed
+allowlist, and any other version retires its generation after every turn. The committed fixtures
+(`cli/src/agent_panel/fixtures/`, including the synthetic stub-MCP runs) stay in the repository
+as regression inputs for the adapter tests in 14.1.
 
 | capability | Codex app-server | Claude Code stream-json | Pi JSONL RPC | OpenCode ACP |
 |---|---|---|---|---|
@@ -1191,11 +1260,11 @@ build host.
    Codex conversation sends `approvalPolicy: "never"` but takes the sandbox from
    `effective_access`, so with `toolAccess` set to `browserOnly` or `readFiles` Codex refuses
    every chrome_use call ("MCP tool call requires approval, but approval policy is never";
-   `fixtures/README.md`, "Other findings"). The fixtures agent is fixing it separately: the
-   `chrome_use` server entry gets `default_tools_approval_mode: "approve"` under full access
-   (`codex_browser_server` in `backend.rs`), without widening shell or file access. It lands
-   before step 5, because no live check can produce Codex browser evidence without it. The
-   `tool_timeout_sec` from D1a rule 3 is added to that same server entry.
+   `fixtures/README.md`, "Other findings"). Landed in `ea4dd857`: the `chrome_use` server entry
+   gets `default_tools_approval_mode: "approve"` under full access (`codex_browser_server` in
+   `backend.rs`), without widening shell or file access, with fixtures
+   `codex-browser-only-full-access{,-unfixed}.jsonl`. The `tool_timeout_sec` from D1a rule 3 is
+   added to that same server entry.
 
 1. **Protocol fixture capture on the build host** (`leo@192.168.0.190`): run each installed
    backend once with a chrome_use MCP that returns a marker block; save raw protocol lines as
@@ -1290,7 +1359,22 @@ Rust, in the module that owns the rule:
   and is retried returns the first answer, including an artifact's `Ready` or `Unavailable`
   state; a lease left `Reporting` across a simulated crash reloads with `interrupted` artifacts
   and a retry gets those states; `turnEnded` carries the active message id captured before
-  `terminal()` cleared it.
+  `terminal()` cleared it. State machine: every row of the 3.3 table, and every other
+  (state, event) pair rejected; an `Unreported` lease's first late report journals one
+  `browserActionTarget` and one `actionObserved` with `lateReported`, under the original turn,
+  with no artifact event; a second and third late report journal nothing and return the stored
+  reply; reload after a late report rebuilds `LateReported` and the same reply.
+- Deadlines: a Begin with another `bootId`, a passed `notAfter`, or a `notAfter` more than 5.25 s
+  ahead is refused, for Begin, assess and recording authorize; no monotonic value appears in the
+  journal or `state.json`.
+- Retirement and resume: the old process ignores `Shutdown` past 10 s (fault switch): the
+  dequeued message stays `chat.active`, `turnStartFailed {delivered: false}` is journaled, the
+  conversation is `RecoveryRequired`, no backend received the message, and after a confirmed
+  terminate the panel offers its text as a draft; a non-resumable OpenCode fixture (`initialize`
+  without resume or `loadSession`) after an interrupted turn journals `generationRetired
+  {resumable: false}`, refuses the next message with the documented text and starts no process;
+  a backend version not on the allowlist retires after a clean completed turn; an allowlisted
+  version keeps its generation.
 - Turns: each of the four `begin_next` sites journals exactly one `turnStarted`; `turnEnded`
   outcome for completed, failed, interrupted, exited-while-stopping, processUnconfirmed;
   `emptyAnswer`; `batchInterrupted` with reported, admitted and unknown execution; continuation
