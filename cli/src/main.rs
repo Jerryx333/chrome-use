@@ -21,6 +21,7 @@ mod friction;
 mod install;
 mod jev;
 mod mcp;
+mod panel_evidence;
 mod native;
 mod opencli;
 mod output;
