@@ -1782,7 +1782,10 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 }
             }
             if let Some(n) = data.get("evicted").and_then(|v| v.as_u64()) {
-                eprintln!("{n} older requests were dropped (the log keeps the newest 1000)");
+                eprintln!(
+                    "{n} older requests were dropped (the log keeps the newest {})",
+                    crate::native::tracked_requests::MAX_TRACKED_REQUESTS
+                );
             }
             return;
         }
@@ -7015,7 +7018,8 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         println!(
             "{}",
             color::dim(&format!(
-                "  {n} requests from this action were dropped from the request log (it keeps the newest 1000)"
+                "  {n} requests from this action were dropped from the request log (it keeps the newest {})",
+                crate::native::tracked_requests::MAX_TRACKED_REQUESTS
             ))
         );
     }
