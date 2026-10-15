@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.217
+## 1.5.218
 
 <!-- release:start -->
+Patch release. Works with extension ab-connect 0.5.58 (no extension change).
+
+### Bug Fixes
+
+- **Recovery works on macOS again.** Since 1.5.208 the panel service started by launchd ran in session 1, so after an unconfirmed stop the side panel could never prove the old agent's process group and never offered End the old agent process or Continue in a new conversation. The service now starts itself in its own session (the launchd job exits normally; Chrome's quarantine is still not inherited).
+- **Passkey guard restore** also finds a guard the page moved deeper in the credentials prototype chain, and reports a chain it cannot walk (proxy, accessor, too long) as a failure instead of clean.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.217
+
 Patch release. Works with extension ab-connect 0.5.58 (no extension change).
 
 ### Bug Fixes
@@ -14,7 +28,6 @@ Patch release. Works with extension ab-connect 0.5.58 (no extension change).
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.216
 
