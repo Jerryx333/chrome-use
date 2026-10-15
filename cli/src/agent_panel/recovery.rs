@@ -330,9 +330,11 @@ mod unix {
         policy: ProofPolicy,
     ) -> Probe {
         let Some(record) = record else {
+            // A backend that spawned and hung before its `ready` has no
+            // record; no record is not proof that its tree is gone.
             return probe(
-                ProcessState::Exited,
-                "No backend process is recorded as running",
+                ProcessState::Unknown,
+                "No process record was journaled, so the tree cannot be proven gone",
             );
         };
         let (Some(pgid), Some(sid)) = (record.pgid, record.service_sid) else {
@@ -1075,11 +1077,11 @@ mod tests {
                 probe_group(Some(&missing), PROVEN).state,
                 ProcessState::Unknown
             );
-            assert_eq!(probe_group(None, PROVEN).state, ProcessState::Exited);
+            assert_eq!(probe_group(None, PROVEN).state, ProcessState::Unknown);
             let p = probe_group(None, PROVEN).review(None);
             assert_eq!(
                 (p["canFork"].as_bool(), p["canTerminate"].as_bool()),
-                (Some(true), Some(false))
+                (Some(false), Some(false))
             );
         }
 
