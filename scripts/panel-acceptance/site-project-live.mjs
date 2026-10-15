@@ -49,6 +49,10 @@ try {
   await b.send('Target.closeTarget', { targetId: opener.targetId });
   await activate(rig, site);
   const panel = expression => A.evaluate(ps, expression);
+  // Text in the panel's own language (Chrome's UI language on the host).
+  const msg = (key, ...subs) => panel(`chrome.i18n.getMessage(${JSON.stringify(key)}, ${JSON.stringify(subs)})`);
+  evidence.uiLanguage = await panel('chrome.i18n.getUILanguage()');
+  const remembered = (await msg('panel_project_remembered', rig.site)), confirmLabel = await msg('panel_resume_confirm'), unsafe = await msg('panel_resume_unsafe');
   failState = async () => { await shot('fail').catch(() => {}); evidence.failure = await panel(`({ notice: document.getElementById('notice').textContent, projectHost: document.getElementById('projectHost').innerHTML.slice(0, 1500), project: document.getElementById('project').value, selected: document.getElementById('conversation').value, page: document.getElementById('pageTitle').textContent })`).catch(e => String(e)); };
   const shot = async name => { const s = await b.send('Page.captureScreenshot', { format: 'png' }, ps); fs.writeFileSync(path.join(out, `${name}.png`), Buffer.from(s.data, 'base64')); };
   await waitFor(() => panel(`document.getElementById('pageTitle')?.textContent.length > 0 && !document.getElementById('projectChip').hidden`), { timeout: 20000, label: 'panel with page and project chip' });
@@ -67,12 +71,13 @@ try {
   await panel(`(() => { const s = document.getElementById('agent'); s.value = 'codex'; s.dispatchEvent(new Event('change')); document.getElementById('executable').value = ${JSON.stringify(rig.backend('codex'))};
     const p = document.getElementById('project'); p.value = ${JSON.stringify(project)}; p.dispatchEvent(new Event('change'));
     document.getElementById('message').value = 'Hello from the site project check'; document.getElementById('composer').requestSubmit(); return true; })()`);
-  await waitFor(() => panel(`!document.querySelector('.project-remember')?.hidden && /from now on/.test(document.querySelector('.project-remember').textContent)`), { timeout: 30000, label: 'remember question' });
+  const question = await msg('panel_project_remember', rig.site);
+  await waitFor(() => panel(`!document.querySelector('.project-remember')?.hidden && document.querySelector('.project-remember').textContent.includes(${JSON.stringify(question)})`), { timeout: 30000, label: 'remember question' });
   const header = await panel(`document.getElementById('projectPath').textContent`);
   await shot('1-remember-bar');
   step('created in the project', { header, question: await panel(`document.querySelector('.project-remember').textContent`) });
-  await panel(`[...document.querySelectorAll('.project-remember button')].find(b => b.textContent === 'Remember').click()`);
-  await waitFor(() => panel(`/now uses this project/.test(document.querySelector('.project-remember').textContent)`), { timeout: 20000, label: 'remembered' });
+  await panel(`[...document.querySelectorAll('.project-remember button')].find(b => b.textContent === ${JSON.stringify(await msg('panel_project_remember_yes'))}).click()`);
+  await waitFor(() => panel(`document.querySelector('.project-remember').textContent.includes(${JSON.stringify(remembered)})`), { timeout: 20000, label: 'remembered' });
   const store = JSON.parse(fs.readFileSync(path.join(rig.home, '.chrome-use', 'inspect', 'bindings.json'), 'utf8'));
   const binding = store.bindings.find(x => x.origin === rig.site);
   step('remembered in the Inspect & Ask store', { binding });
@@ -102,9 +107,9 @@ try {
   await waitFor(() => panel(`[...document.querySelectorAll('.resume-item')].some(r => r.title === ${JSON.stringify(codexProject)})`), { timeout: 40000, label: 'codex session listed' });
   await panel(`[...document.querySelectorAll('.resume-item')].find(r => r.title === ${JSON.stringify(codexProject)}).click()`);
   // Written seconds ago: it must ask first.
-  await waitFor(() => panel(`/still active in another terminal/.test(document.querySelector('.resume-picker').innerText)`), { timeout: 30000, label: 'active-elsewhere warning' });
+  await waitFor(() => panel(`document.querySelector('.resume-picker').innerText.includes(${JSON.stringify(unsafe)})`), { timeout: 30000, label: 'active-elsewhere warning' });
   await shot('4-resume-warning');
-  await panel(`[...document.querySelectorAll('.resume-picker button')].find(b => b.textContent === 'Continue here anyway').click()`);
+  await panel(`[...document.querySelectorAll('.resume-picker button')].find(b => b.textContent === ${JSON.stringify(confirmLabel)}).click()`);
   await waitFor(() => panel(`!!document.querySelector('.imported-history')`), { timeout: 40000, label: 'imported history' });
   const resumed = await panel(`({ header: document.getElementById('projectPath').textContent, imported: document.querySelector('.imported-history').innerText })`);
   step('resumed', resumed);
