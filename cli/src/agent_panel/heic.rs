@@ -80,7 +80,9 @@ fn convert_with(
     fit(jpeg)
 }
 
-/// Accept only a decodable JPEG; downscale and re-encode when it is too large.
+/// Accept only a decodable JPEG and always re-encode it: the EXIF orientation
+/// is baked into the pixels, and the new file carries no EXIF at all, so GPS
+/// and camera metadata never reach the agent.
 fn fit(jpeg: Vec<u8>) -> Result<Vec<u8>, String> {
     use image::ImageDecoder;
     if image::guess_format(&jpeg).ok() != Some(image::ImageFormat::Jpeg) {
@@ -95,11 +97,6 @@ fn fit(jpeg: Vec<u8>) -> Result<Vec<u8>, String> {
     decoder
         .set_limits(limits)
         .map_err(|_| "The converted image is too large")?;
-    let (width, height) = decoder.dimensions();
-    if width.max(height) <= MAX_EDGE && jpeg.len() <= MAX_OUTPUT_BYTES {
-        // Unchanged bytes keep any EXIF orientation for the extension to apply.
-        return Ok(jpeg);
-    }
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
@@ -110,7 +107,7 @@ fn fit(jpeg: Vec<u8>) -> Result<Vec<u8>, String> {
         picture = picture.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle);
     }
     let picture = picture.to_rgb8();
-    for quality in [85, 70, 55, 40] {
+    for quality in [90, 80, 65, 50, 40] {
         let mut encoded = Vec::new();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, quality)
             .encode_image(&picture)
@@ -148,16 +145,7 @@ fn run(mut command: Command, timeout: Duration) -> Result<ExitStatus, String> {
 fn platform_convert(input: &Path, output: &Path) -> Result<(), String> {
     let mut command = Command::new("/usr/bin/sips");
     command
-        .args([
-            "-s",
-            "format",
-            "jpeg",
-            "-s",
-            "formatOptions",
-            "85",
-            "-Z",
-            "2000",
-        ])
+        .args(["-s", "format", "jpeg", "-s", "formatOptions", "90"])
         .arg(input)
         .arg("--out")
         .arg(output);
@@ -210,8 +198,18 @@ $source = [IO.File]::OpenRead($env:CHROME_USE_HEIC_IN)
 try {
   try { $decoder = [Windows.Media.Imaging.BitmapDecoder]::Create($source, [Windows.Media.Imaging.BitmapCreateOptions]::None, [Windows.Media.Imaging.BitmapCacheOption]::OnLoad) } catch { exit 3 }
   $frame = $decoder.Frames[0]
+  $orientation = 1
+  foreach ($query in 'System.Photo.Orientation', '/app1/ifd/{ushort=274}', '/ifd/{ushort=274}') {
+    try { $value = $frame.Metadata.GetQuery($query); if ($value -ge 1 -and $value -le 8) { $orientation = [int]$value; break } } catch { }
+  }
+  # EXIF orientation as a horizontal flip followed by a clockwise rotation.
+  $flip = @{2=$true; 4=$true; 5=$true; 7=$true}[$orientation] -eq $true
+  $angle = @{3=180; 4=180; 5=270; 6=90; 7=90; 8=270}[$orientation]; if ($null -eq $angle) { $angle = 0 }
   $scale = [Math]::Min(1.0, 2000.0 / [Math]::Max($frame.PixelWidth, $frame.PixelHeight))
-  $bitmap = New-Object Windows.Media.Imaging.TransformedBitmap($frame, (New-Object Windows.Media.ScaleTransform($scale, $scale)))
+  $transform = New-Object Windows.Media.TransformGroup
+  $transform.Children.Add((New-Object Windows.Media.ScaleTransform($(if ($flip) { -$scale } else { $scale }), $scale)))
+  $transform.Children.Add((New-Object Windows.Media.RotateTransform($angle)))
+  $bitmap = New-Object Windows.Media.Imaging.TransformedBitmap($frame, $transform)
   $encoder = New-Object Windows.Media.Imaging.JpegBitmapEncoder
   $encoder.QualityLevel = 90
   $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
@@ -284,6 +282,59 @@ mod tests {
         bytes
     }
 
+    /// A landscape picture whose left sixth is red, so rotation is observable.
+    fn striped(width: u32, height: u32) -> Vec<u8> {
+        let picture = image::RgbImage::from_fn(width, height, |x, _| {
+            if x < width / 6 {
+                image::Rgb([255, 0, 0])
+            } else {
+                image::Rgb([0, 0, 255])
+            }
+        });
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 95)
+            .encode_image(&picture)
+            .unwrap();
+        bytes
+    }
+
+    /// Insert an EXIF APP1 segment with an orientation and a GPS position.
+    fn with_exif(jpeg: &[u8], orientation: u16) -> Vec<u8> {
+        let mut tiff = b"MM\0\x2a\0\0\0\x08".to_vec();
+        tiff.extend_from_slice(&2u16.to_be_bytes());
+        tiff.extend_from_slice(&[0x01, 0x12, 0, 3, 0, 0, 0, 1]);
+        tiff.extend_from_slice(&orientation.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0]);
+        tiff.extend_from_slice(&[0x88, 0x25, 0, 4, 0, 0, 0, 1, 0, 0, 0, 38]);
+        tiff.extend_from_slice(&[0; 4]);
+        tiff.extend_from_slice(&2u16.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 4, 2, 2, 0, 0]);
+        tiff.extend_from_slice(&[0, 1, 0, 2, 0, 0, 0, 2, b'N', 0, 0, 0]);
+        tiff.extend_from_slice(&[0; 4]);
+        let mut segment = vec![0xff, 0xe1];
+        segment.extend_from_slice(&(tiff.len() as u16 + 8).to_be_bytes());
+        segment.extend_from_slice(b"Exif\0\0");
+        segment.extend_from_slice(&tiff);
+        [&jpeg[..2], &segment, &jpeg[2..]].concat()
+    }
+
+    fn has_exif(jpeg: &[u8]) -> bool {
+        jpeg.windows(6).any(|w| w == b"Exif\0\0")
+    }
+
+    fn assert_upright_portrait(jpeg: &[u8], width: u32, height: u32) {
+        assert!(!has_exif(jpeg), "EXIF (orientation, GPS) must be stripped");
+        let picture = image::load_from_memory(jpeg).unwrap().to_rgb8();
+        assert_eq!(picture.dimensions(), (width, height));
+        let top = picture.get_pixel(width / 2, 2);
+        let bottom = picture.get_pixel(width / 2, height - 3);
+        assert!(top[0] > 200 && top[2] < 60, "top is red: {top:?}");
+        assert!(
+            bottom[2] > 200 && bottom[0] < 60,
+            "bottom is blue: {bottom:?}"
+        );
+    }
+
     #[test]
     fn brand_sniff_accepts_heif_brands_and_rejects_others() {
         assert!(is_heif(&ftyp(b"heic", &[b"mif1"])));
@@ -317,14 +368,24 @@ mod tests {
     }
 
     #[test]
-    fn small_jpeg_passes_through_and_large_output_is_reduced() {
-        let small = jpeg(40, 30, false);
-        assert_eq!(fit(small.clone()).unwrap(), small);
+    fn output_is_reduced_and_never_upscaled() {
+        let small = image::load_from_memory(&fit(jpeg(40, 30, false)).unwrap()).unwrap();
+        assert_eq!((small.width(), small.height()), (40, 30));
         let reduced = fit(jpeg(3000, 1500, true)).unwrap();
         assert!(reduced.len() <= MAX_OUTPUT_BYTES, "{}", reduced.len());
         let picture = image::load_from_memory(&reduced).unwrap();
         assert_eq!((picture.width(), picture.height()), (2000, 1000));
         assert!(fit(b"not a jpeg".to_vec()).unwrap_err().contains("JPEG"));
+    }
+
+    #[test]
+    fn orientation_is_baked_into_pixels_and_metadata_stripped() {
+        let tagged = with_exif(&striped(300, 120), 6);
+        assert!(has_exif(&tagged));
+        assert_upright_portrait(&fit(tagged).unwrap(), 120, 300);
+        let plain = fit(with_exif(&striped(300, 120), 1)).unwrap();
+        assert!(!has_exif(&plain));
+        assert_eq!(image::load_from_memory(&plain).unwrap().width(), 300);
     }
 
     #[test]
@@ -400,5 +461,31 @@ mod tests {
         assert!(bytes.len() <= MAX_OUTPUT_BYTES);
         let picture = image::load_from_memory(&bytes).unwrap();
         assert_eq!((picture.width(), picture.height()), (2000, 1000));
+    }
+
+    /// iPhone portraits store landscape pixels plus a rotation; sips keeps
+    /// the stored pixels and copies the EXIF orientation (and GPS) into its
+    /// JPEG, so the module must rotate and strip.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_rotated_heic_comes_out_upright_without_exif() {
+        let directory = tempfile::tempdir().unwrap();
+        let tagged = directory.path().join("tagged.jpg");
+        let heic = directory.path().join("rotated.heic");
+        std::fs::write(&tagged, with_exif(&striped(300, 120), 6)).unwrap();
+        let status = Command::new("/usr/bin/sips")
+            .args(["-s", "format", "heic"])
+            .arg(&tagged)
+            .arg("--out")
+            .arg(&heic)
+            .stdout(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "sips could not write HEIC");
+        let source = std::fs::read(&heic).unwrap();
+        assert!(source.windows(4).any(|w| w == b"irot"), "HEIC carries irot");
+        let reply = handle(&json!({"data": STANDARD.encode(source)})).unwrap();
+        let bytes = STANDARD.decode(reply["data"].as_str().unwrap()).unwrap();
+        assert_upright_portrait(&bytes, 120, 300);
     }
 }

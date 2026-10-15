@@ -172,7 +172,7 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 侧栏还支持以下功能：
 
 - **技能：**输入 `/` 选择内置技能、用户技能或当前 Chrome profile 的技能库条目。在 **Agents & models → Skill library** 编辑、启停库内技能，或从本机绝对路径目录、ZIP/.skill 压缩包、HTTPS Git 仓库导入。用户和 CLI 原有技能目录在这里只读。发送前会保存所选技能及文件的副本，排队和明确重试使用同一份内容。面板中的 agent 可通过 `chrome_use_skills` 列出、读取技能或当前所选技能的相对路径文本文件，并在用户要求时保存库内说明。
-- **图片：**用 **Attach images** 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP/HEIC。Chrome 无法解码 HEIC，由本地 CLI 用系统编解码器转成 JPEG（macOS 用 `sips`；Windows 需要从 Microsoft Store 安装 HEIF 图像扩展和 HEVC 视频扩展；Linux 需要 `heif-convert` 或带 HEIF 支持的 ImageMagick）。传输前缩到最长边 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入，不支持时会报错，不会丢掉图片只发送文字。附件会交给所选模型服务。
+- **图片：**用 **Attach images** 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP/HEIC。Chrome 无法解码 HEIC，由本地 CLI 用系统编解码器转成 JPEG（macOS 用 `sips`；Windows 需要从 Microsoft Store 安装 HEIF 图像扩展和 HEVC 视频扩展；Linux 需要 `heif-convert` 或带 HEIF 支持的 ImageMagick），按照片方向转正，并去掉包括 GPS 在内的 EXIF 信息。传输前缩到最长边 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入，不支持时会报错，不会丢掉图片只发送文字。附件会交给所选模型服务。
 - **会话参数：**选择允许的工具，Codex/Claude 可另设推理强度，Codex 可设服务等级。空闲时保存，下一次回复生效，不改 CLI 全局配置。Codex 能限制写入，但无法移除可以读文件的 shell；OpenCode ACP 无法保证限制内置工具，仍遵循它自己的权限规则。审批开关只决定是否自动处理当前工具范围内的请求，Pi 没有逐次审批。
 - **定时提示：**在 **Agents & models → Scheduled prompts** 设置间隔、每天或工作日的本地时间、五字段 cron，并保存 agent、模型、会话参数、技能和明确的工具范围。**Run now** 不改变下一次到期时间。任务使用独立后台浏览器 session，结果保留在历史，完成通知可打开对应会话。主机上的本地服务需要运行，关闭侧栏不会停掉服务。重启或唤醒后，错过的周期只补跑一次；上次仍在执行或结果未确认时，不会重叠执行或重放。确认未知结果前先看历史。聊天不能创建比自己工具范围更大或审批权限更高的任务；定时聊天不能修改或触发定时任务，也不能重写供未来任务使用的技能库。消息已接收、agent 已结束和网页目标已达成仍需分别确认。
 
