@@ -23,6 +23,9 @@ class Node {
   fire(type, details = {}) { this.listeners[type]?.({ preventDefault() {}, ...details }); }
 }
 const settle = async (rounds = 4) => { for (let i = 0; i < rounds; i++) await new Promise(resolve => setImmediate(resolve)); };
+// Digest checks run on WebCrypto's thread pool, so a fixed number of turns is
+// not enough on a busy machine; wait for the condition instead.
+const until = async (check, timeout = 2000) => { const end = Date.now() + timeout; while (!check()) { if (Date.now() > end) throw new Error('condition not met within ' + timeout + ' ms'); await new Promise(resolve => setTimeout(resolve, 5)); } };
 const fixtureFile = name => JSON.parse(readFileSync(new URL(`../../cli/src/agent_panel/fixtures/panel/${name}`, import.meta.url), 'utf8'));
 const turnsJournal = fixtureFile('journal-turns.json'), legacyJournal = fixtureFile('journal-v1.5.214.json');
 const turnSupport = turnsJournal.capabilities;
@@ -145,7 +148,7 @@ test('a screenshot is shown only after its digest checks, and its object URL is 
     const digest = `sha256:${createHash('sha256').update(png).digest('hex')}`;
     return { success: true, result: { schemaVersion: 1, artifactId: params.artifactId, offset: params.offset, data: png.subarray(params.offset, params.offset + 40).toString('base64'), total: png.length, digest } };
   } } });
-  await settle(8);
+  await until(() => created.length === 1);
   assert.deepEqual(reads.map(read => read.offset), [0, 40]);
   assert.equal(reads.every(read => read.length === 384 * 1024), true);
   assert.equal(created.length, 1); assert.equal(created[0].size, png.length);
@@ -160,9 +163,8 @@ test('bytes that do not match the digest are discarded and the card says the fil
   const tampered = Buffer.from(png); tampered[tampered.length - 1] ^= 1;
   const created = [];
   const f = await panel({ objectUrls: { create: blob => { created.push(blob); return 'blob:x'; }, revoke() {} }, overrides: { conversationArtifactRead: params => ({ success: true, result: { schemaVersion: 1, artifactId: params.artifactId, offset: params.offset, data: tampered.toString('base64'), total: tampered.length, digest: turnsJournal.events.find(e => e.kind === 'artifactReady').data.digest } }) } });
-  await settle(8);
+  await until(() => /Not shown: the file changed while it was read\./.test(text(byClass(f.transcript, 'result-card')[0])));
   assert.equal(created.length, 0);
-  assert.match(text(byClass(f.transcript, 'result-card')[0]), /Not shown: the file changed while it was read\./);
   f.panel.close();
 });
 
