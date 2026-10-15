@@ -496,6 +496,9 @@ struct BackendInfo {
     generation: u64,
     version: Option<String>,
     resumable: Option<bool>,
+    /// The MCP client's tool timeout the service set; null where the
+    /// backend offers no way to set it (OpenCode).
+    client_timeout: Option<u64>,
 }
 
 /// The turn a conversation is running, from `turnStarted` to `turnEnded`.
@@ -977,7 +980,10 @@ impl Engine {
             self.reuse_allowlist
                 .iter()
                 .any(|(a, v)| a == &agent && v == version)
-        }) {
+        }) || info.client_timeout.is_none_or(|secs| secs < 30)
+        {
+            // Without a client timeout above the Begin window, a turn can
+            // complete while a chrome_use call still runs (D1a rule 3).
             Some("unlistedVersion")
         } else {
             None
@@ -1108,6 +1114,7 @@ impl Engine {
                             .filter(|v| v.len() <= 64)
                             .map(String::from),
                         resumable: notice.data["resumable"].as_bool(),
+                        client_timeout: notice.data["mcpToolTimeoutSecs"].as_u64(),
                     },
                 );
                 let chat = self.chat(id)?;
@@ -3789,7 +3796,7 @@ mod turn_tests {
             drop(e);
             self.notice(
                 "ready",
-                json!({"sessionId":"s1","model":"m","backendVersion":version,"resumable":true}),
+                json!({"sessionId":"s1","model":"m","backendVersion":version,"resumable":true,"mcpToolTimeoutSecs":120}),
             )
             .await;
         }
@@ -4031,7 +4038,24 @@ mod turn_tests {
         c.allow_reuse("2.1.300").await;
         c.notice(
             "ready",
-            json!({"sessionId":"s1","backendVersion":"9.9.9","resumable":true}),
+            json!({"sessionId":"s1","backendVersion":"9.9.9","resumable":true,"mcpToolTimeoutSecs":120}),
+        )
+        .await;
+        c.send("one").await;
+        c.started();
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert_eq!(
+            c.kinds("generationRetired").await[0]["reason"],
+            "unlistedVersion"
+        );
+        // An allowlisted version whose client timeout could not be set
+        // retires too.
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.notice(
+            "ready",
+            json!({"sessionId":"s1","backendVersion":"2.1.300","resumable":true,"mcpToolTimeoutSecs":null}),
         )
         .await;
         c.send("one").await;
