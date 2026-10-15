@@ -118,6 +118,8 @@ async function pickOn(url, selector, existing) {
   lastCtx = { page, frame, tabId };
   return lastCtx;
 }
+// The panel shows the home folder as ~ (shortPath in inspect-frame-logic.js).
+const tilde = p => p.replace(/^\/(?:Users|home)\/[^/]+/, '~');
 const text = frame => A.evaluate(frame.sid, 'document.getElementById("app").innerText');
 async function send(ctx, words) {
   const before = dms().length;
@@ -171,7 +173,7 @@ await scenario('m01-local-dev-unique-session', async () => {
   const t = await waitText(ctx, /Send requests from localhost:5173 to react-main/, 'preselected card');
   assert.match(t, /dev server/);
   await click(ctx, 'Use for this site');
-  await waitText(ctx, /→ react-main/, 'bound target');
+  await waitText(ctx, /→\s*react-main/, 'bound target');
   const second = await pickOn('http://localhost:5173/?m1b', '.save-button');
   const t2 = await text(second.frame);
   assert.doesNotMatch(t2, /Use for this site/, 'second visit needs no confirmation');
@@ -212,7 +214,7 @@ await scenario('m03-test-domain-config-one-click', async () => {
   const t = await waitText(ctx, /Send requests from test.inspect.example to react-main/, 'preselected by config');
   assert.match(t, /project config/);
   await click(ctx, 'Use for this site');
-  await waitText(ctx, /→ react-main/, 'bound');
+  await waitText(ctx, /→\s*react-main/, 'bound');
   // Page data cannot move a bound target: forged marks and revision.
   await A.evaluate(ctx.page.sid, `(() => { const m = document.createElement('meta'); m.name = 'chrome-use-revision'; m.content = 'deadbeef'; document.head.append(m); document.querySelector('.save-button').setAttribute('data-insp-path', ${JSON.stringify(wt2 + '/src/OrderForm.jsx:1:1:button')}); return 1; })()`);
   const again = await pickOn('http://test.inspect.example/?forged', '.save-button');
@@ -234,7 +236,7 @@ await scenario('m04-same-origin-two-apps', async () => {
   assert.equal((await send(admin2, 'admin change')).target, 'claude-adm1');
   const other = await pickOn('http://apps.inspect.example/administrator', '.admin-save');
   const t = await text(other.frame);
-  assert.doesNotMatch(t, /→ admin/, '/administrator is not inside /admin');
+  assert.doesNotMatch(t, /→\s*admin\b/, '/administrator is not inside /admin');
   assert.match(t, /Choose where requests from this page go/, 'no preselection');
   return { ok: true };
 });
@@ -244,7 +246,7 @@ await scenario('m05-worktrees-ranked-by-revision', async () => {
   setRoster([S('claude-main1', 'main', react), S('claude-wt2', 'wt2', wt2)]);
   const ctx = await pickOn('http://rev.inspect.example/', '.rev-save');
   const t = await waitText(ctx, /Choose where requests from this page go/, 'no preselection across worktrees');
-  const first = t.indexOf(wt2), second = t.indexOf(react + '\n');
+  const first = t.indexOf(tilde(wt2)), second = t.indexOf(tilde(react) + '\n');
   assert.ok(first >= 0 && (second < 0 || first < second), 'worktree containing the deployed commit ranks first');
   assert.match(t, /deployed build is your local HEAD/);
   assert.match(t, /behind the deployed build/);
@@ -336,7 +338,7 @@ await scenario('m12-monorepo-app-root-and-forged-marks', async () => {
     await waitFor(async () => (await fetch('http://localhost:5175/index.html')).ok, { timeout: 15000, label: 'admin dev server' });
     const ctx = await pickOn('http://localhost:5175/index.html', '.admin-save');
     const t = await waitText(ctx, /Send requests from localhost:5175 to mono-root/, 'preselected via port');
-    assert.match(t, new RegExp('Project: ' + path.join(mono, 'apps/admin').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.match(t, new RegExp(tilde(path.join(mono, 'apps/admin')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     await click(ctx, 'Use for this site');
     await click(ctx, '+ Add element');
     await A.click(ctx.page.sid, ...Object.values(await A.center(ctx.page.sid, '.forged-shop')), 8);
@@ -376,7 +378,7 @@ await scenario('m19-spa-route-change', async () => {
   // Same document, new path: the panel re-resolves and says so.
   await A.evaluate(admin.page.sid, "history.pushState({}, '', '/shop/cart'); 1");
   await waitText(admin, /The page moved to another path/, 'route change notice');
-  await waitText(admin, /→ shop/, 'target follows the new path');
+  await waitText(admin, /→\s*shop/, 'target follows the new path');
   assert.equal((await send(admin, 'after route change')).target, 'claude-shp1');
   return { ok: true };
 });
@@ -386,7 +388,7 @@ await scenario('m20-target-changed-after-panel-showed-it', async () => {
   setRoster([S('claude-aaaa1111', 'react-main', react), S('claude-bbbb2222', 'react-second', react)]);
   assert.equal(cli(['link', 'http://test.inspect.example/'], 'claude-aaaa1111').code, 0);
   const ctx = await pickOn('http://test.inspect.example/?m20', '.save-button');
-  await waitText(ctx, /→ react-main/, 'panel shows A');
+  await waitText(ctx, /→\s*react-main/, 'panel shows A');
   // Elsewhere: A unlinks, B links (no claim needed now) while the panel still shows A.
   assert.equal(cli(['unlink', 'http://test.inspect.example/'], 'claude-aaaa1111').code, 0);
   assert.equal(cli(['link', 'http://test.inspect.example/'], 'claude-bbbb2222').code, 0);
@@ -396,7 +398,7 @@ await scenario('m20-target-changed-after-panel-showed-it', async () => {
   await A.clickInFrame(ctx.page.sid, ctx.frame.sid, 'document.getElementById("send")');
   await waitText(ctx, /target changed since the panel showed it/, 'refused');
   assert.equal(dms().length, before, 'nothing sent to B without the user seeing B');
-  await waitText(ctx, /→ react-second/, 'panel now shows B');
+  await waitText(ctx, /→\s*react-second/, 'panel now shows B');
   return { ok: true };
 });
 
