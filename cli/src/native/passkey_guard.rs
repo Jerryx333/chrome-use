@@ -624,8 +624,40 @@ async fn holders(
         })
         .and_then(|p| p["value"]["objectId"].as_str().map(str::to_string))
     };
-    let Some(navigator) = native(prop(&globals, "navigator"), "Navigator", None) else {
-        return Err(replaced("navigator"));
+    let navigator = match native(prop(&globals, "navigator"), "Navigator", None) {
+        Some(n) => n,
+        // A Chrome that lists `navigator` by its getter instead: Chrome's own
+        // getter is called, never one of the page's.
+        None if prop(&globals, "navigator").is_some_and(|p| {
+            p["get"]["subtype"] != "proxy"
+                && p["get"]["description"] == "function get navigator() { [native code] }"
+        }) =>
+        {
+            let r = client
+                .send_command(
+                    "Runtime.callFunctionOn",
+                    Some(json!({
+                        "objectId": global,
+                        "functionDeclaration": "function () { return this.navigator; }",
+                        "objectGroup": GROUP,
+                    })),
+                    Some(session),
+                )
+                .await?;
+            if let Some(e) = threw(&r) {
+                return Err(format!("{}: {e}", replaced("navigator")));
+            }
+            match object_id(&r) {
+                Some(n)
+                    if r["result"]["subtype"] != "proxy"
+                        && r["result"]["className"] == "Navigator" =>
+                {
+                    n
+                }
+                _ => return Err(replaced("navigator")),
+            }
+        }
+        None => return Err(replaced("navigator")),
     };
     let Some(interface) = native(
         prop(&globals, "CredentialsContainer"),
@@ -687,14 +719,25 @@ async fn holders(
 }
 
 /// The current own data value of `create` on `holder`, read through CDP
-/// (no getter, no page code).
+/// (no getter, no page code). Err when the page made it an accessor, which
+/// could be handing out a guard of ours where we cannot look.
 async fn own_create(
     client: &CdpClient,
     session: &str,
     holder: &str,
 ) -> Result<Option<String>, String> {
     let props = own_props(client, session, holder, false).await?;
-    Ok(prop(&props, "create").and_then(|p| p["value"]["objectId"].as_str().map(str::to_string)))
+    let Some(create) = prop(&props, "create") else {
+        return Ok(None);
+    };
+    if create.get("get").is_some() || create.get("set").is_some() {
+        return Err(
+            "the page replaced create with an accessor, so a create() guard there cannot be \
+             looked for; reload the page to get the original back"
+                .to_string(),
+        );
+    }
+    Ok(create["value"]["objectId"].as_str().map(str::to_string))
 }
 
 /// `[[Target]]` and `[[Handler]]` of `object` when it is a proxy.
@@ -1160,6 +1203,101 @@ process.stdout.write(JSON.stringify({{
             restore_slot(&client, "S", "H", &[], &new_key()).await,
             Ok(false)
         );
+    }
+
+    /// A secure document for [`fake_cdp`] whose global lists `navigator`
+    /// by `getter` (a Chrome that does not show its value), with Chrome's
+    /// own `credentials` getter and `CredentialsContainer`.
+    fn navigator_by_getter(getter: Value) -> Respond {
+        Arc::new(move |req| {
+            let id = req["params"]["objectId"].as_str().unwrap_or("");
+            let entry = |name: &str, v: Value| {
+                let mut e = json!({ "name": name });
+                e.as_object_mut()
+                    .unwrap()
+                    .extend(v.as_object().unwrap().clone());
+                e
+            };
+            let proto = |p: &str| {
+                json!({ "result": [], "internalProperties": [
+                { "name": "[[Prototype]]", "value": { "objectId": p } },
+            ] })
+            };
+            Ok(match req["method"].as_str().unwrap_or("") {
+                "Runtime.evaluate" => json!({ "result": { "objectId": "W" } }),
+                "Runtime.getProperties" => match id {
+                    "W" => json!({ "result": [
+                        entry("navigator", json!({ "get": getter.clone() })),
+                        entry("CredentialsContainer", json!({ "value": {
+                            "objectId": "IF", "className": "Function",
+                            "description": "function CredentialsContainer() { [native code] }",
+                        } })),
+                    ] }),
+                    "IF" => {
+                        json!({ "result": [entry("prototype", json!({ "value": { "objectId": "PROTO" } }))] })
+                    }
+                    "NAV" => proto("NP"),
+                    "NP" => json!({ "result": [entry("credentials", json!({ "get": {
+                        "description": "function get credentials() { [native code] }",
+                    } }))] }),
+                    "C" => proto("PROTO"),
+                    _ => json!({ "result": [] }),
+                },
+                "Runtime.callFunctionOn" => match id {
+                    "W" => json!({ "result": { "objectId": "NAV", "className": "Navigator" } }),
+                    "NAV" => {
+                        json!({ "result": { "objectId": "C", "className": "CredentialsContainer" } })
+                    }
+                    _ => json!({}),
+                },
+                _ => json!({}),
+            })
+        })
+    }
+
+    /// Round 8: a Chrome that lists `navigator` by its own getter is still
+    /// searched (through that getter); a getter of the page's is reported.
+    #[tokio::test]
+    async fn navigator_listed_by_chromes_getter_is_still_searched() {
+        let native = json!({ "type": "function", "description": "function get navigator() { [native code] }" });
+        let (url, _) = fake_cdp(navigator_by_getter(native)).await;
+        let client = CdpClient::connect(&url).await.unwrap();
+        assert_eq!(
+            holders(&client, "S", "F", true).await,
+            Ok(Some(vec![
+                "PROTO".to_string(),
+                "PROTO".to_string(),
+                "C".to_string()
+            ]))
+        );
+        for page in [
+            json!({ "type": "function", "description": "get() { return {}; }" }),
+            json!({ "type": "object", "subtype": "proxy", "description": "function get navigator() { [native code] }" }),
+        ] {
+            let (url, _) = fake_cdp(navigator_by_getter(page.clone())).await;
+            let client = CdpClient::connect(&url).await.unwrap();
+            let err = holders(&client, "S", "F", true).await.unwrap_err();
+            assert!(err.contains("the page replaced navigator"), "{page}: {err}");
+        }
+    }
+
+    /// Round 8: a `create` the page made an accessor may hand out a guard of
+    /// ours: reported, not clean.
+    #[tokio::test]
+    async fn an_accessor_create_is_never_clean() {
+        let (url, _) = fake_cdp(Arc::new(|req| {
+            Ok(match req["params"]["objectId"].as_str() {
+                Some("H") => json!({ "result": [{ "name": "create",
+                    "get": { "type": "function", "objectId": "g" }, "set": { "type": "undefined" } }] }),
+                _ => json!({ "result": [] }),
+            })
+        }))
+        .await;
+        let client = CdpClient::connect(&url).await.unwrap();
+        let err = restore_slot(&client, "S", "H", &[], &new_key())
+            .await
+            .unwrap_err();
+        assert!(err.contains("accessor"), "{err}");
     }
 
     /// Round 8: when Chrome will not enable the Page domain on an

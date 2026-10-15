@@ -7862,6 +7862,7 @@ async fn e2e_auth_login_bwu_create_guard_restore_survives_replaced_builtins() {
         "Object.defineProperty(navigator, 'credentials', { value: {}, configurable: true })",
         "delete Navigator.prototype.credentials",
         "window.CredentialsContainer = function CredentialsContainer() {}",
+        "((g) => Object.defineProperty(CredentialsContainer.prototype, 'create', { get: () => g, configurable: true }))(CredentialsContainer.prototype.create)",
     ]
     .into_iter()
     .enumerate()
