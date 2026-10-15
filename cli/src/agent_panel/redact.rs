@@ -827,6 +827,9 @@ pub(super) struct TextScrubber {
     withheld: bool,
     /// Rule-masked values of withheld text, still learned as secrets.
     revealed: Vec<String>,
+    /// The end of the withheld text, scanned again with the next chunk so
+    /// a rule split across chunks (`{"pass` + `word":"…"}`) still matches.
+    withheld_tail: String,
     message_id: Value,
     item_id: String,
     next_part: u64,
@@ -869,15 +872,38 @@ impl TextScrubber {
         }
         new
     }
-    /// Withhold `text` whole, still learning what the rules find in it.
-    fn withhold(&mut self, text: &str) -> (String, Vec<Mask>) {
+    /// Withhold `text` whole, still learning what the rules find in it
+    /// together with the end of the text withheld before it. A match that
+    /// runs to the end may still grow, so it is learned once more text
+    /// arrives, or at the `last` call.
+    fn withhold(&mut self, text: &str, last: bool) -> (String, Vec<Mask>) {
         self.pending.clear();
         self.run = false;
+        let window = std::mem::take(&mut self.withheld_tail) + text;
+        let masks = find_masks(&window, &[], false);
+        let complete = if last { usize::MAX } else { window.len() };
         self.revealed.extend(
-            find_masks(text, &[], false)
-                .into_iter()
-                .filter_map(|m| m.secret),
+            masks
+                .iter()
+                .filter(|m| m.end < complete)
+                .filter_map(|m| m.secret.clone()),
         );
+        if !last {
+            let mut cut = window.len().saturating_sub(MAX_HOLD);
+            // Keep an unfinished match whole, as far as the hold allows.
+            if let Some(open) = masks
+                .iter()
+                .filter(|m| m.end == window.len())
+                .map(|m| m.anchor)
+                .min()
+            {
+                cut = cut.min(open.max(window.len().saturating_sub(2 * MAX_HOLD)));
+            }
+            while !window.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            self.withheld_tail = window[cut..].to_string();
+        }
         if text.is_empty() {
             return (String::new(), Vec::new());
         }
@@ -897,7 +923,7 @@ impl TextScrubber {
     fn push(&mut self, chunk: &str, known: &[String]) -> (String, Vec<Mask>) {
         if self.withheld {
             let text = std::mem::take(&mut self.pending) + chunk;
-            return self.withhold(&text);
+            return self.withhold(&text, false);
         }
         let merged = self.merged(known);
         let known = merged.as_slice();
@@ -930,7 +956,7 @@ impl TextScrubber {
         let new = self.adopt(&masks, known, buffer.len());
         if self.withheld {
             // The run marker, if any, stood for text before this buffer.
-            let (text, mut withheld) = self.withhold(&buffer);
+            let (text, mut withheld) = self.withhold(&buffer, false);
             let offset = out.len();
             out.push_str(&text);
             withheld.iter_mut().for_each(|m| {
@@ -938,8 +964,6 @@ impl TextScrubber {
                 m.end += offset;
             });
             out_masks.extend(withheld);
-            self.revealed
-                .extend(masks.into_iter().filter_map(|m| m.secret));
             return (out, out_masks);
         }
         if !new.is_empty() {
@@ -1006,14 +1030,12 @@ impl TextScrubber {
         let buffer = std::mem::take(&mut self.pending);
         self.run = false;
         if self.withheld {
-            return self.withhold(&buffer);
+            return self.withhold(&buffer, true);
         }
         let masks = find_masks(&buffer, &merged, false);
         let new = self.adopt(&masks, &merged, usize::MAX);
         if self.withheld {
-            self.revealed
-                .extend(masks.into_iter().filter_map(|m| m.secret));
-            return self.withhold(&buffer);
+            return self.withhold(&buffer, true);
         }
         let (mut out, mut applied) = apply(&buffer, &masks);
         rescan(&mut out, &new, &mut applied);
@@ -2801,6 +2823,38 @@ mod tests {
                     streamed.push_str(r.value()["text"].as_str().unwrap());
                 }
                 assert!(!streamed.contains(&short[256]), "{what}: {streamed}");
+                // After an item is withheld, a rule streamed in random pieces
+                // is still learned, and a later item's echo is masked.
+                let mut secrets = Secrets::default();
+                let flood: String = short
+                    .iter()
+                    .map(|v| format!("{{\"password\":\"{v}\"}} "))
+                    .collect();
+                event(
+                    "textDelta",
+                    json!({"itemId":"a","text":flood}),
+                    &mut secrets,
+                );
+                let rule = format!("{{\"password\":\"{}\"}} done", many[1]);
+                let mut rest = rule.as_str();
+                while !rest.is_empty() {
+                    let cut = (1 + rng.below(6) as usize).min(rest.len());
+                    let (piece, after) = rest.split_at(cut);
+                    rest = after;
+                    event(
+                        "textDelta",
+                        json!({"itemId":"a","text":piece}),
+                        &mut secrets,
+                    );
+                }
+                let out = event(
+                    "textFinal",
+                    json!({"itemId":"b","text":format!("echo {}", many[1]),"part":0,"last":true}),
+                    &mut secrets,
+                )
+                .unwrap()
+                .into_value();
+                check(&out, &[many[1].clone()], &what);
             }
         }
     }
@@ -2842,6 +2896,70 @@ mod tests {
         assert!(!out.to_string().contains("100256"), "{out}");
         assert_eq!(out["method"], "can_use_tool");
         assert_eq!(out["params"]["tool_name"], "x");
+    }
+
+    #[test]
+    fn codex_round_seven_withheld_items_still_learn_split_rules() {
+        let flood: String = (0..257)
+            .map(|i| format!("{{\"password\":\"P{i:03}\"}} "))
+            .collect();
+        let rule = "{\"password\":\"violet river meadow\"}";
+        for split in 1..rule.len() {
+            let mut secrets = Secrets::default();
+            let out = event(
+                "textDelta",
+                json!({"itemId":"a","text":flood}),
+                &mut secrets,
+            )
+            .unwrap()
+            .into_value();
+            assert!(out["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("[redacted withheld"));
+            for piece in [&rule[..split], &rule[split..]] {
+                if let Some(out) = event(
+                    "textDelta",
+                    json!({"itemId":"a","text":piece}),
+                    &mut secrets,
+                ) {
+                    assert!(!out.value().to_string().contains("violet"), "{split}");
+                }
+            }
+            let out = event(
+                "textFinal",
+                json!({"itemId":"b","text":"echo violet river meadow","part":0,"last":true}),
+                &mut secrets,
+            )
+            .unwrap()
+            .into_value();
+            assert!(
+                !out.to_string().contains("violet river meadow"),
+                "{split}: {out}"
+            );
+        }
+        // Split in three, the value itself cut too.
+        let mut secrets = Secrets::default();
+        event(
+            "textDelta",
+            json!({"itemId":"a","text":flood}),
+            &mut secrets,
+        );
+        for piece in ["{\"pass", "word\":\"violet ri", "ver meadow\"}"] {
+            event(
+                "textDelta",
+                json!({"itemId":"a","text":piece}),
+                &mut secrets,
+            );
+        }
+        let out = event(
+            "textFinal",
+            json!({"itemId":"b","text":"echo violet river meadow","part":0,"last":true}),
+            &mut secrets,
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("violet river meadow"), "{out}");
     }
 
     #[test]
