@@ -1207,16 +1207,15 @@ pub(super) fn opencode_tool_notice(completed: bool, item: &Value) -> Notice {
 }
 
 /// `{pgid, processStartTime, serviceSid}` of a freshly spawned backend,
-/// read right after spawn for the process record (plan 5.3).
+/// read right after spawn for the process record (plan 5.3). The values come
+/// from the recovery module so the probe compares like with like.
 #[cfg(unix)]
 fn process_identity(pid: u32) -> Value {
     // `process_group(0)` made the backend its own group leader.
-    let pgid = pid;
-    let service_sid = unsafe { libc::getsid(0) };
     json!({
-        "pgid": pgid,
-        "processStartTime": process_start_time(pid),
-        "serviceSid": (service_sid > 0).then_some(service_sid),
+        "pgid": pid,
+        "processStartTime": super::recovery::process_start_time(pid),
+        "serviceSid": super::recovery::current_session(),
     })
 }
 #[cfg(windows)]
@@ -1244,34 +1243,53 @@ fn process_identity(_pid: u32, handle: Option<std::os::windows::io::RawHandle>) 
     });
     json!({"pgid": null, "processStartTime": start, "serviceSid": null})
 }
-/// The kernel's start time of `pid`, as an opaque string compared only for
-/// equality: macOS seconds.microseconds, Linux clock ticks since boot.
-#[cfg(target_os = "macos")]
-fn process_start_time(pid: u32) -> Option<String> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
-    let read = unsafe {
-        libc::proc_pidinfo(
-            pid as i32,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            (&mut info as *mut libc::proc_bsdinfo).cast(),
-            size,
-        )
-    };
-    (read == size).then(|| format!("{}.{:06}", info.pbi_start_tvsec, info.pbi_start_tvusec))
-}
-#[cfg(all(unix, not(target_os = "macos")))]
-fn process_start_time(pid: u32) -> Option<String> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // Field 2 is "(comm)" and may hold spaces; count fields after its ')'.
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(19).map(str::to_string)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `ready` a real spawn produces must give the recovery probe a
+    /// record it can prove: same start-time encoding on both sides.
+    #[cfg(unix)]
+    #[test]
+    fn a_real_ready_notice_lets_recovery_prove_a_live_leader() {
+        use std::os::unix::process::CommandExt;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let mut data = ready_data(
+            json!({"sessionId": "s", "pid": pid}),
+            &process_identity(pid),
+        );
+        data["generation"] = json!(1);
+        let events = [super::super::conversation::Event {
+            sequence: 1,
+            at: 0,
+            kind: "ready".into(),
+            data,
+        }];
+        let record = super::super::recovery::ProcessRecord::from_events(events.iter()).unwrap();
+        assert!(
+            record.process_start_time.is_some(),
+            "start time must parse: {record:?}"
+        );
+        let probe = super::super::recovery::probe_group(
+            Some(&record),
+            super::super::recovery::ProofPolicy::running_os(),
+        );
+        // A runner whose session cannot be proven (session 1) stays unknown by design.
+        if super::super::recovery::current_session().is_some() {
+            assert_eq!(
+                probe.state,
+                super::super::recovery::ProcessState::Alive,
+                "{probe:?}"
+            );
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 
     fn setup(full_access: bool, tool_access: Option<ToolAccess>) -> Setup {
         Setup {
