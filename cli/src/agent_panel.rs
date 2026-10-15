@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod acp;
+mod approval;
 mod attachments;
 mod backend;
 mod config_edit;
@@ -21,6 +22,7 @@ mod conversation;
 mod inspect;
 mod inspection;
 mod options;
+mod redact;
 mod schedules;
 mod service;
 mod skill_library;
@@ -568,7 +570,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"chatAgents":CHAT_AGENTS})
+    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"requestRevision":1,"chatAgents":CHAT_AGENTS})
 }
 
 /// `chrome-use inspect link|unlink|list`; returns the process exit code.

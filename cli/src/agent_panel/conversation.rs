@@ -4,6 +4,7 @@
 use super::attachments::Attachment;
 use super::config_transaction::{atomic_write, private_tree};
 use super::options::ModelOptions;
+use super::redact::Redacted;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -70,7 +71,9 @@ impl Message {
             .unwrap_or_default();
         format!("{skill}{page}{}", self.text)
     }
-    fn fingerprint(&self) -> Result<String, String> {
+    /// Request identity. The rule is the one v1.5.214 used and runs on the
+    /// raw input, before any redaction, so retries across the upgrade match.
+    pub(super) fn fingerprint(&self) -> Result<String, String> {
         if self.attachments.is_empty() && self.skill.is_none() {
             return Ok(hex::encode(Sha256::digest(self.text.as_bytes())));
         }
@@ -83,6 +86,21 @@ impl Message {
             ))
             .map_err(|_| "Cannot fingerprint message")?,
         )))
+    }
+    /// The form that is queued, saved and journaled: the page URL without
+    /// credentials or token parameters. Identity is taken before this.
+    pub(super) fn projected(mut self) -> Self {
+        if let Some(page) = &mut self.page {
+            page.url = super::redact::url(&page.url);
+        }
+        self
+    }
+    /// Whether this message already is its own stored projection, as a
+    /// client that only holds the redacted form would send it.
+    pub(super) fn is_projection(&self) -> bool {
+        self.page
+            .as_ref()
+            .is_none_or(|page| super::redact::url(&page.url) == page.url)
     }
 }
 
@@ -256,9 +274,32 @@ impl Conversation {
                 .collect();
         }
         self.accepted.insert(message.id.clone(), hash);
-        self.queue.push_back(message);
+        self.queue.push_back(message.projected());
         self.updated = now();
         Ok(true)
+    }
+    /// Whether `message` reuses an accepted id as a retry from a client that
+    /// only holds the stored projection: its raw hash differs, it is its own
+    /// projection, and that projection equals the projection of `stored`, the
+    /// message the id was accepted for (rebuilt from its `user` event). A
+    /// message still carrying a raw sensitive value never matches here, so
+    /// two different raw tokens with one projection stay different payloads.
+    pub(super) fn projected_retry(
+        &self,
+        message: &Message,
+        stored: Option<Message>,
+    ) -> Result<bool, String> {
+        let Some(existing) = self.accepted.get(&message.id) else {
+            return Ok(false);
+        };
+        let hash = message.fingerprint()?;
+        if existing == &hash || !message.is_projection() {
+            return Ok(false);
+        }
+        let Some(stored) = stored.filter(|m| m.id == message.id) else {
+            return Ok(false);
+        };
+        Ok(stored.projected().fingerprint()? == hash)
     }
     pub(super) fn begin_next(&mut self) -> Option<Message> {
         if self.phase.busy() || self.phase == Phase::RecoveryRequired {
@@ -515,17 +556,19 @@ impl Store {
             None,
         )
     }
+    /// Append one event. Only [`Redacted`] data is accepted, so every write
+    /// has passed the privacy rules in `redact.rs`.
     pub(super) fn event(
         &mut self,
         chat: &mut Conversation,
         kind: &str,
-        data: Value,
+        data: Redacted,
     ) -> Result<Event, String> {
         let event = Event {
             sequence: chat.next_sequence,
             at: now(),
             kind: kind.into(),
-            data,
+            data: data.into_value(),
         };
         let mut raw = serde_json::to_vec(&event).map_err(|_| "Cannot encode conversation event")?;
         if raw.len() > MAX_EVENT {
@@ -689,7 +732,38 @@ impl Store {
         Ok(json!({"events":rows,"cursor":cursor,"more":more}))
     }
 
+    /// The `user` event that accepted `message_id`, if the journal has one.
+    pub(super) fn user_event(&self, id: &str, message_id: &str) -> Result<Option<Value>, String> {
+        let mut found = None;
+        self.scan(id, |event| {
+            if event.kind == "user" && event.data["messageId"] == message_id {
+                found = Some(event.data);
+            }
+        })?;
+        Ok(found)
+    }
+
+    /// How often each backend request id was journaled, keyed by its JSON
+    /// spelling.
+    pub(super) fn request_ids(&self, id: &str) -> Result<HashMap<String, u32>, String> {
+        let mut counts = HashMap::new();
+        self.scan(id, |event| {
+            if event.kind == "request" {
+                if let Ok(key) = serde_json::to_string(&event.data["requestId"]) {
+                    *counts.entry(key).or_insert(0) += 1;
+                }
+            }
+        })?;
+        Ok(counts)
+    }
+
     fn last_sequence(&self, id: &str) -> Result<u64, String> {
+        self.scan(id, |_| {})
+    }
+
+    /// Visit every event in order; refuses a gap, a torn line or corruption
+    /// like `events` does. Returns the last sequence.
+    fn scan(&self, id: &str, mut visit: impl FnMut(Event)) -> Result<u64, String> {
         let path = self.folder(id)?.join("events.jsonl");
         if !path.exists() {
             return Ok(0);
@@ -723,6 +797,7 @@ impl Store {
                 return Err("Conversation event sequence has a gap or duplicate".into());
             }
             previous = event.sequence;
+            visit(event);
         }
         Ok(previous)
     }
@@ -808,6 +883,118 @@ mod tests {
             skill: None,
         }
     }
+    fn rich(id: &str, url: &str) -> Message {
+        Message {
+            id: id.into(),
+            text: "Check my order".into(),
+            page: Some(PageContext {
+                tab_id: 42,
+                url: url.into(),
+                title: "Orders".into(),
+            }),
+            attachments: vec![Attachment {
+                id: "a".repeat(64),
+                media_type: "image/png".into(),
+                bytes: 1234,
+            }],
+            skill: None,
+        }
+    }
+    const TOKEN_A: &str = "https://shop.example/orders?access_token=SYNTH_TOKEN_A&x=1";
+    const TOKEN_B: &str = "https://shop.example/orders?access_token=SYNTH_TOKEN_B&x=1";
+    const PROJECTED: &str = "https://shop.example/orders?access_token=[redacted]&x=1";
+
+    #[test]
+    fn fingerprints_without_new_fields_match_v1_5_214() {
+        // Hashes of the v1.5.214 rule: text only, and text with an
+        // attachment and a page (serde_json of the tuple).
+        let mut text = message("Summarize this page");
+        text.page = rich("x", TOKEN_A).page;
+        assert_eq!(
+            text.fingerprint().unwrap(),
+            "d598de4e6b338ec44e8abb56be9eedb3994e828291fc2a521d10951c6f29180f"
+        );
+        assert_eq!(
+            rich("x", TOKEN_A).fingerprint().unwrap(),
+            "477c7aca284db26bc2126aa5e0e0d55fc4ae9a01e640dd500230717d53566440"
+        );
+        assert_eq!(
+            rich("x", PROJECTED).fingerprint().unwrap(),
+            "933c1eb45b7469ede1ae5cdafec91f1ad28124bb15404a5a4d51da7406fbcbd5"
+        );
+        let mut no_page = rich("x", TOKEN_A);
+        no_page.page = None;
+        assert_eq!(
+            no_page.fingerprint().unwrap(),
+            "25763951449927044ac6aeed712ec0316c727a0059445ff752e8aab5d48cac15"
+        );
+    }
+
+    #[test]
+    fn accepted_messages_are_queued_as_their_projection_under_the_raw_hash() {
+        let mut c = Conversation::new("claude", None, None).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        assert!(c.accept(rich(&id, TOKEN_A)).unwrap());
+        assert_eq!(c.queue[0].page.as_ref().unwrap().url, PROJECTED);
+        assert_eq!(
+            c.accepted[&id],
+            "477c7aca284db26bc2126aa5e0e0d55fc4ae9a01e640dd500230717d53566440"
+        );
+        let saved = serde_json::to_string(&c).unwrap();
+        assert!(!saved.contains("SYNTH_TOKEN_A"));
+        // The queued projection is what the agent's prompt carries.
+        assert!(c.queue[0].prompt_text().contains(PROJECTED));
+    }
+
+    #[test]
+    fn retries_dedupe_by_raw_hash_or_canonical_projection_only() {
+        let id = uuid::Uuid::new_v4().to_string();
+        // The stored `user` event of the original, as the journal holds it:
+        // raw for v1.5.214, projected for this build. Both project equally.
+        let stored = || Some(rich(&id, TOKEN_A));
+        // (1) Accepted before the upgrade (legacy hash in state), reply lost,
+        // raw retry: duplicate through the raw hash.
+        let mut old = Conversation::new("claude", None, None).unwrap();
+        old.accepted.insert(
+            id.clone(),
+            "477c7aca284db26bc2126aa5e0e0d55fc4ae9a01e640dd500230717d53566440".into(),
+        );
+        assert!(!old.accept(rich(&id, TOKEN_A)).unwrap());
+        // (2) Accepted by this build, identical raw retry.
+        let mut c = Conversation::new("claude", None, None).unwrap();
+        assert!(c.accept(rich(&id, TOKEN_A)).unwrap());
+        assert!(!c.accept(rich(&id, TOKEN_A)).unwrap());
+        assert_eq!(c.queue.len(), 1);
+        // (3) A client holding only the projection retries with it.
+        let projected = rich(&id, PROJECTED);
+        assert!(c.accept(projected.clone()).is_err());
+        assert!(c.projected_retry(&projected, stored()).unwrap());
+        assert!(old.projected_retry(&projected, stored()).unwrap());
+        // (4) A different raw token with the same projection is a different
+        // payload.
+        let other = rich(&id, TOKEN_B);
+        assert!(c.accept(other.clone()).is_err());
+        assert!(!c.projected_retry(&other, stored()).unwrap());
+        assert!(!old.projected_retry(&other, stored()).unwrap());
+        // Changed text is refused either way, sensitive or not.
+        let mut changed = rich(&id, PROJECTED);
+        changed.text = "Cancel my order".into();
+        assert!(!c.projected_retry(&changed, stored()).unwrap());
+        let plain_id = uuid::Uuid::new_v4().to_string();
+        let mut plain = rich(&plain_id, "https://shop.example/orders");
+        assert!(c.accept(plain.clone()).unwrap());
+        plain.text = "Cancel my order".into();
+        assert!(c.accept(plain.clone()).is_err());
+        assert!(!c
+            .projected_retry(&plain, Some(rich(&plain_id, "https://shop.example/orders")))
+            .unwrap());
+        // No stored event or another id: no projection match.
+        assert!(!c.projected_retry(&projected, None).unwrap());
+        assert!(!c
+            .projected_retry(&projected, Some(rich(&plain_id, TOKEN_A)))
+            .unwrap());
+    }
+
     #[test]
     fn journal_pages_seek_forward_after_our_appends_and_reject_external_corruption() {
         let root = tempfile::tempdir().unwrap();
@@ -816,7 +1003,11 @@ mod tests {
         store.create(&chat).unwrap();
         for _ in 0..300 {
             store
-                .event(&mut chat, "textDelta", json!({"text":"chunk"}))
+                .event(
+                    &mut chat,
+                    "textDelta",
+                    Redacted::raw_for_tests(json!({"text":"chunk"})),
+                )
                 .unwrap();
         }
         store.save(&chat).unwrap();
@@ -825,7 +1016,11 @@ mod tests {
         let offset = store.cursors.lock().unwrap()[&chat.id].offset;
         assert!(offset > 0);
         store
-            .event(&mut chat, "textDelta", json!({"text":"tail"}))
+            .event(
+                &mut chat,
+                "textDelta",
+                Redacted::raw_for_tests(json!({"text":"tail"})),
+            )
             .unwrap();
         assert_eq!(store.cursors.lock().unwrap()[&chat.id].offset, offset);
         assert_eq!(
@@ -1016,7 +1211,12 @@ mod tests {
         s.create(&c).unwrap();
         c.accept(message("one")).unwrap();
         c.begin_next();
-        s.event(&mut c, "user", json!({"text":"one"})).unwrap();
+        s.event(
+            &mut c,
+            "user",
+            Redacted::raw_for_tests(json!({"text":"one"})),
+        )
+        .unwrap();
         s.save(&c).unwrap();
         let mut reopened = Store::open(t.path().join("chats")).unwrap();
         let recovered = reopened.load(&c.id).unwrap();
@@ -1036,8 +1236,18 @@ mod tests {
         let mut s = Store::open(t.path().join("chats")).unwrap();
         let mut c = Conversation::new("codex", None, None).unwrap();
         s.create(&c).unwrap();
-        s.event(&mut c, "user", json!({"text":"one"})).unwrap();
-        s.event(&mut c, "text", json!({"text":"two"})).unwrap();
+        s.event(
+            &mut c,
+            "user",
+            Redacted::raw_for_tests(json!({"text":"one"})),
+        )
+        .unwrap();
+        s.event(
+            &mut c,
+            "text",
+            Redacted::raw_for_tests(json!({"text":"two"})),
+        )
+        .unwrap();
         s.save(&c).unwrap();
         assert_eq!(
             s.events(&c.id, 1).unwrap()["events"]

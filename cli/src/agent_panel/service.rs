@@ -2,10 +2,12 @@
 //! The loopback protocol is private native IPC, not a page or browser endpoint.
 //! Each endpoint is authenticated by a capability kept in a mode-0600 file.
 
+use super::approval::{self, Pending};
 use super::backend::{self, Command as BackendCommand, Notice, Setup};
 use super::config_transaction::{atomic_write, private_open, private_tree};
 use super::conversation::{Conversation, Message, PageContext, Phase, Store};
 use super::options::ModelOptions;
+use super::redact::{self, Redacted};
 use super::DiscoveryContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -491,39 +493,79 @@ struct Engine {
     store: Store,
     chats: HashMap<String, Conversation>,
     jobs: HashMap<String, Job>,
-    requests: HashMap<(String, String), (Value, String, Value, bool)>,
+    requests: HashMap<(String, String), Pending>,
+    /// Per-conversation redaction state (known secrets, held stream text).
+    secrets: HashMap<String, redact::Secrets>,
+    /// Engine-wide request revision counter.
+    revision: u64,
+    /// Per conversation: how often each request id was journaled, loaded
+    /// from the journal on first need.
+    request_ids: HashMap<String, HashMap<String, u32>>,
     profile: String,
     stop: bool,
     schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
 }
 
 impl Engine {
+    fn new(
+        store: Store,
+        profile: String,
+        schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
+    ) -> Self {
+        Self {
+            store,
+            chats: HashMap::new(),
+            jobs: HashMap::new(),
+            requests: HashMap::new(),
+            secrets: HashMap::new(),
+            revision: 0,
+            request_ids: HashMap::new(),
+            profile,
+            stop: false,
+            schedules,
+        }
+    }
     /// Answer every waiting approval for a full-access conversation exactly as
-    /// the panel's "Allow once" would. Questions still go to the user.
+    /// the panel's "Allow once" would. Questions still go to the user. While
+    /// the user is stopping the turn, approvals are declined instead, so no
+    /// approval can start an action after Stop.
     fn approve_pending(&mut self, id: &str) {
         let Some(sender) = self.jobs.get(id).map(|j| j.sender.clone()) else {
             return;
         };
-        for ((chat, _), (request_id, method, original, sent)) in self.requests.iter_mut() {
-            if chat != id || *sent {
+        let stopping = self
+            .chats
+            .get(id)
+            .is_some_and(|chat| chat.phase == Phase::Stopping);
+        for ((chat, _), pending) in self.requests.iter_mut() {
+            if chat != id || pending.sent {
                 continue;
             }
-            let Some(result) = automatic_approval(method, original) else {
+            let answer = if stopping {
+                approval::automatic_decline(&pending.method, &pending.original)
+            } else {
+                automatic_approval(&pending.method, &pending.original)
+            };
+            let Some(result) = answer else {
                 continue;
             };
-            if validate_reply(method, original, &result).is_err() {
+            if validate_reply(&pending.method, &pending.original, &result).is_err() {
                 continue;
             }
             if sender
                 .try_send(BackendCommand::Reply {
-                    id: request_id.clone(),
+                    id: pending.request_id.clone(),
                     result,
                 })
                 .is_ok()
             {
-                *sent = true;
+                pending.sent = true;
             }
         }
+    }
+    fn forget(&mut self, id: &str) {
+        self.secrets.remove(id);
+        self.request_ids.remove(id);
     }
     fn chat(&mut self, id: &str) -> Result<&mut Conversation, String> {
         if !self.chats.contains_key(id) {
@@ -536,6 +578,7 @@ impl Engine {
                     .map(|(key, _)| key.clone());
                 if let Some(victim) = victim {
                     self.chats.remove(&victim);
+                    self.forget(&victim);
                 }
             }
             let chat = self.store.load(id)?;
@@ -549,13 +592,45 @@ impl Engine {
         let chat = self.chats.get(id).ok_or("Conversation was not found")?;
         self.store.save(chat)
     }
+    /// Journal one event. Every write goes through the redaction rules.
     fn record(&mut self, id: &str, kind: &str, data: Value) -> Result<(), String> {
+        match self.redact(id, kind, data) {
+            Some(data) => self.record_redacted(id, kind, data),
+            None => Ok(()),
+        }
+    }
+    fn redact(&mut self, id: &str, kind: &str, data: Value) -> Option<Redacted> {
+        redact::event(kind, data, self.secrets.entry(id.into()).or_default())
+    }
+    fn record_redacted(&mut self, id: &str, kind: &str, data: Redacted) -> Result<(), String> {
         let chat = self.chats.get_mut(id).ok_or("Conversation was not found")?;
+        if matches!(kind, "terminal" | "exited" | "processUnconfirmed") {
+            // Streamed text held back by the scrubber ends with its turn.
+            let held = self
+                .secrets
+                .get_mut(id)
+                .map(|s| s.flush())
+                .unwrap_or_default();
+            for (held_kind, held_data) in held {
+                self.store.event(chat, held_kind, held_data)?;
+            }
+        }
         self.store.event(chat, kind, data)?;
         if kind != "textDelta" {
             self.store.save(chat)?;
         }
         Ok(())
+    }
+    /// Journal counts of request ids for one conversation.
+    fn request_counts(&mut self, id: &str) -> Result<&mut HashMap<String, u32>, String> {
+        if !self.request_ids.contains_key(id) {
+            let counts = self.store.request_ids(id)?;
+            self.request_ids.insert(id.into(), counts);
+        }
+        Ok(self
+            .request_ids
+            .get_mut(id)
+            .expect("request ids were loaded"))
     }
     fn notice(
         &mut self,
@@ -597,13 +672,13 @@ impl Engine {
                 let resolved: Vec<_> = self
                     .requests
                     .iter()
-                    .filter(|((chat, _), (_, method, params, sent))| {
+                    .filter(|((chat, _), pending)| {
                         chat == id
-                            && *sent
-                            && method == "can_use_tool"
-                            && params["tool_use_id"] == tool_id
+                            && pending.sent
+                            && pending.method == "can_use_tool"
+                            && pending.original["tool_use_id"] == tool_id
                     })
-                    .map(|(key, (request_id, _, _, _))| (key.clone(), request_id.clone()))
+                    .map(|(key, pending)| (key.clone(), pending.request_id.clone()))
                     .collect();
                 for (key, request_id) in resolved {
                     self.requests.remove(&key);
@@ -611,6 +686,7 @@ impl Engine {
                 }
             }
         }
+        let mut prepared = None;
         match notice.kind {
             "ready" => {
                 let chat = self.chat(id)?;
@@ -635,15 +711,36 @@ impl Engine {
                 if key.len() > 1024 || self.requests.len() >= 64 {
                     return Err("Backend request capacity reached".into());
                 }
+                // A re-sent request or a new process reusing an id gets a new
+                // revision; replies bound to the old one are refused.
+                self.revision += 1;
+                let revision = self.revision;
+                let count = {
+                    let counts = self.request_counts(id)?;
+                    let count = counts.entry(key.clone()).or_insert(0);
+                    *count += 1;
+                    *count
+                };
+                notice.data["generation"] = generation.into();
+                notice.data["requestRevision"] = revision.into();
+                let original = notice.data["params"].clone();
+                let journaled = self
+                    .redact(id, "request", notice.data.clone())
+                    .ok_or("Backend request could not be recorded")?;
                 self.requests.insert(
                     (id.into(), key),
-                    (
+                    Pending {
                         request_id,
-                        notice.data["method"].as_str().unwrap_or("").into(),
-                        notice.data["params"].clone(),
-                        false,
-                    ),
+                        method: notice.data["method"].as_str().unwrap_or("").into(),
+                        original,
+                        sent: false,
+                        generation,
+                        revision,
+                        sent_projection: journaled.value()["params"].clone(),
+                        single_revision: count == 1,
+                    },
                 );
+                prepared = Some(journaled);
                 if self.chat(id)?.phase != Phase::Stopping {
                     self.chat(id)?.phase = Phase::WaitingInput;
                 }
@@ -709,7 +806,10 @@ impl Engine {
             }
             _ => {}
         }
-        self.record(id, notice.kind, notice.data)?;
+        match prepared {
+            Some(data) => self.record_redacted(id, notice.kind, data)?,
+            None => self.record(id, notice.kind, notice.data)?,
+        }
         if ["terminal", "exited"].contains(&notice.kind) {
             let next = self.chat(id)?.begin_next();
             if next.is_some() {
@@ -798,12 +898,21 @@ struct Events {
     #[serde(default)]
     after: u64,
 }
+/// A reply is either a decision bound to a request revision (this build's
+/// panel) or a backend result echoed by an older panel.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Reply {
     conversation_id: String,
     request_id: Value,
-    result: Value,
+    #[serde(default)]
+    result: Option<Value>,
+    #[serde(default)]
+    generation: Option<u64>,
+    #[serde(default)]
+    request_revision: Option<u64>,
+    #[serde(default)]
+    decision: Option<Value>,
 }
 
 async fn dispatch(
@@ -1054,7 +1163,15 @@ async fn dispatch(
             })?;
             let mut e = engine.lock().await;
             let summary = e.chat(&p.conversation_id)?.summary();
-            let events = e.store.events(&p.conversation_id, p.after)?;
+            let mut events = e.store.events(&p.conversation_id, p.after)?;
+            // Events written before redaction existed are minimized for
+            // display; the journal file is not rewritten.
+            if let Some(rows) = events["events"].as_array_mut() {
+                for row in rows {
+                    let kind = row["kind"].as_str().unwrap_or("").to_string();
+                    redact::legacy(&kind, &mut row["data"]);
+                }
+            }
             let queued = e.chat(&p.conversation_id)?.queue_snapshot();
             Ok(
                 json!({"schemaVersion":1,"conversation":summary,"journal":events,"queuedMessages":queued}),
@@ -1170,17 +1287,38 @@ async fn dispatch(
                 text: p.text.clone(),
                 page: p.page.clone(),
             };
-            let added = if direct {
+            // A client that only holds the stored projection may retry with
+            // it; that is a duplicate, never a resend.
+            let differs = e
+                .chat(&p.conversation_id)?
+                .accepted
+                .get(&message.id)
+                .is_some_and(|hash| message.fingerprint().ok().as_ref() != Some(hash));
+            let stored = if differs && message.is_projection() {
+                stored_message(&e.store, &p.conversation_id, &message.id, &workspace)?
+            } else {
+                None
+            };
+            let added = if e
+                .chat(&p.conversation_id)?
+                .projected_retry(&message, stored)?
+            {
+                false
+            } else if direct {
                 e.chat(&p.conversation_id)?.accept_direct(message)?
             } else {
                 e.chat(&p.conversation_id)?.accept(message)?
             };
             e.persist(&p.conversation_id)?;
             if added {
+                let page = p.page.clone().map(|mut page| {
+                    page.url = redact::url(&page.url);
+                    page
+                });
                 e.record(
                     &p.conversation_id,
                     "user",
-                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":p.page,"attachments":p.attachments,"skillId":p.skill_id}),
+                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":page,"attachments":p.attachments,"skillId":p.skill_id}),
                 )?;
             }
             if added {
@@ -1338,6 +1476,7 @@ async fn dispatch(
                 );
             }
             e.chats.remove(&id);
+            e.forget(&id);
             e.requests.retain(|(chat, _), _| chat != &id);
             e.store.delete(&id)?;
             Ok(
@@ -1385,21 +1524,55 @@ async fn dispatch(
         }
         "conversationRespond" => {
             let p: Reply = serde_json::from_value(params.clone()).map_err(|_| {
-                "Conversation response requires conversationId, requestId and result"
+                "Conversation response requires conversationId, requestId and a decision"
             })?;
             let mut e = engine.lock().await;
             let key = serde_json::to_string(&p.request_id).map_err(|_| "Invalid request id")?;
-            let (id, method, original, sent) = e
+            let stopping = e.chat(&p.conversation_id)?.phase == Phase::Stopping;
+            let pending = e
                 .requests
                 .get(&(p.conversation_id.clone(), key.clone()))
-                .ok_or("The backend request is stale or belongs to another conversation")?
-                .clone();
-            if sent {
+                .ok_or("The backend request is stale or belongs to another conversation")?;
+            if pending.sent {
                 return Err(
                     "A response was already dispatched; wait for backend confirmation".into(),
                 );
             }
-            validate_reply(&method, &original, &p.result)?;
+            // Errors below are fixed strings: request input never leaves the
+            // service through a refusal.
+            let result = match (p.result, p.generation, p.request_revision, p.decision) {
+                (None, Some(generation), Some(revision), Some(decision)) => {
+                    if generation != pending.generation || revision != pending.revision {
+                        return Err("The request was replaced or belongs to an earlier agent process; read the current state".into());
+                    }
+                    approval::reply_for_decision(&pending.method, &pending.original, &decision)?
+                }
+                (Some(result), None, None, None) => {
+                    if !pending.single_revision {
+                        return Err(
+                            "This request id was reused; update the panel to answer it".into()
+                        );
+                    }
+                    approval::reply_for_legacy(
+                        &pending.method,
+                        &pending.original,
+                        &pending.sent_projection,
+                        &result,
+                    )?
+                }
+                _ => {
+                    return Err(
+                        "Send either a decision with its request revision or a result".into(),
+                    )
+                }
+            };
+            validate_reply(&pending.method, &pending.original, &result)?;
+            if stopping && !approval::is_decline(&pending.method, &pending.original, &result) {
+                return Err(
+                    "The user stopped this response; only decline or cancel can be sent".into(),
+                );
+            }
+            let id = pending.request_id.clone();
             let sender = e
                 .jobs
                 .get(&p.conversation_id)
@@ -1407,21 +1580,54 @@ async fn dispatch(
                 .sender
                 .clone();
             sender
-                .try_send(BackendCommand::Reply {
-                    id,
-                    result: p.result,
-                })
+                .try_send(BackendCommand::Reply { id, result })
                 .map_err(|_| "Backend response could not be dispatched")?;
-            e.requests
-                .get_mut(&(p.conversation_id.clone(), key))
-                .unwrap()
-                .3 = true;
+            if let Some(pending) = e.requests.get_mut(&(p.conversation_id.clone(), key)) {
+                pending.sent = true;
+            }
             Ok(
                 json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary(),"response":{"dispatched":true,"confirmed":false}}),
             )
         }
         _ => Err("Unsupported conversation service operation".into()),
     }
+}
+
+/// The message an id was accepted for, rebuilt from its `user` event, for
+/// matching a retry that only carries the stored projection.
+fn stored_message(
+    store: &Store,
+    conversation: &str,
+    message_id: &str,
+    workspace: &Path,
+) -> Result<Option<Message>, String> {
+    let Some(data) = store.user_event(conversation, message_id)? else {
+        return Ok(None);
+    };
+    let page = match data.get("page").filter(|p| !p.is_null()) {
+        Some(page) => match serde_json::from_value(page.clone()) {
+            Ok(page) => Some(page),
+            Err(_) => return Ok(None),
+        },
+        None => None,
+    };
+    let Ok(attachments) = serde_json::from_value(data["attachments"].clone()) else {
+        return Ok(None);
+    };
+    let skill = match data["skillId"].as_str() {
+        Some(id) => match super::skill_library::load_snapshot(workspace, id) {
+            Ok(skill) => Some(skill),
+            Err(_) => return Ok(None),
+        },
+        None => None,
+    };
+    Ok(Some(Message {
+        id: message_id.into(),
+        text: data["text"].as_str().unwrap_or("").into(),
+        page,
+        attachments,
+        skill,
+    }))
 }
 
 /// The host a conversation is listed under: the page's host without `www.`.
@@ -1765,15 +1971,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     release_bun_libraries();
     let store = Store::open(directory.join("conversations"))?;
-    let engine = Arc::new(Mutex::new(Engine {
+    let engine = Arc::new(Mutex::new(Engine::new(
         store,
-        chats: HashMap::new(),
-        jobs: HashMap::new(),
-        requests: HashMap::new(),
-        profile: profile.clone(),
-        stop: false,
-        schedules: super::schedules::load(&directory.join("conversations"))?,
-    }));
+        profile.clone(),
+        super::schedules::load(&directory.join("conversations"))?,
+    )));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -2308,15 +2510,11 @@ async fn schedule_tick(engine: &Arc<Mutex<Engine>>) -> Result<(), String> {
 mod schedule_tests {
     use super::*;
     fn engine(root: &Path) -> Arc<Mutex<Engine>> {
-        Arc::new(Mutex::new(Engine {
-            store: Store::open(root.join("conversations")).unwrap(),
-            chats: HashMap::new(),
-            jobs: HashMap::new(),
-            requests: HashMap::new(),
-            profile: "fixture".into(),
-            stop: false,
-            schedules: std::collections::BTreeMap::new(),
-        }))
+        Arc::new(Mutex::new(Engine::new(
+            Store::open(root.join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )))
     }
     #[tokio::test]
     async fn scheduling_does_not_escalate_or_allow_recursive_mutation() {
@@ -2533,6 +2731,469 @@ mod endpoint_permission_tests {
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o400
+        );
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    const SECRET: &str = "SYNTH_PASSWORD_7781";
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        engine: Arc<Mutex<Engine>>,
+        id: String,
+        replies: mpsc::Receiver<BackendCommand>,
+    }
+
+    async fn fixture(full_access: bool) -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(root.join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )));
+        let created = dispatch(
+            &engine,
+            "conversationCreate",
+            &json!({"agentId":"claude","fullAccess":full_access}),
+        )
+        .await
+        .unwrap();
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        let (sender, replies) = mpsc::channel(16);
+        {
+            let mut e = engine.lock().await;
+            e.jobs.insert(
+                id.clone(),
+                Job {
+                    generation: 0,
+                    full_access,
+                    options: ModelOptions::default(),
+                    retiring: false,
+                    sender,
+                },
+            );
+            e.chat(&id).unwrap().phase = Phase::Running;
+        }
+        Fixture {
+            _dir: dir,
+            root,
+            engine,
+            id,
+            replies,
+        }
+    }
+
+    impl Fixture {
+        async fn notice(&self, kind: &'static str, data: Value) {
+            let mut e = self.engine.lock().await;
+            e.notice(&self.id, 0, backend::notice(kind, data)).unwrap();
+        }
+        async fn fill_request(&self, request_id: &str) {
+            self.notice(
+                "request",
+                json!({"requestId":request_id,"method":"can_use_tool","params":{"subtype":"can_use_tool","tool_name":"mcp__chrome_use__chrome_use_fill","tool_use_id":"tool-1","input":{"selector":"#password","value":SECRET,"note":"SYNTH_NOTE_VALUE"}}}),
+            )
+            .await;
+        }
+        async fn respond(&self, reply: Value) -> Result<Value, String> {
+            let mut params = reply;
+            params["conversationId"] = self.id.clone().into();
+            dispatch(&self.engine, "conversationRespond", &params).await
+        }
+        fn sent(&mut self) -> Option<Value> {
+            match self.replies.try_recv() {
+                Ok(BackendCommand::Reply { result, .. }) => Some(result),
+                _ => None,
+            }
+        }
+        async fn journal(&self) -> Vec<Value> {
+            let read = dispatch(
+                &self.engine,
+                "conversationRead",
+                &json!({"conversationId":self.id}),
+            )
+            .await
+            .unwrap();
+            read["journal"]["events"].as_array().unwrap().clone()
+        }
+        async fn request_event(&self) -> Value {
+            self.journal()
+                .await
+                .into_iter()
+                .rev()
+                .find(|e| e["kind"] == "request")
+                .unwrap()["data"]
+                .clone()
+        }
+        /// Every file under the profile directory, as bytes.
+        fn disk(&self) -> Vec<u8> {
+            fn walk(path: &Path, out: &mut Vec<u8>) {
+                for entry in std::fs::read_dir(path).unwrap().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        walk(&path, out);
+                    } else {
+                        out.extend(std::fs::read(&path).unwrap_or_default());
+                    }
+                }
+            }
+            let mut out = Vec::new();
+            walk(&self.root, &mut out);
+            out
+        }
+        fn on_disk(&self, needle: &str) -> bool {
+            let disk = self.disk();
+            disk.windows(needle.len()).any(|w| w == needle.as_bytes())
+        }
+    }
+
+    #[tokio::test]
+    async fn decision_replies_send_the_original_and_bind_to_the_revision() {
+        let mut f = fixture(false).await;
+        f.fill_request("r1").await;
+        let request = f.request_event().await;
+        assert_eq!(
+            request["params"]["input"]["value"],
+            "[redacted input, 19 chars]"
+        );
+        assert_eq!(request["generation"], 0);
+        let revision = request["requestRevision"].as_u64().unwrap();
+        assert!(!f.on_disk(SECRET));
+        // Stale generation, wrong revision, unknown fields, an echoed input
+        // on the new shape, and mixed shapes are refused.
+        for bad in [
+            json!({"requestId":"r1","generation":1,"requestRevision":revision,"decision":"allow"}),
+            json!({"requestId":"r1","generation":0,"requestRevision":revision + 1,"decision":"allow"}),
+            json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow","extra":true}),
+            json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":{"updatedInput":{"value":"SYNTH_FORGED"}}}),
+            json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow","result":{"behavior":"allow","updatedInput":{}}}),
+            json!({"requestId":"r1","requestRevision":revision,"decision":"allow"}),
+        ] {
+            assert!(f.respond(bad.clone()).await.is_err(), "{bad}");
+            assert!(f.sent().is_none());
+        }
+        let ok = f
+            .respond(json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow"}))
+            .await
+            .unwrap();
+        assert_eq!(ok["response"], json!({"dispatched":true,"confirmed":false}));
+        let sent = f.sent().unwrap();
+        assert_eq!(sent["updatedInput"]["value"], SECRET);
+        assert_eq!(sent["updatedInput"]["note"], "SYNTH_NOTE_VALUE");
+        // A second allow for the same revision is refused.
+        assert!(f
+            .respond(json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow"}))
+            .await
+            .is_err());
+        assert!(!f.on_disk(SECRET));
+        assert!(!f.on_disk("SYNTH_FORGED"));
+    }
+
+    #[tokio::test]
+    async fn a_reused_request_id_gets_a_new_revision_and_kills_the_old_one() {
+        let mut f = fixture(false).await;
+        f.fill_request("7").await;
+        let first = f.request_event().await["requestRevision"].as_u64().unwrap();
+        f.fill_request("7").await;
+        let second = f.request_event().await["requestRevision"].as_u64().unwrap();
+        assert!(second > first);
+        assert!(f
+            .respond(
+                json!({"requestId":"7","generation":0,"requestRevision":first,"decision":"allow"})
+            )
+            .await
+            .is_err());
+        // An older panel cannot tell the two apart, so its reply is refused.
+        let frozen = f.request_event().await["params"]["input"].clone();
+        assert!(f
+            .respond(json!({"requestId":"7","result":{"behavior":"allow","updatedInput":frozen}}))
+            .await
+            .is_err());
+        assert!(f.sent().is_none());
+        f.respond(
+            json!({"requestId":"7","generation":0,"requestRevision":second,"decision":"deny"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.sent().unwrap()["behavior"], "deny");
+    }
+
+    #[tokio::test]
+    async fn legacy_echoes_compare_with_the_frozen_projection() {
+        let mut f = fixture(false).await;
+        f.fill_request("r1").await;
+        let frozen = f.request_event().await["params"]["input"].clone();
+        // The note becomes a known secret after the request was shown, so a
+        // projection recomputed now would differ from the frozen one.
+        f.notice(
+            "tool",
+            json!({"completed":false,"item":{"type":"tool_use","id":"t2","name":"x","input":{"password":"SYNTH_NOTE_VALUE"}}}),
+        )
+        .await;
+        let mut recomputed = frozen.clone();
+        recomputed["note"] = "[redacted secret, 16 chars]".into();
+        let refused = f
+            .respond(
+                json!({"requestId":"r1","result":{"behavior":"allow","updatedInput":recomputed}}),
+            )
+            .await
+            .unwrap_err();
+        assert!(!refused.contains("SYNTH"));
+        let forged = f
+            .respond(json!({"requestId":"r1","result":{"behavior":"allow","updatedInput":{"selector":"#password","value":"SYNTH_REPLY_VALUE"}}}))
+            .await
+            .unwrap_err();
+        assert!(!forged.contains("SYNTH"));
+        assert!(f.sent().is_none());
+        f.respond(json!({"requestId":"r1","result":{"behavior":"allow","updatedInput":frozen}}))
+            .await
+            .unwrap();
+        let sent = f.sent().unwrap();
+        assert_eq!(sent["updatedInput"]["value"], SECRET);
+        assert!(!f.on_disk("SYNTH_REPLY_VALUE"));
+        assert!(!f.on_disk(SECRET));
+        // Codex and ACP shapes carry no input and are unchanged.
+        f.notice(
+            "request",
+            json!({"requestId":3,"method":"item/commandExecution/requestApproval","params":{"command":"ls"}}),
+        )
+        .await;
+        f.respond(json!({"requestId":3,"result":{"decision":"accept"}}))
+            .await
+            .unwrap();
+        assert_eq!(f.sent().unwrap(), json!({"decision":"accept"}));
+        f.notice(
+            "request",
+            json!({"requestId":"p","method":"session/request_permission","params":{"options":[{"optionId":"once","kind":"allow_once"}]}}),
+        )
+        .await;
+        f.respond(
+            json!({"requestId":"p","result":{"outcome":{"outcome":"selected","optionId":"once"}}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.sent().unwrap()["outcome"]["optionId"], "once");
+    }
+
+    #[tokio::test]
+    async fn stopping_accepts_only_declines_and_full_access_declines() {
+        let mut f = fixture(false).await;
+        f.fill_request("r1").await;
+        let revision = f.request_event().await["requestRevision"].as_u64().unwrap();
+        dispatch(
+            &f.engine,
+            "conversationStop",
+            &json!({"conversationId":f.id}),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            f.replies.try_recv(),
+            Ok(BackendCommand::Interrupt)
+        ));
+        assert!(f
+            .respond(json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow"}))
+            .await
+            .is_err());
+        let frozen = f.request_event().await["params"]["input"].clone();
+        assert!(f
+            .respond(json!({"requestId":"r1","result":{"behavior":"allow","updatedInput":frozen}}))
+            .await
+            .is_err());
+        assert!(f.sent().is_none());
+        f.respond(
+            json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"deny"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.sent().unwrap()["behavior"], "deny");
+
+        // Full access: a request arriving during stop is declined.
+        let mut f = fixture(true).await;
+        f.engine.lock().await.chat(&f.id).unwrap().phase = Phase::Stopping;
+        f.fill_request("r2").await;
+        let sent = f.sent().unwrap();
+        assert_eq!(sent["behavior"], "deny");
+        // And while not stopping it is approved as before.
+        f.engine.lock().await.chat(&f.id).unwrap().phase = Phase::Running;
+        f.fill_request("r3").await;
+        assert_eq!(f.sent().unwrap()["behavior"], "allow");
+    }
+
+    #[tokio::test]
+    async fn legacy_journal_events_are_minimized_on_read_without_rewriting() {
+        let f = fixture(false).await;
+        {
+            let mut guard = f.engine.lock().await;
+            let e = &mut *guard;
+            let chat = e.chats.get_mut(&f.id).unwrap();
+            // A v1.5.214 event, written before redaction existed.
+            e.store
+                .event(
+                    chat,
+                    "tool",
+                    Redacted::raw_for_tests(
+                        json!({"messageId":"m","completed":false,"item":{"id":"t","name":"chrome_use_open","input":{"url":"https://x.example/cb?access_token=SYNTH_TOKEN_9"}}}),
+                    ),
+                )
+                .unwrap();
+        }
+        let journal = f
+            .root
+            .join("conversations")
+            .join(&f.id)
+            .join("events.jsonl");
+        let before = std::fs::read(&journal).unwrap();
+        let events = f.journal().await;
+        assert_eq!(
+            events[0]["data"]["item"]["input"]["url"],
+            "https://x.example/cb?access_token=[redacted]"
+        );
+        assert_eq!(events[0]["data"]["item"]["id"], "t");
+        assert_eq!(std::fs::read(&journal).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn held_stream_text_is_flushed_before_each_terminal_kind() {
+        for terminal in ["terminal", "exited", "processUnconfirmed"] {
+            let f = fixture(false).await;
+            let message_id = uuid::Uuid::new_v4().to_string();
+            {
+                let mut e = f.engine.lock().await;
+                let chat = e.chat(&f.id).unwrap();
+                chat.active = Some(Message {
+                    id: message_id.clone(),
+                    text: "hi".into(),
+                    page: None,
+                    attachments: Vec::new(),
+                    skill: None,
+                });
+            }
+            // OpenCode only streams deltas; the tail must not be lost.
+            let text = "The order total is 42 and the last words matter";
+            for chunk in text.as_bytes().chunks(7) {
+                f.notice(
+                    "textDelta",
+                    json!({"itemId":"msg","text":std::str::from_utf8(chunk).unwrap(),"part":0,"last":true}),
+                )
+                .await;
+            }
+            let data = match terminal {
+                "terminal" => json!({"status":"completed"}),
+                _ => json!({"error":null,"processExitConfirmed":true,"processStarted":true}),
+            };
+            f.notice(terminal, data).await;
+            let events = f.journal().await;
+            let end = events.iter().position(|e| e["kind"] == terminal).unwrap();
+            let streamed: String = events[..end]
+                .iter()
+                .filter(|e| e["kind"] == "textDelta")
+                .map(|e| {
+                    assert_eq!(e["data"]["messageId"], message_id);
+                    e["data"]["text"].as_str().unwrap().to_string()
+                })
+                .collect();
+            assert_eq!(streamed, text, "{terminal}");
+            assert!(events[end + 1..].iter().all(|e| e["kind"] != "textDelta"));
+        }
+    }
+
+    fn png() -> String {
+        let mut bytes = Vec::new();
+        image::RgbImage::new(1, 1)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[tokio::test]
+    async fn sent_pages_are_stored_as_projections_and_retries_dedupe() {
+        let f = fixture(false).await;
+        let attachment = dispatch(
+            &f.engine,
+            "conversationAttachmentPut",
+            &json!({"conversationId":f.id,"data":png()}),
+        )
+        .await
+        .unwrap()["attachment"]
+            .clone();
+        let send = |id: &str, url: &str| json!({"conversationId":f.id,"messageId":id,"text":"Check my order","page":{"tabId":42,"url":url,"title":"Orders"},"attachments":[attachment.clone()]});
+        let token_a = "https://shop.example/o?access_token=SYNTH_TOKEN_A";
+        let token_b = "https://shop.example/o?access_token=SYNTH_TOKEN_B";
+        let projected = "https://shop.example/o?access_token=[redacted]";
+        let id = uuid::Uuid::new_v4().to_string();
+        let first = dispatch(&f.engine, "conversationSend", &send(&id, token_a))
+            .await
+            .unwrap();
+        assert_eq!(first["message"]["accepted"], true);
+        for retry in [token_a, projected] {
+            let again = dispatch(&f.engine, "conversationSend", &send(&id, retry))
+                .await
+                .unwrap();
+            assert_eq!(again["message"]["accepted"], false, "{retry}");
+        }
+        assert!(dispatch(&f.engine, "conversationSend", &send(&id, token_b))
+            .await
+            .is_err());
+        let user = f
+            .journal()
+            .await
+            .into_iter()
+            .find(|e| e["kind"] == "user")
+            .unwrap();
+        assert_eq!(user["data"]["page"]["url"], projected);
+        let queued = f.engine.lock().await.chat(&f.id).unwrap().queue[0].clone();
+        assert_eq!(queued.page.unwrap().url, projected);
+        assert!(!f.on_disk("SYNTH_TOKEN_A"));
+
+        // A message accepted by v1.5.214: raw hash in state, raw URL in its
+        // `user` event. Raw and projected retries are duplicates; another
+        // token is a different payload.
+        let old = uuid::Uuid::new_v4().to_string();
+        {
+            let mut guard = f.engine.lock().await;
+            let e = &mut *guard;
+            let raw: Value = send(&old, token_a);
+            let message = Message {
+                id: old.clone(),
+                text: "Check my order".into(),
+                page: serde_json::from_value(raw["page"].clone()).unwrap(),
+                attachments: serde_json::from_value(raw["attachments"].clone()).unwrap(),
+                skill: None,
+            };
+            let hash = message.fingerprint().unwrap();
+            let chat = e.chats.get_mut(&f.id).unwrap();
+            chat.accepted.insert(old.clone(), hash);
+            e.store
+                .event(
+                    chat,
+                    "user",
+                    Redacted::raw_for_tests(
+                        json!({"messageId":old,"text":"Check my order","direct":false,"page":raw["page"],"attachments":raw["attachments"],"skillId":null}),
+                    ),
+                )
+                .unwrap();
+        }
+        for retry in [token_a, projected] {
+            let again = dispatch(&f.engine, "conversationSend", &send(&old, retry))
+                .await
+                .unwrap();
+            assert_eq!(again["message"]["accepted"], false, "{retry}");
+        }
+        assert!(
+            dispatch(&f.engine, "conversationSend", &send(&old, token_b))
+                .await
+                .is_err()
         );
     }
 }
