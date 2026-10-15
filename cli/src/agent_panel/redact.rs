@@ -134,9 +134,26 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
     if matches!(kind, "textDelta" | "textFinal") && data["text"].is_string() {
         return stream(kind, data, secrets);
     }
-    let known = secrets.known();
+    let cookie = kind == "tool" && cookie_context(&data, secrets);
+    // Pass 1 finds what this event's own rules mask (a password typed into
+    // a field, a header, a cookie); pass 2 masks those values wherever else
+    // the event repeats them ("typed blue river pass"), with the older
+    // known secrets. Short values count here too, down to IN_EVENT_MIN;
+    // only values of MIN_SECRET or more are kept for later events.
+    let mut known = secrets.known();
+    let mut probe = data.clone();
+    let mut first = Walker::new(&known, kind);
+    first.cookie = cookie;
+    first.top(&mut probe, kind);
+    drop(probe);
+    for secret in first.learned {
+        if secret.len() >= IN_EVENT_MIN && !is_marker(&secret) && !known.contains(&secret) {
+            known.push(secret);
+        }
+    }
+    known.sort_by_key(|k| std::cmp::Reverse(k.len()));
     let mut walker = Walker::new(&known, kind);
-    walker.cookie = kind == "tool" && cookie_context(&data, secrets);
+    walker.cookie = cookie;
     walker.top(&mut data, kind);
     // Redacted whole above; only now bounded for the journal.
     if kind == "tool" && !data["item"].is_null() {
@@ -147,8 +164,22 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
     }
     let redactions = std::mem::take(&mut walker.redactions);
     stamp(&mut data, &redactions, walker.class);
+    // The whole event must fit a journal line.
+    let mut budget = ITEM_BUDGET;
+    while kind == "tool" && data.to_string().len() > EVENT_BUDGET && budget > 1024 {
+        budget /= 2;
+        data["item"] = bounded_to(&data["item"], budget);
+    }
     Some(Redacted(data))
 }
+
+/// Shortest value of this event's own masked secrets that is also masked
+/// where the event repeats it.
+const IN_EVENT_MIN: usize = 4;
+/// Most redaction records kept on one event; the rest are counted.
+const MAX_REDACTIONS: usize = 64;
+/// Under the journal's 64 KiB line limit, with room for the envelope.
+const EVENT_BUDGET: usize = 60 * 1024;
 
 /// Whether a tool event carries cookie text: the call's own input reads
 /// `document.cookie` (or the Cookie Store API), or it is the result of such a
@@ -222,12 +253,16 @@ pub(super) const ITEM_BUDGET: usize = 24000;
 /// structure: long strings are cut and long arrays shortened. Redaction runs
 /// on the whole item first, so cutting can never hide a sensitive field.
 pub(super) fn bounded(value: &Value) -> Value {
-    if value.to_string().len() <= ITEM_BUDGET {
+    bounded_to(value, ITEM_BUDGET)
+}
+
+fn bounded_to(value: &Value, budget: usize) -> Value {
+    if value.to_string().len() <= budget {
         return value.clone();
     }
     for cap in [6000, 2000, 500, 100] {
         let cut = cut_to(value, cap, 0);
-        if cut.to_string().len() <= ITEM_BUDGET {
+        if cut.to_string().len() <= budget {
             return cut;
         }
     }
@@ -257,7 +292,7 @@ pub(super) fn bounded(value: &Value) -> Value {
         for key in ["input", "arguments", "rawInput", "args"] {
             if let Some(field) = object.get(key) {
                 let args = cut_to(field, 200, 16);
-                if args.to_string().len() <= ITEM_BUDGET / 2 {
+                if args.to_string().len() <= budget / 2 {
                     skeleton.insert(key.into(), args);
                 }
             }
@@ -349,7 +384,14 @@ fn stamp(data: &mut Value, redactions: &[Redaction], class: PrivacyClass) {
     };
     object.insert("privacyClass".into(), json!(class));
     if !redactions.is_empty() {
-        object.insert("redactions".into(), json!(redactions));
+        let kept = &redactions[..redactions.len().min(MAX_REDACTIONS)];
+        object.insert("redactions".into(), json!(kept));
+        if redactions.len() > kept.len() {
+            object.insert(
+                "redactionsOmitted".into(),
+                (redactions.len() - kept.len()).into(),
+            );
+        }
     }
 }
 
@@ -999,7 +1041,13 @@ impl<'a> Walker<'a> {
         let mut masks = find_masks(text, self.known, self.tool_text);
         if self.cookie {
             masks.extend(cookie_masks(text));
-            masks.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+            // A rule's own label wins over the known-secret one.
+            masks.sort_by(|a, b| {
+                a.start
+                    .cmp(&b.start)
+                    .then(b.end.cmp(&a.end))
+                    .then((a.kind == "secret").cmp(&(b.kind == "secret")))
+            });
             let mut kept: Vec<Mask> = Vec::new();
             for mask in masks {
                 if kept.last().is_none_or(|last| mask.start >= last.end) {
@@ -1724,6 +1772,54 @@ mod tests {
         assert_eq!(out["item"]["name"], "mcp__chrome_use__chrome_use_fill");
         assert_eq!(out["item"]["input"]["value"], "[redacted input, 6 chars]");
         assert!(!out.to_string().contains("483927"));
+    }
+
+    #[test]
+    fn a_secret_found_in_an_event_is_masked_where_the_same_event_repeats_it() {
+        let mut secrets = Secrets::default();
+        let out = event(
+            "tool",
+            json!({"completed":true,"item":{"name":"chrome_use_fill","input":{"selector":"#password","value":"blue river pass"},"output":"typed blue river pass"}}),
+            &mut secrets,
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("blue river pass"), "{out}");
+        assert_eq!(out["item"]["output"], "typed [redacted secret, 15 chars]");
+        // A short code is masked where this event repeats it, but not
+        // remembered for later events (below the learning floor).
+        let out = event(
+            "request",
+            json!({"requestId":"r","method":"can_use_tool","params":{"tool_name":"mcp__chrome_use__chrome_use_fill",
+                "input":{"selector":"#otp","value":"483927"},"description":"Enter 483927 into the code field"}}),
+            &mut secrets,
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("483927"), "{out}");
+        assert!(!secrets.known().iter().any(|k| k == "483927"));
+        // The longer secret was remembered.
+        assert!(secrets.known().iter().any(|k| k == "blue river pass"));
+    }
+
+    #[test]
+    fn many_redactions_still_fit_one_journal_line() {
+        let many: Vec<Value> = (0..2000).map(|_| json!({"password":"x"})).collect();
+        let out = event(
+            "tool",
+            json!({"completed":true,"item":{"type":"tool_result","tool_use_id":"t","content":many}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(
+            out.to_string().len() < 64 * 1024,
+            "{}",
+            out.to_string().len()
+        );
+        assert_eq!(out["redactions"].as_array().unwrap().len(), MAX_REDACTIONS);
+        assert_eq!(out["redactionsOmitted"], 2000 - MAX_REDACTIONS);
+        assert_eq!(out["privacyClass"], "masked");
     }
 
     #[test]
