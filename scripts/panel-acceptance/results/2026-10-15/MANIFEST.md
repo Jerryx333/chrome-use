@@ -10,7 +10,7 @@ Build host 192.168.0.190, 2026-10-15. Driver, fixtures and method: `scripts/pane
 | Chrome for Testing | Chrome/155.0.8059.39 (headless=new, private --user-data-dir) |
 | v1.5.214 release binary sha256 (checks 15, 16) | `sha256:d77538717467a0fd84b71b4465376d52998b67fa6e641dc0ad1db53b76a7bb41` |
 | v1.5.214 extension tree hash (checks 15) | `815c3c3b7e088d7580f574fe1ceca9124478f7866e13dd945e43519efe464ffc` |
-| result files | `results.json` (2026-10-15T04:02:13.870Z), `results-5-15.json` (2026-10-15T04:20:21.282Z), `results-check5-e2e.json` (2026-10-15T04:21:51.728Z) |
+| result files | `results.json` (2026-10-15T04:02:13.870Z), `results-5-15.json` (2026-10-15T04:20:21.282Z), `results-r2.json` (2026-10-15T04:36:20.163Z), `results-check5-e2e.json` (2026-10-15T04:21:51.728Z) |
 
 | check | name | status | seconds | from | note / error |
 |---|---|---|---|---|---|
@@ -36,5 +36,6 @@ Build host 192.168.0.190, 2026-10-15. Driver, fixtures and method: `scripts/pane
 | 19 | Assessment counterexamples live | pass | 6.4 | results.json |  |
 | 20 | Late Begin across Stop | pass | 52 | results.json |  |
 | R | Real backends: scenarios 1, 4 and 12 | pass | 487.3 | results.json |  |
+| R2 | Real backends: reuse after a clean turn, resume after Stop | pass | 188.7 | results-r2.json |  |
 
 Evidence per check: `checks[].evidence` in the result files. Side-panel screenshots (`panel-*.png`, the real side panel, not a tab) are not committed (`*.png` is git-ignored); they stay next to the results on the build host (`~/panel-accept/repo/scripts/panel-acceptance/results/<date>/`).

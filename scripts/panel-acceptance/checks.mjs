@@ -881,6 +881,60 @@ export const checks = [
     },
   },
   {
+    // A clean turn keeps its generation only for fixture-backed versions
+    // (GENERATION_REUSE, service.rs); every other turn end retires it and the
+    // next message resumes the backend session on a new process. Real
+    // backends: a clean second message, then a stopped third and a fourth
+    // that must resume with the conversation's memory.
+    id: 'R2', name: 'Real backends: reuse after a clean turn, resume after Stop', timeout: 1200,
+    async run(h, ev) {
+      ev.runs = [];
+      const allowlist = { codex: ['0.162.1'], claude: ['2.1.300'] };
+      const backends = [];
+      if (process.env.REAL_CODEX !== '0') backends.push({ agent: 'codex' });
+      if (process.env.REAL_OPENCODE_BIN) backends.push({ agent: 'opencode', executable: process.env.REAL_OPENCODE_BIN });
+      for (const b of backends) for (let attempt = 1; attempt <= 2; attempt++) {
+        const r = { agent: b.agent, attempt };
+        ev.runs.push(r);
+        try {
+          const conv = await h.create(b.agent, { real: true, executable: b.executable });
+          const turn = async text => { const m = await h.send(conv.id, text); const e = await h.turnEnd(conv.id, m.messageId, 300000); return { m, e, end: h.one(e, 'turnEnded', d => d.messageId === m.messageId), started: h.one(e, 'turnStarted', d => d.messageId === m.messageId) }; };
+          const t1 = await turn(`Open ${h.site('/a')} in your browser session and tell me its page title in one short sentence.`);
+          r.first = { outcome: t1.end.data.outcome, generation: t1.end.data.generation, error: t1.end.data.error };
+          if (r.first.outcome !== 'completed') throw new Error(`first turn ${r.first.outcome}: ${r.first.error}`);
+          const version = h.kinds(t1.e, 'ready')[0]?.data.backendVersion;
+          r.backendVersion = version;
+          r.reuseExpected = (allowlist[b.agent] || []).includes(version);
+          const t2 = await turn(`Now open ${h.site('/b')} and tell me its page title in one short sentence.`);
+          r.second = { outcome: t2.end.data.outcome, generation: t2.started.data.generation };
+          // A third message stopped while it runs, then a fourth that must resume.
+          const m3 = await h.send(conv.id, `Open ${h.site('/slow?ms=20000')} and wait for it to finish loading, then tell me its heading.`);
+          await h.waitEvent(conv.id, 'actionAdmitted', d => d.messageId === m3.messageId, 180000);
+          await h.rig.service.call('conversationStop', { conversationId: conv.id });
+          const e3 = await h.turnEnd(conv.id, m3.messageId, 120000);
+          const end3 = h.one(e3, 'turnEnded', d => d.messageId === m3.messageId);
+          r.third = { outcome: end3.data.outcome, generation: end3.data.generation, retired: h.kinds(e3, 'generationRetired').map(e => e.data) };
+          const m4 = await h.send(conv.id, 'Without using any tools, list the titles of the pages you opened earlier in this conversation, in one short sentence.');
+          r.resumeQueue = await h.rig.service.tryCall('conversationResumeQueue', { conversationId: conv.id });
+          const e4 = await h.turnEnd(conv.id, m4.messageId, 300000);
+          const started4 = h.one(e4, 'turnStarted', d => d.messageId === m4.messageId);
+          const end4 = h.one(e4, 'turnEnded', d => d.messageId === m4.messageId);
+          const ready4 = e4.find(e => e.kind === 'ready' && e.sequence > end3.sequence);
+          r.fourth = { outcome: end4.data.outcome, generation: started4.data.generation, continuation: started4.data.continuation, restartMs: ready4 ? ready4.at - end3.at : null, sessions: [...new Set(h.kinds(e4, 'ready').map(e => e.data.sessionId))] };
+          r.answer4 = e4.filter(e => (e.kind === 'textFinal' || e.kind === 'textDelta') && e.data.messageId === m4.messageId).map(e => e.data.text).join('').slice(0, 300);
+          r.pass = r.second.outcome === 'completed'
+            && (r.reuseExpected ? r.second.generation === r.first.generation : r.second.generation > r.first.generation)
+            && r.third.outcome === 'interrupted' && r.fourth.outcome === 'completed' && r.fourth.generation > r.third.generation
+            && !!ready4 && r.fourth.sessions.length === 1 && /Page A/i.test(r.answer4) && /Page B/i.test(r.answer4);
+        } catch (e) { r.error = String(e.message || e).slice(0, 500); r.pass = false; }
+        if (r.pass || !/deprecated|no longer available|set_config_option/i.test(JSON.stringify(r))) break;
+        r.retried = true;
+      }
+      const failed = ev.runs.filter(r => !r.pass && !r.retried);
+      if (failed.length) return { status: 'fail', note: `not passing: ${failed.map(r => r.agent).join(', ')}` };
+    },
+  },
+  {
     // Runs last: its old-extension part registers a second relay for the profile.
     id: 15, name: 'Old journal and upgrade retry', timeout: 600,
     async run(h, ev) {

@@ -14,7 +14,7 @@ for (const r of runs) for (const c of r.checks) {
   const id = r.file.includes('e2e') ? `${c.id} (e2e build)` : String(c.id);
   rows.set(id, { ...c, file: r.file, hostSha256: r.hostSha256, buildCommit: r.buildCommit });
 }
-const order = [...Array.from({ length: 20 }, (_, i) => [String(i + 1), `${i + 1} (e2e build)`]).flat(), 'R'];
+const order = [...Array.from({ length: 20 }, (_, i) => [String(i + 1), `${i + 1} (e2e build)`]).flat(), 'R', 'R2'];
 const main = runs[0];
 const binaries = [...new Map(runs.map(r => [r.hostSha256, r])).values()];
 const lines = [
