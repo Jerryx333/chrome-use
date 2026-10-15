@@ -184,6 +184,19 @@ pub(super) struct Event {
     pub data: Value,
 }
 
+/// The most recent turn that ended, for notifications: what a client keys a
+/// finished turn on without reading the journal.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LastTurn {
+    pub message_id: String,
+    pub outcome: String,
+    pub ended: u64,
+    /// First line of the turn's last redacted answer, at most 120 characters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Conversation {
@@ -222,6 +235,11 @@ pub(super) struct Conversation {
     pub site: Option<String>,
     #[serde(default)]
     pub schedule_id: Option<String>,
+    #[serde(default)]
+    pub last_turn: Option<LastTurn>,
+    /// Revision of the newest unanswered approval request; live only.
+    #[serde(skip)]
+    pub waiting_request: Option<u64>,
 }
 
 impl Conversation {
@@ -266,6 +284,8 @@ impl Conversation {
             full_access: false,
             site: None,
             schedule_id: None,
+            last_turn: None,
+            waiting_request: None,
         })
     }
     /// Who drives this conversation's agent process, derived from its phase.
@@ -287,7 +307,7 @@ impl Conversation {
         }
     }
     pub(super) fn summary(&self) -> Value {
-        json!({"control":self.control(),"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
+        json!({"control":self.control(),"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"lastTurn":self.last_turn,"waitingRequest":self.waiting_request,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
     }
     pub(super) fn queue_snapshot(&self) -> Value {
         Value::Array(
@@ -486,6 +506,7 @@ impl Conversation {
         self.active_direct = false;
         self.last_error = error;
         self.active = None;
+        self.waiting_request = None;
         self.updated = now();
         Ok(true)
     }
