@@ -158,7 +158,7 @@ fn platform_convert(input: &Path, output: &Path) -> Result<(), String> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn platform_convert(input: &Path, output: &Path) -> Result<(), String> {
-    let mut command = if let Some(tool) = find_tool("heif-convert") {
+    let command = if let Some(tool) = find_tool("heif-convert") {
         let mut command = Command::new(tool);
         command.args(["-q", "90"]).arg(input).arg(output);
         command
