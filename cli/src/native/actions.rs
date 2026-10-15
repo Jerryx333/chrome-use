@@ -3017,6 +3017,12 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         let mut settled = settled;
         settled.mark_changed(observed.get("changed").and_then(|v| v.as_bool()) == Some(true));
         observed.insert("settle".into(), settled.to_json());
+        // Toasts and live regions seen while the action ran and the page
+        // settled, by their text at the time: a "saved" / "under review, not
+        // saved" toast is often gone before the snapshot above was taken.
+        if !settled.announced.is_empty() {
+            observed.insert("announced".into(), json!(settled.announced));
+        }
         if new_reqs.total > 0 {
             observed.insert("requests".into(), json!(new_reqs.lines));
             observed.insert("requestsTotal".into(), json!(new_reqs.total));
@@ -3040,8 +3046,11 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // (#274). Probe the target only when there was nothing to report —
         // on the path where the action visibly did something this costs
         // nothing, which is the constraint the request came with.
+        // A toast that came and went is a reaction: the page answered, even
+        // though nothing of it is left in the tree.
         if observed.get("changed").and_then(|v| v.as_bool()) == Some(false)
             && !observed.contains_key("humanCheck")
+            && !observed.contains_key("announced")
         {
             if let Some(sel) = cmd
                 .get("selector")

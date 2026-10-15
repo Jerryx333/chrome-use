@@ -87,6 +87,12 @@ pub struct SettleOutcome {
     /// warning names what kept the page busy instead of only saying a
     /// request was in flight (#505). Empty unless `network` is pending.
     pub requests: Vec<String>,
+    /// Text of the toasts and live regions (`role=alert|status`, `aria-live`,
+    /// a `*toast*` / `*snackbar*` class) that appeared or changed while the
+    /// arm and the wait watched, captured when they changed — so a "video
+    /// under review, not saved" toast that is gone before the after-snapshot
+    /// is still reported. Only from an armed settle (`--observe`).
+    pub announced: Vec<String>,
 }
 
 impl SettleOutcome {
@@ -99,6 +105,7 @@ impl SettleOutcome {
             saw_change: false,
             pending: Vec::new(),
             requests: Vec::new(),
+            announced: Vec::new(),
         }
     }
 
@@ -270,6 +277,7 @@ pub async fn settle_armed(
     let mut last_pending: Vec<String> = Vec::new();
     let mut last_requests: Vec<String> = Vec::new();
     let mut saw_change = false;
+    let mut announced: Vec<String> = Vec::new();
 
     loop {
         state.drain_cdp_events_background().await;
@@ -335,6 +343,7 @@ pub async fn settle_armed(
         match probe {
             Ok(page) if page.pending.is_empty() => {
                 saw_change |= page.saw_change;
+                merge_announced(&mut announced, page.announced);
                 // The page went quiet; re-check the network, because it may have
                 // started fetching while we were waiting on the DOM.
                 state.drain_cdp_events_background().await;
@@ -345,6 +354,7 @@ pub async fn settle_armed(
                         saw_change,
                         pending: Vec::new(),
                         requests: Vec::new(),
+                        announced,
                     };
                 }
                 saw_change = true;
@@ -353,6 +363,7 @@ pub async fn settle_armed(
             }
             Ok(page) => {
                 saw_change |= page.saw_change;
+                merge_announced(&mut announced, page.announced);
                 last_pending = page.pending;
                 last_requests.clear();
             }
@@ -400,6 +411,22 @@ pub async fn settle_armed(
         saw_change,
         pending: last_pending,
         requests: last_requests,
+        announced,
+    }
+}
+
+/// Most announcements one action reports.
+const MAX_ANNOUNCED: usize = 5;
+
+/// Add a probe's announcements, without duplicates, up to [`MAX_ANNOUNCED`].
+fn merge_announced(into: &mut Vec<String>, more: Vec<String>) {
+    for text in more {
+        if into.len() >= MAX_ANNOUNCED {
+            break;
+        }
+        if !text.is_empty() && !into.contains(&text) {
+            into.push(text);
+        }
     }
 }
 
@@ -409,6 +436,8 @@ struct PageQuiet {
     pending: Vec<String>,
     /// Whether anything mutated while it was watching.
     saw_change: bool,
+    /// Toast / live-region text the arm and this wait recorded.
+    announced: Vec<String>,
 }
 
 /// Page-side half of the wait: resolves when the DOM has been still for
@@ -485,7 +514,8 @@ fn page_quiet_promise(quiet_ms: u64, budget_ms: u64, reaction_ms: u64, seeded: b
         r#"
   try {
     if (arm && arm.obs) {
-      if (arm.obs.takeRecords().length) { arm.saw = true; arm.last = performance.now(); }
+      const queued = arm.obs.takeRecords();
+      if (queued.length) { arm.saw = true; arm.last = performance.now(); if (arm.note) arm.note(queued); }
       arm.obs.disconnect();
     }
     if (arm && arm.timer) clearTimeout(arm.timer);
@@ -498,6 +528,18 @@ fn page_quiet_promise(quiet_ms: u64, budget_ms: u64, reaction_ms: u64, seeded: b
         ""
     };
     let capture = if seeded { "const arm = this;\n  " } else { "" };
+    // Seeded, the wait keeps recording toasts where the arm left off, and
+    // hands back everything the two of them saw.
+    let note = if seeded {
+        "try { if (arm && arm.note) arm.note(recs); } catch (e) {}"
+    } else {
+        ""
+    };
+    let announced = if seeded {
+        "(arm && arm.texts) ? arm.texts() : []"
+    } else {
+        "[]"
+    };
     format!(
         r#"(() => {{ {capture}return new Promise((resolve) => {{
   const QUIET = {quiet_ms};
@@ -508,7 +550,7 @@ fn page_quiet_promise(quiet_ms: u64, budget_ms: u64, reaction_ms: u64, seeded: b
   let sawChange = false;
   let observer = null;
   try {{
-    observer = new MutationObserver(() => {{ lastChange = performance.now(); sawChange = true; }});
+    observer = new MutationObserver((recs) => {{ lastChange = performance.now(); sawChange = true; {note} }});
     observer.observe(document, {{ subtree: true, childList: true, attributes: true, characterData: true }});
   }} catch (e) {{}}{seed}
   const animating = () => {{
@@ -525,7 +567,9 @@ fn page_quiet_promise(quiet_ms: u64, budget_ms: u64, reaction_ms: u64, seeded: b
   }};
   const finish = (pending) => {{
     try {{ if (observer) observer.disconnect(); }} catch (e) {{}}
-    resolve({{ pending, sawChange, waitedMs: Math.round(performance.now() - t0) }});
+    let announced = [];
+    try {{ announced = {announced}; }} catch (e) {{}}
+    resolve({{ pending, sawChange, announced, waitedMs: Math.round(performance.now() - t0) }});
   }};
   const tick = () => {{
     const now = performance.now();
@@ -567,12 +611,41 @@ const ARM_LIFETIME_MS: u64 = 30_000;
 
 /// The arm itself: an object holding its observer, when it last fired, and
 /// whether it fired at all.
+///
+/// It also remembers the toasts and live regions mutations touched (`note`),
+/// with their text as of that mutation — held in the arm's closure, never
+/// written into the page — so one that vanishes before the after-snapshot is
+/// still reported (`texts`). Only additions and text changes count: an
+/// attribute flip on a status region that already said something is not news.
 pub fn arm_script() -> String {
     format!(
         r#"(() => {{
   const arm = {{ saw: false, last: 0, obs: null, timer: 0, expired: false }};
+  const LIVE = '[role="alert"],[role="alertdialog"],[role="status"],[aria-live="polite"],[aria-live="assertive"],[class*="toast" i],[class*="snackbar" i]';
+  const live = [];
+  arm.note = (recs) => {{
+    for (const r of recs) {{
+      if (r.type !== 'childList' && r.type !== 'characterData') continue;
+      const nodes = r.type === 'childList' ? Array.from(r.addedNodes) : [r.target];
+      for (const n of nodes) {{
+        const el = n.nodeType === 1 ? n : n.parentElement;
+        if (!el || !el.closest) continue;
+        const region = el.closest(LIVE) || (n.nodeType === 1 && el.querySelector(LIVE));
+        if (!region) continue;
+        let seen = live.find((x) => x.el === region);
+        if (!seen) {{
+          if (live.length >= {MAX_ANNOUNCED}) continue;
+          seen = {{ el: region, text: '' }};
+          live.push(seen);
+        }}
+        const text = (region.innerText || region.textContent || '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+        if (text) seen.text = text;
+      }}
+    }}
+  }};
+  arm.texts = () => live.map((x) => x.text).filter((t, i, a) => t && a.indexOf(t) === i);
   try {{
-    arm.obs = new MutationObserver(() => {{ arm.saw = true; arm.last = performance.now(); }});
+    arm.obs = new MutationObserver((recs) => {{ arm.saw = true; arm.last = performance.now(); try {{ arm.note(recs); }} catch (e) {{}} }});
     arm.obs.observe(document, {{ subtree: true, childList: true, attributes: true, characterData: true }});
     arm.timer = setTimeout(() => {{ arm.expired = true; try {{ arm.obs.disconnect(); }} catch (e) {{}} }}, {ARM_LIFETIME_MS});
   }} catch (e) {{}}
@@ -685,9 +758,20 @@ fn parse_page_quiet(value: &Value) -> PageQuiet {
         .get("sawChange")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let announced = value
+        .get("announced")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
     PageQuiet {
         pending,
         saw_change,
+        announced,
     }
 }
 
@@ -829,6 +913,7 @@ mod tests {
             saw_change: true,
             pending: vec!["network".to_string(), "dom".to_string()],
             requests: Vec::new(),
+            announced: Vec::new(),
         };
         let w = s.warning().expect("a non-quiet settle must warn");
         assert!(w.contains("1000ms"), "{w}");
@@ -970,6 +1055,7 @@ mod tests {
             saw_change: true,
             pending: vec!["network".to_string()],
             requests: detail,
+            announced: Vec::new(),
         };
         let w = s.warning().unwrap();
         assert!(
@@ -1130,5 +1216,90 @@ mod tests {
         let (waited, saw) = run_wait(&expired).expect("node ran once already");
         assert!(!saw, "an expired arm's mutation must not count");
         assert!(waited >= 500.0, "expired arm waited {waited}");
+    }
+}
+
+#[cfg(test)]
+mod announced_tests {
+    use super::*;
+
+    fn node() -> Option<std::path::PathBuf> {
+        std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        })
+    }
+
+    fn run(js: &str) -> Option<String> {
+        let prelude = "globalThis.MutationObserver = class { constructor(cb) { this.cb = cb; } \
+             observe() {} disconnect() {} takeRecords() { return []; } }; \
+             globalThis.document = { getAnimations: () => [] };";
+        let out = std::process::Command::new(node()?)
+            .arg("-e")
+            .arg(format!("{prelude} {js}"))
+            .output()
+            .ok()?;
+        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    #[test]
+    fn merge_announced_dedupes_and_caps() {
+        let mut into = vec!["a".to_string()];
+        merge_announced(
+            &mut into,
+            ["a", "", "b", "c", "d", "e", "f"]
+                .map(String::from)
+                .to_vec(),
+        );
+        assert_eq!(into, ["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn only_the_seeded_wait_reports_announcements() {
+        let seeded = page_quiet_seeded_function(100, 900, 500);
+        assert!(seeded.contains("arm.note(recs)"), "{seeded}");
+        assert!(seeded.contains("arm.texts()"), "{seeded}");
+        // Unseeded there is no `arm` in scope: naming it would throw.
+        let plain = page_quiet_script(100, 900, 500);
+        assert!(!plain.contains("arm."), "{plain}");
+        assert!(plain.contains("announced"), "{plain}");
+    }
+
+    /// A toast's text is kept as of the mutation that showed it, so one that
+    /// is gone by the after-snapshot is still reported; an attribute flip on a
+    /// region is not news, and zero-width padding is dropped.
+    #[test]
+    fn the_arm_keeps_a_toast_that_was_removed() {
+        let js = format!(
+            "const arm = {}; \
+             const toast = {{ innerText: ' 视频审核中\\u200B，修改未保存 ' }}; \
+             const status = {{ innerText: 'Online' }}; \
+             const text = {{ nodeType: 3, parentElement: {{ closest: () => toast }} }}; \
+             arm.note([{{ type: 'childList', addedNodes: [text] }}]); \
+             toast.innerText = ''; \
+             arm.note([{{ type: 'attributes', target: {{ nodeType: 1, closest: () => status }} }}]); \
+             clearTimeout(arm.timer); \
+             console.log(JSON.stringify(arm.texts()));",
+            arm_script()
+        );
+        let Some(out) = run(&js) else {
+            return;
+        };
+        assert_eq!(out, r#"["视频审核中，修改未保存"]"#);
+    }
+
+    #[test]
+    fn a_seeded_wait_hands_back_what_the_arm_recorded() {
+        let js = format!(
+            "Promise.resolve(({}).call({{ saw: true, last: performance.now() - 30, \
+             obs: new MutationObserver(() => {{}}), timer: 0, note: () => {{}}, \
+             texts: () => ['已保存'] }})).then(r => console.log(JSON.stringify(r.announced)));",
+            page_quiet_seeded_function(50, 600, 0)
+        );
+        let Some(out) = run(&js) else {
+            return;
+        };
+        assert_eq!(out, r#"["已保存"]"#);
     }
 }

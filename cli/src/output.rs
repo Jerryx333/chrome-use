@@ -6845,6 +6845,22 @@ fn print_observed(obs: &serde_json::Map<String, serde_json::Value>) {
         .get("settle")
         .and_then(|s| s.get("waitedMs"))
         .and_then(|v| v.as_u64());
+    // Toasts and live regions the page showed while the action ran, by their
+    // text at the time — first, because one that already vanished is why the
+    // tree below may say "no change".
+    for text in obs
+        .get("announced")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+    {
+        println!(
+            "{} {}",
+            color::dim("observed announced:"),
+            color::cyan(text)
+        );
+    }
     if changed == Some(false) {
         match waited {
             Some(ms) => println!("{}", color::dim(&format!("observed: no change ({ms}ms)"))),
