@@ -105,6 +105,8 @@ const handlers = {
         // As the panel does: disable every user MCP server, add chrome_use.
         const servers = Object.fromEntries(Object.keys(v.result?.config?.mcp_servers ?? {}).map((n) => [n, { enabled: false }]));
         servers.chrome_use = { command: node, args: [stub], env, enabled: true };
+        // CODEX_MCP_APPROVAL sets chrome_use's default_tools_approval_mode.
+        if (process.env.CODEX_MCP_APPROVAL) servers.chrome_use.default_tools_approval_mode = process.env.CODEX_MCP_APPROVAL;
         rpc("thread/start", {
           cwd: workspace, approvalPolicy: process.env.CODEX_APPROVAL ?? "on-request",
           sandbox: process.env.CODEX_SANDBOX ?? "read-only", developerInstructions: instructions,

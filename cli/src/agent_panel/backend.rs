@@ -424,10 +424,10 @@ async fn protocol(
                                 if let Some(existing)=config.get("mcp_servers") {
                                     for name in existing.as_object().ok_or("Backend MCP configuration is not a server map")?.keys() {servers.insert(name.clone(),json!({"enabled":false}));}
                                 }
-                                servers.insert("chrome_use".into(),json!({"command":setup.mcp_executable,"args":["mcp","--tools","all"],"env":browser_env,"enabled":true}));
+                                servers.insert("chrome_use".into(),codex_browser_server(setup,&browser_env));
                                 next_id+=1;
                                 let method=if session.is_some(){"thread/resume"}else{"thread/start"};
-                                let mut params=json!({"cwd":setup.workspace,"approvalPolicy":if setup.full_access {"never"} else {"on-request"},"sandbox":setup.options.sandbox("codex",setup.full_access),"developerInstructions":prompt,"config":{"web_search":"disabled","features":{"apps":false,"goals":false,"multi_agent":false,"image_generation":false},"mcp_servers":servers}});
+                                let mut params=json!({"cwd":setup.workspace,"approvalPolicy":codex_approval_policy(setup.full_access),"sandbox":setup.options.sandbox("codex",setup.full_access),"developerInstructions":prompt,"config":{"web_search":"disabled","features":{"apps":false,"goals":false,"multi_agent":false,"image_generation":false},"mcp_servers":servers}});
                                 if let Some(s)=&session {params["threadId"]=s.clone().into();params["excludeTurns"]=true.into();}
                                 if let Some(model)=&setup.model {params["model"]=model.clone().into();}
                                 if let Some(effort)=&setup.options.effort {params["config"]["model_reasoning_effort"]=effort.clone().into();}
@@ -720,6 +720,26 @@ async fn pi_turn(
     .await
 }
 
+fn codex_approval_policy(full_access: bool) -> &'static str {
+    if full_access {
+        "never"
+    } else {
+        "on-request"
+    }
+}
+/// Codex's `chrome_use` server entry. Under full access the thread never asks,
+/// and Codex refuses any MCP call that would need approval unless the sandbox
+/// is `danger-full-access`, so a full-access chat limited to browser or read
+/// access had every browser call fail. Approving this one server's tools keeps
+/// them usable without widening shell or file access.
+fn codex_browser_server(setup: &Setup, browser_env: &Value) -> Value {
+    let mut server = json!({"command":setup.mcp_executable,"args":["mcp","--tools","all"],"env":browser_env,"enabled":true});
+    if setup.full_access {
+        server["default_tools_approval_mode"] = json!("approve");
+    }
+    server
+}
+
 /// Encode the same saved images for the backend's native multimodal protocol.
 fn codex_input(message: &Message, workspace: &std::path::Path) -> Result<Vec<Value>, String> {
     let mut input = vec![json!({"type":"text","text":message.prompt_text(),"text_elements":[]})];
@@ -738,4 +758,107 @@ fn claude_input(message: &Message, workspace: &std::path::Path) -> Result<Value,
         input.push(json!({"type":"image","source":{"type":"base64","media_type":image.media_type,"data":image.base64(workspace)?}}));
     }
     Ok(json!(input))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup(full_access: bool, tool_access: Option<ToolAccess>) -> Setup {
+        Setup {
+            agent_id: "codex".into(),
+            executable: "codex".into(),
+            workspace: "/WORK".into(),
+            profile: "default".into(),
+            browser_session: "panel-test".into(),
+            backend_session: None,
+            model: None,
+            previous_model: None,
+            options: ModelOptions {
+                tool_access,
+                ..ModelOptions::default()
+            },
+            mcp_executable: "chrome-use".into(),
+            full_access,
+        }
+    }
+
+    #[test]
+    fn full_access_codex_approves_only_browser_tools() {
+        for access in [
+            Some(ToolAccess::BrowserOnly),
+            Some(ToolAccess::ReadFiles),
+            None,
+        ] {
+            let setup = setup(true, access);
+            let server = codex_browser_server(&setup, &json!({}));
+            assert_eq!(codex_approval_policy(setup.full_access), "never");
+            assert_eq!(server["default_tools_approval_mode"], "approve");
+            assert_eq!(server["enabled"], true);
+        }
+        let limited = setup(true, Some(ToolAccess::BrowserOnly));
+        assert_eq!(limited.options.sandbox("codex", true), "read-only");
+    }
+
+    #[test]
+    fn asking_codex_keeps_browser_tool_approval() {
+        let setup = setup(false, None);
+        assert_eq!(codex_approval_policy(setup.full_access), "on-request");
+        assert!(codex_browser_server(&setup, &json!({}))
+            .get("default_tools_approval_mode")
+            .is_none());
+    }
+
+    /// Codex 0.162.1 on the build host, full access with browser-only tools:
+    /// without the approval mode every chrome_use call failed; with it, both
+    /// ran and no approval was requested. The fixtures record those threads.
+    #[test]
+    fn codex_fixture_confirms_browser_tool_approval() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent_panel/fixtures");
+        let lines = |name: &str| -> Vec<Value> {
+            std::fs::read_to_string(fixtures.join(name))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        };
+        let generated = setup(true, Some(ToolAccess::BrowserOnly));
+        let server = codex_browser_server(&generated, &json!({}));
+        for (name, approved) in [
+            ("codex-browser-only-full-access", true),
+            ("codex-browser-only-full-access-unfixed", false),
+        ] {
+            let sent = lines(&format!("{name}.stdin.jsonl"));
+            let start = sent.iter().find(|v| v["method"] == "thread/start").unwrap();
+            assert_eq!(
+                start["params"]["approvalPolicy"],
+                codex_approval_policy(true)
+            );
+            assert_eq!(
+                start["params"]["sandbox"],
+                generated.options.sandbox("codex", true)
+            );
+            let fixture_mode = &start["params"]["config"]["mcp_servers"]["chrome_use"]
+                ["default_tools_approval_mode"];
+            assert_eq!(
+                fixture_mode == &server["default_tools_approval_mode"],
+                approved
+            );
+            let calls: Vec<Value> = lines(&format!("{name}.jsonl"))
+                .into_iter()
+                .filter(|v| {
+                    v["method"] == "item/completed" && v["params"]["item"]["type"] == "mcpToolCall"
+                })
+                .map(|v| v["params"]["item"].clone())
+                .collect();
+            assert_eq!(calls.len(), 2);
+            for call in calls {
+                assert_eq!(
+                    call["status"],
+                    if approved { "completed" } else { "failed" }
+                );
+            }
+        }
+    }
 }

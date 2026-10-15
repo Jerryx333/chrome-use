@@ -171,6 +171,12 @@ tools were "not registered" and called nothing, even though the server log shows
   but takes the sandbox from `effective_access`. A full-access conversation with `toolAccess` set to
   `browserOnly` or `readFiles` would therefore have every chrome_use call refused. The stub declares no
   tool annotations; neither does the real chrome-use MCP.
+  Fixed: under full access the panel now sets `default_tools_approval_mode: "approve"` on the
+  `chrome_use` server only. `codex-browser-only-full-access-unfixed.jsonl` is that thread
+  (`never`, `read-only`) without the setting, where both calls fail;
+  `codex-browser-only-full-access.jsonl` has the setting, and both calls complete with no
+  approval request (`CODEX_APPROVAL=never CODEX_SANDBOX=read-only CODEX_MCP_APPROVAL=approve`).
+  `backend.rs` tests check the generated config against these fixtures.
 - Codex still started plugin-provided MCP servers (`agentparty`) that `config/read` does not
   list, even with every listed server disabled.
 - Pi printed `extension_ui_request notify` "MCP tools are only reachable from the codemode or
