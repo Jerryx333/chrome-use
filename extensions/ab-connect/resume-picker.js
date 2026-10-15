@@ -26,6 +26,7 @@ export const RESUME_TEXT = {
   confirm: 'Continue here anyway',
   cancel: 'Cancel',
   ownership: "After you continue a session here, don't keep using it in the terminal at the same time.",
+  deleteKeeps: "Removes its panel history and its browser tabs from this computer. The CLI session it continued stays, and can still be used in the terminal.",
   earlier: count => `Earlier in this session · ${count} message${count === 1 ? '' : 's'}`,
   notRecorded: 'Earlier history not recorded.',
   omitted: count => `${count} earlier message${count === 1 ? ' was' : 's were'} not imported.`,

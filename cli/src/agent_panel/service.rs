@@ -2454,12 +2454,13 @@ async fn dispatch(
             }
             // Real deletion also removes the CLI's own session history and the
             // conversation's browser session. Both run without the engine lock.
-            let (agent_id, session_id, executable, workspace) = {
+            let (agent_id, session_id, executable, external, workspace) = {
                 let chat = e.chat(&id)?;
                 (
                     chat.agent_id.clone(),
                     chat.session_id.clone(),
                     chat.executable.clone(),
+                    chat.external.is_some(),
                     e.store.directory.join(&id).join("workspace"),
                 )
             };
@@ -2468,7 +2469,9 @@ async fn dispatch(
             let mut removed = Vec::new();
             let mut failed = Vec::new();
             let mut history_error = None;
-            if let Some(session_id) = &session_id {
+            // A continued CLI session belongs to the CLI and its terminal:
+            // deleting the panel's conversation never removes it.
+            if let Some(session_id) = session_id.as_ref().filter(|_| !external) {
                 if agent_id == "opencode" {
                     let executable = executable
                         .or_else(|| DiscoveryContext::current().ok()?.executable("opencode"));
@@ -2517,7 +2520,7 @@ async fn dispatch(
             e.requests.retain(|(chat, _), _| chat != &id);
             e.store.delete(&id)?;
             Ok(
-                json!({"schemaVersion":1,"deleted":{"id":id,"cliHistory":{"agentId":agent_id,"sessionId":session_id,"removed":removed,"failed":failed,"error":history_error},"browserSession":browser}}),
+                json!({"schemaVersion":1,"deleted":{"id":id,"cliHistory":{"agentId":agent_id,"sessionId":session_id,"removed":removed,"failed":failed,"error":history_error,"kept":external.then_some("external")},"browserSession":browser}}),
             )
         }
         "conversationStop" | "conversationResumeQueue" => {
@@ -3833,6 +3836,19 @@ mod schedule_tests {
             .await
             .unwrap();
         assert_eq!(all["conversations"].as_array().unwrap().len(), 1);
+
+        // Deleting the conversation keeps the CLI's own session.
+        let file = dir
+            .path()
+            .join(".claude/projects/-project")
+            .join(format!("{EXTERNAL_SESSION}.jsonl"));
+        let before = std::fs::read(&file).unwrap();
+        let deleted = dispatch(&engine, "conversationDelete", &json!({"conversationId":id}))
+            .await
+            .unwrap();
+        assert_eq!(deleted["deleted"]["cliHistory"]["kept"], "external");
+        assert_eq!(deleted["deleted"]["cliHistory"]["removed"], json!([]));
+        assert_eq!(std::fs::read(&file).unwrap(), before);
     }
 
     #[tokio::test]

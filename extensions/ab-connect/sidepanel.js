@@ -1379,7 +1379,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     } finally { controls(); }
   })().catch(error));
   nodes.access.addEventListener('click' , () => void setAccess(!(selected ? conversation?.fullAccess === true : newFullAccess)).catch(error));
-  nodes.deleteChat.addEventListener('click', () => { nodes.deleteConfirm.hidden = false; });
+  const deleteHint = nodes.deleteConfirm.querySelector?.('.hint'), deleteHintText = deleteHint?.textContent;
+  nodes.deleteChat.addEventListener('click', () => {
+    // A continued CLI session is never deleted with the conversation.
+    if (deleteHint) deleteHint.textContent = conversation?.resumed ? RESUME_TEXT.deleteKeeps : deleteHintText;
+    nodes.deleteConfirm.hidden = false;
+  });
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
   nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
   nodes.inspectAgent.addEventListener('click', () => void inspectModels(true).catch(error));
