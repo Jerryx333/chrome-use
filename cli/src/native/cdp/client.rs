@@ -296,6 +296,13 @@ impl CdpClient {
         })
     }
 
+    /// Hold the writer: every command waits to be sent until the returned
+    /// guard drops. For tests that cancel a command before it is on the wire.
+    #[cfg(test)]
+    pub(crate) async fn hold_writer(&self) -> impl Sized + '_ {
+        self.ws_tx.lock().await
+    }
+
     pub async fn send_command(
         &self,
         method: &str,
