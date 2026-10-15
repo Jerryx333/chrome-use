@@ -7598,6 +7598,117 @@ async fn e2e_auth_login_bwu_presses_the_button_when_enter_is_lost() {
     .await;
 }
 
+/// Round 6: while a passkey login runs, the page cannot create a credential
+/// by any path it has (the instance, the prototype, a fresh `about:blank`
+/// frame), its source names no token, and only CDP puts the original back,
+/// on documents guarded by the new-document script and twice-guarded ones.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_create_guard_only_cdp_restores() {
+    let (base_url, _server) = start_echo_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+    let nav = |id: &str| json!({ "id": id, "action": "navigate", "url": format!("{base_url}/") });
+    assert_success(&execute_command(&nav("n1"), &mut state).await);
+    let (client, sid) = {
+        let mgr = state.browser.as_ref().unwrap();
+        (
+            mgr.client.clone(),
+            mgr.active_session_id().unwrap().to_string(),
+        )
+    };
+    let script = client
+        .send_command(
+            "Page.addScriptToEvaluateOnNewDocument",
+            Some(json!({ "source": super::actions::no_create_js() })),
+            Some(&sid),
+        )
+        .await
+        .unwrap()["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let guard = format!("JSON.stringify({})", super::actions::no_create_js());
+    assert_evaluate(&mut state, "g", &guard, json!("true")).await;
+
+    let probe = r#"(async () => {
+        const c = navigator.credentials, p = CredentialsContainer.prototype;
+        const how = async (f) => { try { await f(); return 'resolved'; } catch (e) { return e.name; } };
+        const f = document.createElement('iframe');
+        document.body.appendChild(f);
+        const src = Function.prototype.toString.call(c.create);
+        const out = [src, c.create.name,
+            await how(() => c.create({ publicKey: {} })),
+            await how(() => p.create.call(c, { publicKey: {} })),
+            await how(() => f.contentWindow.navigator.credentials.create({ publicKey: {} })),
+            /[0-9a-f]{16,}/.test(src)];
+        f.remove();
+        return JSON.stringify(out);
+    })()"#;
+    let guarded = json!(json!([
+        "function () { [native code] }",
+        "create",
+        "NotAllowedError",
+        "NotAllowedError",
+        "NotAllowedError",
+        false
+    ])
+    .to_string());
+    assert_evaluate(&mut state, "p1", probe, guarded.clone()).await;
+
+    // A new document gets the guard from the script; guarding it again on
+    // top (the navigation race at install) still restores in one go.
+    assert_success(&execute_command(&nav("n2"), &mut state).await);
+    assert_evaluate(&mut state, "p2", probe, guarded).await;
+    assert_evaluate(&mut state, "g2", &guard, json!("true")).await;
+    client
+        .send_command(
+            "Page.removeScriptToEvaluateOnNewDocument",
+            Some(json!({ "identifier": script })),
+            Some(&sid),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        super::actions::restore_create(&client, &sid).await,
+        Ok(true)
+    );
+    let native = r#"(async () => {
+        const c = navigator.credentials;
+        let how;
+        try { await c.create({ publicKey: {} }); how = 'resolved'; } catch (e) { how = e.name; }
+        return JSON.stringify([Function.prototype.toString.call(c.create), c.create === CredentialsContainer.prototype.create, how]);
+    })()"#;
+    let restored =
+        json!(json!(["function create() { [native code] }", true, "TypeError"]).to_string());
+    assert_evaluate(&mut state, "r1", native, restored).await;
+
+    // A proxy the page made itself is not ours to take off.
+    assert_evaluate(
+        &mut state,
+        "own",
+        "const o = CredentialsContainer.prototype.create; CredentialsContainer.prototype.create = new Proxy(o, { apply() { return Promise.reject(new TypeError('page')); } }); true",
+        json!(true),
+    )
+    .await;
+    assert_eq!(
+        super::actions::restore_create(&client, &sid).await,
+        Ok(true)
+    );
+    assert_evaluate(
+        &mut state,
+        "own2",
+        "Function.prototype.toString.call(navigator.credentials.create)",
+        json!("function () { [native code] }"),
+    )
+    .await;
+}
+
 /// #482: a submit that navigates is judged by where the page ends up.
 #[tokio::test]
 #[ignore]
