@@ -3128,6 +3128,7 @@ fn main() {
             retryable: None,
             warning: None,
             timing: None,
+            action_context: None,
         };
         let passive = || {
             inventory_response(diag::list_all_tabs(
@@ -3188,6 +3189,7 @@ fn main() {
                 retryable: None,
                 warning: None,
                 timing: None,
+                action_context: None,
             },
             Err(e) => {
                 let metadata = error_envelope::classify_error(&e);
@@ -3199,6 +3201,7 @@ fn main() {
                     error: Some(e),
                     warning: None,
                     timing: None,
+                    action_context: None,
                 }
             }
         };

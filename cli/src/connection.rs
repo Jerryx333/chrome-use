@@ -42,6 +42,13 @@ pub struct Response {
     /// Where the daemon spent the time: `{ms, cdpMs, cdpCalls, slowest}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<Value>,
+    /// `{actionId, before, after}` on a command that carried `_panelActionId`.
+    #[serde(
+        default,
+        rename = "actionContext",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub action_context: Option<Value>,
 }
 
 #[allow(dead_code)]
@@ -2259,6 +2266,14 @@ pub fn choosebrowser_skip() -> bool {
     CHOOSEBROWSER_SKIP.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The side-panel action a command belongs to. The chrome_use MCP server sets
+/// `CHROME_USE_PANEL_ACTION_ID` on the one CLI run a panel lease covers, and
+/// the daemon stamps that command's reply with `actionContext`. Only a
+/// hyphenated UUID counts; anything else is ignored.
+pub(crate) fn panel_action_id(value: Option<&str>) -> Option<&str> {
+    value.filter(|v| v.len() == 36 && uuid::Uuid::parse_str(v).is_ok())
+}
+
 /// Whether AGENT_BROWSER_TIMING asks for replies without `timing`.
 pub(crate) fn timing_disabled(value: Option<&str>) -> bool {
     matches!(
@@ -2300,6 +2315,11 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         );
         if let Ok(m) = std::env::var("AGENT_BROWSER_CLICK_MODE") {
             obj.insert("_clickMode".to_string(), Value::String(m));
+        }
+        if let Some(id) =
+            panel_action_id(std::env::var("CHROME_USE_PANEL_ACTION_ID").ok().as_deref())
+        {
+            obj.insert("_panelActionId".to_string(), Value::String(id.to_string()));
         }
         // `--no-timing` / AGENT_BROWSER_TIMING=0: a compact reply without the
         // `timing` object. Default replies keep it (the --json contract).
@@ -2661,8 +2681,39 @@ fn await_reply(
 
 #[cfg(test)]
 mod tests {
-    use super::{client_read_budget, daemon_cdp_budget};
+    use super::{client_read_budget, daemon_cdp_budget, panel_action_id, Response};
     use serde_json::json;
+
+    #[test]
+    fn only_a_hyphenated_uuid_is_a_panel_action_id() {
+        let id = "0b5c3f4e-8a7d-4c2b-9e1f-6a2d8c4b7e90";
+        assert_eq!(panel_action_id(Some(id)), Some(id));
+        for bad in [
+            "",
+            "t1",
+            "0b5c3f4e8a7d4c2b9e1f6a2d8c4b7e90",
+            "{0b5c3f4e-8a7d-4c2b-9e1f-6a2d8c4b7e90}",
+            "0b5c3f4e-8a7d-4c2b-9e1f-6a2d8c4b7e9z",
+        ] {
+            assert_eq!(panel_action_id(Some(bad)), None, "{bad:?}");
+        }
+        assert_eq!(panel_action_id(None), None);
+    }
+
+    /// `--json` output is the serialized `Response`: the MCP server reads
+    /// `actionContext` from it, on errors too.
+    #[test]
+    fn action_context_survives_to_json_output() {
+        let reply = json!({"success": false, "error": "x", "actionContext": {"actionId": "a"}});
+        let resp: Response = serde_json::from_value(reply).unwrap();
+        let out = serde_json::to_value(&resp).unwrap();
+        assert_eq!(out["actionContext"]["actionId"], "a");
+        let plain: Response = serde_json::from_value(json!({"success": true})).unwrap();
+        assert!(serde_json::to_value(&plain)
+            .unwrap()
+            .get("actionContext")
+            .is_none());
+    }
 
     #[test]
     fn an_upload_ceiling_scales_with_its_files_and_others_keep_180s() {

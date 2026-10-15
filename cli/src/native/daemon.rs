@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::signal;
 use tokio::sync::{mpsc, Notify, RwLock};
 
-use super::actions::{execute_command_recovering, DaemonState};
+use super::actions::DaemonState;
 use super::cdp::client::CdpClient;
 use super::state;
 use super::stream::StreamServer;
@@ -685,7 +685,9 @@ async fn handle_connection<S>(
                         &mut writer,
                         keepalive,
                         KEEPALIVE_PERIOD,
-                        super::timing::timed(execute_command_recovering(&cmd, &mut s)),
+                        super::timing::timed(super::panel_action::execute_command_stamped(
+                            &cmd, &mut s,
+                        )),
                     )
                     .await;
                     let ok = response.get("success").and_then(|v| v.as_bool()) == Some(true);
