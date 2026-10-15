@@ -45,6 +45,9 @@ const UNIT_TEST_LAUNCH_REFUSAL: Option<&str> = None;
 /// and the caller's SIGKILL is no longer what decides whether cleanup ran.
 pub const OWNED_TAB_CLEANUP_BUDGET: Duration = Duration::from_secs(5);
 
+/// Object group of the field handles a menu-closing tab cycle refocuses.
+const REFOCUS_GROUP: &str = "chrome-use-refocus";
+
 #[cfg(test)]
 thread_local! {
     /// Makes [`BrowserManager::save_first_tab_record`] fail on this thread.
@@ -6846,7 +6849,8 @@ impl BrowserManager {
         if closed {
             let _ = self.forget_created_target(&temp);
         }
-        flipped?;
+        // The field focus was taken from, to be focused again at the end.
+        let remembered = flipped?;
 
         let mut note = None;
         if in_front {
@@ -6906,7 +6910,8 @@ impl BrowserManager {
         for _ in 0..6 {
             if !self.pinned_tab_blocked().await {
                 if refocus {
-                    self.refocus_marked_field(&session_id).await;
+                    self.refocus_remembered_field(&session_id, &remembered)
+                        .await;
                 }
                 return Ok(note);
             }
@@ -6946,7 +6951,7 @@ impl BrowserManager {
         blur_session: Option<&str>,
         remember_focus: bool,
         hidden_ms: u64,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         let activate = |tab: i64| json!([tab, { "active": true }]);
         // In front: right of the pinned tab. In the background: where the
         // user's tab is, so that closing the blank tab returns the front to it.
@@ -6961,6 +6966,7 @@ impl BrowserManager {
             json!([temp_tab, { "windowId": window_id, "index": index }]),
         )
         .await?;
+        let mut remembered = Vec::new();
         if in_front {
             self.chrome_call("tabs", "update", activate(temp_tab))
                 .await?;
@@ -6971,7 +6977,7 @@ impl BrowserManager {
             // as the tab is shown, so the repeat hit the same block (#373).
             // The value typed so far stays.
             if let Some(session) = blur_session {
-                self.blur_focused_field(session, remember_focus).await;
+                remembered = self.blur_focused_field(session, remember_focus).await;
             }
             self.chrome_call("tabs", "update", activate(chrome_tab))
                 .await?;
@@ -6984,81 +6990,95 @@ impl BrowserManager {
                 .await?;
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        Ok(())
+        Ok(remembered)
     }
 
     /// Take focus out of the focused field: in the page, and in its
     /// same-process child frames, where a sign-in form in an iframe keeps its
-    /// own focused field (#449). With `remember`, the field is marked for
-    /// [`Self::refocus_marked_field`].
-    async fn blur_focused_field(&self, session_id: &str, remember: bool) {
-        let mark = if remember {
-            "if (a.tagName !== 'IFRAME' && a.tagName !== 'FRAME') a.setAttribute('data-cu-refocus', '1');"
+    /// own focused field (#449). With `remember`, returns handles to the
+    /// fields it blurred (the page's first) for
+    /// [`Self::refocus_remembered_field`]. A handle, not a marker attribute:
+    /// a MutationObserver on the page sees an attribute written and removed.
+    async fn blur_focused_field(&self, session_id: &str, remember: bool) -> Vec<String> {
+        let keep = if remember {
+            "return a.tagName !== 'IFRAME' && a.tagName !== 'FRAME' ? a : null;"
         } else {
-            ""
+            "return null;"
         };
         let expression = format!(
             "(() => {{ const a = document.activeElement; \
-             if (a && a !== document.body && a.blur) {{ {mark} a.blur(); }} }})()"
+             if (a && a !== document.body && a.blur) {{ a.blur(); {keep} }} return null; }})()"
         );
-        // Frames first: the page's own blur moves focus off the frame element.
-        for context in self.child_frame_worlds(session_id).await {
-            let _ = self
-                .client
-                .send_command(
-                    "Runtime.evaluate",
-                    Some(json!({ "expression": expression, "contextId": context })),
-                    Some(session_id),
-                )
-                .await;
-        }
+        let blur = |context: Option<i64>| {
+            let mut params = json!({
+                "expression": expression,
+                "returnByValue": false,
+                "objectGroup": REFOCUS_GROUP,
+            });
+            if let Some(context) = context {
+                params["contextId"] = json!(context);
+            }
+            self.client
+                .send_command("Runtime.evaluate", Some(params), Some(session_id))
+        };
+        let held = |reply: Result<Value, String>| {
+            reply.ok().and_then(|v| {
+                v.pointer("/result/objectId")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+            })
+        };
         let _ = self
             .client
             .send_command(
-                "Runtime.evaluate",
-                Some(json!({ "expression": expression })),
+                "Runtime.releaseObjectGroup",
+                Some(json!({ "objectGroup": REFOCUS_GROUP })),
                 Some(session_id),
             )
             .await;
+        // Frames first: the page's own blur moves focus off the frame element.
+        let mut frames = Vec::new();
+        for context in self.child_frame_worlds(session_id).await {
+            frames.extend(held(blur(Some(context)).await));
+        }
+        let mut remembered: Vec<String> = held(blur(None).await).into_iter().collect();
+        remembered.extend(frames);
+        remembered
     }
 
-    /// Put focus back on the field [`Self::blur_focused_field`] marked, in the
-    /// page or in a child frame. Last, right before the command that needs it:
-    /// the menu reopens on it a moment later.
-    async fn refocus_marked_field(&self, session_id: &str) {
-        let expression = "(() => { const el = document.querySelector('[data-cu-refocus]'); \
-            if (!el) return false; el.removeAttribute('data-cu-refocus'); \
-            el.focus({ preventScroll: true }); return true; })()";
-        let found = self
-            .client
-            .send_command(
-                "Runtime.evaluate",
-                Some(json!({ "expression": expression, "returnByValue": true })),
-                Some(session_id),
-            )
-            .await
-            .ok()
-            .and_then(|v| v.pointer("/result/value").and_then(Value::as_bool))
-            == Some(true);
-        if found {
-            return;
-        }
-        for context in self.child_frame_worlds(session_id).await {
-            let found = self
+    /// Put focus back on the field [`Self::blur_focused_field`] remembered, in
+    /// the page or in a child frame. Last, right before the command that needs
+    /// it: the menu reopens on it a moment later.
+    async fn refocus_remembered_field(&self, session_id: &str, remembered: &[String]) {
+        for object in remembered {
+            let focused = self
                 .client
                 .send_command(
-                    "Runtime.evaluate",
-                    Some(json!({ "expression": expression, "contextId": context, "returnByValue": true })),
+                    "Runtime.callFunctionOn",
+                    Some(json!({
+                        "objectId": object,
+                        "functionDeclaration": "function() { if (!this.isConnected) return false; \
+                            this.focus({ preventScroll: true }); return true; }",
+                        "returnByValue": true,
+                    })),
                     Some(session_id),
                 )
                 .await
                 .ok()
                 .and_then(|v| v.pointer("/result/value").and_then(Value::as_bool))
                 == Some(true);
-            if found {
-                return;
+            if focused {
+                break;
             }
         }
+        let _ = self
+            .client
+            .send_command(
+                "Runtime.releaseObjectGroup",
+                Some(json!({ "objectGroup": REFOCUS_GROUP })),
+                Some(session_id),
+            )
+            .await;
     }
 
     /// An isolated world in each same-process child frame of the page (at most

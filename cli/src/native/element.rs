@@ -14,10 +14,30 @@ pub struct SemanticPin {
     pub session: String,
     pub scope: i64,
     pub target: i64,
+    /// Refuse a target that is hidden. `nth` names its node by index and acts
+    /// on it like a CSS selector would, visible or not.
+    pub require_visible: bool,
 }
 tokio::task_local! { pub static SEMANTIC_PIN: SemanticPin; }
+/// The selector that names the pinned node while a [`SEMANTIC_PIN`] is in
+/// scope. Never queried in the page: the node is resolved by its id.
+pub const PINNED_SELECTOR: &str = "[data-chrome-use-located='true']";
 pub fn semantic_pin_active(selector: &str) -> bool {
-    selector == "[data-chrome-use-located='true']" && SEMANTIC_PIN.try_with(|_| ()).is_ok()
+    selector == PINNED_SELECTOR && SEMANTIC_PIN.try_with(|_| ()).is_ok()
+}
+
+/// Object group of the handles [`resolve_semantic_pin`] hands out.
+pub const SEMANTIC_PIN_GROUP: &str = "chrome-use-semantic-locator";
+
+/// Release the handles pinned commands resolved in `session`.
+pub async fn release_semantic_pin_handles(client: &CdpClient, session: &str) {
+    let _ = client
+        .send_command(
+            "Runtime.releaseObjectGroup",
+            Some(json!({ "objectGroup": SEMANTIC_PIN_GROUP })),
+            Some(session),
+        )
+        .await;
 }
 
 pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<String, String> {
@@ -47,8 +67,8 @@ pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<S
         .as_str()
         .ok_or("semantic target unavailable")?;
     let checked = client.send_command("Runtime.callFunctionOn",Some(json!({
-        "objectId":scope_id,"functionDeclaration":"function(target){if(!this.isConnected || !target.isConnected || !this.contains(target))throw new Error('semantic target left scope');const r=target.getBoundingClientRect();if(!(r.width>0 && r.height>0) || (target.checkVisibility && !target.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})))throw new Error('semantic target hidden');return target;}",
-        "arguments":[{"objectId":target_id}],"returnByValue":false,"objectGroup":"chrome-use-semantic-locator"
+        "objectId":scope_id,"functionDeclaration":"function(target,requireVisible){if(!this.isConnected || !target.isConnected || !this.contains(target))throw new Error('semantic target left scope');const r=target.getBoundingClientRect();if(requireVisible && (!(r.width>0 && r.height>0) || (target.checkVisibility && !target.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))))throw new Error('semantic target hidden');return target;}",
+        "arguments":[{"objectId":target_id},{"value":pin.require_visible}],"returnByValue":false,"objectGroup":"chrome-use-semantic-locator"
     })),Some(session)).await?;
     if checked.get("exceptionDetails").is_some() {
         return Err("semantic target changed or left its scope; refusing dispatch".into());
@@ -57,6 +77,73 @@ pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<S
         .as_str()
         .map(String::from)
         .ok_or("semantic target unavailable; refusing dispatch".into())
+}
+
+/// The `backendNodeId` of the element a remote object handle points at.
+pub(crate) async fn object_backend_node_id(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+) -> Result<i64, String> {
+    let described = client
+        .send_command(
+            "DOM.describeNode",
+            Some(json!({ "objectId": object_id })),
+            Some(session_id),
+        )
+        .await?;
+    described["node"]["backendNodeId"]
+        .as_i64()
+        .ok_or_else(|| "DOM.describeNode returned no backendNodeId".to_string())
+}
+
+/// The element handles of a remote JS array, by index. Reading a handle
+/// leaves the page untouched, unlike marking the elements with an attribute
+/// and querying it back (a MutationObserver sees both the write and the
+/// cleanup).
+pub(crate) async fn array_element_objects(
+    client: &CdpClient,
+    session_id: &str,
+    array_object_id: &str,
+) -> Result<HashMap<usize, String>, String> {
+    let props = client
+        .send_command(
+            "Runtime.getProperties",
+            Some(json!({ "objectId": array_object_id, "ownProperties": true })),
+            Some(session_id),
+        )
+        .await?;
+    let mut out = HashMap::new();
+    for row in props["result"].as_array().into_iter().flatten() {
+        let Some(idx) = row["name"].as_str().and_then(|n| n.parse::<usize>().ok()) else {
+            continue;
+        };
+        if let Some(id) = row["value"]["objectId"].as_str() {
+            out.insert(idx, id.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// The `backendNodeId` of every element in a remote JS array, by index.
+/// Best-effort: an element that cannot be described is left out.
+pub(crate) async fn array_backend_node_ids(
+    client: &CdpClient,
+    session_id: &str,
+    array_object_id: &str,
+) -> HashMap<usize, i64> {
+    let Ok(objects) = array_element_objects(client, session_id, array_object_id).await else {
+        return HashMap::new();
+    };
+    let described =
+        futures_util::future::join_all(objects.into_iter().map(|(idx, object)| async move {
+            object_backend_node_id(client, session_id, &object)
+                .await
+                .ok()
+                .map(|id| (idx, id))
+        }))
+        .await;
+    described.into_iter().flatten().collect()
 }
 
 /// Discover Monaco editor APIs exposed through the global object or AMD loader.
@@ -3356,7 +3443,7 @@ pub async fn probe_viewport(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<ViewportProbe, String> {
-    if parse_ref(selector_or_ref).is_some() {
+    if parse_ref(selector_or_ref).is_some() || semantic_pin_active(selector_or_ref) {
         let (object_id, effective_session_id) = resolve_element_object_id(
             client,
             session_id,
