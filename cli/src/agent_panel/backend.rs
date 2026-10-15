@@ -1039,7 +1039,22 @@ pub(super) fn claude_tool_results(line: &Value, tools: &ClaudeTools) -> Vec<Noti
                 if single {
                     structured_ids(&line["tool_use_result"]["structuredContent"], &mut ids, 0);
                 }
-                content_marker_ids(&block["content"], &mut ids);
+                // The text Claude kept is `JSON.stringify(structuredContent)`,
+                // so the id is also in the block itself, also on lines that
+                // carry several results.
+                let texts: Vec<&str> = match &block["content"] {
+                    Value::String(text) => vec![text.as_str()],
+                    Value::Array(parts) => {
+                        parts.iter().filter_map(|p| p["text"].as_str()).collect()
+                    }
+                    _ => Vec::new(),
+                };
+                for text in texts {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                        structured_ids(&parsed, &mut ids, 0);
+                    }
+                    marker_ids(text, &mut ids);
+                }
             }
             tool_notice(true, id, ids, block)
         })
@@ -1398,6 +1413,30 @@ mod tests {
             .unwrap()
             .starts_with("toolu_"));
         events.iter().for_each(assert_stripped);
+        // Parallel tool calls answered in one line: tool_use_result cannot
+        // be attributed, the JSON text of each block still names its action.
+        let lines = fixture("claude-tool-marker.jsonl");
+        let users: Vec<&Value> = lines
+            .iter()
+            .filter(|v| v["type"] == "user" && v["tool_use_result"].is_object())
+            .collect();
+        let mut both = users[0].clone();
+        both["message"]["content"]
+            .as_array_mut()
+            .unwrap()
+            .extend(users[1]["message"]["content"].as_array().unwrap().clone());
+        let mut tools = ClaudeTools::default();
+        for line in &lines {
+            for block in line["message"]["content"].as_array().into_iter().flatten() {
+                if line["type"] == "assistant" && block["type"] == "tool_use" {
+                    tools.remember(block);
+                }
+            }
+        }
+        let parallel = claude_tool_results(&both, &tools);
+        assert_eq!(parallel.len(), 2);
+        assert_eq!(ids(&parallel[0]), [READ_ID]);
+        assert_eq!(ids(&parallel[1]), [SHOT_ID]);
         // Without structuredContent the marker reaches the tool result.
         let plain = claude_events("claude-tool-marker-no-structured.jsonl");
         assert_eq!(ids(&plain[0]), [READ_ID]);

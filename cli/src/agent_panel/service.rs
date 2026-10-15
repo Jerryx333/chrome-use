@@ -155,7 +155,8 @@ fn operation_seconds(operation: &str) -> u64 {
         "agentInspect" => 30,
         "skillImport" => 40,
         "conversationDelete" => 45,
-        "agentActionBegin" | "agentActionReport" | "agentDeliveryReport" => 5,
+        "agentActionBegin" | "agentDeliveryReport" => 5,
+        "agentActionReport" => 60,
         "agentRecordingAuthorize" | "agentRecordingStop" => 20,
         _ => 10,
     }
