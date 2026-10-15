@@ -671,7 +671,7 @@ impl Artifacts {
     }
 
     /// Non-terminal artifacts of one message, for turn-end and reload sweeps.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(any(not(test), windows), allow(dead_code))]
     pub fn open_for_message(&self, message_id: &str) -> Vec<String> {
         let mut ids: Vec<_> = self
             .entries

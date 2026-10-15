@@ -36,7 +36,18 @@ pub(super) enum Command {
 pub(super) struct Notice {
     pub kind: &'static str,
     pub data: Value,
+    /// With `processUnconfirmed` on Windows: the job of the process tree
+    /// whose exit was not confirmed. The service keeps it, so the recovery
+    /// probe can count the tree and end it (plan 5.3).
+    #[cfg(windows)]
+    pub job: Option<std::sync::Arc<super::windows::ProcessJob>>,
 }
+
+/// The job `drive` hands back when it cannot confirm the tree exited.
+#[cfg(windows)]
+type HeldJob = super::windows::ProcessJob;
+#[cfg(not(windows))]
+type HeldJob = ();
 
 /// The panel system prompt. Its stealth sentence (no console capture,
 /// `Runtime.enable` or overlays for progress display) must stay verbatim.
@@ -54,7 +65,12 @@ pub(super) async fn write(
         .map_err(|_| "The backend closed its input; turn outcome is unconfirmed".into())
 }
 pub(super) fn notice(kind: &'static str, data: Value) -> Notice {
-    Notice { kind, data }
+    Notice {
+        kind,
+        data,
+        #[cfg(windows)]
+        job: None,
+    }
 }
 pub(super) fn short(value: &Value) -> Value {
     let raw = value.to_string();
@@ -74,12 +90,14 @@ pub(super) async fn run(
 ) {
     let mut process_started = false;
     let mut exit_confirmed = false;
+    let mut held: Option<HeldJob> = None;
     let result = drive(
         &setup,
         &mut commands,
         &events,
         &mut process_started,
         &mut exit_confirmed,
+        &mut held,
     )
     .await;
     let kind = if process_started && !exit_confirmed {
@@ -87,11 +105,19 @@ pub(super) async fn run(
     } else {
         "exited"
     };
-    if let Err(error) = result {
-        let _ = events.send(notice(kind, json!({"error":error,"processExitConfirmed":exit_confirmed,"processStarted":process_started}))).await;
-    } else {
-        let _ = events.send(notice(kind, json!({"error":null,"processExitConfirmed":exit_confirmed,"processStarted":process_started}))).await;
+    let error = result.err();
+    #[allow(unused_mut)]
+    let mut last = notice(
+        kind,
+        json!({"error":error,"processExitConfirmed":exit_confirmed,"processStarted":process_started}),
+    );
+    #[cfg(windows)]
+    if kind == "processUnconfirmed" {
+        last.job = held.map(std::sync::Arc::new);
     }
+    #[cfg(not(windows))]
+    let _ = held;
+    let _ = events.send(last).await;
 }
 
 async fn drive(
@@ -100,6 +126,7 @@ async fn drive(
     events: &mpsc::Sender<Notice>,
     process_started: &mut bool,
     exit_confirmed: &mut bool,
+    #[cfg_attr(not(windows), allow(unused_variables))] held: &mut Option<HeldJob>,
 ) -> Result<(), String> {
     let mut browser_env = json!({"AGENT_BROWSER_BROWSER":setup.profile,"AGENT_BROWSER_SESSION":setup.browser_session,"CHROME_USE_NO_UPDATE_CHECK":"1","CHROME_USE_PANEL_PROFILE":setup.profile,"CHROME_USE_PANEL_CONVERSATION":setup.browser_session.strip_prefix("panel-").ok_or("Panel session has no conversation identity")?,"CHROME_USE_PANEL_GENERATION":setup.generation.to_string()});
     if let Some(directory) = std::env::var_os("CHROME_USE_RELAY_DIR").filter(|v| !v.is_empty()) {
@@ -304,8 +331,12 @@ async fn drive(
         }
         _ => Err("This agent has no conversational adapter yet".into()),
     };
+    // A tree whose end cannot be confirmed keeps its job with the service.
     #[cfg(windows)]
-    owned_job.terminate()?;
+    if let Err(error) = owned_job.terminate() {
+        *held = Some(owned_job);
+        return Err(error);
+    }
     // Kill only the still-live owned process group, before reaping its PID.
     #[cfg(not(windows))]
     if child
@@ -324,10 +355,13 @@ async fn drive(
             .await
             .map_err(|_| "Backend termination could not be confirmed")?;
     }
-    let _ = child
-        .wait()
-        .await
-        .map_err(|_| "Backend exit could not be confirmed")?;
+    let waited = child.wait().await;
+    #[cfg(windows)]
+    if waited.is_err() {
+        *held = Some(owned_job);
+        return Err("Backend exit could not be confirmed".into());
+    }
+    waited.map_err(|_| "Backend exit could not be confirmed")?;
     #[cfg(unix)]
     {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -347,7 +381,10 @@ async fn drive(
         }
     }
     #[cfg(windows)]
-    owned_job.confirm_empty().await?;
+    if let Err(error) = owned_job.confirm_empty().await {
+        *held = Some(owned_job);
+        return Err(error);
+    }
     *exit_confirmed = true;
     result
 }

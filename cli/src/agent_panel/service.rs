@@ -688,6 +688,10 @@ struct Engine {
     /// How long a retired process may take to confirm its exit.
     retire_wait: Duration,
     evidence: EvidenceState,
+    /// Windows: jobs of process trees whose exit was not confirmed, with
+    /// their generation. Only these prove anything about such a tree.
+    #[cfg(windows)]
+    held_jobs: HashMap<String, (u64, Arc<super::windows::ProcessJob>)>,
     profile: String,
     stop: bool,
     schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
@@ -718,6 +722,8 @@ impl Engine {
                 .collect(),
             retire_wait: Duration::from_secs(10),
             evidence: EvidenceState::default(),
+            #[cfg(windows)]
+            held_jobs: HashMap::new(),
             profile,
             stop: false,
             schedules,
@@ -1173,6 +1179,10 @@ impl Engine {
         generation: u64,
         mut notice: Notice,
     ) -> Result<Option<Message>, String> {
+        #[cfg(windows)]
+        if let Some(job) = notice.job.take() {
+            self.held_jobs.insert(id.into(), (generation, job));
+        }
         if self
             .jobs
             .get(id)
@@ -2144,6 +2154,8 @@ async fn dispatch(
             }
             e.chats.remove(&id);
             e.forget(&id);
+            #[cfg(windows)]
+            e.held_jobs.remove(&id);
             e.requests.retain(|(chat, _), _| chat != &id);
             e.store.delete(&id)?;
             Ok(

@@ -118,10 +118,12 @@ impl Probe {
 ///
 /// So while group P lives, no other process can be P's leader, and a member
 /// whose session id is the recorded service session is in that session.
+#[cfg_attr(windows, allow(dead_code))] // Windows proves through the held job.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ProofPolicy {
     pub pid_allocation_proven: bool,
 }
+#[cfg_attr(windows, allow(dead_code))]
 impl ProofPolicy {
     pub fn running_os() -> Self {
         Self {

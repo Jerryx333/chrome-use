@@ -1165,6 +1165,8 @@ struct RecoveryView {
     summary: Value,
     phase: Phase,
     last_error: Option<String>,
+    #[cfg(windows)]
+    held: Option<Arc<super::super::windows::ProcessJob>>,
 }
 
 async fn recovery_view(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<RecoveryView, String> {
@@ -1179,7 +1181,11 @@ async fn recovery_view(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Recovery
             .find(|ev| ev.kind == "turnStarted")
             .and_then(|ev| ev.data["messageId"].as_str().map(String::from))
     });
+    #[cfg(windows)]
+    let held = e.held_jobs.get(id).map(|(_, job)| job.clone());
     Ok(RecoveryView {
+        #[cfg(windows)]
+        held,
         events,
         record,
         message_id,
@@ -1189,18 +1195,16 @@ async fn recovery_view(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Recovery
     })
 }
 
-fn probe(record: Option<&recovery::ProcessRecord>) -> recovery::Probe {
-    #[cfg(unix)]
-    {
-        recovery::probe_group(record, recovery::ProofPolicy::running_os())
-    }
-    #[cfg(windows)]
-    {
-        // The service does not hold the job after an unconfirmed exit yet,
-        // so nothing can be proven.
-        let _ = record;
-        recovery::probe_job(None)
-    }
+#[cfg(unix)]
+fn probe(view: &RecoveryView) -> recovery::Probe {
+    recovery::probe_group(view.record.as_ref(), recovery::ProofPolicy::running_os())
+}
+
+/// Only the job the service still holds proves anything; after a restart
+/// the answer is `unknown`.
+#[cfg(windows)]
+fn probe(view: &RecoveryView) -> recovery::Probe {
+    recovery::probe_job(view.held.as_deref())
 }
 
 #[derive(Deserialize)]
@@ -1220,10 +1224,12 @@ pub(super) async fn recovery_dispatch(
         .map_err(|_| "Recovery operations require only conversationId")?;
     let id = p.conversation_id.as_str();
     let view = recovery_view(engine, id).await?;
-    let record = view.record.clone();
-    let probed = tokio::task::spawn_blocking(move || probe(record.as_ref()))
-        .await
-        .map_err(|_| "The process probe failed")?;
+    let (view, probed) = tokio::task::spawn_blocking(move || {
+        let probed = probe(&view);
+        (view, probed)
+    })
+    .await
+    .map_err(|_| "The process probe failed")?;
     match operation {
         "conversationRecoveryReview" => {
             let mut reply = match &view.message_id {
@@ -1252,11 +1258,12 @@ pub(super) async fn recovery_dispatch(
             )
             .await;
             #[cfg(windows)]
-            let termination = recovery::Termination {
-                method: "jobObject",
-                confirmed: false,
-                detail: "The service does not hold the agent's job".into(),
-            };
+            let termination = recovery::terminate_job(
+                view.held
+                    .as_deref()
+                    .ok_or("The service no longer holds the agent's job")?,
+            )
+            .await;
             let mut e = engine.lock().await;
             e.chat(id)?;
             e.record(
@@ -2078,6 +2085,7 @@ mod tests {
         assert!(chat.queue[0].record);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn recovery_reviews_terminates_and_forks_only_on_proof() {
         let c = chat_with("claude", false).await;
@@ -2159,6 +2167,46 @@ mod tests {
             .prompt_text()
             .starts_with("[This conversation continues one whose last request ended"));
         assert!(next.prompt_text().contains("click"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_held_job_of_an_unconfirmed_exit_proves_the_tree() {
+        let c = chat_with("claude", false).await;
+        c.send("go", false).await;
+        let job = Arc::new(super::super::super::windows::ProcessJob::new().unwrap());
+        let mut notice = backend::notice(
+            "processUnconfirmed",
+            json!({"error":"lost","processExitConfirmed":false}),
+        );
+        notice.job = Some(job);
+        c.engine.lock().await.notice(&c.id, 0, notice).unwrap();
+        assert!(c.engine.lock().await.held_jobs.contains_key(&c.id));
+        // The job is empty: the tree is proven gone, so a fork is allowed.
+        let review = c
+            .op("conversationRecoveryReview", json!({"conversationId":c.id}))
+            .await
+            .unwrap();
+        assert_eq!(review["process"]["state"], "exited", "{review}");
+        assert!(c
+            .op("conversationRecoveryFork", json!({"conversationId":c.id}))
+            .await
+            .is_ok());
+        // After a restart the job is gone and nothing can be proven.
+        let root = c.engine.lock().await.store.directory.clone();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(root).unwrap(),
+            "fixture".into(),
+            Default::default(),
+        )));
+        let review = dispatch(
+            &engine,
+            "conversationRecoveryReview",
+            &json!({"conversationId":c.id}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(review["process"]["state"], "unknown");
     }
 
     #[tokio::test]
