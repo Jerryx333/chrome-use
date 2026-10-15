@@ -937,7 +937,13 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 .filter(|a| !a.starts_with("--"))
                 .collect();
             if let Some((x, y)) = parse_coords(&coord_args) {
-                return Ok(json!({ "id": id, "action": "click", "x": x, "y": y }));
+                let mut cmd = json!({ "id": id, "action": "click", "x": x, "y": y });
+                // A point can be a `target=_blank` link too: `--follow` used
+                // to be dropped here, so the click never looked for its tab.
+                if follow {
+                    cmd["follow"] = json!(true);
+                }
+                return Ok(cmd);
             }
             let sel = rest
                 .iter()
@@ -7102,6 +7108,15 @@ mod tests {
         assert_eq!(cmd["x"], 449.0);
         assert_eq!(cmd["y"], 320.0);
         assert!(cmd.get("selector").is_none());
+    }
+
+    #[test]
+    fn test_click_coords_keep_follow() {
+        let cmd = parse_command(&args("click 449 320 --follow"), &default_flags()).unwrap();
+        assert_eq!(cmd["x"], 449.0);
+        assert_eq!(cmd["follow"], true);
+        let cmd = parse_command(&args("click 449 320"), &default_flags()).unwrap();
+        assert!(cmd.get("follow").is_none());
     }
 
     #[test]

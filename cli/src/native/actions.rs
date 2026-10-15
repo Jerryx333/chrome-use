@@ -8165,6 +8165,16 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         let session_id = mgr.active_session_id()?.to_string();
         let button = cmd.get("button").and_then(|v| v.as_str()).unwrap_or("left");
         let click_count = cmd.get("clickCount").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+        // `click <x> <y> --follow` took the flag and never looked for a tab:
+        // the same check as a selector click, when it was asked for.
+        let follow = cmd.get("follow").and_then(|v| v.as_bool()).unwrap_or(false);
+        let tab_baseline = if follow {
+            let before: std::collections::HashSet<String> =
+                mgr.pages_list().into_iter().map(|p| p.target_id).collect();
+            Some((before, mgr.relay_tab_baseline().await))
+        } else {
+            None
+        };
         let dialog_events = mgr.client.subscribe();
         if let Some(dialog) = wait_for_click_or_dialog(
             interaction::click_at_point(&mgr.client, &session_id, x, y, button, click_count),
@@ -8182,7 +8192,20 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                 "dialog": { "type": dialog_type, "message": message, "pending": true },
             }));
         }
-        return Ok(json!({ "clicked": { "x": x, "y": y } }));
+        let mut out = json!({ "clicked": { "x": x, "y": y } });
+        if let Some((before, relay_before)) = tab_baseline {
+            let pending = DeferredClickTabCheck {
+                before,
+                relay_before,
+                follow,
+                clicked_at: std::time::Instant::now(),
+                focus_watch: None,
+                raised_note: None,
+            };
+            let extra = finish_click_tab_check(state, pending).await;
+            merge_object(&mut out, extra);
+        }
+        return Ok(out);
     }
 
     let selector = cmd
@@ -8709,7 +8732,11 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
         return out;
     };
     let check = mgr
-        .adopt_newly_opened(&pending.before, pending.relay_before.as_ref())
+        .adopt_newly_opened(
+            &pending.before,
+            pending.relay_before.as_ref(),
+            pending.follow,
+        )
         .await;
     if let Some(w) = check.warning {
         out["openedTabWarning"] = json!(w);
@@ -8818,6 +8845,10 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
                 }
             }
         }
+    } else if pending.follow && out.get("openedTabStatus").is_some() {
+        // A tab opened but was not adopted (or may not have been): --follow
+        // asked to move, and the session did not.
+        out["followed"] = json!(false);
     }
     out
 }

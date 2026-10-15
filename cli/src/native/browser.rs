@@ -2820,6 +2820,25 @@ const RELAY_POPUP_FIND_BUDGET: Duration = Duration::from_millis(2_000);
 /// relay session). When it runs out the outcome is reported as unknown: the
 /// extension may still attach the tab.
 const RELAY_POPUP_ATTACH_BUDGET: Duration = Duration::from_millis(3_000);
+/// How long a click on a tab the session does not own looks for the tab it
+/// opened, to report it.
+const FOREIGN_POPUP_FIND_BUDGET: Duration = Duration::from_millis(1_000);
+
+/// What `openedTabWarning` says about a tab opened from a tab the session does
+/// not own. Names the url to adopt it by (the pending one while it loads).
+fn foreign_popup_note(tab_id: i64, url: &str, pending_url: &str) -> String {
+    let shown = [url, pending_url]
+        .into_iter()
+        .find(|u| relay_url_is_attachable(u))
+        .unwrap_or("about:blank");
+    format!(
+        "the click opened a tab (Chrome tab {tab_id}, {shown}) from a tab this session does not \
+         own (taken with `tab adopt` or `--tab … --force`), so it stays the user's: it was not \
+         adopted, and --follow did not switch to it. The session is still on the clicked tab. \
+         To work in the new tab: `tab adopt <url-substring>`, or `open <url>` in a tab of your own."
+    )
+}
+
 /// Extension capability that attaches one tab by Chrome tab id (ab-connect
 /// 0.5.30). Without it a relay pop-up is reported, never attached by URL.
 const ATTACH_TAB_BY_ID_CAPABILITY: &str = "attachTabById";
@@ -7277,6 +7296,7 @@ impl BrowserManager {
         &mut self,
         before: &HashSet<String>,
         relay_before: Option<&RelayTabBaseline>,
+        follow: bool,
     ) -> NewTabCheck {
         // STRICT MULTI-AGENT ISOLATION: on the relay this session's `before` set is
         // only its OWN tabs, so EVERY foreign tab (the user's, other agents') looks
@@ -7297,7 +7317,14 @@ impl BrowserManager {
         // this session created can yield a tab the session adopts.
         if on_relay && !clicked_tab_is_created(self.active_target_id().ok(), &self.created_targets)
         {
-            return NewTabCheck::default();
+            // Not adopted, as above — but not silent either: `click --follow`
+            // on such a tab used to come back as a plain success while the
+            // link's tab sat open in the user's window, and the agent went on
+            // reading the old page.
+            return match relay_before {
+                Some(baseline) => self.report_foreign_popup(baseline, follow).await,
+                None => NewTabCheck::default(),
+            };
         }
         let mut check = NewTabCheck::default();
         // The target-list diff upgrades every new target to created, so it is
@@ -7319,6 +7346,45 @@ impl BrowserManager {
             }
         }
         check
+    }
+
+    /// A tab a click opened from a tab this session drives but does not own
+    /// (taken with `tab adopt`, or `--tab <handle> --force`): the clicked tab
+    /// as its opener, or in its group. Reported, never attached — the pop-up
+    /// of the user's tab is the user's — with the command that takes it.
+    ///
+    /// One look by default, as every click pays for it; with `--follow`, which
+    /// asked for the new tab, it keeps looking for up to
+    /// [`FOREIGN_POPUP_FIND_BUDGET`].
+    async fn report_foreign_popup(&self, baseline: &RelayTabBaseline, follow: bool) -> NewTabCheck {
+        let Some(clicked) = self.active_session_id().ok().and_then(relay_chrome_tab_id) else {
+            return NewTabCheck::default();
+        };
+        let ours = HashSet::from([clicked]);
+        let deadline = tokio::time::Instant::now() + FOREIGN_POPUP_FIND_BUDGET;
+        loop {
+            let tabs = match tokio::time::timeout_at(
+                deadline,
+                self.chrome_call("tabs", "query", json!([{}])),
+            )
+            .await
+            {
+                Ok(Ok(v)) => v.as_array().cloned().unwrap_or_default(),
+                _ => return NewTabCheck::default(),
+            };
+            if let Some(popup) = relay_popup_candidate(&tabs, &baseline.tab_ids, &ours) {
+                let s = |k: &str| popup.get(k).and_then(Value::as_str).unwrap_or("");
+                return NewTabCheck::unadopted(foreign_popup_note(
+                    popup.get("id").and_then(Value::as_i64).unwrap_or(-1),
+                    s("url"),
+                    s("pendingUrl"),
+                ));
+            }
+            if !follow || tokio::time::Instant::now() + Duration::from_millis(100) >= deadline {
+                return NewTabCheck::default();
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     /// Over the relay, the Chrome tab ids that exist right before a click, so
@@ -13701,5 +13767,41 @@ mod acting_target_tests {
         );
         let empty = BrowserManager::for_test(&url, Vec::new()).await;
         assert!(empty.acting_target().is_none());
+    }
+}
+
+#[cfg(test)]
+mod foreign_popup_tests {
+    use super::*;
+
+    #[test]
+    fn the_note_names_the_url_to_adopt_and_the_way_out() {
+        let n = foreign_popup_note(42, "about:blank", "https://creator.douyin.com/upload");
+        assert!(
+            n.contains("Chrome tab 42, https://creator.douyin.com/upload"),
+            "{n}"
+        );
+        assert!(n.contains("--follow did not switch"), "{n}");
+        assert!(n.contains("tab adopt <url-substring>"), "{n}");
+        let n = foreign_popup_note(7, "", "");
+        assert!(n.contains("Chrome tab 7, about:blank"), "{n}");
+    }
+
+    /// The clicked (user's) tab as opener or group anchor identifies its pop-up.
+    #[test]
+    fn a_popup_of_the_clicked_tab_is_found() {
+        let tabs = vec![
+            json!({ "id": 1, "groupId": -1 }),
+            json!({ "id": 9, "groupId": -1, "openerTabId": 1, "url": "https://x.test/" }),
+        ];
+        let before = HashSet::from([1]);
+        let ours = HashSet::from([1]);
+        let hit = relay_popup_candidate(&tabs, &before, &ours).unwrap();
+        assert_eq!(hit["id"], 9);
+        let unrelated = vec![
+            json!({ "id": 1, "groupId": -1 }),
+            json!({ "id": 9, "groupId": -1, "openerTabId": 5 }),
+        ];
+        assert!(relay_popup_candidate(&unrelated, &before, &ours).is_none());
     }
 }
