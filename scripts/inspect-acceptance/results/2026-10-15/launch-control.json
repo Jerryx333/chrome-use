@@ -1,0 +1,6 @@
+{
+  "chrome": "Google Chrome 155.0.8059.41 (build host)",
+  "extension": "none",
+  "pipe+unsafeExtDebug, no extension": { "webdriver": true, "sannysoftFailed": ["WebDriver (New)"] },
+  "port, no extension": { "webdriver": false, "sannysoftFailed": [] }
+}
