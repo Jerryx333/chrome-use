@@ -548,20 +548,44 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>) {
             with_ext
         );
     }
+    let newest = newest_extension_version(&profiles, cached_store_extension_version().as_deref());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    let mut stale = 0usize;
     for p in &profiles {
         match &p.extension {
-            Some(ext) => println!(
-                "  ✓ {}  —  {}{}",
-                p.label(),
-                if zh { "扩展 " } else { "extension " },
-                ext.version.as_deref().unwrap_or("?")
-            ),
+            Some(ext) => {
+                let version = ext.version.as_deref().unwrap_or("?");
+                let behind = newest
+                    .as_deref()
+                    .filter(|n| crate::upgrade::version_is_newer(n, version));
+                stale += usize::from(behind.is_some());
+                println!(
+                    "  ✓ {}  —  {}{}{}",
+                    p.label(),
+                    if zh { "扩展 " } else { "extension " },
+                    version,
+                    stale_note(behind, p.last_active, now, zh)
+                );
+            }
             None => println!(
                 "  ✗ {}  —  {}",
                 p.label(),
                 if zh { "未安装" } else { "missing" }
             ),
         }
+    }
+    if stale > 0 {
+        println!(
+            "  {}",
+            if zh {
+                "! 标「旧版」的 profile：Chrome 只在 profile 打开时才更新它的扩展。\n    打开那个 profile → chrome://extensions → 打开「开发者模式」→ 点「更新」，几秒就好。"
+            } else {
+                "! Profiles marked \"outdated\": Chrome updates a profile's extensions only while\n    that profile is open. Open it → chrome://extensions → Developer mode → Update."
+            }
+        );
     }
     if profiles.is_empty() {
         println!(
@@ -1520,6 +1544,10 @@ pub(crate) struct ChromeProfileInfo {
     pub(crate) email: Option<String>,
     /// The Google account's full name (`gaia_name`), when signed in.
     pub(crate) gaia_name: Option<String>,
+    /// When the profile was last active (`active_time`, Unix seconds). Chrome
+    /// only updates a profile's extensions while that profile is open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_active: Option<f64>,
     pub(crate) extension: Option<ChromeExtensionStatus>,
 }
 
@@ -1600,6 +1628,10 @@ pub(crate) fn parse_local_state_profiles(
             name: text(info, "name"),
             email: text(info, "user_name"),
             gaia_name: text(info, "gaia_name"),
+            last_active: info
+                .get("active_time")
+                .and_then(|v| v.as_f64())
+                .filter(|t| *t > 0.0),
             extension: None,
         })
         .collect();
@@ -1791,6 +1823,47 @@ pub fn ext_version_line(live: &str, bundled: &str, store: Option<&str>) -> Strin
 
 /// Shared skew advice for doctor and both status commands. A newer Store
 /// release does not imply a development install.
+/// The newest extension version worth updating to: the Web Store's, when
+/// known, else the newest any local profile already runs.
+pub(crate) fn newest_extension_version(
+    profiles: &[ChromeProfileInfo],
+    store: Option<&str>,
+) -> Option<String> {
+    profiles
+        .iter()
+        .filter_map(|p| p.extension.as_ref()?.version.clone())
+        .chain(store.map(ToString::to_string))
+        .reduce(|a, b| {
+            if crate::upgrade::version_is_newer(&b, &a) {
+                b
+            } else {
+                a
+            }
+        })
+}
+
+/// ` — outdated (newest 0.5.58; last opened 93 days ago)` for a profile whose
+/// extension is behind `newest`, else empty.
+pub(crate) fn stale_note(
+    newest: Option<&str>,
+    last_active: Option<f64>,
+    now: f64,
+    zh: bool,
+) -> String {
+    let Some(newest) = newest else {
+        return String::new();
+    };
+    let days = last_active
+        .filter(|t| now >= *t)
+        .map(|t| ((now - t) / 86_400.0).floor() as u64);
+    match (zh, days) {
+        (true, Some(d)) => format!("  （旧版，最新 {newest}；{d} 天前用过）"),
+        (true, None) => format!("  （旧版，最新 {newest}）"),
+        (false, Some(d)) => format!("  (outdated, newest {newest}; last opened {d} days ago)"),
+        (false, None) => format!("  (outdated, newest {newest})"),
+    }
+}
+
 pub fn newer_extension_hint(live: &str, bundled: &str) -> String {
     format!("extension {live} is newer than this CLI expects ({bundled}): run `chrome-use upgrade`")
 }
@@ -4954,6 +5027,45 @@ mod tests {
         assert!(!relay_tcp_live(&url).await);
     }
 
+    #[test]
+    fn profiles_behind_the_newest_extension_are_marked_with_how_long_ago_they_were_opened() {
+        let mut old = profile("Profile 6", None, true);
+        old.last_active = Some(1_000_000.0);
+        let mut current = profile("Default", None, true);
+        if let Some(e) = current.extension.as_mut() {
+            e.version = Some("0.5.54".to_string());
+        }
+        let profiles = vec![current, old];
+        // Store unknown: the newest local version is the yardstick.
+        assert_eq!(
+            newest_extension_version(&profiles, None).as_deref(),
+            Some("0.5.54")
+        );
+        // A newer Store build wins.
+        assert_eq!(
+            newest_extension_version(&profiles, Some("0.5.58")).as_deref(),
+            Some("0.5.58")
+        );
+        let now = 1_000_000.0 + 93.0 * 86_400.0;
+        assert_eq!(
+            stale_note(Some("0.5.58"), Some(1_000_000.0), now, true),
+            "  （旧版，最新 0.5.58；93 天前用过）"
+        );
+        assert_eq!(
+            stale_note(Some("0.5.58"), None, now, false),
+            "  (outdated, newest 0.5.58)"
+        );
+        assert_eq!(stale_note(None, Some(1_000_000.0), now, false), "");
+    }
+
+    #[test]
+    fn local_state_active_time_becomes_last_active() {
+        let state = serde_json::json!({"profile": {"info_cache": {"Profile 6": {"name": "lisa", "active_time": 1783322085.369827}, "Default": {"name": "Leo"}}}});
+        let profiles = parse_local_state_profiles(Path::new("/root"), &state);
+        assert_eq!(profiles[0].last_active, None);
+        assert_eq!(profiles[1].last_active, Some(1783322085.369827));
+    }
+
     fn profile(dir: &str, email: Option<&str>, with_ext: bool) -> ChromeProfileInfo {
         ChromeProfileInfo {
             root: "/Users/x/Library/Application Support/Google/Chrome".to_string(),
@@ -4961,6 +5073,7 @@ mod tests {
             name: Some(format!("name-{dir}")),
             email: email.map(ToString::to_string),
             gaia_name: None,
+            last_active: None,
             extension: with_ext.then(|| ChromeExtensionStatus {
                 id: "knfcmbamhjmaonkfnjhldjedeobeafmk".to_string(),
                 name: Some("chrome-use".to_string()),
