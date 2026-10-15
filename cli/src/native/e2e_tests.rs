@@ -7897,6 +7897,99 @@ async fn e2e_auth_login_bwu_create_guard_restore_survives_replaced_builtins() {
     server.abort();
 }
 
+/// Round 9: the page moves the guard deeper in the prototype chain, onto a
+/// new object between `CredentialsContainer.prototype` and
+/// `Object.prototype`, where none of the objects restore used to look at has
+/// an own `create`. Restore still finds and takes it off; a chain it cannot
+/// walk (an accessor `create`, a proxy in it) or a moved guard the page
+/// wrapped is reported.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_create_guard_restore_walks_the_prototype_chain() {
+    use super::passkey_guard::{install, report_result, restore, CreateGuard, Outcome};
+    let (port, server) = spawn_html_server("<!doctype html><p>guarded</p>".to_string()).await;
+    let base_url = format!("http://127.0.0.1:{port}");
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+    let nav = |id: &str| json!({ "id": id, "action": "navigate", "url": format!("{base_url}/") });
+    assert_success(&execute_command(&nav("n0"), &mut state).await);
+    let (client, sid) = {
+        let mgr = state.browser.as_ref().unwrap();
+        (
+            mgr.client.clone(),
+            mgr.active_session_id().unwrap().to_string(),
+        )
+    };
+    let none = std::collections::HashMap::new();
+    let probe = "(async () => { try { await navigator.credentials.create({ publicKey: {} }); return 'resolved'; } \
+                  catch (e) { return [e.name, Function.prototype.toString.call(navigator.credentials.create), \
+                  Object.prototype.hasOwnProperty.call(CredentialsContainer.prototype, 'create')].join('|'); } })()";
+    let moved_guard = json!("NotAllowedError|function () { [native code] }|false");
+    let moved_native = json!("TypeError|function create() { [native code] }|false");
+    let hide = |then: &str| {
+        format!(
+            "(() => {{ const p = CredentialsContainer.prototype; \
+               const hidden = Object.create(Object.getPrototypeOf(p)); hidden.create = p.create; \
+               Object.setPrototypeOf(p, hidden); delete p.create; {then} return true; }})()"
+        )
+    };
+
+    // Guarded through CDP (handles kept) and by the new-document script
+    // (none kept): either way the moved guard is found and taken off.
+    for (n, script_only) in [false, true].into_iter().enumerate() {
+        assert_success(&execute_command(&nav(&format!("a{n}")), &mut state).await);
+        let mut guard = CreateGuard::new();
+        install(&client, &sid, &none, &mut guard).await.unwrap();
+        if script_only {
+            assert_success(&execute_command(&nav(&format!("b{n}")), &mut state).await);
+        }
+        assert_evaluate(&mut state, "move", &hide(""), json!(true)).await;
+        assert_evaluate(&mut state, "p1", probe, moved_guard.clone()).await;
+        let report = restore(&client, &sid, &none, &mut guard).await;
+        assert_eq!(report_result(&report), Ok(()), "{script_only}: {report:?}");
+        assert!(
+            report.iter().any(|(_, r)| *r == Outcome::Restored),
+            "{script_only}: {report:?}"
+        );
+        assert_evaluate(&mut state, "r1", probe, moved_native.clone()).await;
+    }
+
+    // Moved, then out of reach of CDP or wrapped by the page: reported.
+    for (n, (then, want)) in [
+        (
+            "const g = hidden.create; delete hidden.create; \
+             Object.defineProperty(hidden, 'create', { get: () => g, configurable: true });",
+            "accessor",
+        ),
+        (
+            "Object.setPrototypeOf(p, new Proxy(hidden, {}));",
+            "proxy in the credentials prototype chain",
+        ),
+        (
+            "hidden.create = new Proxy(hidden.create, {});",
+            "wrapped the create() guard",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_success(&execute_command(&nav(&format!("c{n}")), &mut state).await);
+        let mut guard = CreateGuard::new();
+        install(&client, &sid, &none, &mut guard).await.unwrap();
+        assert_evaluate(&mut state, "move", &hide(then), json!(true)).await;
+        assert_evaluate(&mut state, "p2", probe, moved_guard.clone()).await;
+        let report = restore(&client, &sid, &none, &mut guard).await;
+        let err = report_result(&report).unwrap_err();
+        assert!(err.contains(want), "{want}: {err}");
+    }
+    server.abort();
+}
+
 /// Round 7: an attached out-of-process frame is guarded through its own
 /// session (now and on its next document) and restored with the rest.
 #[tokio::test]
