@@ -1202,7 +1202,12 @@ build host.
    test fixtures under `cli/src/agent_panel/fixtures/`. Settles the *verify* cells of
    section 11 before anything depends on them. Also capture the v1.5.214 compatibility fixtures
    (section 10), record the kernel PID-allocation source reading and run the PID-cycling
-   observation for 5.3, and for each backend: set the MCP client timeout as in D1a rule 3 and run
+   observation for 5.3 (macOS reading recorded: XNU `xnu-12377.121.6` `bsd/kern/kern_fork.c:964-974`
+   `forkproc` skips a candidate PID that is a live process, process group or session; groups
+   and sessions leave their hashes only with their last reference, `kern_proc.c:3107-3118`,
+   `2849-2873`; `setpgid` is same-session only, `kern_prot.c:595`, `626`; same loop in
+   `xnu-11417.140.69` and `xnu-10063.141.1`. `ProofPolicy` is on for Linux and macOS; see
+   `agent_panel/recovery.rs`), and for each backend: set the MCP client timeout as in D1a rule 3 and run
    a fixture whose chrome_use call outlives the client's timeout, to see whether the turn can
    complete with the call still running (if so, that backend retires after every turn).
 2. **Redaction gate**: `redact.rs`, `Store::event(Redacted)`, type-preserving masks, message

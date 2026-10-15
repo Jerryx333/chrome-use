@@ -96,10 +96,29 @@ impl Probe {
 }
 
 /// Whether the running OS is known, from its kernel source, never to hand out
-/// a PID that a live process group or session still uses. Linux: `alloc_pid`
-/// keeps a `struct pid` alive while any task references it as pgid or sid.
-/// macOS: the XNU reading for the shipped versions (plan step 1) is not
-/// recorded yet, so every live macOS group is `unknown` until it is.
+/// a PID that a live process group or session still uses, and never to let a
+/// process join a group of another session.
+///
+/// Linux: `alloc_pid` keeps a `struct pid` alive while any task references it
+/// as pgid or sid; `setpgid` refuses a group in another session.
+///
+/// macOS, read in apple-oss-distributions/xnu at `xnu-12377.121.6` (macOS 26):
+/// - `bsd/kern/kern_fork.c:964-974` (`forkproc`): the PID loop skips any
+///   candidate for which `phash_find_locked`, `pghash_exists_locked` or
+///   `session_find_locked` finds something, so a new process never gets the
+///   id of a live process, process group or session. The same loop is in
+///   `xnu-11417.140.69` (macOS 15) and `xnu-10063.141.1` (macOS 14).
+/// - `bsd/kern/kern_proc.c:3107-3118` (`pgrp_destroy`): a group leaves the
+///   hash only when its last reference goes, then releases its session;
+///   `kern_proc.c:2849-2873` (`session_destroy`/`session_rele`): a session
+///   leaves the hash only when its last group is gone.
+/// - `bsd/kern/kern_prot.c:595` and `626` (`setpgid`): moving a process into
+///   another group is EPERM unless both are in the caller's session, and
+///   `kern_proc.c:2982-3040` (`enterpgrp`) creates a new group only with the
+///   caller's own PID as its id.
+///
+/// So while group P lives, no other process can be P's leader, and a member
+/// whose session id is the recorded service session is in that session.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ProofPolicy {
     pub pid_allocation_proven: bool,
@@ -107,7 +126,7 @@ pub(super) struct ProofPolicy {
 impl ProofPolicy {
     pub fn running_os() -> Self {
         Self {
-            pid_allocation_proven: cfg!(target_os = "linux"),
+            pid_allocation_proven: cfg!(any(target_os = "linux", target_os = "macos")),
         }
     }
 }
@@ -1024,6 +1043,10 @@ mod tests {
             );
             let probe = probe_group(Some(&record), PROVEN);
             assert_eq!(probe.state, ProcessState::Alive, "{}", probe.reason);
+            if cfg!(any(target_os = "linux", target_os = "macos")) {
+                let running = probe_group(Some(&record), ProofPolicy::running_os());
+                assert_eq!(running.state, ProcessState::Alive, "{}", running.reason);
+            }
             let ended = terminate_group(&record, PROVEN, Duration::from_secs(5)).await;
             assert!(ended.confirmed, "{}", ended.detail);
             assert!(unsafe { libc::kill(-pgid, 0) } < 0 && errno() == libc::ESRCH);
@@ -1156,6 +1179,53 @@ mod tests {
             )
             .unwrap();
             assert_eq!((stat.pgrp, stat.session, stat.start_time), (7, 9, 12345));
+        }
+    }
+
+    #[cfg(windows)]
+    mod windows_job {
+        use super::super::*;
+        use crate::agent_panel::windows::ProcessJob;
+        use std::time::Duration;
+
+        /// 14.1: the held job's probe counts its processes, terminate empties
+        /// it, and without the handle (a restarted service) it is unknown.
+        #[tokio::test]
+        async fn held_job_is_counted_terminated_and_unknown_after_restart() {
+            let mut command = tokio::process::Command::new("python");
+            command
+                .args(["-c", "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)']); time.sleep(120)"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true);
+            let (mut child, job) = ProcessJob::spawn(&mut command).await.unwrap();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            while job.active_processes().unwrap() < 2 {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "descendant never started"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let probe = probe_job(Some(&job));
+            assert_eq!(probe.state, ProcessState::Alive, "{}", probe.reason);
+            let ended = terminate_job(&job).await;
+            assert!(ended.confirmed, "{}", ended.detail);
+            assert_eq!(ended.method, "jobObject");
+            child.wait().await.unwrap();
+            assert_eq!(probe_job(Some(&job)).state, ProcessState::Exited);
+            drop(job);
+            let restarted = probe_job(None);
+            assert_eq!(restarted.state, ProcessState::Unknown);
+            let review = restarted.review(None);
+            assert_eq!(
+                (
+                    review["canFork"].as_bool(),
+                    review["canTerminate"].as_bool()
+                ),
+                (Some(false), Some(false))
+            );
         }
     }
 }
