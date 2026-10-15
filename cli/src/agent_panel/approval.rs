@@ -127,10 +127,13 @@ fn answers_for(
         return Err("Answer each question exactly once".into());
     }
     let mut out = Vec::new();
-    for question in questions {
+    for (index, question) in questions.iter().enumerate() {
         let id = question[key].as_str().ok_or_else(refused)?;
+        // By position (the panel shows redacted text, so text is no
+        // identity); an older form keyed by the original text still works.
         let answer = answers
-            .get(id)
+            .get(&index.to_string())
+            .or_else(|| answers.get(id))
             .and_then(Value::as_object)
             .filter(|o| o.len() == 1)
             .ok_or_else(refused)?;
@@ -139,12 +142,20 @@ fn answers_for(
             .map(|o| o.iter().filter_map(|o| o["label"].as_str()).collect())
             .unwrap_or_default();
         let multi = question["multiSelect"] == true;
+        // An option by its index in the original, or by its original label.
+        let pick = |option: &Value| -> Result<String, String> {
+            let label = match option {
+                Value::Number(n) => n
+                    .as_u64()
+                    .and_then(|i| labels.get(i as usize).copied())
+                    .ok_or_else(refused)?,
+                Value::String(s) if labels.contains(&s.as_str()) => s.as_str(),
+                _ => return Err(refused()),
+            };
+            Ok(label.to_string())
+        };
         let values = if let Some(option) = answer.get("option") {
-            let option = option.as_str().ok_or_else(refused)?;
-            if !labels.contains(&option) {
-                return Err(refused());
-            }
-            vec![option.to_string()]
+            vec![pick(option)?]
         } else if let Some(options) = answer.get("options") {
             let options = options.as_array().ok_or_else(refused)?;
             if !multi || options.is_empty() {
@@ -152,11 +163,11 @@ fn answers_for(
             }
             let mut picked: Vec<String> = Vec::new();
             for option in options {
-                let option = option.as_str().ok_or_else(refused)?;
-                if !labels.contains(&option) || picked.iter().any(|p| p == option) {
+                let option = pick(option)?;
+                if picked.contains(&option) {
                     return Err(refused());
                 }
-                picked.push(option.into());
+                picked.push(option);
             }
             picked
         } else if let Some(custom) = answer.get("custom") {
@@ -467,6 +478,37 @@ mod tests {
             &json!({"answers":{"q1":{"custom":"B"},"q2":{"custom":"Ada"}}})
         )
         .is_err());
+    }
+
+    #[test]
+    fn answers_by_position_map_to_the_original_text() {
+        // The panel showed redacted text; the agent must get the original.
+        let original = json!({"tool_name":"AskUserQuestion","input":{"questions":[
+            {"question":"Use https://x.example/?token=SYNTH_Q?","multiSelect":false,"options":[{"label":"Keep SYNTH_OPT"},{"label":"Drop"}]},
+            {"question":"Which?","multiSelect":true,"options":[{"label":"A"},{"label":"B"}]}
+        ]}});
+        let built = reply_for_decision(
+            "can_use_tool",
+            &original,
+            &json!({"answers":{"0":{"option":0},"1":{"options":[1,0]}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            built["updatedInput"]["answers"],
+            json!({"Use https://x.example/?token=SYNTH_Q?":"Keep SYNTH_OPT","Which?":"B, A"})
+        );
+        for bad in [
+            json!({"answers":{"0":{"option":2},"1":{"option":0}}}),
+            json!({"answers":{"0":{"option":"Keep [redacted]"},"1":{"option":0}}}),
+            json!({"answers":{"0":{"option":-1},"1":{"option":0}}}),
+            json!({"answers":{"0":{"options":[0]},"1":{"option":0}}}),
+            json!({"answers":{"0":{"option":0},"1":{"options":[0,0]}}}),
+        ] {
+            assert!(
+                reply_for_decision("can_use_tool", &original, &bad).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

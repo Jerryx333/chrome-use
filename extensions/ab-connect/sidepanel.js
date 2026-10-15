@@ -680,13 +680,15 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   }
   // `allowCustom(question)` decides whether a free-text answer is offered.
   // `read()` returns the typed values; `answer()` the decision shape the
-  // service validates: {option}, {options} (multi-select) or {custom}.
+  // service validates: {option}, {options} (multi-select) or {custom}. Options
+  // are sent by index: the shown labels may be redacted, the original's are
+  // what the agent gets.
   function questionFields(questions, container, allowCustom = () => true) {
     return questions.map((question, index) => {
       const group = element('div', undefined, 'question'); group.append(element('label', question.question || question.header || 'Question'));
       const choices = [];
-      for (const option of question.options || []) {
-        const label = element('label', undefined, 'choice'); const input = element('input');
+      for (const [optionIndex, option] of (question.options || []).entries()) {
+        const label = element('label', undefined, 'choice'); const input = element('input'); input.dataset.index = String(optionIndex);
         input.type = question.multiSelect ? 'checkbox' : 'radio'; input.name = `question-${selectionEpoch}-${index}`; input.value = option.label;
         const text = element('span', option.label); if (option.description) text.append(element('small', option.description)); label.append(input, text); group.append(label); choices.push(input);
       }
@@ -694,7 +696,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       const custom = allowCustom(question); if (custom) group.append(free); container.append(group);
       const read = () => { const text = custom ? free.value.trim() : ''; return text ? [text] : choices.filter(c => c.checked).map(c => c.value); };
       return { question, read, answer() {
-        const text = custom ? free.value.trim() : ''; const picked = choices.filter(c => c.checked).map(c => c.value);
+        const text = custom ? free.value.trim() : ''; const picked = choices.filter(c => c.checked).map(c => Number(c.dataset.index));
         return text ? { custom: text } : question.multiSelect ? { options: picked } : { option: picked[0] };
       } };
     });
@@ -737,7 +739,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
         const result = codex
           ? { answers: Object.fromEntries(answers.map(a => [a.question.id, { answers: a.values }])) }
           : { behavior: 'allow', updatedInput: { ...params.input, answers: Object.fromEntries(answers.map(a => [a.question.question, a.values.join(', ')])) } };
-        const decision = { answers: Object.fromEntries(answers.map(a => [codex ? a.question.id : a.question.question, a.answer])) };
+        // Questions by position: their shown text may be redacted.
+        const decision = { answers: Object.fromEntries(answers.map((a, i) => [String(i), a.answer])) };
         await respond(key, result, decision);
       }, 'primary')));
     } else if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {

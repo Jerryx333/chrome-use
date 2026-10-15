@@ -669,14 +669,14 @@ test('question answers are sent as validated decisions, never as echoed input', 
   inputs.find(i => i.value === 'Bag').checked = true; inputs.find(i => i.value === 'Card').checked = true;
   claude.querySelectorAll('button').find(b => b.textContent === 'Send answers').fire('click'); await settle();
   const answered = f.calls.filter(call => call.operation === 'conversationRespond').map(call => call.params);
-  assert.deepEqual(answered[0], {conversationId:'a', requestId:'q', generation:1, requestRevision:2, decision:{answers:{'Which size?':{option:'Large'}, 'Extras?':{options:['Bag','Card']}}}});
+  assert.deepEqual(answered[0], {conversationId:'a', requestId:'q', generation:1, requestRevision:2, decision:{answers:{'0':{option:1}, '1':{options:[0,1]}}}});
   // Codex: free text only where the question allows it (q2 has no options).
   const codexInputs = codexCard.querySelectorAll('input');
   assert.equal(codexInputs.filter(i => i.placeholder === 'Your answer').length, 1);
   codexInputs.find(i => i.value === 'A').checked = true;
   codexInputs.find(i => i.placeholder === 'Your answer').value = 'Ada';
   codexCard.querySelectorAll('button').find(b => b.textContent === 'Send answers').fire('click'); await settle();
-  assert.deepEqual(f.calls.filter(call => call.operation === 'conversationRespond')[1].params.decision, {answers:{q1:{option:'A'}, q2:{custom:'Ada'}}});
+  assert.deepEqual(f.calls.filter(call => call.operation === 'conversationRespond')[1].params.decision, {answers:{'0':{option:0}, '1':{custom:'Ada'}}});
   f.panel.close();
 });
 
