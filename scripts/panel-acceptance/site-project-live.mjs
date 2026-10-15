@@ -32,6 +32,7 @@ const step = (name, data = {}) => { evidence.steps.push({ name, at: new Date().t
 const save = () => fs.writeFileSync(path.join(out, 'evidence.json'), JSON.stringify(evidence, null, 1));
 const check = (ok, message) => { if (!ok) { save(); throw new Error(message); } };
 
+let failState = async () => {};
 const rig = await startRig({ dir, work, hostBin: process.env.HOST_BIN, chrome: process.env.CHROME, extDir: process.env.EXT_DIR, sitePort: 8920, cdpPort: 9381, serviceEnv: { CODEX_HOME: codexHome } });
 evidence.chrome = rig.chromeVersion; evidence.extension = rig.extensionVersion;
 const A = rig.cdp, b = rig.browser;
@@ -48,6 +49,7 @@ try {
   await b.send('Target.closeTarget', { targetId: opener.targetId });
   await activate(rig, site);
   const panel = expression => A.evaluate(ps, expression);
+  failState = async () => { await shot('fail').catch(() => {}); evidence.failure = await panel(`({ notice: document.getElementById('notice').textContent, projectHost: document.getElementById('projectHost').innerHTML.slice(0, 1500), project: document.getElementById('project').value, selected: document.getElementById('conversation').value, page: document.getElementById('pageTitle').textContent })`).catch(e => String(e)); };
   const shot = async name => { const s = await b.send('Page.captureScreenshot', { format: 'png' }, ps); fs.writeFileSync(path.join(out, `${name}.png`), Buffer.from(s.data, 'base64')); };
   await waitFor(() => panel(`document.getElementById('pageTitle')?.textContent.length > 0 && !document.getElementById('projectChip').hidden`), { timeout: 20000, label: 'panel with page and project chip' });
   step('panel open', { page: await panel(`document.getElementById('pageTitle').textContent`) });
@@ -121,6 +123,10 @@ try {
   check(answer.outcome === 'completed' && answer.text.includes(word), 'the agent remembered the earlier turn');
   evidence.passed = true;
   console.log('[site-project] PASS');
+} catch (failure) {
+  evidence.error = String(failure.message || failure);
+  await failState();
+  throw failure;
 } finally {
   save();
   cleanup(rig);
