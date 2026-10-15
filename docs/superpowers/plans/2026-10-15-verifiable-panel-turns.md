@@ -25,6 +25,7 @@ into one release. Six capabilities ship together; none is staged for a later ver
 | P2-3 crash points and concurrent duplicate reports | Agreed. A capture verdict is now written last, after the artifact outcome; duplicate reports during ingest get `pending`. | 3.2, 3.3, 14.1 |
 | P2-4 pidfd kill and macOS proof | Agreed. Kill loops until the group is empty; the macOS loop test is observation only; proof comes from kernel source or the probe answers `unknown`. | 5.3, 5.4, risk 8 |
 | P2-5 naming | Agreed: `sentProjection`; the `sent` dispatched flag keeps its meaning. | 7.3 |
+| Fixture findings (step 1, `cli/src/agent_panel/fixtures/README.md`) | Claude drops all text blocks of an MCP result that has `structuredContent`: the actionId and every note now live in `structuredContent.chromeUseAction`, which chrome-use already returns. OpenCode runs MCP calls inside a codemode `execute` wrapper: a step is the wrapper, linked to several actionIds when they survive, otherwise unlinked; the lease still puts the evidence in the right turn. Pi provider failure ends `agent_settled {aborted: false}` after three errored retries: outcome follows the last assistant message. The Codex full-access approval bug is a prerequisite fix. | 3.2, 3.4, 4.4, 11, 13 steps 0 and 3 |
 
 ## Review response (seq 22)
 
@@ -359,9 +360,23 @@ New module `cli/src/panel_evidence.rs`, used by `cli/src/mcp.rs` only when
   retried once with the same `actionId`; the service replays its first answer (3.3). A failed
   report never fails the tool; the MCP appends "browser evidence was not recorded" so the
   transcript does not imply evidence exists.
-- Tool result: prepend a text block `chrome-use action <actionId>` as the first content block
-  and add `structuredContent.chromeUseAction = {actionId}`. First position survives any later
-  truncation in the adapters; the adapters extract it before `short()` anyway (3.4).
+- Tool result: the actionId lives in `structuredContent.chromeUseAction = {actionId, notes}`;
+  a text block `chrome-use action <actionId>` is also prepended as the first content block.
+  `structuredContent` is the carrier that every backend keeps, and the only one Claude keeps:
+  the fixtures show Claude 2.1.300 drops every text block of an MCP result that has
+  `structuredContent` and gives the model only `JSON.stringify(structuredContent)`
+  (`fixtures/README.md`, "actionId in the tool result"). chrome-use already returns
+  `structuredContent = {exitCode, stdout, stderr, response}` for every CLI-backed tool
+  (`tool_result_from_run`, `mcp.rs:2057-2077`), so today Claude reads the page through
+  `stdout`/`response` in that JSON, not through the pretty text block, and that stays as it is.
+  Decision: keep `structuredContent` and mirror into it everything this plan adds for the model.
+  Every note the MCP appends ("browser evidence was not recorded", "the requested location was
+  not written", the delivered path, a refused lease's reason) goes into
+  `chromeUseAction.notes` as well as the text block. Dropping `structuredContent` for Claude
+  was rejected: the MCP does not know which backend called it, and screenshot inlining
+  (`attach_screenshot_image`, `mcp.rs:1222-1235`) and existing MCP clients read it. Step 1
+  re-runs the Claude fixture with this exact result shape and checks that the tool result the
+  model sees contains `stdout`, `chromeUseAction.actionId` and the notes.
 - New tool arguments: optional `observe` on the acting tools listed in D3
   (`core_tools` / `extended_tools`, `mcp.rs:315-676`), mapped to `--observe`. Non-panel MCP
   clients see the same optional argument; behaviour without it is unchanged.
@@ -446,24 +461,45 @@ markers / `chromeUseAction.actionId` from the raw item, strip `image` blocks' `d
 `notice("tool", {completed, toolCallId, actionIds, item: short(item)})`. Extraction happens
 before redaction, so a known secret that happens to be a fragment of a UUID cannot break a link.
 
-- Codex, `backend.rs:407-408`: `item.id`; markers in `item.result.content` / `structuredContent`.
-- Claude, `backend.rs:471-472`: `tool_use.id` / `tool_result.tool_use_id`; markers in `content`.
-- Pi, `backend.rs:666-671`: `toolCallId`; markers in `result.content`.
-- OpenCode ACP, `acp.rs:132-149`: `toolCallId`; markers in `rawOutput` / `content`.
+Where each backend keeps the id (all observed in the step 1 fixtures):
+- Codex, `backend.rs:407-408`: `item.id`; `item.result.structuredContent.chromeUseAction`, with
+  the text marker in `item.result.content[0]` as a second source.
+- Claude, `backend.rs:471-472`: `tool_use.id` / `tool_result.tool_use_id`;
+  `tool_use_result.structuredContent.chromeUseAction` (a top-level field of the `user` line).
+  The text marker is not there whenever `structuredContent` is present, which for chrome-use is
+  always.
+- Pi, `backend.rs:666-671`: `toolCallId`; `result.structuredContent.structuredContent.chromeUseAction`
+  (Pi nests the whole MCP result), with `result.content[0]` as a second source.
+- OpenCode ACP, `acp.rs:132-149`: OpenCode 2.0.25 does not expose MCP tools directly. The model
+  calls one codemode tool, `execute`, whose script calls `tools.chrome_use.*`; the ACP
+  `toolCallId` is the wrapper's, one wrapper may make several MCP calls,
+  `rawOutput.metadata.toolCalls` lists `{tool, status}` per inner call with no ids and no
+  results, and the ACP `content` is whatever the script returned. So for OpenCode a step is the
+  wrapper, linked to `[actionId]`: the ids found in its `content` (as `chromeUseAction.actionId`
+  in returned structured JSON, or as text markers), at most as many as `metadata.toolCalls` lists
+  chrome_use calls. When the script did not return them, the wrapper stays unlinked. An inner
+  failure comes back as the wrapper's `status: completed` with `metadata.error: true`, so step
+  verdicts for OpenCode come only from the evidence reports, never from the wrapper's status.
 
-Only items whose tool name is a chrome_use tool are scanned
-(`^(?:mcp__chrome_use__)?chrome_use[_.][a-z_]+$`, mirroring `browserTool` in `panel-state.js`),
-so a shell transcript that happens to print a UUID cannot claim an action. An `actionId`
-claimed by two tool items keeps the first link; the second is recorded as `duplicateClaim`.
+Only chrome_use items are scanned, so a shell transcript that happens to print a UUID cannot
+claim an action: for Codex, Claude and Pi the tool name must match
+`^(?:mcp__chrome_use__)?chrome_use[_.][a-z_]+$` (mirroring `browserTool` in `panel-state.js`);
+for OpenCode, an `execute` wrapper whose `metadata.toolCalls` names a `chrome_use.*` tool. An id
+links only when a lease with that id exists in this conversation; an `actionId` claimed by two
+tool items keeps the first link and the second is recorded as `duplicateClaim`. Linking only
+attaches a step to its evidence for display. Which turn the evidence belongs to is decided by
+the lease (D1), so an unlinked wrapper's actions still appear under the right turn.
 
 Also in the adapters:
 - Codex `agentMessage`: pass `item.phase` through as `role` when the CLI emits it
   (`final_answer` → `final`, `commentary` → `commentary`); otherwise no role.
 - Claude `result` (`backend.rs:474`): when `result` is a string, emit
   `notice("textRole", {itemId: claude_message, role: "final", source: "claude.result"})`.
-- Compaction: Codex `contextCompaction` item and `thread/compacted`; Claude
-  `system` / `compact_boundary`; Pi `auto_compaction_end` → `notice("contextCompacted", {...})`.
-  OpenCode ACP: none.
+- Compaction, from what the fixtures showed: Codex `contextCompaction` item (`thread/compacted`
+  was not observed and is not relied on); Claude `system/compact_boundary` with
+  `compact_metadata.trigger`; Pi `compaction_end` with `reason` when not `aborted` and without
+  `errorMessage`; OpenCode `session_info_update` with
+  `_meta["opencode/compaction"].status == "completed"` → `notice("contextCompacted", {...})`.
 - `ready`: add `pgid`, `processStartTime` and `serviceSid` read right after spawn in `drive`
   (`backend.rs:224-228`; macOS `proc_pidinfo(PROC_PIDTBSDINFO)`, Linux `/proc/<pid>/stat`
   field 22, Windows `GetProcessTimes`; `serviceSid` is `getsid(0)`, the session the service
@@ -581,6 +617,11 @@ exists, `admitted` when only an `actionAdmitted` exists (the action may have run
 `unknown`. This covers Claude's several `tool_use` blocks in one message and Codex's parallel
 items when a stop lands mid-batch. The native CLI `batch` command is not reachable from the
 panel MCP surface, so it has no producer here.
+
+"Open chrome_use tool" for generation retirement (D1a) means: an open item whose name matches
+the chrome_use pattern (Codex, Claude, Pi), or any open OpenCode `execute` wrapper, because
+which MCP tools a wrapper calls is only known when it completes. Leases are counted too: a turn
+that completes with a lease still `Open` retires its generation, whatever the backend reported.
 
 ## 5. Control, takeover and recovery
 
@@ -1083,14 +1124,14 @@ shows "unknown" whenever an event lacks the field.
 |---|---|---|---|---|
 | Turn start/end per message | host | host | host | host |
 | Backend turn id | `turn/started` id | none (null) | none (null) | prompt request id |
-| Terminal outcome | `turn/completed.status` | `result.subtype`/`is_error` | `agent_settled` + `stopReason` | `stopReason` |
-| Tool call id | `item.id` | `tool_use.id` / `tool_use_id` | `toolCallId` | `toolCallId` |
-| Tool error flag | `status`/`error` | `is_error` | `isError` | `status: failed` |
+| Terminal outcome | `turn/completed.status` | `result.subtype`/`is_error` | `agent_settled` + the last assistant `stopReason` (a provider failure is three `stopReason: "error"` retries, then `agent_settled {aborted: false}`) | `stopReason` |
+| Tool call id | `item.id` | `tool_use.id` / `tool_use_id` | `toolCallId` | `toolCallId` of the codemode `execute` wrapper, which may hold several MCP calls |
+| Tool error flag | `status`/`error` | `is_error` | `isError` | wrapper `status: failed`; an inner MCP failure shows as `status: completed` with `metadata.error: true` |
 | actionId survives in tool result | observed: `item.result.content[0]` marker and `item.result.structuredContent` both kept | observed: marker text **dropped** when `structuredContent` is present (`tool_result.content` becomes its JSON; `tool_use_result.structuredContent` kept); marker kept in `content[0]` without it | observed: `result.content[0]` kept; whole MCP result under `result.structuredContent` | observed: model-dependent; MCP runs inside codemode `execute`, ACP `content` is the script's return value (`structuredContent` JSON when present), `rawOutput` has no result |
 | Browser target and effect | host (MCP side channel) | host | host | host |
 | Artifacts | host | host | host | host |
 | Final vs commentary text | `agentMessage.phase` observed (`commentary`, `final_answer`); else unknown | `result.result` → final | unknown | unknown |
-| Context compaction signal | `contextCompaction` item observed (`thread/compacted` not observed) | `system/compact_boundary` observed (`compact_metadata.trigger`) | `compaction_start`/`compaction_end` with `reason` observed (`auto_compaction_end` not observed) | unknown |
+| Context compaction signal | `contextCompaction` item observed (`thread/compacted` not observed) | `system/compact_boundary` observed (`compact_metadata.trigger`) | `compaction_start`/`compaction_end` with `reason` observed (`auto_compaction_end` not observed) | `session_info_update` `_meta["opencode/compaction"]` `started`/`completed` observed |
 | Approval requests | yes | yes (`can_use_tool`) | none (Pi never asks) | yes |
 | Approval resolution confirm | `serverRequest/resolved` | matching `tool_use_id` result | n/a | tool completion / prompt end |
 | Interrupt confirmation | `turn/completed interrupted` | `result` while stopping | `agent_settled aborted` | `stopReason cancelled` |
@@ -1098,9 +1139,10 @@ shows "unknown" whenever an event lacks the field.
 | Recording | host via `chrome_use_record` | same | same | same |
 | Exit confirmation | host process group / job | host | host | host |
 
-If the actionId does not survive for a backend, its browser evidence still appears in the turn
-(the report carries `messageId`) as "browser record not matched to a step", and steps show
-"no browser record". No adjacency matching.
+If the actionId does not survive for a backend, its browser evidence still appears in the right
+turn, because the action's lease (D1) names the message, as "browser record not matched to a
+step", and steps show "no browser record". For OpenCode a step is the `execute` wrapper and may
+link to several actions (3.4). No adjacency matching.
 
 ## 12. Files touched
 
@@ -1145,6 +1187,16 @@ Docs, per `AGENTS.md:20-29`, in the same tag as the feature:
 Each step lands with its unit tests; the release is cut only after section 14 passes on the
 build host.
 
+0. **Prerequisite: Codex full-access browser calls.** The fixtures found that a full-access
+   Codex conversation sends `approvalPolicy: "never"` but takes the sandbox from
+   `effective_access`, so with `toolAccess` set to `browserOnly` or `readFiles` Codex refuses
+   every chrome_use call ("MCP tool call requires approval, but approval policy is never";
+   `fixtures/README.md`, "Other findings"). The fixtures agent is fixing it separately: the
+   `chrome_use` server entry gets `default_tools_approval_mode: "approve"` under full access
+   (`codex_browser_server` in `backend.rs`), without widening shell or file access. It lands
+   before step 5, because no live check can produce Codex browser evidence without it. The
+   `tool_timeout_sec` from D1a rule 3 is added to that same server entry.
+
 1. **Protocol fixture capture on the build host** (`leo@192.168.0.190`): run each installed
    backend once with a chrome_use MCP that returns a marker block; save raw protocol lines as
    test fixtures under `cli/src/agent_panel/fixtures/`. Settles the *verify* cells of
@@ -1158,7 +1210,13 @@ build host.
    construction, stop-time approval rules. Everything after this writes through it. The
    existing `Store::event` tests (`conversation.rs:811-1057`) move to a test-only `Redacted`
    constructor.
-3. **Turn lifecycle**: `Engine::begin`, `turnStarted`, `turnEnded` from the message snapshot,
+3. **Turn lifecycle**: Pi's outcome follows the last assistant message: `failed` only when the
+   last assistant `message_end` before `agent_settled` has `stopReason: "error"`. The fixtures
+   show a provider failure as three `stopReason: "error"` retries and then
+   `agent_settled {aborted: false}`, which stays `failed`. Today `failure` is set by any error
+   `message_end` and is never cleared by a later successful one (`backend.rs:661-664`, `684-687`),
+   so a successful auto-retry would end `failed`; this step clears it on a non-error assistant
+   `message_end`. `Engine::begin`, `turnStarted`, `turnEnded` from the message snapshot,
    generation retirement and the `start()` change for retiring jobs, `toolCallId`, open tools, `batchInterrupted`, `emptyAnswer`, `continuation`, `control` in
    summary, `textRole`/`phase`.
 4. **Native stamping**: `_panelActionId`, `acting_target`, `actionContext` with provenance,
@@ -1246,7 +1304,15 @@ Rust, in the module that owns the rule:
 - Evidence: verdict and check derivation table (every rule in 3.2), timeout → possiblyExecuted
   for non-idempotent actions; duplicate lease refused; report failure leaves the tool result
   successful with the note; adapters extract actionIds from each backend fixture (step 1) and
-  ignore markers in non chrome_use items; image data stripped before `short()`.
+  ignore markers in non chrome_use items; Claude: the id comes from
+  `tool_use_result.structuredContent` when the text marker is absent, and the tool result the
+  model sees carries `stdout` and `chromeUseAction.notes`; Pi: the nested
+  `result.structuredContent.structuredContent`; OpenCode: one `execute` wrapper with two
+  chrome_use calls links both ids, a wrapper whose script returned no ids stays unlinked while
+  its leased evidence still shows under the turn, an id with no lease in this conversation is not
+  linked, and `status: completed` with `metadata.error: true` never reads as a successful step;
+  Pi: three errored retries then `agent_settled {aborted: false}` → `failed`, an errored attempt
+  followed by a successful one → `completed`; image data stripped before `short()`.
 - Native: `actionContext` present only with `_panelActionId`, no CDP traffic added (assert on
   the mock client's sent-command log), chromeTabId from `cb-tab-<id>` and null when launched,
   provenance `actionReply` for navigation, popup adoption and verified tab select and
