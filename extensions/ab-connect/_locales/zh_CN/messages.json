@@ -908,6 +908,9 @@
   "options_inspect_binding_linked": {
     "message": "由会话关联"
   },
+  "options_inspect_binding_project_only": {
+    "message": "仅项目：没有绑定 agent 会话"
+  },
   "options_inspect_bindings_empty": {
     "message": "还没有绑定任何网站。在某个网站上第一次点选时，会询问请求发到哪里。"
   },
@@ -915,7 +918,7 @@
     "message": "已绑定到项目的网站"
   },
   "options_inspect_bindings_hint": {
-    "message": "一个网站（可限定到某个路径）只发给一个 agent 会话。解除绑定后可以重新选择；会话也可以用 `chrome-use inspect link <url>` 认领网站。"
+    "message": "一个网站（可限定到某个路径）只发给一个 agent 会话。解除绑定后可以重新选择；会话也可以用 `chrome-use inspect link <url>` 认领网站。在该网站上新开的侧栏会话也会默认使用它的项目。"
   },
   "options_inspect_bindings_loading": {
     "message": "正在加载…"
@@ -1774,6 +1777,68 @@
         "content": "$1"
       }
     }
+  },
+  "panel_project_choose_prompt": {
+    "message": "为这个会话选择项目文件夹"
+  },
+  "panel_project_header": {
+    "message": "项目：$FOLDER$",
+    "placeholders": {
+      "folder": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_label": {
+    "message": "项目文件夹"
+  },
+  "panel_project_manual": {
+    "message": "文件夹路径"
+  },
+  "panel_project_manual_hint": {
+    "message": "这台电脑没有文件夹选择器，请输入文件夹的完整路径。"
+  },
+  "panel_project_other": {
+    "message": "其他…"
+  },
+  "panel_project_pi": {
+    "message": "Pi 只能在私有文件夹中工作。"
+  },
+  "panel_project_private": {
+    "message": "私有文件夹（默认）"
+  },
+  "panel_project_remember": {
+    "message": "以后在 $SITE$ 上都用这个项目吗？",
+    "placeholders": {
+      "site": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_remember_no": {
+    "message": "暂不"
+  },
+  "panel_project_remember_yes": {
+    "message": "记住"
+  },
+  "panel_project_remembered": {
+    "message": "$SITE$ 以后会用这个项目。",
+    "placeholders": {
+      "site": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_site_hint": {
+    "message": "$SITE$ 记住的项目",
+    "placeholders": {
+      "site": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_use": {
+    "message": "使用"
   },
   "panel_question": {
     "message": "问题"

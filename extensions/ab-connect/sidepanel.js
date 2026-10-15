@@ -4,6 +4,7 @@ import { renderMarkdown } from './markdown.js';
 import { t, messageMap, applyI18n } from './i18n.js';
 import { renderReplies, validReplies } from './inspect-replies.js';
 import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } from './resume-picker.js';
+import { createProjectChoice, folderLabel } from './project-picker.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -76,6 +77,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     onResumed: async resumed => { await list(); rememberAgent(conversations.find(c => c.id === resumed.id)?.agentId || preferredAgent); select(resumed.id); },
   });
   document.getElementById('resumeHost')?.append(resumePicker.container);
+  // The project folder a new conversation's agent works in.
+  const projectChip = document.getElementById('projectChip'), projectPath = document.getElementById('projectPath');
+  const projectChoice = createProjectChoice({
+    document, api, onError: error, select: document.getElementById('project'), host: document.getElementById('projectHost'),
+    supported: () => Boolean(panelSupport?.projectDirectory), canRemember: () => Boolean(panelSupport?.inspect),
+  });
+  function refreshProjects() { if (!selected && connected) void projectChoice.refresh(page).catch(() => {}); }
   let importedNode = null, importedCount = -1;
   async function openResume(query = '') {
     if (!panelSupport?.sessionResume) throw new Error(RESUME_TEXT.updateCli);
@@ -155,6 +163,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     nodes.scheduleSettings.hidden = !panelSupport?.schedules || settingsSection !== 'schedules';
     nodes.agentsView.dataset.section = settingsSection;
     nodes.newOptions.hidden = Boolean(selected); nodes.modelChip.hidden = Boolean(selected);
+    if (projectChip) projectChip.hidden = Boolean(selected) || !panelSupport?.projectDirectory;
+    if (projectPath) {
+      // Fixed at creation: shown, never edited.
+      projectPath.hidden = !conversation?.project;
+      projectPath.textContent = conversation?.project ? t('panel_project_header', folderLabel(conversation.project)) : '';
+      projectPath.title = conversation?.project || '';
+    }
     const optionAgent = conversation?.agentId || nodes.agent.value;
     const optionOwner = `${selected}:${optionAgent}`;
     if (optionsOwner !== optionOwner) {
@@ -266,6 +281,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     toolTail = null; toolGroups.clear(); clearTurnView(); importedNode = null; importedCount = -1;
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
+    if (!id) refreshProjects(); else projectChoice.hideQuestion();
     reportPresence();
     void poll().catch(error);
   }
@@ -957,7 +973,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
         if (panelSupport?.conversationOptions) options.options = readTurnOptions();
         if (nodes.executable.value.trim()) options.executable = nodes.executable.value.trim();
         if (panelSupport?.fullAccess) options.fullAccess = newFullAccess;
-        const result = await api('conversationCreate', options); rememberAgent(options.agentId); conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        const project = panelSupport?.projectDirectory ? projectChoice.value() : '';
+        if (project) options.project = project;
+        const result = await api('conversationCreate', options); rememberAgent(options.agentId);
+        if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); } conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
       }
       const id = selected, pending = { id: crypto.randomUUID(), text, direct };
       imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();
@@ -1010,7 +1029,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const [tab] = await tabs.query({ active: true, currentWindow: true });
     const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
     if (next?.tabId !== page?.tabId) pageDetached = false;
+    const moved = next?.url !== page?.url;
     page = next; renderPage(); renderConversationMenu();
+    if (moved) refreshProjects();
   }
   // New conversations use the remembered choice; an existing one switches in
   // place, and the service answers requests that are already waiting.
@@ -1388,7 +1409,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
   nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
   nodes.inspectAgent.addEventListener('click', () => void inspectModels(true).catch(error));
-  nodes.agent.addEventListener('change', () => { rememberAgent(nodes.agent.value); clearModels(); loadModels(); skillChoice = null; void loadSkills().catch(error); controls(); });
+  nodes.agent.addEventListener('change', () => { rememberAgent(nodes.agent.value); projectChoice.setAgent(nodes.agent.value); clearModels(); loadModels(); skillChoice = null; void loadSkills().catch(error); controls(); });
   nodes.executable.addEventListener('change', () => { clearModels(); loadModels(); });
   nodes.discover.addEventListener('click', () => void discover().catch(error));
   nodes.settings.addEventListener('click', () => runtime?.openOptionsPage?.());
@@ -1428,6 +1449,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       document.addEventListener?.('visibilitychange', reportPresence);
       void Promise.resolve(windows?.getCurrent?.()).then(current => { if (Number.isInteger(current?.id)) { windowId = current.id; connectPresence(); } }).catch(() => {});
       await refresh();
+      projectChoice.setAgent(nodes.agent.value); refreshProjects();
     } catch (failure) { error(failure); }
   }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }

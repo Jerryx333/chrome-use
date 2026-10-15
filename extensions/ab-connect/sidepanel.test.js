@@ -788,3 +788,37 @@ test('the conversation menu offers to resume a session only when the CLI can', a
     f.panel.close();
   }
 });
+
+// ---- project folder ------------------------------------------------------------
+test('a new conversation is created in the chosen project folder, shown in the header', async () => {
+  const created = [];
+  const made = { ...chat('p'), agentId: 'codex', project: '/work/app' };
+  const f = await fixture({
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, projectDirectory: 1, chatAgents: ['codex', 'claude'] } }),
+    conversationProjectList: () => ({ success: true, result: { schemaVersion: 1, projects: [{ path: '/work/app', sources: ['claude'] }] } }),
+    conversationCreate: params => { created.push(params); return { success: true, result: { conversation: made } }; },
+    conversationSend: () => ({ success: true, result: { conversation: made, message: { id: 'x', accepted: true, replayed: false } } }),
+  });
+  f.chats.push(made);
+  f.panel.select(''); await settle(); await settle();
+  assert.equal(f.nodes.get('projectChip').hidden, false);
+  const select = f.nodes.get('project');
+  select.value = '/work/app'; select.fire('change');
+  f.nodes.get('message').value = 'Fix the build'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(created[0].project, '/work/app');
+  assert.equal(f.nodes.get('projectPath').hidden, false);
+  assert.match(f.nodes.get('projectPath').textContent, /Project: app/);
+  assert.equal(f.nodes.get('projectPath').title, '/work/app');
+  f.panel.close();
+});
+
+test('an older CLI without project folders is never sent one', async () => {
+  const created = [];
+  const f = await fixture({ conversationCreate: params => { created.push(params); return { success: true, result: { conversation: chat('n') } }; }, conversationSend: () => ({ success: true, result: { conversation: chat('n'), message: { id: 'x', accepted: true, replayed: false } } }) });
+  f.panel.select(''); await settle();
+  assert.equal(f.nodes.get('projectChip').hidden, true);
+  assert.ok(!f.calls.some(c => c.operation === 'conversationProjectList'));
+  f.nodes.get('message').value = 'Hello'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(created[0].project, undefined);
+  f.panel.close();
+});

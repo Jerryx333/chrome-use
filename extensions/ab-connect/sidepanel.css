@@ -328,3 +328,11 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 .imported-message .content { white-space:pre-wrap; overflow-wrap:anywhere; }
 .imported-message.assistant .content { white-space:normal; }
 .resume-picker .resume-head select { width:auto; max-width:40%; }
+/* The project folder: a chip when creating, a label once fixed. */
+.chip.project { max-width:170px; min-width:0; }
+.chip.project select { width:100%; text-overflow:ellipsis; color:var(--muted); }
+.project-path { color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:45%; }
+.project-host > div { margin:8px 12px 0; padding:8px 10px; border:1px solid var(--line); border-radius:10px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12px; }
+.project-host > div[hidden] { display:none; }
+.project-host .project-manual input { flex:1; min-width:160px; }
+.project-host .project-manual .hint { flex-basis:100%; margin:0; }

@@ -175,7 +175,7 @@ async function renderBindings() {
       const name = document.createElement('div'); name.className = 'name'; name.textContent = scopeText(binding.origin, binding.pathScope)
       const detail = document.createElement('div'); detail.className = 'hint'
       const consents = Object.entries(binding.consents || {}).filter(([, v]) => v).map(([k]) => k === 'plugin' ? t('options_inspect_consent_dev') : t('options_inspect_consent_test'))
-      detail.textContent = [binding.root, binding.sessionLabel, binding.source === 'linked' ? t('options_inspect_binding_linked') : '', consents.length ? t('options_inspect_binding_consented', consents.join(', ')) : ''].filter(Boolean).join(' · ')
+      detail.textContent = [binding.root, binding.sessionId ? binding.sessionLabel : t('options_inspect_binding_project_only'), binding.source === 'linked' ? t('options_inspect_binding_linked') : '', consents.length ? t('options_inspect_binding_consented', consents.join(', ')) : ''].filter(Boolean).join(' · ')
       text.append(name, detail); row.append(text)
       for (const kind of ['plugin', 'testEnv']) {
         if (!binding.consents?.[kind]) continue

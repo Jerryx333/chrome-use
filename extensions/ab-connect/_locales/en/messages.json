@@ -908,6 +908,9 @@
   "options_inspect_binding_linked": {
     "message": "linked by the session"
   },
+  "options_inspect_binding_project_only": {
+    "message": "project only: no agent session"
+  },
   "options_inspect_bindings_empty": {
     "message": "No site is bound yet. The first pick on a site asks where its requests go."
   },
@@ -915,7 +918,7 @@
     "message": "Sites bound to projects"
   },
   "options_inspect_bindings_hint": {
-    "message": "A site (optionally limited to a path) sends to one agent session. Unbind to choose again; a session can also claim a site with `chrome-use inspect link <url>`."
+    "message": "A site (optionally limited to a path) sends to one agent session. Unbind to choose again; a session can also claim a site with `chrome-use inspect link <url>`. New side-panel conversations on the site start in its project."
   },
   "options_inspect_bindings_loading": {
     "message": "Loading…"
@@ -1774,6 +1777,68 @@
         "content": "$1"
       }
     }
+  },
+  "panel_project_choose_prompt": {
+    "message": "Choose the project folder for this conversation"
+  },
+  "panel_project_header": {
+    "message": "Project: $FOLDER$",
+    "placeholders": {
+      "folder": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_label": {
+    "message": "Project folder"
+  },
+  "panel_project_manual": {
+    "message": "Folder path"
+  },
+  "panel_project_manual_hint": {
+    "message": "This computer has no folder picker. Type the folder's full path."
+  },
+  "panel_project_other": {
+    "message": "Other…"
+  },
+  "panel_project_pi": {
+    "message": "Pi works in its private folder."
+  },
+  "panel_project_private": {
+    "message": "Private folder (default)"
+  },
+  "panel_project_remember": {
+    "message": "Use this project for $SITE$ from now on?",
+    "placeholders": {
+      "site": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_remember_no": {
+    "message": "Not now"
+  },
+  "panel_project_remember_yes": {
+    "message": "Remember"
+  },
+  "panel_project_remembered": {
+    "message": "$SITE$ now uses this project.",
+    "placeholders": {
+      "site": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_site_hint": {
+    "message": "Remembered for $SITE$",
+    "placeholders": {
+      "site": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_use": {
+    "message": "Use"
   },
   "panel_question": {
     "message": "Question"

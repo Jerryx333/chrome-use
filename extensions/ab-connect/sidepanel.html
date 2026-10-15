@@ -34,7 +34,8 @@
       <div class="actions"><button id="confirmDelete" class="danger" type="button" data-i18n="sidepanel_delete">Delete</button><button id="cancelDelete" class="quiet" type="button" data-i18n="sidepanel_keep">Keep</button></div>
     </section>
     <div id="resumeHost"></div>
-    <div id="status" class="conversation-status"><span id="phase" data-i18n="sidepanel_phase_ready">Ready</span><span id="control" class="control" hidden></span><span id="effectiveModel"></span></div>
+    <div id="projectHost" class="project-host"></div>
+    <div id="status" class="conversation-status"><span id="phase" data-i18n="sidepanel_phase_ready">Ready</span><span id="control" class="control" hidden></span><span id="projectPath" class="project-path" hidden></span><span id="effectiveModel"></span></div>
     <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript" data-i18n-aria-label="sidepanel_transcript">
       <div id="empty" class="empty">
         <img src="icons/icon48.png" width="40" height="40" alt="">
@@ -78,6 +79,7 @@
               </div>
             </details>
             <label class="chip"><span class="sr-only" data-i18n="sidepanel_agent">Agent</span><select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
+            <label id="projectChip" class="chip project" hidden><span class="sr-only" data-i18n="panel_project_label">Project folder</span><select id="project"></select></label>
           </span>
           <button id="access" class="access" type="button" hidden aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg><span id="accessLabel" data-i18n="sidepanel_full_access">Full access</span></button>
           <details id="turnOptions" class="more" hidden>

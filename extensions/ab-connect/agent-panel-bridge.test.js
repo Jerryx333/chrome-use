@@ -339,3 +339,25 @@ test('session listing is a read; an unanswered resume is unconfirmed', async () 
   await assert.rejects(listing, /did not answer/);
   await assert.rejects(resume, /unconfirmed/);
 });
+
+test('project folder replies must match what was asked', async () => {
+  for (const [operation, params, result, valid] of [
+    ['conversationProjectList', {}, { projects: [{ path: '/w', sources: ['panel'] }] }, true],
+    ['conversationProjectList', {}, { projects: [{ path: 3, sources: [] }] }, false],
+    ['conversationProjectChoose', {}, { path: '/w' }, true],
+    ['conversationProjectChoose', {}, { cancelled: true }, true],
+    ['conversationProjectChoose', {}, { unavailable: true }, true],
+    ['conversationProjectChoose', {}, {}, false],
+    ['conversationCreate', { agentId: 'codex', project: '/w' }, { conversation: { id: 'c', agentId: 'codex', phase: 'idle', project: '/w' } }, true],
+    ['conversationCreate', { agentId: 'codex', project: '/w' }, { conversation: { id: 'c', agentId: 'codex', phase: 'idle' } }, false],
+    ['inspectProject', { origin: 'http://a', pagePath: '/' }, { binding: null }, true],
+    ['inspectProject', { origin: 'http://a', pagePath: '/' }, { binding: { root: '/w', fingerprint: 'f', exists: true } }, true],
+    ['inspectProject', { origin: 'http://a', pagePath: '/' }, { binding: { root: '/w' } }, false],
+    ['inspectProjectBind', { origin: 'http://a', root: '/w' }, { binding: { origin: 'http://a', root: '/w' } }, true],
+  ]) {
+    const { bridge, messages } = setup();
+    const reply = bridge.request(operation, params);
+    bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, ...result } });
+    if (valid) await reply; else await assert.rejects(reply, /Malformed/, `${operation} ${JSON.stringify(result)}`);
+  }
+});
