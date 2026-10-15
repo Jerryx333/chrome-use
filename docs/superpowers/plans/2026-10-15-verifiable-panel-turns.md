@@ -15,6 +15,17 @@ into one release. Six capabilities ship together; none is staged for a later ver
 5. Privacy minimization before anything reaches the journal.
 6. Long-task progress and evidence continuity (`progressStalled`, `batchInterrupted`, `turnSummary`, `contextCompacted`).
 
+## Review response (seq 24)
+
+| review point | verdict | where |
+|---|---|---|
+| P1 a delayed `agentActionBegin` from turn A is admitted under turn B | Agreed. Begin had no turn identity of its own and took `chat.active` at processing time. Fixed by making the generation a turn epoch: the MCP sends the generation it was spawned with (`CHROME_USE_PANEL_GENERATION`, set per process in `drive`, `backend.rs:97`), every turn that ends other than cleanly retires its generation and the next message gets a new process, and Begin carries `notAfter`. The same rules bind `agentTaskAssess` and `agentRecordingAuthorize`. One code fact the design has to handle: `start()` hands the next message to any existing job (`service.rs:1585-1593`), so a retired job must go through the existing replace path (`service.rs:1556-1583`) instead. One case where a turn can complete while an MCP call still runs: the backend's own MCP client timeout. The plan sets it above the Begin window and falls back to retiring after every turn where that cannot be set. | D1, 3.2, 3.3, 4.1, 4.3, 6.4, 14.1, 14.2.20, risk 13 |
+| P2-1 projection fallback weakens different-payload rejection | Agreed. The projection match applies only when the retried message is already its own canonical projection. | 7.2, 14.1 |
+| P2-2 per-lease output silently replaces the caller's path | Agreed. The capture and the delivery to the requested path are two effects, recorded and checked separately. | 6.2, 2.2, 14.1 |
+| P2-3 crash points and concurrent duplicate reports | Agreed. A capture verdict is now written last, after the artifact outcome; duplicate reports during ingest get `pending`. | 3.3, 6.1, 14.1 |
+| P2-4 pidfd kill and macOS proof | Agreed. Kill loops until the group is empty; the macOS loop test is observation only; proof comes from kernel source or the probe answers `unknown`. | 5.3, 5.4, risk 8 |
+| P2-5 naming | Agreed: `sentProjection`; the `sent` dispatched flag keeps its meaning. | 7.3 |
+
 ## Review response (seq 22)
 
 Every point was checked against the code on the branch. Two points are partly wrong in their

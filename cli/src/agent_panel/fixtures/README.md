@@ -34,7 +34,8 @@ capture-machine catalogs (Claude commands/skills/plugins/agents/models, the
 Codex `config/read` reply, ACP model option lists) with a placeholder, and
 redacts the account email, host name, Codex installation id and credit balance,
 and home or scratch paths (`/Users/USER`, `/WORK`, `/CAPTURE`). Everything else
-is byte-for-byte what the backend wrote.
+is what the backend wrote, re-serialized by `JSON.stringify` (same values; escapes and key
+spacing may differ from the raw bytes).
 
 ## Versions and hosts
 
@@ -108,6 +109,10 @@ image is kept and the JSON replaces the marker text block. Declaring an
 `structuredContent` (`claude-tool-marker-no-structured.jsonl`), `content[0].text`
 is the marker and the page text reaches the model. So for Claude, a chrome-use
 tool that returns `structuredContent` hides its text content from the model.
+chrome-use already returns `structuredContent` today (`cli/src/mcp.rs`, e.g. the
+`response.path` of screenshots), so Claude already sees only that JSON. An actionId
+that must reach Claude has to be inside `structuredContent`. A text-only marker
+would be lost there.
 
 OpenCode 2.0.25 does not expose MCP tools directly. The model calls one
 codemode tool, `execute` (`kind: other`), whose `rawInput.code` is JavaScript
