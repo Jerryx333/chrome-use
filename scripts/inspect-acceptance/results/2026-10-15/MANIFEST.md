@@ -19,4 +19,10 @@ Files:
 - `stealth-v0557-zip.json`, `timing-v0557-zip.json`: the 0.5.57 zip (key re-added for the stable id); worker and relay report 0.5.57; static-id probes indistinguishable from a non-existent extension; relay stealth bench passed. Limited observations on CfT 155, not a guarantee.
 - `real-ocs-link.json`: `inspect link` run inside a live Claude Code session with the real ocs, then a delivery quoting the bound fingerprint; the session received it; same id again returned duplicate.
 
+- `chain-results.json` (driver in `chain/`): the whole path in one run with nothing stubbed: released v1.5.214 host, 0.5.57 zip with its unmodified manifest in headed Chrome for Testing 152, the real Alt+Shift+C keystroke, a pick, the activeTab screenshot, Send, the real ocs, delivered to the live session that ran `inspect link`. Run once on the maintainer's machine with the owner's approval, own profile and HOME.
+- `stealth-v0557-chrome-stable.json`: branded Google Chrome 155.0.8059.41, the 0.5.57 zip installed through chrome://extensions Load unpacked (see `branded/`), port launch: relay stealth bench all passed (sannysoft, creepjs 0% headless, incolumitas, browserscan, worker languages, Cloudflare managed challenge, Turnstile), static-id probes indistinguishable, no DOM marker. Limited observations, not a guarantee.
+- `launch-control.json`: why the earlier branded run over the CDP pipe failed: the pipe launch alone sets `navigator.webdriver` with no extension loaded; a port launch does not.
+
+Windows: covered by CI only (owner's decision); no run on a Windows machine.
+
 Fake ocs and host_permissions are used in the headless scenarios; real ocs and the real shortcut are covered by the last two items separately, not in one combined run.

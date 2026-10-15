@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createHash } from 'node:crypto';
-import { launch, launchPipe, api, waitFor, sleep } from './lib.mjs';
+import { launch, api, waitFor, sleep } from './lib.mjs';
 // Usage: node rig.mjs <unpacked extension dir> <label>
 // env: CHROME (Chrome for Testing binary), HOST_BIN (chrome-use binary),
 //      STEALTH_BENCH (defaults to ../stealth-bench.sh in this repo).
@@ -28,21 +28,21 @@ function treeHash(root) {
 const dir = path.dirname(new URL(import.meta.url).pathname);
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stealth-home-'));
 const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'inspect-accept-stealth-'));
-fs.mkdirSync(path.join(ud, 'NativeMessagingHosts'));
+// PROFILE: a copy of a profile that already has extDir installed (branded
+// Chrome, see ui-install.md); otherwise the extension is loaded by flag.
+if (process.env.PROFILE) fs.cpSync(process.env.PROFILE, ud, { recursive: true });
+fs.mkdirSync(path.join(ud, 'NativeMessagingHosts'), { recursive: true });
 const nm = path.join(dir, 'nm-host-' + label + '.sh');
 fs.writeFileSync(nm, `#!/bin/sh\nexport HOME="${home}"\nexec "${process.env.HOST_BIN}" __nm-host "$@"\n`, { mode: 0o755 });
 fs.writeFileSync(path.join(ud, 'NativeMessagingHosts', 'com.agent_browser.connect.json'), JSON.stringify({ name: 'com.agent_browser.connect', description: 'x', path: nm, type: 'stdio', allowed_origins: ['chrome-extension://ciiljdlhdpfckdcfkphgmfalanpdejep/'] }));
 const server = http.createServer((q, r) => { r.setHeader('content-type', 'text/html'); r.end('<!doctype html><title>probe</title><body>probe</body>'); }).listen(8896, '127.0.0.1');
-// PIPE=1: branded Chrome, extension loaded through CDP (see launchPipe).
-const b = process.env.PIPE
-  ? await launchPipe({ chrome: process.env.CHROME, userDataDir: ud })
-  : await launch({ chrome: process.env.CHROME, port: 9360, userDataDir: ud, args: [`--load-extension=${extDir}`, `--disable-extensions-except=${extDir}`] });
-if (process.env.PIPE) {
-  const loaded = await b.send('Extensions.loadUnpacked', { path: extDir });
-  if (loaded.id !== 'ciiljdlhdpfckdcfkphgmfalanpdejep') throw new Error('unexpected extension id ' + loaded.id);
-}
+// Branded Chrome ignores --load-extension, and loading through the CDP pipe
+// (Extensions.loadUnpacked) is no substitute for stealth runs: the pipe alone
+// sets navigator.webdriver, with or without any extension. So branded runs use
+// a profile with the extension installed through chrome://extensions.
+const b = await launch({ chrome: process.env.CHROME, port: 9360, userDataDir: ud, args: process.env.PROFILE ? [] : [`--load-extension=${extDir}`, `--disable-extensions-except=${extDir}`] });
 const A = api(b);
-const out = { label, chrome: b.version, transport: process.env.PIPE ? 'pipe+Extensions.loadUnpacked' : 'port+--load-extension', extensionVersion: JSON.parse(fs.readFileSync(path.join(extDir, 'manifest.json'), 'utf8')).version, extensionTree: treeHash(extDir), zipSha256: process.env.ZIP_SHA256 || null, host: process.env.HOST_BIN };
+const out = { label, chrome: b.version, transport: process.env.PROFILE ? 'port, extension installed via chrome://extensions Load unpacked' : 'port+--load-extension', extensionVersion: JSON.parse(fs.readFileSync(path.join(extDir, 'manifest.json'), 'utf8')).version, extensionTree: treeHash(extDir), zipSha256: process.env.ZIP_SHA256 || null, host: process.env.HOST_BIN };
 try {
   await waitFor(() => fs.existsSync(path.join(home, '.chrome-use', 'relay-cdp-url')), { timeout: 30000, label: 'relay up' });
   // The relay must belong to the extension this run loaded.
