@@ -33,9 +33,14 @@
 //! registration still shows up as `credentialAdded` and stops the login.
 //!
 //! Restoring is by identity, never by source text: a guard installed through
-//! CDP is the very object whose handle we kept; one the new-document script
-//! made carries this install's random key on its handler, which the page can
-//! neither read nor guess. A proxy that only looks like ours is left alone.
+//! CDP is the very object whose handle we kept, and every guard carries this
+//! install's random key on its handler, which the page can neither read nor
+//! guess. A proxy that only looks like ours is left alone. The documents are
+//! searched through CDP alone, never by calling a function the page could
+//! have replaced since; where the page replaced what the search goes through
+//! (`navigator`, its `credentials`, `CredentialsContainer`), or hid `create`
+//! under too many proxies, the restore reports a guard may be left rather
+//! than calling the document clean.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,10 +53,10 @@ use super::element::GroupRelease;
 /// Object group of every handle the guard holds or uses.
 pub(super) const GROUP: &str = "chrome-use-passkey-guard";
 
-/// The guard installer, as a function of the handler key (`null` for a
-/// guard installed through CDP, which is known by its handle). Returns
-/// `[prototype, instance, prototype guard, instance guard or null]`, or null
-/// when `create` could not be guarded.
+/// The guard installer, as a function of the install's key, which every
+/// guard's handler carries. Returns `[prototype, instance, prototype guard,
+/// instance guard or null]`, or null, with nothing left replaced, when
+/// `create` could not be guarded.
 const INSTALLER: &str = r#"function (key) {
     'use strict';
     const P = Proxy, O = Object, proto = O.getPrototypeOf, own = O.getOwnPropertyDescriptor, define = O.defineProperty;
@@ -63,29 +68,33 @@ const INSTALLER: &str = r#"function (key) {
     if (!d || typeof d.value !== 'function') return null;
     const o = own(c, 'create');
     if (o && typeof o.value !== 'function') return null;
+    // All or nothing: a value that cannot be replaced is found before
+    // anything is, and a replacement that fails takes the others back.
+    const settable = (x) => x.writable || x.configurable;
+    if (!settable(d) || (o && !settable(o))) return null;
     const wrap = (f) => {
         const h = { __proto__: null, apply() { return reject(new E(msg, 'NotAllowedError')); } };
-        if (key) h[key] = 0;
+        h[key] = 0;
         return new P(f, h);
     };
     const gp = wrap(d.value), gc = o ? wrap(o.value) : null;
     try {
         define(p, 'create', { __proto__: null, ...d, value: gp });
         if (o) define(c, 'create', { __proto__: null, ...o, value: gc });
-    } catch (e) {
-        return null;
-    }
-    // Only when the guards really replaced create().
-    if (own(p, 'create').value !== gp || (o && own(c, 'create').value !== gc)) return null;
-    return [p, c, gp, gc];
+        // Only when the guards really replaced create().
+        if (own(p, 'create').value === gp && (!o || own(c, 'create').value === gc)) return [p, c, gp, gc];
+    } catch (e) {}
+    try { define(p, 'create', { __proto__: null, ...d }); } catch (e) {}
+    if (o) try { define(c, 'create', { __proto__: null, ...o }); } catch (e) {}
+    return null;
 }"#;
 
-/// The new-document script: the installer, keyed.
+/// The new-document script: the installer with the install's key.
 pub(super) fn no_create_js(key: &str) -> String {
     format!("({INSTALLER})({});", Value::String(key.to_string()))
 }
 
-/// A fresh key for one install. Only the new-document script carries it.
+/// A fresh key for one install.
 pub(super) fn new_key() -> String {
     format!("k{}", uuid::Uuid::new_v4().simple())
 }
@@ -174,14 +183,27 @@ fn sessions(page: &str, iframes: &HashMap<String, String>, extra: &[&str]) -> Ve
 }
 
 /// The frames whose documents live in `session`: its root, then the
-/// same-process children (out-of-process ones are their own sessions).
-async fn frames(client: &CdpClient, session: &str) -> Result<Vec<String>, String> {
+/// same-process children (out-of-process ones are their own sessions), each
+/// with whether Chrome counts it a secure context (the only kind that has
+/// `navigator.credentials`).
+async fn frames(client: &CdpClient, session: &str) -> Result<Vec<(String, bool)>, String> {
+    fn walk(node: &Value, out: &mut Vec<(String, bool)>) {
+        if let Some(id) = node["frame"]["id"].as_str() {
+            let secure = node["frame"]["secureContextType"]
+                .as_str()
+                .is_none_or(|t| t.starts_with("Secure"));
+            out.push((id.to_string(), secure));
+        }
+        for child in node["childFrames"].as_array().into_iter().flatten() {
+            walk(child, out);
+        }
+    }
     let tree = client
         .send_command_no_params("Page.getFrameTree", Some(session))
         .await?;
     let mut all = Vec::new();
-    super::element::flatten_frame_tree(&tree["frameTree"], true, &mut all);
-    Ok(all.into_iter().map(|(id, _, _)| id).collect())
+    walk(&tree["frameTree"], &mut all);
+    Ok(all)
 }
 
 /// Run `function` in the main world of `frame` (`root`: the session's own
@@ -307,10 +329,16 @@ pub(super) async fn install(
         let page = session == page_session;
         if !page {
             // Without the Page domain on, a frame target never runs its
-            // new-document scripts (the page session has it on already).
-            let _ = client
+            // new-document scripts (the page session has it on already), so
+            // a frame where it fails is not guarded.
+            match client
                 .send_command_no_params("Page.enable", Some(&session))
-                .await;
+                .await
+            {
+                Ok(_) => {}
+                Err(e) if gone(&e) => continue,
+                Err(e) => return Err(format!("frame session {session}: Page.enable: {e}")),
+            }
         }
         match client
             .send_command(
@@ -334,17 +362,18 @@ pub(super) async fn install(
             Err(e) if !page && gone(&e) => continue,
             Err(e) => return Err(e),
         };
-        for (i, frame) in list.iter().enumerate() {
+        for (i, (frame, _)) in list.iter().enumerate() {
             let root = i == 0;
-            let r = match call_in_frame(client, &session, frame, root, INSTALLER, json!([null]))
-                .await
-            {
-                Ok(Some(r)) => r,
-                // Out of process (its own session), or gone.
-                Ok(None) => continue,
-                Err(e) if gone(&e) && !(page && root) => continue,
-                Err(e) => return Err(format!("frame {frame}: {e}")),
-            };
+            let r =
+                match call_in_frame(client, &session, frame, root, INSTALLER, json!([guard.key]))
+                    .await
+                {
+                    Ok(Some(r)) => r,
+                    // Out of process (its own session), or gone.
+                    Ok(None) => continue,
+                    Err(e) if gone(&e) && !(page && root) => continue,
+                    Err(e) => return Err(format!("frame {frame}: {e}")),
+                };
             let Some(array) = object_id(&r) else {
                 return Err(format!("frame {frame}: create() could not be guarded"));
             };
@@ -467,8 +496,8 @@ pub(super) async fn restore(
                 continue;
             }
         };
-        for (n, frame) in list.iter().enumerate() {
-            let out = sweep_frame(client, session, frame, n == 0, &guard.key).await;
+        for (n, (frame, secure)) in list.iter().enumerate() {
+            let out = sweep_frame(client, session, frame, n == 0, *secure, &guard.key).await;
             match report.iter_mut().find(|(f, _)| f == frame) {
                 Some(seen) => seen.1 = merge(std::mem::replace(&mut seen.1, Outcome::Clean), out),
                 None => report.push((frame.clone(), out)),
@@ -497,25 +526,21 @@ async fn sweep_frame(
     session: &str,
     frame: &str,
     root: bool,
+    secure: bool,
     key: &str,
 ) -> Outcome {
-    const HOLDERS: &str = "function () { const c = navigator.credentials; return c ? [Object.getPrototypeOf(c), c] : null; }";
-    let r = match call_in_frame(client, session, frame, root, HOLDERS, json!([])).await {
-        Ok(Some(r)) => r,
+    // Nothing to guard where there is no `navigator.credentials`.
+    if !secure {
+        return Outcome::Clean;
+    }
+    let holders = match holders(client, session, frame, root).await {
+        Ok(Some(h)) => h,
         Ok(None) => return Outcome::Clean,
         Err(e) if gone(&e) => return Outcome::Gone,
         Err(e) => return Outcome::Failed(e),
     };
-    let Some(array) = object_id(&r) else {
-        return Outcome::Clean;
-    };
-    let holders = match elements(client, session, &array, 2).await {
-        Ok(h) => h,
-        Err(e) if gone(&e) => return Outcome::Gone,
-        Err(e) => return Outcome::Failed(e),
-    };
     let mut out = Outcome::Clean;
-    for holder in holders.into_iter().flatten() {
+    for holder in holders {
         match restore_slot(client, session, &holder, &[], key).await {
             Ok(true) => out = Outcome::Restored,
             Ok(false) => {}
@@ -526,6 +551,141 @@ async fn sweep_frame(
     out
 }
 
+/// Own properties of `object` through CDP (no getter of the page's runs).
+async fn own_props(
+    client: &CdpClient,
+    session: &str,
+    object: &str,
+    accessors_only: bool,
+) -> Result<Value, String> {
+    client
+        .send_command(
+            "Runtime.getProperties",
+            Some(json!({
+                "objectId": object,
+                "ownProperties": true,
+                "accessorPropertiesOnly": accessors_only,
+            })),
+            Some(session),
+        )
+        .await
+}
+
+fn prop<'a>(props: &'a Value, name: &str) -> Option<&'a Value> {
+    props["result"]
+        .as_array()
+        .and_then(|a| a.iter().find(|p| p["name"] == name))
+}
+
+fn internal(props: &Value, name: &str) -> Option<String> {
+    props["internalProperties"]
+        .as_array()
+        .and_then(|a| a.iter().find(|p| p["name"] == name))
+        .and_then(|p| p["value"]["objectId"].as_str().map(str::to_string))
+}
+
+/// The objects of a secure document a guard can be on, found without
+/// calling anything the page can replace (round 8: a page that swapped
+/// `Object.getPrototypeOf` after the install hid them): the global object
+/// from a function of our own, `navigator` and `CredentialsContainer` as
+/// Chrome's own values on it, `navigator.credentials` through Chrome's own
+/// getter, and the `[[Prototype]]`s from CDP. Returns
+/// `CredentialsContainer.prototype` (by the interface, and the instance's
+/// `[[Prototype]]` in case the page changed it) and the instance; Ok(None)
+/// when the frame has no document here. Err when the page replaced one of
+/// them, since then a guard may be where we cannot look.
+async fn holders(
+    client: &CdpClient,
+    session: &str,
+    frame: &str,
+    root: bool,
+) -> Result<Option<Vec<String>>, String> {
+    const GLOBAL: &str = "function () { return (function () { return this; })(); }";
+    let replaced = |what: &str| {
+        format!(
+            "the page replaced {what}, so a create() guard there cannot be looked for; \
+             reload the page to get the original back"
+        )
+    };
+    let Some(r) = call_in_frame(client, session, frame, root, GLOBAL, json!([])).await? else {
+        return Ok(None);
+    };
+    let Some(global) = object_id(&r) else {
+        return Ok(None);
+    };
+    let globals = own_props(client, session, &global, false).await?;
+    // A value means Chrome's own (a getter of the page's has no value, and
+    // a data property of the page's is no platform object or a proxy).
+    let native = |p: Option<&Value>, class: &str, description: Option<&str>| {
+        p.filter(|p| {
+            p["value"]["subtype"] != "proxy"
+                && p["value"]["className"] == class
+                && description.is_none_or(|d| p["value"]["description"] == d)
+        })
+        .and_then(|p| p["value"]["objectId"].as_str().map(str::to_string))
+    };
+    let Some(navigator) = native(prop(&globals, "navigator"), "Navigator", None) else {
+        return Err(replaced("navigator"));
+    };
+    let Some(interface) = native(
+        prop(&globals, "CredentialsContainer"),
+        "Function",
+        Some("function CredentialsContainer() { [native code] }"),
+    ) else {
+        return Err(replaced("CredentialsContainer"));
+    };
+    // `prototype` of an interface can be neither written nor redefined.
+    let Some(prototype) = prop(
+        &own_props(client, session, &interface, false).await?,
+        "prototype",
+    )
+    .and_then(|p| p["value"]["objectId"].as_str().map(str::to_string)) else {
+        return Err(replaced("CredentialsContainer"));
+    };
+    let nav = own_props(client, session, &navigator, false).await?;
+    if prop(&nav, "credentials").is_some() {
+        return Err(replaced("navigator.credentials"));
+    }
+    let Some(nav_proto) = internal(&nav, "[[Prototype]]") else {
+        return Err(replaced("navigator"));
+    };
+    let getter = own_props(client, session, &nav_proto, true).await?;
+    let native_getter = prop(&getter, "credentials").is_some_and(|p| {
+        p["get"]["subtype"] != "proxy"
+            && p["get"]["description"] == "function get credentials() { [native code] }"
+    });
+    if !native_getter {
+        return Err(replaced("navigator.credentials"));
+    }
+    // Only Chrome's getter runs here: there is no own `credentials`.
+    let r = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": navigator,
+                "functionDeclaration": "function () { return this.credentials; }",
+                "objectGroup": GROUP,
+            })),
+            Some(session),
+        )
+        .await?;
+    if let Some(e) = threw(&r) {
+        return Err(format!("{}: {e}", replaced("navigator")));
+    }
+    let Some(instance) = object_id(&r) else {
+        return Err(replaced("navigator.credentials"));
+    };
+    let mut out = vec![prototype];
+    if let Some(p) = internal(
+        &own_props(client, session, &instance, false).await?,
+        "[[Prototype]]",
+    ) {
+        out.push(p);
+    }
+    out.push(instance);
+    Ok(Some(out))
+}
+
 /// The current own data value of `create` on `holder`, read through CDP
 /// (no getter, no page code).
 async fn own_create(
@@ -533,18 +693,8 @@ async fn own_create(
     session: &str,
     holder: &str,
 ) -> Result<Option<String>, String> {
-    let props = client
-        .send_command(
-            "Runtime.getProperties",
-            Some(json!({ "objectId": holder, "ownProperties": true })),
-            Some(session),
-        )
-        .await?;
-    Ok(props["result"].as_array().and_then(|a| {
-        a.iter()
-            .find(|p| p["name"] == "create")
-            .and_then(|p| p["value"]["objectId"].as_str().map(str::to_string))
-    }))
+    let props = own_props(client, session, holder, false).await?;
+    Ok(prop(&props, "create").and_then(|p| p["value"]["objectId"].as_str().map(str::to_string)))
 }
 
 /// `[[Target]]` and `[[Handler]]` of `object` when it is a proxy.
@@ -553,20 +703,8 @@ async fn proxy_parts(
     session: &str,
     object: &str,
 ) -> Result<Option<(String, String)>, String> {
-    let props = client
-        .send_command(
-            "Runtime.getProperties",
-            Some(json!({ "objectId": object, "ownProperties": true })),
-            Some(session),
-        )
-        .await?;
-    let internal = |name: &str| {
-        props["internalProperties"]
-            .as_array()
-            .and_then(|a| a.iter().find(|p| p["name"] == name))
-            .and_then(|p| p["value"]["objectId"].as_str().map(str::to_string))
-    };
-    Ok(internal("[[Target]]").zip(internal("[[Handler]]")))
+    let props = own_props(client, session, object, false).await?;
+    Ok(internal(&props, "[[Target]]").zip(internal(&props, "[[Handler]]")))
 }
 
 /// Whether two handles name the same object (`===`, no page code).
@@ -613,9 +751,14 @@ async fn ours(
         .is_some_and(|a| a.iter().any(|p| p["name"] == key)))
 }
 
+/// How many proxies deep `create` is looked through. Deeper than this, the
+/// guard may be under them: reported, never taken for clean.
+const DEPTH: usize = 32;
+
 /// Take our guards off `holder.create`. Ok(true) when one was taken off,
 /// Ok(false) when none of ours is there; Err when one still is (under a
-/// wrapper the page put on top, or the page kept it).
+/// wrapper the page put on top, or the page kept it), or may be (under more
+/// proxies than [`DEPTH`]).
 async fn restore_slot(
     client: &CdpClient,
     session: &str,
@@ -626,48 +769,47 @@ async fn restore_slot(
     let Some(top) = own_create(client, session, holder).await? else {
         return Ok(false);
     };
-    // Unwrap every guard of ours on top: a navigation between registering the
-    // new-document script and the install on the current page wraps twice.
+    // Every guard of ours on top comes off (a navigation between registering
+    // the new-document script and the install on the current page wraps
+    // twice); one of ours under a proxy of the page's is still in effect and
+    // not ours to unwrap.
     let mut current = top;
-    let mut unwrapped = false;
+    let mut original = None;
+    let mut wrapped = false;
     let mut depth = 0;
     while let Some((target, handler)) = proxy_parts(client, session, &current).await? {
-        if depth == 8 {
-            break;
+        if depth == DEPTH {
+            return Err(format!(
+                "create() is under more than {DEPTH} proxies, so a guard there cannot be \
+                 looked for; reload the page to get the original back"
+            ));
         }
         depth += 1;
         if !ours(client, session, &current, &handler, mine, key).await? {
-            break;
+            wrapped = true;
+        } else if wrapped {
+            return Err(
+                "the page wrapped the create() guard in its own function; reload the page \
+                 to get the original back"
+                    .to_string(),
+            );
+        } else {
+            original = Some(target.clone());
         }
         current = target;
-        unwrapped = true;
     }
-    if !unwrapped {
-        // Not ours on top; one of ours under a wrapper of the page's is
-        // still in effect and not ours to unwrap.
-        let mut below = current;
-        for _ in 0..8 {
-            let Some((target, handler)) = proxy_parts(client, session, &below).await? else {
-                break;
-            };
-            if ours(client, session, &below, &handler, mine, key).await? {
-                return Err(
-                    "the page wrapped the create() guard in its own function; reload the page \
-                     to get the original back"
-                        .to_string(),
-                );
-            }
-            below = target;
-        }
+    let Some(original) = original else {
         return Ok(false);
-    }
+    };
     let put = client
         .send_command(
             "Runtime.callFunctionOn",
             Some(json!({
                 "objectId": holder,
-                "functionDeclaration": "function (original) { const d = Object.getOwnPropertyDescriptor(this, 'create'); try { Object.defineProperty(this, 'create', { __proto__: null, ...d, value: original }); } catch (e) {} }",
-                "arguments": [{ "objectId": current }],
+                // A plain assignment first: it needs no builtin the page may
+                // have replaced since.
+                "functionDeclaration": "function (original) { try { this.create = original; } catch (e) {} if (this.create === original) return; try { const d = Object.getOwnPropertyDescriptor(this, 'create'); Object.defineProperty(this, 'create', { __proto__: null, ...d, value: original }); } catch (e) {} }",
+                "arguments": [{ "objectId": original }],
             })),
             Some(session),
         )
@@ -676,7 +818,7 @@ async fn restore_slot(
         return Err(e);
     }
     match own_create(client, session, holder).await? {
-        Some(now) if same(client, session, &current, &now).await? => Ok(true),
+        Some(now) if same(client, session, &original, &now).await? => Ok(true),
         _ => Err("the page kept the create() guard".to_string()),
     }
 }
@@ -828,19 +970,42 @@ Promise.allSettled([c.create({}), CredentialsContainer.prototype.create.call(c, 
     }
 
     /// Round 7: the builtins are taken before anything else runs, and an own
-    /// `create` that is not a function, or a getter, fails closed.
+    /// `create` that is not a function, or a getter, fails closed. Round 8:
+    /// with nothing left replaced, also when the instance's `create` cannot
+    /// be replaced after the prototype's could, or replacing it throws.
     #[test]
     fn an_unguardable_create_fails_closed() {
-        let probe = "process.stdout.write(JSON.stringify({ installed }));";
+        let probe = r#"
+const c = navigator.credentials, p = CredentialsContainer.prototype;
+const before = calls;
+p.create.call(c);
+process.stdout.write(JSON.stringify({
+    installed,
+    prototype: Object.getOwnPropertyDescriptor(p, 'create').value === original,
+    instance: ((d) => d.value === was.value && d.get === was.get)(Object.getOwnPropertyDescriptor(c, 'create')),
+    reached: calls - before,
+}));
+"#;
         for setup in [
             "Object.defineProperty(navigator.credentials, 'create', { get() { return original; }, configurable: true });",
             "Object.defineProperty(navigator.credentials, 'create', { value: 1, configurable: true });",
-            "Object.defineProperty(navigator.credentials, 'create', { value: function create() {}, writable: false, configurable: false });",
+            "Object.defineProperty(navigator.credentials, 'create', { value: ownCreate, writable: false, configurable: false });",
+            "Object.defineProperty(navigator.credentials, 'create', { value: ownCreate, writable: true, configurable: true }); \
+             Object.defineProperty(globalThis, 'navigator', { value: { credentials: new Proxy(navigator.credentials, { \
+                 defineProperty() { throw new Error('no'); } }) }, configurable: true });",
         ] {
-            let Some(r) = run_node(setup, &new_key(), probe) else {
+            let setup = format!(
+                "const ownCreate = function create() {{}};\n{setup}\n\
+                 const was = Object.getOwnPropertyDescriptor(navigator.credentials, 'create');"
+            );
+            let Some(r) = run_node(&setup, &new_key(), probe) else {
                 return;
             };
-            assert_eq!(r["installed"], Value::Null, "{setup}: {r}");
+            assert_eq!(
+                r,
+                json!({ "installed": null, "prototype": true, "instance": true, "reached": 1 }),
+                "{setup}"
+            );
         }
     }
 
@@ -877,7 +1042,12 @@ process.stdout.write(JSON.stringify({{
         assert_ne!(new_key(), key);
     }
 
-    async fn recorder() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+    type Respond = Arc<dyn Fn(&Value) -> Result<Value, String> + Send + Sync>;
+
+    /// A CDP endpoint answering each command with `respond(request)` (Err:
+    /// a CDP error with that message). Returns its URL and the
+    /// `session:objectGroup` of every `Runtime.releaseObjectGroup`.
+    async fn fake_cdp(respond: Respond) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
         use futures_util::{SinkExt, StreamExt};
         let released = Arc::new(std::sync::Mutex::new(Vec::new()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -886,6 +1056,7 @@ process.stdout.write(JSON.stringify({{
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let seen = seen.clone();
+                let respond = respond.clone();
                 tokio::spawn(async move {
                     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
                         return;
@@ -902,7 +1073,13 @@ process.stdout.write(JSON.stringify({{
                                 req["params"]["objectGroup"].as_str().unwrap_or("")
                             ));
                         }
-                        let mut out = json!({ "id": req["id"], "result": {} });
+                        let mut out = match respond(&req) {
+                            Ok(result) => json!({ "id": req["id"], "result": result }),
+                            Err(message) => json!({
+                                "id": req["id"],
+                                "error": { "code": -32000, "message": message },
+                            }),
+                        };
                         if let Some(sid) = req.get("sessionId") {
                             out["sessionId"] = sid.clone();
                         }
@@ -915,6 +1092,116 @@ process.stdout.write(JSON.stringify({{
             }
         });
         (url, released)
+    }
+
+    async fn recorder() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        fake_cdp(Arc::new(|_| Ok(json!({})))).await
+    }
+
+    /// A heap of objects for [`fake_cdp`]: `H.create` is `w{layers}`, each
+    /// `w{i}` a proxy of the page's around `w{i-1}` (`w1` around `G`), and
+    /// `G` our guard (its handler has the key) around the native `N`.
+    fn wrapped_guard(layers: usize, key: &str) -> Respond {
+        let key = key.to_string();
+        Arc::new(move |req| {
+            let id = req["params"]["objectId"].as_str().unwrap_or("");
+            let proxy = |target: &str, handler: &str| {
+                json!({ "result": [], "internalProperties": [
+                    { "name": "[[Target]]", "value": { "objectId": target } },
+                    { "name": "[[Handler]]", "value": { "objectId": handler } },
+                ] })
+            };
+            Ok(match req["method"].as_str().unwrap_or("") {
+                "Runtime.getProperties" => match id {
+                    "H" => json!({ "result": [{ "name": "create", "value": {
+                        "objectId": if layers == 0 { "G".to_string() } else { format!("w{layers}") },
+                    } }] }),
+                    "G" => proxy("N", "ours"),
+                    "ours" => {
+                        json!({ "result": [{ "name": key.as_str(), "value": { "value": 0 } }] })
+                    }
+                    "w1" => proxy("G", "page"),
+                    w if w.starts_with('w') => {
+                        let i: usize = w[1..].parse().unwrap();
+                        proxy(&format!("w{}", i - 1), "page")
+                    }
+                    _ => json!({ "result": [] }),
+                },
+                "Runtime.callFunctionOn" => json!({ "result": { "value":
+                    req["params"]["arguments"][0]["objectId"] == req["params"]["objectId"] } }),
+                _ => json!({}),
+            })
+        })
+    }
+
+    /// Round 8: our guard under proxies of the page's is reported however
+    /// deep it is, never taken for clean (eight layers used to be).
+    #[tokio::test]
+    async fn a_guard_under_page_proxies_is_never_clean() {
+        let key = new_key();
+        for layers in [1, 8, 31, 40] {
+            let (url, _) = fake_cdp(wrapped_guard(layers, &key)).await;
+            let client = CdpClient::connect(&url).await.unwrap();
+            let r = restore_slot(&client, "S", "H", &[], &key).await;
+            let err = r.expect_err(&format!("{layers} layers"));
+            assert!(
+                err.contains(if layers < DEPTH {
+                    "wrapped the create() guard"
+                } else {
+                    "more than 32 proxies"
+                }),
+                "{layers}: {err}"
+            );
+        }
+        // Not ours (another key): nothing of ours there.
+        let (url, _) = fake_cdp(wrapped_guard(8, &key)).await;
+        let client = CdpClient::connect(&url).await.unwrap();
+        assert_eq!(
+            restore_slot(&client, "S", "H", &[], &new_key()).await,
+            Ok(false)
+        );
+    }
+
+    /// Round 8: when Chrome will not enable the Page domain on an
+    /// out-of-process frame's session, its new-document guard would never
+    /// run there: the install fails instead of passing that frame by.
+    #[tokio::test]
+    async fn an_oopif_without_the_page_domain_fails_the_install() {
+        let (url, _) = fake_cdp(Arc::new(|req| {
+            match (
+                req["method"].as_str().unwrap_or(""),
+                req["sessionId"].as_str(),
+            ) {
+                ("Page.enable", Some("S2")) => Err("Page domain unavailable".to_string()),
+                ("Page.addScriptToEvaluateOnNewDocument", _) => Ok(json!({ "identifier": "1" })),
+                _ => Ok(json!({})),
+            }
+        }))
+        .await;
+        let client = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let mut iframes = HashMap::new();
+        iframes.insert("F1".to_string(), "S2".to_string());
+        let mut guard = CreateGuard::new();
+        let err = install(&client, "S1", &iframes, &mut guard)
+            .await
+            .unwrap_err();
+        assert!(err.contains("S2") && err.contains("Page.enable"), "{err}");
+        assert_eq!(guard.scripts, vec![("S1".to_string(), "1".to_string())]);
+        // A session that is already gone is no failure.
+        let (url, _) = fake_cdp(Arc::new(|req| {
+            match (
+                req["method"].as_str().unwrap_or(""),
+                req["sessionId"].as_str(),
+            ) {
+                ("Page.enable", Some("S2")) => Err("Session with given id not found".to_string()),
+                ("Page.addScriptToEvaluateOnNewDocument", _) => Ok(json!({ "identifier": "1" })),
+                _ => Ok(json!({})),
+            }
+        }))
+        .await;
+        let client = Arc::new(CdpClient::connect(&url).await.unwrap());
+        let mut guard = CreateGuard::new();
+        assert_eq!(install(&client, "S1", &iframes, &mut guard).await, Ok(()));
     }
 
     /// Round 7: a restore cancelled part-way (here before its first command

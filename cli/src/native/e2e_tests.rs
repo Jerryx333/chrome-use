@@ -7797,6 +7797,105 @@ async fn e2e_auth_login_bwu_create_guard_covers_frames_and_restores_by_identity(
     assert!(err.contains("wrapped the create() guard"), "{err}");
 }
 
+/// Round 8: restore finds a guard the new-document script made without
+/// calling anything the page can replace, and never calls a document clean
+/// where a guard may be left: the page swapping `Object.getPrototypeOf`
+/// changes nothing, a `navigator` or `credentials` of the page's and a
+/// guard under eight proxies of the page's are reported.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_create_guard_restore_survives_replaced_builtins() {
+    use super::passkey_guard::{install, report_result, restore, CreateGuard, Outcome};
+    let (port, server) = spawn_html_server("<!doctype html><p>guarded</p>".to_string()).await;
+    let base_url = format!("http://127.0.0.1:{port}");
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+    let nav = |id: &str| json!({ "id": id, "action": "navigate", "url": format!("{base_url}/") });
+    assert_success(&execute_command(&nav("n0"), &mut state).await);
+    let (client, sid) = {
+        let mgr = state.browser.as_ref().unwrap();
+        (
+            mgr.client.clone(),
+            mgr.active_session_id().unwrap().to_string(),
+        )
+    };
+    let none = std::collections::HashMap::new();
+    let probe = "(async () => { try { await CredentialsContainer.prototype.create.call(navigator.credentials, { publicKey: {} }); return 'resolved'; } \
+                  catch (e) { return [e.name, Function.prototype.toString.call(CredentialsContainer.prototype.create)].join('|'); } })()";
+    let guarded = json!("NotAllowedError|function () { [native code] }");
+    let native = json!("TypeError|function create() { [native code] }");
+
+    // Guarded by the new-document script only (no handle of ours), then the
+    // page replaces the builtins the old sweep went through.
+    let mut guard = CreateGuard::new();
+    install(&client, &sid, &none, &mut guard).await.unwrap();
+    assert_success(&execute_command(&nav("n1"), &mut state).await);
+    assert_evaluate(&mut state, "p1", probe, guarded.clone()).await;
+    assert_evaluate(
+        &mut state,
+        "swap",
+        "(() => { Object.getPrototypeOf = () => ({}); Reflect.getPrototypeOf = () => ({}); \
+           Object.getOwnPropertyDescriptor = () => undefined; Object.defineProperty = (o) => o; \
+           Function.prototype.call = function () {}; return true; })()",
+        json!(true),
+    )
+    .await;
+    let report = restore(&client, &sid, &none, &mut guard).await;
+    assert_eq!(report_result(&report), Ok(()), "{report:?}");
+    assert!(
+        report.iter().any(|(_, r)| *r == Outcome::Restored),
+        "{report:?}"
+    );
+    assert_success(&execute_command(&nav("n2"), &mut state).await);
+    assert_evaluate(&mut state, "r1", probe, native.clone()).await;
+
+    // What the search goes through, replaced by the page: reported.
+    for (n, replace) in [
+        "Object.defineProperty(window, 'navigator', { get() { return {}; }, configurable: true })",
+        "Object.defineProperty(window, 'navigator', { value: new Proxy(navigator, {}), configurable: true })",
+        "Object.defineProperty(Navigator.prototype, 'credentials', { get() { return {}; }, configurable: true })",
+        "Object.defineProperty(navigator, 'credentials', { value: {}, configurable: true })",
+        "delete Navigator.prototype.credentials",
+        "window.CredentialsContainer = function CredentialsContainer() {}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_success(&execute_command(&nav(&format!("f{n}")), &mut state).await);
+        let mut guard = CreateGuard::new();
+        install(&client, &sid, &none, &mut guard).await.unwrap();
+        assert_success(&execute_command(&nav(&format!("m{n}")), &mut state).await);
+        assert_evaluate(&mut state, "p2", probe, guarded.clone()).await;
+        assert_evaluate(&mut state, "replace", &format!("{replace}, true"), json!(true)).await;
+        let report = restore(&client, &sid, &none, &mut guard).await;
+        let err = report_result(&report).unwrap_err();
+        assert!(err.contains("the page replaced"), "{replace}: {err}");
+    }
+
+    // Our guard under eight proxies of the page's: reported, not clean.
+    assert_success(&execute_command(&nav("n3"), &mut state).await);
+    let mut guard = CreateGuard::new();
+    install(&client, &sid, &none, &mut guard).await.unwrap();
+    assert_evaluate(
+        &mut state,
+        "wrap8",
+        "(() => { let g = CredentialsContainer.prototype.create; \
+           for (let i = 0; i < 8; i++) g = new Proxy(g, {}); \
+           CredentialsContainer.prototype.create = g; return true; })()",
+        json!(true),
+    )
+    .await;
+    let report = restore(&client, &sid, &none, &mut guard).await;
+    let err = report_result(&report).unwrap_err();
+    assert!(err.contains("wrapped the create() guard"), "{err}");
+    server.abort();
+}
+
 /// Round 7: an attached out-of-process frame is guarded through its own
 /// session (now and on its next document) and restored with the rest.
 #[tokio::test]
