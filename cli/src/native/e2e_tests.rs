@@ -13725,3 +13725,141 @@ async fn e2e_snapshot_excerpt_ref_metadata() {
     let closed = execute_command(&json!({"id":"scope-close","action":"close"}), &mut state).await;
     assert_success(&closed);
 }
+
+/// The Douyin creator-center failures, on a local page shaped like it:
+/// clickable `<div>`s named only by their text, a class shared by several
+/// header items, an editor that pads lines with U+200B and wraps topics in
+/// NBSPs, and a toast that is gone before the post-click snapshot.
+#[tokio::test]
+#[ignore]
+async fn e2e_creator_center_native_actions() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>creator</title>
+<style>.tab{cursor:pointer;display:inline-block;padding:6px}.topic{cursor:pointer}</style>
+<div class="tab nav" id="post" onclick="window.hit=(window.hit||[]).concat('post')"><p>投稿</p></div>
+<div class="tab nav" onclick="window.hit=(window.hit||[]).concat('coins')"><p>充钻石</p></div>
+<div class="topic" onclick="window.hit=(window.hit||[]).concat('topic')"><span>#少帅</span><span>302.6亿</span></div>
+<button id="save" onclick="setTimeout(()=>{const t=document.createElement('div');t.setAttribute('role','alert');t.textContent='视频审核中，修改未保存';document.body.appendChild(t);setTimeout(()=>t.remove(),60)},30)">提交修改</button>
+<div id="editor" contenteditable="true"></div>
+<script>
+const ed=document.getElementById('editor');
+ed.addEventListener('input',()=>setTimeout(()=>{
+  const lines=ed.innerText.replace(/\u200b/g,'').split('\n').filter((l,i,a)=>!(i===a.length-1&&l===''));
+  ed.innerHTML=lines.map(l=>'<div><span>'+l.replace(/#([^\s#\u00a0]+)(?=[\s\u00a0])/g,(m,w)=>'<span data-mention="#'+w+'" contenteditable="false">\u00a0#'+w+'\u00a0</span>\u200b')+'</span><span>\u200b</span></div>').join('');
+},0));
+</script>"##
+        .to_string();
+    let (port, _server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    async fn run(state: &mut DaemonState, cmd: Value) -> Value {
+        Box::pin(execute_command(&cmd, state)).await
+    }
+    assert_success(
+        &run(
+            &mut state,
+            json!({"id":"1","action":"launch","headless":true}),
+        )
+        .await,
+    );
+    let url = format!("http://127.0.0.1:{port}/");
+    assert_success(&run(&mut state, json!({"id":"2","action":"navigate","url":url})).await);
+    let snap = run(
+        &mut state,
+        json!({"id":"3","action":"snapshot","interactive":true}),
+    )
+    .await;
+    assert_success(&snap);
+    let tree = get_data(&snap)["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let ref_of = |name: &str| -> String {
+        let line = tree
+            .lines()
+            .find(|l| l.contains(&format!("\"{name}\"")))
+            .unwrap_or_else(|| panic!("no {name} in:\n{tree}"));
+        let start = line.find("ref=").unwrap() + 4;
+        let end = line[start..].find(|c: char| !c.is_alphanumeric()).unwrap() + start;
+        format!("@{}", &line[start..end])
+    };
+    let (post, topic) = (ref_of("投稿"), ref_of("#少帅302.6亿"));
+
+    // 1. Refs named from their text act straight after the snapshot ...
+    assert_success(
+        &run(
+            &mut state,
+            json!({"id":"4","action":"click","selector":topic}),
+        )
+        .await,
+    );
+    assert_success(
+        &run(
+            &mut state,
+            json!({"id":"5","action":"click","selector":post}),
+        )
+        .await,
+    );
+    // ... and one whose node now shows other content is refused.
+    let reuse = "document.querySelector('#post p').textContent='充钻石'";
+    assert_success(
+        &run(
+            &mut state,
+            json!({"id":"6","action":"evaluate","script":reuse}),
+        )
+        .await,
+    );
+    let refused = run(
+        &mut state,
+        json!({"id":"7","action":"click","selector":post}),
+    )
+    .await;
+    assert_eq!(refused["success"], false, "{refused}");
+    let hits = run(
+        &mut state,
+        json!({"id":"8","action":"evaluate","script":"window.hit.join(',')"}),
+    )
+    .await;
+    assert_eq!(get_data(&hits)["result"], "topic,post");
+
+    // 2. A class shared by two controls is refused, with both listed.
+    let amb = run(
+        &mut state,
+        json!({"id":"9","action":"click","selector":".tab.nav"}),
+    )
+    .await;
+    assert_error_code(&amb, "selector_ambiguous");
+    let err = amb["error"].as_str().unwrap_or_default();
+    assert!(
+        err.contains("matches 2 elements") && err.contains("[1] <div>"),
+        "{err}"
+    );
+
+    // 3. The editor's U+200B / NBSP padding is formatting, not a failed write.
+    let text = "从1912年到1949年。\n#少帅 #民国军阀";
+    let fill = run(
+        &mut state,
+        json!({"id":"10","action":"fill","selector":"#editor","value":text}),
+    )
+    .await;
+    assert_success(&fill);
+    let typed = run(
+        &mut state,
+        json!({"id":"11","action":"type","selector":"#editor","text":" #民国历史 ","keyEvents":true}),
+    )
+    .await;
+    assert_success(&typed);
+    assert!(get_data(&typed).get("warning").is_none(), "{typed}");
+
+    // 4. A toast gone before the after-snapshot is still reported.
+    let saved = run(
+        &mut state,
+        json!({"id":"12","action":"click","selector":"#save","observe":true}),
+    )
+    .await;
+    assert_success(&saved);
+    assert_eq!(
+        get_data(&saved)["observed"]["announced"],
+        json!(["视频审核中，修改未保存"]),
+        "{saved}"
+    );
+    assert_success(&run(&mut state, json!({"id":"13","action":"close"})).await);
+}
