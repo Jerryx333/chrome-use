@@ -2423,9 +2423,9 @@ mod tests {
             crate::panel_evidence::OBSERVE_TOOLS.len()
         );
         let mut args = vec!["back".to_string()];
-        push_observe(&mut args, &json!({"observe": true})).unwrap();
+        assert!(push_observe(&mut args, &json!({"observe": true})).is_ok());
         assert_eq!(args, ["back", "--observe"]);
-        push_observe(&mut args, &json!({"observe": false})).unwrap();
+        assert!(push_observe(&mut args, &json!({"observe": false})).is_ok());
         assert_eq!(args.len(), 2);
         assert!(push_observe(&mut args, &json!({"observe": "yes"})).is_err());
     }

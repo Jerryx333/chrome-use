@@ -34,6 +34,8 @@ pub(crate) const BEGIN_BUDGET: Duration = Duration::from_secs(5);
 /// How far ahead of the service's clock a `notAfter` may lie: the budget plus
 /// 250 ms of skew. Anything further is refused, so a caller cannot hand in an
 /// arbitrarily distant deadline.
+// Read by the service's admission handlers (Deadline::admit).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const NOT_AFTER_CAP: Duration = Duration::from_millis(5_250);
 pub(crate) const REPORT_BUDGET: Duration = Duration::from_secs(5);
 pub(crate) const ARTIFACT_REPORT_BUDGET: Duration = Duration::from_secs(60);
@@ -99,6 +101,7 @@ impl Deadline {
     /// The service's admission check (plan D1a rule 4): this boot, not
     /// passed, and not beyond [`NOT_AFTER_CAP`]. The error is worded for the
     /// agent.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn admit(boot: &str, not_after: u64) -> Result<(), &'static str> {
         let now = monotonic_ms().map_err(|_| "the host clock is unavailable")?;
         if boot_id().as_deref() != Some(boot) {

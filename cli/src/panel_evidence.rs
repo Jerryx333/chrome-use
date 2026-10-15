@@ -1048,12 +1048,14 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    type Answers = Vec<Result<Value, String>>;
+
     /// A scripted service: each operation answers from its queue (the last
     /// answer repeats) and every request is kept.
     #[derive(Clone, Default)]
     struct Fake {
         calls: Rc<RefCell<Vec<(String, Value)>>>,
-        answers: Rc<RefCell<Vec<(String, Vec<Result<Value, String>>)>>>,
+        answers: Rc<RefCell<Vec<(String, Answers)>>>,
     }
     impl Fake {
         fn answer(&self, operation: &str, answers: Vec<Result<Value, String>>) {
