@@ -51,22 +51,24 @@ pub(super) fn reply_for_decision(
             .and_then(|o| o.get(name))
     };
     let result = match method {
-        "can_use_tool" if ask_user_question(method, original) => match (word, field("answers")) {
-            (Some("deny"), _) => json!({"behavior":"deny","message":"User declined"}),
-            (None, Some(answers)) => {
-                let questions = original["input"]["questions"]
-                    .as_array()
-                    .ok_or_else(refused)?;
-                let mut built = Map::new();
-                for (question, values) in answers_for(questions, answers, "question", true)? {
-                    built.insert(question, values.join(", ").into());
+        "can_use_tool" if ask_user_question(method, original) => {
+            match (word, given_answers(decision)) {
+                (Some("deny"), _) => json!({"behavior":"deny","message":"User declined"}),
+                (None, Some(answers)) => {
+                    let questions = original["input"]["questions"]
+                        .as_array()
+                        .ok_or_else(refused)?;
+                    let mut built = Map::new();
+                    for (question, values) in answers_for(questions, answers, "question", true)? {
+                        built.insert(question, values.join(", ").into());
+                    }
+                    let mut input = original["input"].clone();
+                    input["answers"] = Value::Object(built);
+                    json!({"behavior":"allow","updatedInput":input})
                 }
-                let mut input = original["input"].clone();
-                input["answers"] = Value::Object(built);
-                json!({"behavior":"allow","updatedInput":input})
+                _ => return Err(refused()),
             }
-            _ => return Err(refused()),
-        },
+        }
         "can_use_tool" => match word {
             Some("allow") => {
                 json!({"behavior":"allow","updatedInput":original.get("input").cloned().unwrap_or(json!({}))})
@@ -75,7 +77,7 @@ pub(super) fn reply_for_decision(
             _ => return Err(refused()),
         },
         "item/tool/requestUserInput" => {
-            let answers = field("answers").ok_or_else(refused)?;
+            let answers = given_answers(decision).ok_or_else(refused)?;
             let questions = original["questions"].as_array().ok_or_else(refused)?;
             let mut built = Map::new();
             for (id, values) in answers_for(questions, answers, "id", false)? {
@@ -116,40 +118,61 @@ pub(super) fn reply_for_decision(
 /// question identity field (`question` text for Claude, `id` for Codex).
 /// Each value is `{option}`, `{options}` (multi-select only) or `{custom}`
 /// where free text is allowed.
+/// The two answer forms, never mixed: `answersByPosition` (this panel: a
+/// list in question order with option indices, because the shown text may
+/// be redacted) or `answers` keyed by the original question text or id with
+/// original option labels (older form).
+enum Answers<'a> {
+    Position(&'a [Value]),
+    Keyed(&'a Map<String, Value>),
+}
+
+fn given_answers(decision: &Value) -> Option<Answers<'_>> {
+    let object = decision.as_object().filter(|o| o.len() == 1)?;
+    if let Some(list) = object.get("answersByPosition") {
+        return list.as_array().map(|l| Answers::Position(l.as_slice()));
+    }
+    object.get("answers")?.as_object().map(Answers::Keyed)
+}
+
 fn answers_for(
     questions: &[Value],
-    answers: &Value,
+    answers: Answers<'_>,
     key: &str,
     custom_always: bool,
 ) -> Result<Vec<(String, Vec<String>)>, String> {
-    let answers = answers.as_object().ok_or_else(refused)?;
-    if answers.len() != questions.len() {
+    let count = match &answers {
+        Answers::Position(list) => list.len(),
+        Answers::Keyed(map) => map.len(),
+    };
+    if count != questions.len() {
         return Err("Answer each question exactly once".into());
     }
+    let by_position = matches!(answers, Answers::Position(_));
     let mut out = Vec::new();
     for (index, question) in questions.iter().enumerate() {
         let id = question[key].as_str().ok_or_else(refused)?;
-        // By position (the panel shows redacted text, so text is no
-        // identity); an older form keyed by the original text still works.
-        let answer = answers
-            .get(&index.to_string())
-            .or_else(|| answers.get(id))
-            .and_then(Value::as_object)
-            .filter(|o| o.len() == 1)
-            .ok_or_else(refused)?;
+        let answer = match &answers {
+            Answers::Position(list) => list.get(index),
+            Answers::Keyed(map) => map.get(id),
+        }
+        .and_then(Value::as_object)
+        .filter(|o| o.len() == 1)
+        .ok_or_else(refused)?;
         let labels: Vec<&str> = question["options"]
             .as_array()
             .map(|o| o.iter().filter_map(|o| o["label"].as_str()).collect())
             .unwrap_or_default();
         let multi = question["multiSelect"] == true;
-        // An option by its index in the original, or by its original label.
+        // By position an option is its index in the original; keyed, its
+        // original label.
         let pick = |option: &Value| -> Result<String, String> {
             let label = match option {
-                Value::Number(n) => n
+                Value::Number(n) if by_position => n
                     .as_u64()
                     .and_then(|i| labels.get(i as usize).copied())
                     .ok_or_else(refused)?,
-                Value::String(s) if labels.contains(&s.as_str()) => s.as_str(),
+                Value::String(s) if !by_position && labels.contains(&s.as_str()) => s.as_str(),
                 _ => return Err(refused()),
             };
             Ok(label.to_string())
@@ -490,7 +513,7 @@ mod tests {
         let built = reply_for_decision(
             "can_use_tool",
             &original,
-            &json!({"answers":{"0":{"option":0},"1":{"options":[1,0]}}}),
+            &json!({"answersByPosition":[{"option":0},{"options":[1,0]}]}),
         )
         .unwrap();
         assert_eq!(
@@ -498,17 +521,68 @@ mod tests {
             json!({"Use https://x.example/?token=SYNTH_Q?":"Keep SYNTH_OPT","Which?":"B, A"})
         );
         for bad in [
-            json!({"answers":{"0":{"option":2},"1":{"option":0}}}),
-            json!({"answers":{"0":{"option":"Keep [redacted]"},"1":{"option":0}}}),
-            json!({"answers":{"0":{"option":-1},"1":{"option":0}}}),
-            json!({"answers":{"0":{"options":[0]},"1":{"option":0}}}),
-            json!({"answers":{"0":{"option":0},"1":{"options":[0,0]}}}),
+            json!({"answersByPosition":[{"option":2},{"option":0}]}),
+            json!({"answersByPosition":[{"option":"Keep [redacted]"},{"option":0}]}),
+            // Labels are not positions, and positions are not labels.
+            json!({"answersByPosition":[{"option":"Keep SYNTH_OPT"},{"option":0}]}),
+            json!({"answersByPosition":[{"option":-1},{"option":0}]}),
+            json!({"answersByPosition":[{"options":[0]},{"option":0}]}),
+            json!({"answersByPosition":[{"option":0},{"options":[0,0]}]}),
+            json!({"answersByPosition":[{"option":0}]}),
+            // The two forms never mix.
+            json!({"answersByPosition":[{"option":0},{"option":0}],"answers":{}}),
+            json!({"answers":{"0":{"option":0},"1":{"option":0}}}),
         ] {
             assert!(
                 reply_for_decision("can_use_tool", &original, &bad).is_err(),
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn keyed_answers_follow_the_original_ids_even_when_they_look_like_positions() {
+        // Codex question ids "1" then "0": keyed answers go by id, never by
+        // position, so they cannot be swapped.
+        let codex = json!({"questions":[
+            {"id":"1","question":"First","isOther":false,"options":[{"label":"Yes"},{"label":"No"}]},
+            {"id":"0","question":"Second","isOther":false,"options":[{"label":"Yes"},{"label":"No"}]}
+        ]});
+        let built = reply_for_decision(
+            "item/tool/requestUserInput",
+            &codex,
+            &json!({"answers":{"1":{"option":"Yes"},"0":{"option":"No"}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            built,
+            json!({"answers":{"1":{"answers":["Yes"]},"0":{"answers":["No"]}}})
+        );
+        let by_position = reply_for_decision(
+            "item/tool/requestUserInput",
+            &codex,
+            &json!({"answersByPosition":[{"option":0},{"option":1}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            by_position,
+            json!({"answers":{"1":{"answers":["Yes"]},"0":{"answers":["No"]}}})
+        );
+        // Claude questions whose text is a number behave the same.
+        let claude = json!({"tool_name":"AskUserQuestion","input":{"questions":[
+            {"question":"1","multiSelect":false,"options":[{"label":"Yes"},{"label":"No"}]},
+            {"question":"0","multiSelect":false,"options":[{"label":"Yes"},{"label":"No"}]}
+        ]}});
+        let built = reply_for_decision(
+            "can_use_tool",
+            &claude,
+            &json!({"answers":{"1":{"option":"Yes"},"0":{"option":"No"}}}),
+        )
+        .unwrap();
+        assert_eq!(
+            built["updatedInput"]["answers"],
+            json!({"1":"Yes","0":"No"})
+        );
     }
 
     #[test]

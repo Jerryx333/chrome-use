@@ -740,7 +740,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
           ? { answers: Object.fromEntries(answers.map(a => [a.question.id, { answers: a.values }])) }
           : { behavior: 'allow', updatedInput: { ...params.input, answers: Object.fromEntries(answers.map(a => [a.question.question, a.values.join(', ')])) } };
         // Questions by position: their shown text may be redacted.
-        const decision = { answers: Object.fromEntries(answers.map((a, i) => [String(i), a.answer])) };
+        const decision = { answersByPosition: answers.map(a => a.answer) };
         await respond(key, result, decision);
       }, 'primary')));
     } else if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {
