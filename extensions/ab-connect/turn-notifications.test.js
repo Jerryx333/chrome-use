@@ -125,14 +125,45 @@ test('a click opens the side panel on the conversation before awaiting anything'
   const here = { posted: [], postMessage(message) { this.posted.push(message); } };
   const elsewhere = { posted: [], postMessage(message) { this.posted.push(message); } };
   const panels = new Map([[here, { windowId: 4 }], [elsewhere, { windowId: 5 }]]);
-  const pending = openFromNotification(`panel-turn:${ID}`, { windowId: 4, chrome, panels });
+  let pending = null;
+  assert.equal(openFromNotification(`panel-turn:${ID}`, { windowId: 4, chrome, panels, pending: value => { pending = value; } }), true);
   // Synchronous: the open call carries the click's gesture.
   assert.deepEqual(calls.slice(0, 2), [['store', { ab_panel_conversation: ID }], ['open', { windowId: 4 }]]);
   assert.deepEqual(here.posted, [{ type: 'select', conversationId: ID }]);
   assert.deepEqual(elsewhere.posted, []);
   assert.equal(pending.conversationId, ID); assert.equal(pending.windowId, 4);
   assert.deepEqual(calls.slice(2), [['focus', 4, { focused: true }], ['clear', `panel-turn:${ID}`]]);
-  assert.equal(openFromNotification(`schedule-run:${ID}`, { windowId: 4, chrome, panels }).conversationId, ID);
-  assert.equal(openFromNotification('connection', { windowId: 4, chrome, panels }), null);
-  assert.equal(openFromNotification(`panel-turn:${ID}`, { windowId: null, chrome, panels }), null);
+  assert.equal(openFromNotification(`schedule-run:${ID}`, { windowId: 4, chrome, panels }), true);
+  assert.equal(openFromNotification('connection', { windowId: 4, chrome, panels }), false);
+  // A click that woke the worker looks the window up first.
+  calls.length = 0; chrome.windows.getLastFocused = async () => ({ id: 9 });
+  openFromNotification(`panel-turn:${ID}`, { windowId: null, chrome, panels, pending: value => { pending = value; } });
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(calls.find(call => call[0] === 'open'), ['open', { windowId: 9 }]);
+  assert.equal(pending.windowId, 9);
+});
+
+test('acknowledging a recovery does not re-announce the last finished turn', async () => {
+  const f = fixture();
+  const c = chat({ phase: 'idle', lastTurn: { messageId: 'm1', outcome: 'completed', ended: 120 } });
+  const read = async () => ({ conversations: [c] });
+  const notifier = new TurnNotifications(f.options);
+  await notifier.poll(read); assert.equal(f.notices.length, 1);
+  // The service restarted during the next turn; the user then acknowledged it.
+  Object.assign(c, { phase: 'recoveryRequired', activeMessageId: 'm2', updated: 150 });
+  await notifier.poll(read); assert.equal(f.notices.length, 2);
+  Object.assign(c, { phase: 'idle', activeMessageId: null, updated: 160 });
+  await notifier.poll(read); assert.equal(f.notices.length, 2);
+  Object.assign(c, { phase: 'idle', lastTurn: { messageId: 'm3', outcome: 'completed', ended: 170 } });
+  await notifier.poll(read); assert.equal(f.notices.length, 3);
+});
+
+test('a turn seen running notifies even if it ends while the worker is stopped', async () => {
+  const f = fixture(100);
+  const c = chat({ phase: 'running', activeMessageId: 'm1', updated: 50 });
+  const read = async () => ({ conversations: [c] });
+  await new TurnNotifications(f.options).poll(read);
+  Object.assign(c, { phase: 'idle', activeMessageId: null, lastTurn: { messageId: 'm1', outcome: 'completed', ended: 150 } });
+  f.tick(1000); await new TurnNotifications(f.options).poll(read);
+  assert.equal(f.notices.length, 1);
 });

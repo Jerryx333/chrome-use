@@ -214,8 +214,7 @@ try {
   });
 } catch {}
 chrome.notifications.onClicked.addListener(id => {
-  const pending = openFromNotification(id, { windowId: lastFocusedWindowId, chrome, panels: panelPresence });
-  if (pending) pendingPanelSelect = pending;
+  openFromNotification(id, { windowId: lastFocusedWindowId, chrome, panels: panelPresence, pending: selection => { pendingPanelSelect = selection; } });
 });
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
 

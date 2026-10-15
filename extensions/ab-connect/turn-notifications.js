@@ -72,13 +72,20 @@ export class TurnNotifications {
       const live = new Set();
       for (const c of conversations || []) {
         live.add(c.id);
-        // A new turn means the user has moved on from the last one.
-        if (BUSY.has(c.phase)) delete unseen[c.id];
+        // A new turn means the user has moved on from the last one. Its cursor
+        // lets the turn notify even if it ends while the worker is stopped.
+        if (BUSY.has(c.phase)) {
+          delete unseen[c.id];
+          if (c.activeMessageId) seen[c.id] = `b:${c.activeMessageId}`;
+        }
         const event = turnEvent(c);
         if (!event || seen[c.id] === event.token) continue;
         const fresh = event.at >= this.startedAt || c.id in seen;
+        // Acknowledging a recovery leaves the last ended turn in place; that
+        // is not a new finish.
+        const acknowledged = String(seen[c.id]).startsWith('r:') && event.token.startsWith('t:');
         seen[c.id] = event.token;
-        if (!fresh || !enabled) continue;
+        if (!fresh || !enabled || acknowledged) continue;
         if (await showing(c.id)) { delete unseen[c.id]; continue; }
         unseen[c.id] = event.token;
         const title = firstLine(c.title || c.site || agentNames[c.agentId] || 'chrome-use', 80);
@@ -104,22 +111,25 @@ export class TurnNotifications {
  * conversation: store the selection for a panel that opens, switch any panel
  * already open in that window, and open the side panel. `sidePanel.open` needs
  * the click's user gesture, so it is called before anything is awaited.
- * Returns the pending selection for a panel that has yet to report, or null.
+ * `pending` receives the selection for a panel that has yet to report.
  */
-export function openFromNotification(id, { windowId, chrome, panels }) {
+export function openFromNotification(id, { windowId, chrome, panels, pending = () => {} }) {
   const match = /^(schedule-run|panel-turn):([a-f0-9-]{36})$/.exec(id);
-  if (!match) return null;
+  if (!match) return false;
   const conversationId = match[2];
   void Promise.resolve(chrome.storage.local.set({ ab_panel_conversation: conversationId })).catch(() => {});
-  let pending = null;
-  if (windowId !== null && windowId !== undefined) {
-    pending = { windowId, conversationId, at: Date.now() };
+  const open = windowId => {
+    pending({ windowId, conversationId, at: Date.now() });
     void Promise.resolve(chrome.sidePanel.open({ windowId })).catch(error => console.warn('Open the side panel to read the finished task:', String(error?.message || error)));
     void Promise.resolve(chrome.windows.update(windowId, { focused: true })).catch(() => {});
     for (const [port, presence] of panels) {
       if (presence.windowId === windowId) try { port.postMessage({ type: 'select', conversationId }); } catch {}
     }
-  }
+  };
+  // A click that woke the worker has no window yet; looking it up may cost
+  // the gesture, so the stored selection still applies when the panel opens.
+  if (windowId !== null && windowId !== undefined) open(windowId);
+  else void Promise.resolve(chrome.windows.getLastFocused()).then(window => { if (window?.id !== undefined) open(window.id); }).catch(() => {});
   void Promise.resolve(chrome.notifications.clear(id)).catch(() => {});
-  return pending;
+  return true;
 }
