@@ -45,6 +45,9 @@ pub(super) struct Session {
     pub running: bool,
     /// The session file (Claude, Codex, Pi); OpenCode has none.
     pub file: Option<PathBuf>,
+    /// The model of the session's latest turn, where the CLI records one
+    /// (Codex): a resumed thread restores that model's default effort.
+    pub model: Option<String>,
 }
 
 /// One message of an imported transcript.
@@ -355,6 +358,7 @@ fn read_claude(id: &str, path: &Path, modified: SystemTime, live: &[(String, i64
         last_active,
         running,
         file: Some(path.into()),
+        model: None,
     }
 }
 
@@ -435,6 +439,18 @@ fn read_codex(
         .get(id)
         .cloned()
         .or_else(|| lines.iter().find_map(codex_record_user));
+    let (tail_lines, _, _) = tail(path, TITLE_TAIL_BYTES);
+    let model = tail_lines
+        .iter()
+        .chain(lines.iter())
+        .rev()
+        .find_map(|r| {
+            (r["type"] == "turn_context")
+                .then(|| r["payload"]["model"].as_str())
+                .flatten()
+        })
+        .filter(|m| !m.is_empty() && m.len() <= 256)
+        .map(String::from);
     let last_active = millis(modified);
     Some(Session {
         agent: "codex".into(),
@@ -444,6 +460,7 @@ fn read_codex(
         last_active,
         running: recent(last_active),
         file: Some(path.into()),
+        model,
     })
 }
 
@@ -480,6 +497,7 @@ fn read_pi(id: &str, path: &Path, modified: SystemTime) -> Option<Session> {
         last_active,
         running: recent(last_active),
         file: Some(path.into()),
+        model: None,
     })
 }
 
@@ -782,11 +800,14 @@ pub(super) fn opencode_history(export: &Value) -> History {
     for message in export["messages"].as_array().into_iter().flatten() {
         match message["type"].as_str() {
             Some("user") => {
-                if let Some(text) = message["text"]
-                    .as_str()
-                    .map(str::trim)
-                    .filter(|t| !t.is_empty())
-                {
+                // Turns the panel sent carry its instructions first (ACP has
+                // no separate field for them); only the user's text is shown.
+                let text = message["text"].as_str().map(|t| {
+                    t.strip_prefix(super::backend::PROMPT)
+                        .and_then(|rest| rest.strip_prefix("\n\n"))
+                        .unwrap_or(t)
+                });
+                if let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) {
                     turns.push(Turn {
                         role: "user",
                         text: text.into(),
@@ -850,6 +871,7 @@ pub(super) fn opencode_session(entry: &Value) -> Option<Session> {
         last_active,
         running: recent(last_active),
         file: None,
+        model: None,
     })
 }
 
@@ -1213,6 +1235,11 @@ mod tests {
         assert_eq!(s.id, CODEX_ID);
         assert_eq!(s.cwd.as_deref(), Some(Path::new("/WORK/a")));
         assert_eq!(
+            s.model.as_deref(),
+            Some("gpt-6.1-sol"),
+            "the latest turn's model"
+        );
+        assert_eq!(
             s.title.as_deref(),
             Some("Remember the codeword OSPREY-19. Reply with just OK.")
         );
@@ -1304,6 +1331,15 @@ mod tests {
         assert!(!s.running);
         assert!(opencode_session(&json!({"sessionId":"../x"})).is_none());
         assert_eq!(opencode_history(&json!({"nope":1})).unparsed, 1);
+        let panel_turn = json!({"messages":[{"type":"user","text":format!("{}\n\nWhat codeword?", super::super::backend::PROMPT)}]});
+        assert_eq!(
+            opencode_history(&panel_turn).turns,
+            vec![Turn {
+                role: "user",
+                text: "What codeword?".into()
+            }],
+            "the panel's instructions are not shown as the user's text"
+        );
     }
 
     #[test]

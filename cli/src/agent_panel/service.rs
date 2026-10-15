@@ -2164,6 +2164,9 @@ async fn dispatch(
             chat.options = p.options;
             chat.full_access = p.full_access;
             chat.session_id = Some(p.session_id.clone());
+            // The session's own model, until the backend reports one: Codex
+            // restores its default effort on resume.
+            chat.model = session.model.clone();
             if let Some(title) = session.title.as_deref().and_then(redacted_line) {
                 chat.title = title.chars().take(80).collect();
             }
