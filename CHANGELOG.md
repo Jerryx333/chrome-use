@@ -1,8 +1,29 @@
 # Changelog
 
-## 1.5.219
+## 1.5.220
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.61 (the new side panel features need it; older extensions keep working without them). Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Continue a terminal session in the side panel (`/resume`).** Pick a Codex, Claude Code or OpenCode session started in the terminal and keep working on it in the panel. Its earlier messages are imported redacted and capped at the last 40; a session still running elsewhere asks for confirmation first. Deleting the panel conversation keeps the CLI's own session files.
+- **Project folder per conversation.** A new conversation can run in a project folder chosen from recent folders or the system folder picker; the choice is fixed for that conversation. System folders are refused, Pi is not supported, and panel files, screenshots and downloads are never written into the project.
+- **Sites remember their project.** After you pick a project on a site, the panel offers "Use this project for <site> from now on?"; later conversations on that site preselect it. The bindings are shared with Inspect & Ask and can be edited on the options page.
+- **The extension speaks Chinese.** The side panel, options page and Inspect & Ask follow Chrome's language (English and Simplified Chinese).
+
+### Bug Fixes
+
+- **Inspect & Ask replies went to the wrong session.** Questions were sent as `chrome-use`, so a terminal session with that name received the agent's replies. Each inspect question now has its own sender identity, and replies show up in the inspect frame, in the side panel and as notifications.
+- **The options page opened in a tab** could not talk to the panel service; it is now accepted when it is the top frame of its tab.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.219
+
 Works with extension ab-connect 0.5.58 (no extension change).
 
 ### Improvements
@@ -16,7 +37,6 @@ Works with extension ab-connect 0.5.58 (no extension change).
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.218
 
