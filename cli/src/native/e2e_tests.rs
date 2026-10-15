@@ -6636,6 +6636,32 @@ new MutationObserver((rs) => {
 }).observe(document.documentElement, {
   attributes: true, attributeOldValue: true, subtree: true, childList: true, characterData: true,
 });
+// Everything else a page can find: new globals (names and symbols), the
+// Symbol registry keys chrome-use once used, expandos on any element.
+// Polled as well as read at the end: a global that exists only while a
+// command runs is just as visible to the page.
+const seen = new Set();
+setInterval(() => { for (const x of JSON.parse(window.__trace(true))) seen.add(x); }, 4);
+window.__trace = (raw) => {
+  const mine = new Set(['__card', '__picked', '__typed', '__press', '__row', '__muts', '__base', '__trace']);
+  const names = Object.getOwnPropertyNames(window).filter((n) => !__base.names.includes(n) && !mine.has(n));
+  const syms = Object.getOwnPropertySymbols(window).filter((x) => !__base.syms.includes(x)).map(String);
+  const all = [window, document, navigator.credentials, ...document.querySelectorAll('*')].filter(Boolean);
+  const probes = ['cu-clicked', 'cu-auth', 'cu-bwu-create', 'cu-enter', 'chrome-use']
+    .filter((k) => all.some((o) => Symbol.for(k) in o));
+  const expandos = [...document.querySelectorAll('*')]
+    .filter((e) => own(e) !== (__base.own.get(e) || ''))
+    .map((e) => e.id || e.tagName);
+  if (raw) return JSON.stringify([...names, ...syms, ...probes, ...expandos.map((e) => 'expando:' + e)]);
+  return JSON.stringify({ muts: __muts, names, syms, probes, expandos, transient: [...seen] });
+};
+// A form's own names are its named controls: the baseline, not ours.
+const own = (e) => [...Object.getOwnPropertyNames(e), ...Object.getOwnPropertySymbols(e).map(String)].join();
+window.__base = {
+  names: Object.getOwnPropertyNames(window),
+  syms: Object.getOwnPropertySymbols(window),
+  own: new Map([...document.querySelectorAll('*')].map((e) => [e, own(e)])),
+};
 </script></body></html>"##
         .to_string();
     let (port, server) = spawn_html_server(page).await;
@@ -6647,14 +6673,23 @@ new MutationObserver((rs) => {
         assert_success(&resp);
         resp
     }
+    /// What the page can see of chrome-use: DOM mutations, new globals,
+    /// Symbol registry keys, element expandos. All empty, or the record.
     async fn mutations(state: &mut DaemonState) -> Value {
         let resp = Box::pin(execute_command(
-            &json!({ "id": "m", "action": "evaluate", "script": "JSON.stringify(window.__muts)" }),
+            &json!({ "id": "m", "action": "evaluate", "script": "window.__trace()" }),
             state,
         ))
         .await;
         assert_success(&resp);
-        get_data(&resp)["result"].clone()
+        let trace: Value =
+            serde_json::from_str(get_data(&resp)["result"].as_str().unwrap()).unwrap();
+        let clean = json!({ "muts": [], "names": [], "syms": [], "probes": [], "expandos": [], "transient": [] });
+        if trace == clean {
+            json!("[]")
+        } else {
+            trace
+        }
     }
 
     // snapshot -i runs all three scans: the cursor card, the error span and
@@ -6806,6 +6841,88 @@ new MutationObserver((rs) => {
     assert_eq!(get_data(&typed)["dispatch"], "pointer", "{typed}");
     assert_evaluate(&mut state, "p4", "window.__typed", json!("Paris")).await;
     assert_eq!(mutations(&mut state).await, json!("[]"), "pick (typed)");
+
+    // The probe itself works: a global that lives for 50 ms is caught.
+    run(
+        &mut state,
+        json!({ "id": "c1", "action": "evaluate", "script": "window.__selfCheck = 1; setTimeout(() => { delete window.__selfCheck; }, 50); true" }),
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let trace = mutations(&mut state).await;
+    assert_eq!(trace["names"], json!([]), "{trace}");
+    assert_eq!(trace["transient"], json!(["__selfCheck"]), "{trace}");
+
+    let _ = Box::pin(execute_command(
+        &json!({ "id": "99", "action": "close" }),
+        &mut state,
+    ))
+    .await;
+    server.abort();
+}
+
+/// The password-manager menu close (#373/#449) takes focus out of the login
+/// field and puts it back afterwards, in the page or in a same-process frame.
+/// The field is remembered by handle: the page sees the blur and the focus,
+/// nothing else (no attribute, no global, no expando). The tab switching
+/// around it needs the extension relay; this drives the two page steps.
+#[tokio::test]
+#[ignore]
+async fn e2e_refocus_remembers_the_field_without_marking_it() {
+    let page = r##"<!doctype html><html><body>
+<input id="user"><iframe id="fr" srcdoc="<input id=inner>"></iframe>
+<script>
+window.__muts = [];
+const own = (e) => [...Object.getOwnPropertyNames(e), ...Object.getOwnPropertySymbols(e).map(String)].join();
+const watch = (doc) => new MutationObserver((rs) => { for (const r of rs) window.__muts.push(r.type + ':' + (r.attributeName || '')); })
+  .observe(doc.documentElement, { attributes: true, subtree: true, childList: true, characterData: true });
+watch(document);
+window.__base = Object.getOwnPropertyNames(window);
+window.__trace = () => {
+  const inner = document.getElementById('fr').contentDocument;
+  const els = [...document.querySelectorAll('*'), ...inner.querySelectorAll('*')];
+  return JSON.stringify({
+    muts: __muts,
+    names: Object.getOwnPropertyNames(window).filter((n) => !__base.includes(n) && !['__muts', '__base', '__trace', '__watchInner'].includes(n)),
+    expandos: els.filter((e) => own(e) && e.tagName !== 'FORM').map((e) => e.id || e.tagName),
+  });
+};
+window.__watchInner = () => watch(document.getElementById('fr').contentDocument);
+</script></body></html>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let clean = json!("{\"muts\":[],\"names\":[],\"expandos\":[]}");
+
+    for (field, focus) in [
+        ("user", "document.getElementById('user').focus(); window.__watchInner(); document.activeElement.id"),
+        ("inner", "const f = document.getElementById('fr'); f.contentDocument.getElementById('inner').focus(); f.contentDocument.activeElement.id"),
+    ] {
+        assert_evaluate(&mut state, "f", focus, json!(field)).await;
+        let mgr = state.browser.as_ref().unwrap();
+        let sid = mgr.active_session_id().unwrap().to_string();
+        let remembered = mgr.blur_focused_field(&sid, true).await;
+        assert!(!remembered.is_empty(), "{field}: nothing remembered");
+        assert_evaluate(
+            &mut state,
+            "b",
+            "[document.activeElement.id, document.getElementById('fr').contentDocument.activeElement.tagName]",
+            json!(["", "BODY"]),
+        )
+        .await;
+        let mgr = state.browser.as_ref().unwrap();
+        mgr.refocus_remembered_field(&sid, &remembered).await;
+        let now = if field == "user" {
+            "document.activeElement.id"
+        } else {
+            "document.getElementById('fr').contentDocument.activeElement.id"
+        };
+        assert_evaluate(&mut state, "r", now, json!(field)).await;
+        assert_evaluate(&mut state, "t", "window.__trace()", clean.clone()).await;
+        // Leave focus on the page for the next round.
+        assert_evaluate(&mut state, "x", "document.activeElement.blur(); true", json!(true)).await;
+    }
 
     let _ = Box::pin(execute_command(
         &json!({ "id": "99", "action": "close" }),
@@ -7333,6 +7450,8 @@ async fn start_bwu_confirm_server() -> (String, tokio::task::JoinHandle<()>) {
 <div id="err" role="alert"></div><script>
 // Recorded once the page is parsed: the parser's own appends are not ours.
 window.__muts = [];
+window.__base = null;
+window.__base = Object.getOwnPropertyNames(window);
 document.addEventListener('DOMContentLoaded', () => new MutationObserver((rs) => {
   for (const r of rs) if (!(r.target.id === 'err' || (r.target.parentNode && r.target.parentNode.id === 'err')))
     window.__muts.push(r.type + ':' + (r.attributeName || '') + ':' + (r.target.id || r.target.nodeName)
@@ -7466,6 +7585,17 @@ async fn e2e_auth_login_bwu_presses_the_button_when_enter_is_lost() {
             .contains("form is gone"),
         "{data}"
     );
+    // The click watch and the key receipt left nothing the page can find.
+    assert_evaluate(
+        &mut state,
+        "g",
+        "JSON.stringify({ names: Object.getOwnPropertyNames(window).filter((n) => !__base.includes(n) && n !== '__muts' && n !== '__base'), \
+           probes: ['cu-clicked', 'cu-enter', 'cu-auth'].filter((k) => [window, ...document.querySelectorAll('*')].some((o) => Symbol.for(k) in o)), \
+           expandos: [...document.querySelectorAll('*')].filter((e) => Object.getOwnPropertyNames(e).length || Object.getOwnPropertySymbols(e).length).length, \
+           wsyms: Object.getOwnPropertySymbols(window).length })",
+        json!("{\"names\":[],\"probes\":[],\"expandos\":0,\"wsyms\":0}"),
+    )
+    .await;
 }
 
 /// #482: a submit that navigates is judged by where the page ends up.

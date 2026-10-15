@@ -6999,7 +6999,7 @@ impl BrowserManager {
     /// fields it blurred (the page's first) for
     /// [`Self::refocus_remembered_field`]. A handle, not a marker attribute:
     /// a MutationObserver on the page sees an attribute written and removed.
-    async fn blur_focused_field(&self, session_id: &str, remember: bool) -> Vec<String> {
+    pub(crate) async fn blur_focused_field(&self, session_id: &str, remember: bool) -> Vec<String> {
         let keep = if remember {
             "return a.tagName !== 'IFRAME' && a.tagName !== 'FRAME' ? a : null;"
         } else {
@@ -7049,7 +7049,7 @@ impl BrowserManager {
     /// Put focus back on the field [`Self::blur_focused_field`] remembered, in
     /// the page or in a child frame. Last, right before the command that needs
     /// it: the menu reopens on it a moment later.
-    async fn refocus_remembered_field(&self, session_id: &str, remembered: &[String]) {
+    pub(crate) async fn refocus_remembered_field(&self, session_id: &str, remembered: &[String]) {
         for object in remembered {
             let focused = self
                 .client
@@ -9307,20 +9307,21 @@ impl BrowserManager {
         let (_queue, queued) =
             UploadQueue::acquire(&lock_path, &holder, upload::QUEUE_MAX_WAIT).await?;
 
-        let key = upload::page_key();
+        let group = upload::object_group();
         let started = std::time::Instant::now();
         let streamed = self
-            .stream_files_to_page(&key, sources, total, session_id, started)
+            .stream_files_to_page(&object_id, &group, sources, total, session_id, started)
             .await;
-        if let Err(e) = streamed {
-            // Free the page's copy of whatever arrived.
-            let _ = self
-                .upload_eval(&upload::discard_script(&key), session_id)
-                .await;
-            return Err(e);
-        }
+        let buffer = match streamed {
+            Ok(buffer) => buffer,
+            Err(e) => {
+                // Free the page's copy of whatever arrived.
+                self.release_upload_buffer(&group, session_id).await;
+                return Err(e);
+            }
+        };
 
-        let result: EvaluateResult = self
+        let result: Result<EvaluateResult, String> = self
             .client
             .send_command_typed(
                 "Runtime.callFunctionOn",
@@ -9329,8 +9330,8 @@ impl BrowserManager {
                     object_id: Some(object_id),
                     arguments: Some(vec![
                         CallArgument {
-                            value: Some(json!(key)),
-                            object_id: None,
+                            value: None,
+                            object_id: Some(buffer),
                         },
                         CallArgument {
                             value: Some(json!(allow_dropzone)),
@@ -9342,8 +9343,15 @@ impl BrowserManager {
                 },
                 Some(session_id),
             )
-            .await
-            .map_err(|e| format!("relay file-injection failed: {}", e))?;
+            .await;
+        self.release_upload_buffer(&group, session_id).await;
+        let result = result.map_err(|e| {
+            if upload::buffer_gone(&e) {
+                format!("relay file-injection failed: {}", upload::MISSING)
+            } else {
+                format!("relay file-injection failed: {}", e)
+            }
+        })?;
 
         if let Some(ref details) = result.exception_details {
             return Err(format!(
@@ -9374,28 +9382,46 @@ impl BrowserManager {
         }))
     }
 
-    /// Send every file's bytes to the page buffer `key`, chunk by chunk,
-    /// checking the page's running byte count after each one.
+    /// Send every file's bytes to a page buffer created next to the target
+    /// element (in object group `group`), chunk by chunk, checking the page's
+    /// running byte count after each one. Returns the buffer's handle.
     async fn stream_files_to_page(
         &self,
-        key: &str,
+        target: &str,
+        group: &str,
         sources: Vec<(std::fs::File, String, u64)>,
         total: u64,
         session_id: &str,
         started: std::time::Instant,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         use super::upload;
         use base64::Engine;
 
         let budget = upload::stream_budget(total);
-        self.upload_eval(&upload::begin_script(key), session_id)
+        let begun = self
+            .client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": target,
+                    "functionDeclaration": upload::BEGIN_FUNCTION,
+                    "returnByValue": false,
+                    "objectGroup": group,
+                })),
+                Some(session_id),
+            )
             .await
             .map_err(|e| format!("relay upload (start) failed: {e}"))?;
+        let key = begun["result"]["objectId"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or("relay upload (start) failed: the page made no buffer")?;
+        let key = key.as_str();
         let mut sent_total: u64 = 0;
         let mut buf = vec![0u8; upload::CHUNK_BYTES];
         for (mut file, name, size) in sources {
             let mime = mime_for_path(&name);
-            self.upload_eval(&upload::file_script(key, &name, mime, size), session_id)
+            self.upload_call(key, &upload::file_function(&name, mime, size), session_id)
                 .await
                 .map_err(|e| format!("relay upload (start {name}) failed: {e}"))?;
             let mut sent: u64 = 0;
@@ -9407,7 +9433,7 @@ impl BrowserManager {
                 }
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                 let got = self
-                    .upload_eval(&upload::chunk_script(key, &b64), session_id)
+                    .upload_call(key, &upload::chunk_function(&b64), session_id)
                     .await
                     .map_err(|e| {
                         format!(
@@ -9442,21 +9468,33 @@ impl BrowserManager {
                 ));
             }
         }
-        Ok(())
+        Ok(key.to_string())
     }
 
-    /// One `Runtime.evaluate` of an upload step. A thrown exception is an
+    /// One upload step, called on the page buffer. A thrown exception is an
     /// error here: the old stream ignored it, so a page that navigated away
-    /// mid-upload "succeeded".
-    async fn upload_eval(&self, expression: &str, session_id: &str) -> Result<Value, String> {
+    /// mid-upload "succeeded". A buffer whose document is gone says so.
+    async fn upload_call(
+        &self,
+        buffer: &str,
+        function: &str,
+        session_id: &str,
+    ) -> Result<Value, String> {
         let reply = self
             .client
             .send_command(
-                "Runtime.evaluate",
-                Some(json!({ "expression": expression, "returnByValue": true })),
+                "Runtime.callFunctionOn",
+                Some(json!({ "objectId": buffer, "functionDeclaration": function, "returnByValue": true })),
                 Some(session_id),
             )
-            .await?;
+            .await
+            .map_err(|e| {
+                if super::upload::buffer_gone(&e) {
+                    super::upload::MISSING.to_string()
+                } else {
+                    e
+                }
+            })?;
         if let Some(details) = reply.get("exceptionDetails") {
             let text = details
                 .pointer("/exception/description")
@@ -9469,6 +9507,17 @@ impl BrowserManager {
             .pointer("/result/value")
             .cloned()
             .unwrap_or(Value::Null))
+    }
+
+    async fn release_upload_buffer(&self, group: &str, session_id: &str) {
+        let _ = self
+            .client
+            .send_command(
+                "Runtime.releaseObjectGroup",
+                Some(json!({ "objectGroup": group })),
+                Some(session_id),
+            )
+            .await;
     }
 
     pub async fn add_script_to_evaluate(&self, source: &str) -> Result<String, String> {
@@ -13343,8 +13392,10 @@ mod relay_upload_tests {
 
     #[derive(Default)]
     struct Page {
-        /// Upload buffers: key -> files of (name, size, bytes).
+        /// Upload buffers: object id -> files of (name, size, bytes).
         buffers: HashMap<String, Vec<(String, u64, Vec<u8>)>>,
+        /// Object group -> the buffer created in it.
+        groups: HashMap<String, String>,
         /// What was attached: (name, type-less sha256, size).
         attached: Vec<(String, String, u64)>,
         largest_command: usize,
@@ -13358,50 +13409,40 @@ mod relay_upload_tests {
     }
     type Shared = Arc<std::sync::Mutex<Page>>;
 
-    fn key_of(expr: &str) -> Option<String> {
-        let start = expr.find("window[\"")? + "window[\"".len();
-        let end = expr[start..].find('"')? + start;
-        Some(expr[start..end].to_string())
-    }
-
-    fn eval_reply(page: &Shared, expr: &str) -> Value {
+    /// What the fake page answers for a `Runtime.callFunctionOn`: upload
+    /// buffers are remote objects, keyed here by their (fake) object id.
+    fn call_reply(page: &Shared, params: &Value) -> Result<Value, String> {
         let mut p = page.lock().unwrap();
-        let key = key_of(expr).unwrap_or_default();
-        let missing = || {
-            json!({"result": {"type": "object", "subtype": "error"},
-                   "exceptionDetails": {"text": "Uncaught", "exception": {
-                       "description": "Error: the page lost the upload buffer (did it navigate or reload during the upload?)\n    at <anonymous>:1:1"}}})
-        };
-        if expr.contains("= { files: [] }") {
-            p.buffers.insert(key, Vec::new());
-            return json!({"result": {"type": "number", "value": 0}});
+        let function = params["functionDeclaration"].as_str().unwrap_or("");
+        let target = params["objectId"].as_str().unwrap_or("").to_string();
+        let gone = || "Could not find object with given id".to_string();
+        if function == upload::BEGIN_FUNCTION {
+            let key = format!("buf-{}", p.groups.len() + 1);
+            let group = params["objectGroup"].as_str().unwrap_or("").to_string();
+            p.groups.insert(group, key.clone());
+            p.buffers.insert(key.clone(), Vec::new());
+            return Ok(json!({"result": {"type": "object", "objectId": key}}));
         }
-        if expr.contains("delete window[") {
-            p.buffers.remove(&key);
-            return json!({"result": {"type": "number", "value": 0}});
-        }
-        if expr.contains("s.files.push(") {
-            let name_at = expr.find("name: ").unwrap() + "name: ".len();
-            let name: String = serde_json::Deserializer::from_str(&expr[name_at..])
+        if function.contains("this.files.push(") {
+            let name_at = function.find("name: ").unwrap() + "name: ".len();
+            let name: String = serde_json::Deserializer::from_str(&function[name_at..])
                 .into_iter::<String>()
                 .next()
                 .unwrap()
                 .unwrap();
-            let size_at = expr.find("size: ").unwrap() + "size: ".len();
-            let size: u64 = expr[size_at..]
+            let size_at = function.find("size: ").unwrap() + "size: ".len();
+            let size: u64 = function[size_at..]
                 .split(|c: char| !c.is_ascii_digit())
                 .next()
                 .unwrap()
                 .parse()
                 .unwrap();
-            let Some(files) = p.buffers.get_mut(&key) else {
-                return missing();
-            };
+            let files = p.buffers.get_mut(&target).ok_or_else(gone)?;
             files.push((name, size, Vec::new()));
             let n = files.len();
-            return json!({"result": {"type": "number", "value": n}});
+            return Ok(json!({"result": {"type": "number", "value": n}}));
         }
-        if let Some(at) = expr.find("const b = '") {
+        if let Some(at) = function.find("const b = '") {
             p.chunks += 1;
             if p.navigate_after_chunks == Some(p.chunks) {
                 p.buffers.clear();
@@ -13409,35 +13450,39 @@ mod relay_upload_tests {
             if p.buffers.len() > 1 {
                 p.interleaved = true;
             }
-            let b64 = &expr[at + "const b = '".len()..];
+            let b64 = &function[at + "const b = '".len()..];
             let b64 = &b64[..b64.find('\'').unwrap()];
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(b64)
                 .unwrap();
-            let Some(file) = p.buffers.get_mut(&key).and_then(|f| f.last_mut()) else {
-                return missing();
-            };
+            let file = p
+                .buffers
+                .get_mut(&target)
+                .and_then(|f| f.last_mut())
+                .ok_or_else(gone)?;
             file.2.extend_from_slice(&bytes);
             let got = file.2.len();
-            return json!({"result": {"type": "number", "value": got}});
+            return Ok(json!({"result": {"type": "number", "value": got}}));
         }
-        json!({"result": {"type": "undefined"}})
-    }
-
-    fn attach_reply(page: &Shared, params: &Value) -> Value {
-        let mut p = page.lock().unwrap();
-        let key = params["arguments"][0]["value"].as_str().unwrap_or("");
-        let Some(files) = p.buffers.remove(key) else {
-            return json!({"result": {"type": "object"},
-                          "exceptionDetails": {"text": "lost the upload buffer"}});
-        };
+        // The attach, on the target element, with the buffer as argument.
+        let key = params["arguments"][0]["objectId"].as_str().unwrap_or("");
+        let files = p.buffers.remove(key).ok_or_else(gone)?;
         let n = files.len();
         for (name, size, bytes) in files {
             assert_eq!(bytes.len() as u64, size, "assembled size of {name}");
             let sha = format!("{:x}", sha2::Sha256::digest(&bytes));
             p.attached.push((name, sha, size));
         }
-        json!({"result": {"type": "string", "value": format!("input:{n}")}})
+        Ok(json!({"result": {"type": "string", "value": format!("input:{n}")}}))
+    }
+
+    fn release_reply(page: &Shared, params: &Value) -> Value {
+        let mut p = page.lock().unwrap();
+        let group = params["objectGroup"].as_str().unwrap_or("");
+        if let Some(key) = p.groups.get(group).cloned() {
+            p.buffers.remove(&key);
+        }
+        json!({})
     }
 
     async fn start(page: Shared) -> String {
@@ -13463,17 +13508,24 @@ mod relay_upload_tests {
                                 "message": "message exceeds the native messaging cap"}})
                         } else {
                             let result = match req["method"].as_str().unwrap_or("") {
-                                "Runtime.evaluate" => {
-                                    let expr = req["params"]["expression"].as_str().unwrap_or("");
-                                    if expr.contains("const b = '") && !delay.is_zero() {
+                                "Runtime.callFunctionOn" => {
+                                    let function =
+                                        req["params"]["functionDeclaration"].as_str().unwrap_or("");
+                                    if function.contains("const b = '") && !delay.is_zero() {
                                         tokio::time::sleep(delay).await;
                                     }
-                                    eval_reply(&page, expr)
+                                    call_reply(&page, &req["params"])
                                 }
-                                "Runtime.callFunctionOn" => attach_reply(&page, &req["params"]),
-                                _ => json!({}),
+                                "Runtime.releaseObjectGroup" => {
+                                    Ok(release_reply(&page, &req["params"]))
+                                }
+                                _ => Ok(json!({})),
                             };
-                            json!({"id": req["id"], "result": result})
+                            match result {
+                                Ok(result) => json!({"id": req["id"], "result": result}),
+                                Err(message) => json!({"id": req["id"],
+                                    "error": {"code": -32000, "message": message}}),
+                            }
                         };
                         if let Some(sid) = req.get("sessionId") {
                             out["sessionId"] = sid.clone();

@@ -3170,10 +3170,12 @@ fn collect_backend_node_ids(node: &Value, ids: &mut std::collections::HashSet<i6
 
 #[cfg(test)]
 mod tests {
-    /// Stealth: page scripts never mark nodes to find them again. A
-    /// MutationObserver sees an attribute write and its removal alike, so
-    /// nodes are held by remote handles / backendNodeIds instead. The needles
-    /// are assembled so this test does not match itself.
+    /// Stealth: page scripts never mark nodes to find them again, and never
+    /// park state where the page can find it. A MutationObserver sees an
+    /// attribute write and its removal alike, and a page can enumerate its
+    /// globals and look up `Symbol.for` keys, so nodes and state are held by
+    /// remote handles / backendNodeIds instead. The needles are assembled so
+    /// this test does not match itself.
     #[test]
     fn page_scripts_never_write_marker_attributes() {
         let files = [
@@ -3184,6 +3186,9 @@ mod tests {
             ("interaction.rs", include_str!("interaction.rs")),
             ("semantic_locator.rs", include_str!("semantic_locator.rs")),
             ("report.rs", include_str!("../report.rs")),
+            ("upload.rs", include_str!("upload.rs")),
+            ("settle.rs", include_str!("settle.rs")),
+            ("observation.rs", include_str!("observation.rs")),
         ];
         let needles = [
             [".set", "Attribute("].concat(),
@@ -3191,6 +3196,13 @@ mod tests {
             [".toggle", "Attribute("].concat(),
             ["data-", "__ab-"].concat(),
             ["data-", "cu-"].concat(),
+            // Page globals and Symbol registry keys: the page can enumerate
+            // its globals and look a `Symbol.for` key up by name.
+            ["window", ".__"].concat(),
+            ["window", "["].concat(),
+            ["Symbol", ".for("].concat(),
+            ["globalThis", ".__"].concat(),
+            ["globalThis", "["].concat(),
         ];
         for (file, src) in files {
             for needle in &needles {
