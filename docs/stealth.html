@@ -92,6 +92,11 @@
           （patchright/rebrowser 说的「runtime leak」）——即便是连着你真实 Chrome 也一样。只有当你主动开启
           console/错误捕获时才启用它；<code>click</code>、<code>fill</code>、<code>eval</code> 等在不开它的情况下照常工作。
         </li>
+        <li>
+          <strong>找元素不往页面 DOM 里写任何东西。</strong><code>snapshot</code>、<code>find</code>、<code>nth</code>、
+          <code>pick</code>、<code>auth login</code> 用节点句柄记住选中的元素，不打临时标记属性；那种属性写上再删掉，页面的
+          <code>MutationObserver</code> 两次都看得见。
+        </li>
       </ul>
       <div class="du-callout tip">
         <div class="du-callout-title">✅ 为什么 0% 是最强的分数</div>
