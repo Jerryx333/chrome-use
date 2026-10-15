@@ -305,3 +305,37 @@ test('an Inspect & Ask reply list must be a list', async () => {
   bridge.receive({ method: 'agentPanelReply', requestId: messages[1].requestId, result: { schemaVersion: 1, replies: {} } });
   await assert.rejects(bad, /Malformed/);
 });
+
+test('session listing and resume replies must match the request', async () => {
+  const row = { sessionId: 's1', agentId: 'codex', title: null, cwd: '/p', lastActive: 1, running: false, resumable: true, conversationId: null };
+  const conversation = { id: 'c', agentId: 'codex', phase: 'idle', resumed: { sessionId: 's1', cwd: '/p' } };
+  for (const [operation, params, result, valid] of [
+    ['conversationSessionList', { agentId: 'codex' }, { agentId: 'codex', supported: true, sessions: [row] }, true],
+    ['conversationSessionList', { agentId: 'codex' }, { agentId: 'codex', supported: false, sessions: [] }, true],
+    ['conversationSessionList', { agentId: 'codex' }, { agentId: 'claude', supported: true, sessions: [] }, false],
+    ['conversationSessionList', { agentId: 'codex' }, { agentId: 'codex', supported: true, sessions: [{ ...row, running: 'yes' }] }, false],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { conversation }, true],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { conversation, existing: true }, true],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { conversation: { ...conversation, resumed: { sessionId: 'other' } } }, false],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { conversation: { ...conversation, resumed: undefined } }, false],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { confirmRequired: 'running', session: row }, true],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { confirmRequired: 'running', session: row, conversation }, false],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { confirmRequired: 'other', session: row }, false],
+  ]) {
+    const { bridge, messages } = setup();
+    const reply = bridge.request(operation, params);
+    bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, ...result } });
+    if (valid) await reply; else await assert.rejects(reply, /Malformed/, `${operation} ${JSON.stringify(result)}`);
+  }
+});
+
+test('session listing is a read; an unanswered resume is unconfirmed', async () => {
+  const timers = [];
+  const bridge = new AgentPanelBridge({ send() {}, schedule: (callback, delay) => { timers.push({ callback, delay }); return timers.length; }, cancel() {} });
+  const listing = bridge.request('conversationSessionList', { agentId: 'codex' });
+  const resume = bridge.request('conversationResume', { agentId: 'codex', sessionId: 's1' });
+  assert.deepEqual(timers.map(t => t.delay), [35000, 50000]);
+  for (const timer of timers) timer.callback();
+  await assert.rejects(listing, /did not answer/);
+  await assert.rejects(resume, /unconfirmed/);
+});

@@ -11,6 +11,8 @@ export class PanelTimeline {
     this.actions = new Map(); this.stepClaims = new Map(); this.artifacts = new Map();
     this.unbound = []; this.control = null; this.recovery = { terminated: null, forkedTo: null, context: null };
     this.requestKeys = new Map();
+    // History imported from a CLI session the conversation continues.
+    this.imported = null;
   }
 
   // A turn exists from its user event; journals without turnStarted start it
@@ -121,6 +123,11 @@ export class PanelTimeline {
           this.turnOrder[this.turnOrder.indexOf(data.messageId)] = data.replacementId;
           if (this.lastUser === data.messageId) this.lastUser = data.replacementId;
         }
+      }
+      else if (event.kind === 'importedHistory') {
+        const imported = this.imported ??= { messages: [], end: null };
+        if (data.end === true) imported.end = data;
+        else if (typeof data.text === 'string' && ['user', 'assistant', 'tool'].includes(data.role)) imported.messages.push({ role: data.role, text: data.text });
       }
       else if (event.kind === 'textDelta' || event.kind === 'textFinal') {
         const key = `text:${data.messageId || 'legacy'}:${data.itemId}`;

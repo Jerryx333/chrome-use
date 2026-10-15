@@ -308,3 +308,23 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 .inspect-reply { border-left: 3px solid var(--accent); padding: 4px 8px; margin: 6px 0; }
 .inspect-reply-head { font-size: 12px; }
 .inspect-reply-body { overflow-wrap: anywhere; }
+
+/* /resume: the session picker and the history imported from a CLI session. */
+.resume-picker { margin:8px 12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--bg); display:grid; gap:6px; max-height:min(70vh,520px); grid-template-rows:auto auto auto minmax(0,1fr) auto auto; }
+.resume-picker .resume-head { display:flex; align-items:center; gap:8px; }
+.resume-picker .resume-head strong { flex:1; font-size:13px; }
+.resume-picker input[type=search] { width:100%; box-sizing:border-box; }
+.resume-picker .resume-items { overflow:auto; min-height:0; }
+.resume-picker .hint { margin:0; font-size:11px; color:var(--muted); }
+.resume-item .badge { display:inline-block; margin-top:2px; margin-right:6px; font-size:10px; padding:1px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+.resume-item .badge.running { border-color:var(--error); color:var(--error); }
+.imported-history { margin:4px 0 10px; padding:8px 10px; border:1px dashed var(--line); border-radius:10px; }
+.imported-history > .hint { margin:0 0 4px; font-size:11px; color:var(--muted); }
+.imported-history summary { cursor:pointer; font-size:12px; color:var(--muted); }
+.imported-history details > .hint { font-size:11px; color:var(--muted); }
+.imported-message { margin:8px 0; }
+.imported-message .speaker { font-size:11px; color:var(--muted); }
+.imported-message.tool .content { font-size:11px; color:var(--muted); }
+.imported-message .content { white-space:pre-wrap; overflow-wrap:anywhere; }
+.imported-message.assistant .content { white-space:normal; }
+.resume-picker .resume-head select { width:auto; max-width:40%; }

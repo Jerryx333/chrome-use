@@ -3,9 +3,9 @@
 // replies must match the request's connection generation; no request is replayed.
 // Slow operations outlast the native host's own budget for them (32 s and 47 s),
 // so the host's answer arrives before this page gives up.
-const operationTimeouts = { agentInspect: 35000, imageConvert: 30000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000, inspectResolve: 20000, conversationArtifactRead: 12000, conversationRecoveryReview: 17000, conversationRecoveryTerminate: 17000, conversationRecoveryFork: 12000 };
+const operationTimeouts = { agentInspect: 35000, imageConvert: 30000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000, inspectResolve: 20000, conversationArtifactRead: 12000, conversationRecoveryReview: 17000, conversationRecoveryTerminate: 17000, conversationRecoveryFork: 12000, conversationSessionList: 35000, conversationResume: 50000 };
 // Reads that change nothing; a timeout there never leaves an outcome to confirm.
-const readOperations = ['conversationRead', 'conversationList', 'conversationArtifactRead', 'conversationRecoveryReview'];
+const readOperations = ['conversationRead', 'conversationList', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationSessionList'];
 
 // Inspect & Ask host operations. inspectDeliver is never replayed: a timeout
 // leaves the batch unconfirmed and the caller asks inspectDeliveryStatus.
@@ -25,7 +25,7 @@ export class AgentPanelBridge {
   }
 
   request(operation, params = {}) {
-    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'imageConvert', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
+    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationSessionList', 'conversationResume', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'imageConvert', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
     if (this.pending.size >= this.maxPending) return Promise.reject(new Error('Too many pending agent panel requests'));
     const requestId = `${this.identity}:${this.generation}:${++this.sequence}`;
     return new Promise((resolve, reject) => {
@@ -39,7 +39,7 @@ export class AgentPanelBridge {
           ? 'The configuration outcome could not be confirmed. Read its current values before retrying; the request was not replayed.'
           : 'The native host did not answer the agent panel request. Check the host version and connection; the request was not replayed.'));
       }, operationTimeouts[operation] ?? this.timeoutMs);
-      this.pending.set(requestId, { resolve, reject, timeout, operation, agentId: params?.agentId, planId: params?.planId, conversationId: params?.conversationId, messageId: params?.messageId, replacementId: params?.replacementId, id: params?.id, skillId: params?.skillId, attachmentId: params?.attachment?.id, artifactId: params?.artifactId, offset: params?.offset, requestedOptions: params?.options });
+      this.pending.set(requestId, { resolve, reject, timeout, operation, agentId: params?.agentId, planId: params?.planId, conversationId: params?.conversationId, messageId: params?.messageId, replacementId: params?.replacementId, id: params?.id, skillId: params?.skillId, attachmentId: params?.attachment?.id, artifactId: params?.artifactId, offset: params?.offset, requestedOptions: params?.options, sessionId: params?.sessionId });
       try { this.send({ method: 'agentPanel', requestId, operation, params }); }
       catch (error) {
         this.cancel(timeout);
@@ -75,13 +75,21 @@ export class AgentPanelBridge {
   }
 }
 
-function validResult({ operation, agentId, planId, conversationId, messageId, replacementId, id, skillId, attachmentId, artifactId, offset, requestedOptions }, result) {
+function validResult({ operation, agentId, planId, conversationId, messageId, replacementId, id, skillId, attachmentId, artifactId, offset, requestedOptions, sessionId }, result) {
   if (result?.schemaVersion !== 1) return false;
   // Recovery and artifact replies name another conversation (a fork) or no
   // conversation at all, so they are checked before the generic branch.
   if (operation === 'conversationArtifactRead') return result.artifactId === artifactId && Number.isInteger(result.offset) && result.offset === offset && typeof result.data === 'string' && Number.isInteger(result.total) && result.total >= 0 && typeof result.digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(result.digest);
   if (operation === 'conversationRecoveryReview') return ['exited', 'alive', 'unknown'].includes(result.process?.state);
   if (operation === 'conversationRecoveryTerminate') return typeof result.confirmed === 'boolean';
+  if (operation === 'conversationSessionList') return result.agentId === agentId && typeof result.supported === 'boolean' && Array.isArray(result.sessions) && result.sessions.length <= 100 && result.sessions.every(session => typeof session.sessionId === 'string' && session.agentId === agentId && typeof session.running === 'boolean' && Number.isFinite(session.lastActive) && (session.title === null || typeof session.title === 'string') && (session.cwd === null || typeof session.cwd === 'string') && (session.conversationId == null || typeof session.conversationId === 'string'));
+  // A resume answers with the new (or already continued) conversation bound
+  // to the session, or asks to confirm a session active elsewhere.
+  if (operation === 'conversationResume') {
+    if (result.confirmRequired !== undefined) return result.confirmRequired === 'running' && result.session?.sessionId === sessionId && result.conversation === undefined;
+    const conversation = result.conversation;
+    return typeof conversation?.id === 'string' && conversation.agentId === agentId && conversation.resumed?.sessionId === sessionId && ['idle', 'starting', 'running', 'waitingInput', 'stopping', 'failed', 'interrupted', 'recoveryRequired'].includes(conversation.phase);
+  }
   if (operation === 'conversationRecoveryFork') return typeof result.conversation?.id === 'string' && result.conversation.id !== conversationId && result.forkedFrom === conversationId;
   if (operation === 'agentInspect') {
     const inspection = result.inspection;

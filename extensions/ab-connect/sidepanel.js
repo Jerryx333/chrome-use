@@ -3,6 +3,7 @@ import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
 import { t, messageMap, applyI18n } from './i18n.js';
 import { renderReplies, validReplies } from './inspect-replies.js';
+import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } from './resume-picker.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -66,6 +67,31 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   const turnCards = new Map(), liveUrls = new Set(), dismissedStalls = new Set();
   let viewMode = null, forkView = null;
   const turnView = () => Boolean(panelSupport?.turnEvidence);
+  // `/resume`: continue a CLI session started outside the panel.
+  const resumePicker = createResumePicker({
+    document, api, onError: error, relativeTime, schedule, cancel,
+    agents: () => (panelSupport?.chatAgents || ['codex', 'claude']).filter(id => chatAgents.has(id)).map(id => ({ id, name: agentNames[id] })),
+    preferredAgent: () => conversation?.agentId || nodes.agent.value || preferredAgent,
+    executable: agentId => agentId === nodes.agent.value ? nodes.executable.value.trim() : '',
+    onResumed: async resumed => { await list(); rememberAgent(conversations.find(c => c.id === resumed.id)?.agentId || preferredAgent); select(resumed.id); },
+  });
+  document.getElementById('resumeHost')?.append(resumePicker.container);
+  let importedNode = null, importedCount = -1;
+  async function openResume(query = '') {
+    if (!panelSupport?.sessionResume) throw new Error(RESUME_TEXT.updateCli);
+    closeConversationMenu(); nodes.skillPicker.hidden = true; nodes.message.value = '';
+    await resumePicker.open(query);
+  }
+  // The imported block sits above everything else and is rebuilt only when
+  // more of it arrived.
+  function renderImported() {
+    const imported = timeline.imported;
+    const count = imported ? imported.messages.length + (imported.end ? 1 : 0) : 0;
+    if (count === importedCount) return;
+    importedNode?.remove?.(); importedCount = count;
+    importedNode = importedView(document, imported, { agentName: id => agentNames[id] || id || '', renderMarkdown });
+    if (importedNode) nodes.transcript.insertBefore(importedNode, nodes.transcript.children[0] || null);
+  }
 
   // Keep only correlation IDs in extension storage. Chat text lives in the
   // native journal; closing the view must not turn an uncertain send into a retry.
@@ -210,6 +236,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     newItem.append(element('span', t('panel_new_conversation_item'), 'title'));
     newItem.addEventListener('click', () => { closeConversationMenu(); nodes.conversation.value = ''; select(''); loadModels(); });
     const items = [newItem];
+    if (panelSupport?.sessionResume) {
+      const resumeItem = element('button', undefined, 'conversation-item new'); resumeItem.type = 'button';
+      resumeItem.append(element('span', RESUME_TEXT.menuItem, 'title'));
+      resumeItem.addEventListener('click', () => void openResume().catch(error));
+      items.push(resumeItem);
+    }
     for (const c of shown) {
       const item = element('button', undefined, `conversation-item${c.id === selected ? ' selected' : ''}`); item.type = 'button';
       item.setAttribute('role', 'option'); item.setAttribute('aria-selected', String(c.id === selected));
@@ -231,7 +263,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     selected = id; skillChoice = null; renderImageDrafts(); selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
     void loadSkills().catch(error);
     timeline = new PanelTimeline(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
-    toolTail = null; toolGroups.clear(); clearTurnView();
+    toolTail = null; toolGroups.clear(); clearTurnView(); importedNode = null; importedCount = -1;
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
     reportPresence();
@@ -287,12 +319,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   function renderTimeline() {
     const mode = turnView() ? 'turns' : 'rows';
     if (viewMode !== mode) {
-      if (viewMode) { rendered.clear(); toolTail = null; toolGroups.clear(); clearTurnView(); nodes.transcript.replaceChildren(nodes.empty); }
+      if (viewMode) { rendered.clear(); toolTail = null; toolGroups.clear(); clearTurnView(); importedNode = null; importedCount = -1; nodes.transcript.replaceChildren(nodes.empty); }
       viewMode = mode;
     }
+    renderImported();
     if (mode === 'turns') { renderTurns(); return; }
     const follow = nodes.transcript.scrollHeight - nodes.transcript.scrollTop - nodes.transcript.clientHeight < 80;
-    nodes.empty.hidden = timeline.rows.length > 0;
+    nodes.empty.hidden = timeline.rows.length > 0 || Boolean(timeline.imported);
     // A tool still open when the response ended is not running any more.
     const live = busyPhases.has(conversation?.phase);
     for (const row of timeline.rows) {
@@ -406,7 +439,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   }
   function renderTurns() {
     const follow = nodes.transcript.scrollHeight - nodes.transcript.scrollTop - nodes.transcript.clientHeight < 80;
-    nodes.empty.hidden = timeline.rows.length > 0 || Boolean(timeline.recovery.context);
+    nodes.empty.hidden = timeline.rows.length > 0 || Boolean(timeline.recovery.context) || Boolean(timeline.imported);
     const live = busyPhases.has(conversation?.phase);
     renderForkContext();
     for (const id of timeline.turnOrder) {
@@ -909,6 +942,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   async function send(direct = false) {
     if (panelSupport?.mode !== 'full') throw new Error(t('panel_error_cli_required'));
     if (!connected || sending || convertingImages || pendingMessages.has(selected) || conversation?.phase === 'recoveryRequired' || !nodes.message.value.trim()) return;
+    // A built-in command, looked up before skills.
+    const command = parseResumeCommand(nodes.message.value);
+    if (command) { await openResume(command.query); return; }
     if (direct && conversation?.directMessageId) throw new Error(t('panel_error_direct_waiting'));
     const text = nodes.message.value, chosen = chosenSkill(text);
     const images = [...(imageDrafts.get(selected) || [])];
@@ -1244,10 +1280,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   }
   function renderSkillPicker() {
     const match = /^\/([^\s]*)$/.exec(nodes.message.value);
-    const skills = match ? skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match[1].toLowerCase())).slice(0, 12) : [];
+    // Built-in commands come first and open their own view when chosen.
+    const builtins = match && panelSupport?.sessionResume && RESUME_TEXT.command.startsWith(match[1].toLowerCase()) ? [{ name: RESUME_TEXT.command, source: 'chrome-use', description: RESUME_TEXT.commandHint, builtin: true }] : [];
+    const skills = match ? [...builtins, ...skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match[1].toLowerCase()))].slice(0, 12) : [];
     visibleSkills = skills; skillPickerIndex = Math.min(skillPickerIndex,Math.max(0,skills.length-1));
     nodes.skillPicker.hidden = !skills.length;
     nodes.skillPicker.replaceChildren(...skills.map(skill => button(`${skill.name} · ${skill.source} · ${skill.description}`, async () => {
+      if (skill.builtin) { await openResume(); return; }
       skillChoice = skill; nodes.message.value = `/${skill.name} `; nodes.skillPicker.hidden = true; nodes.message.focus?.();
     })));
   }
@@ -1261,7 +1300,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     }
     if (['Tab','Enter'].includes(event.key) && !event.ctrlKey && !event.metaKey) {
       const skill = visibleSkills[skillPickerIndex]; if(!skill)return false;
-      event.preventDefault(); skillChoice=skill; nodes.message.value=`/${skill.name} `;nodes.skillPicker.hidden=true;return true;
+      event.preventDefault();
+      if (skill.builtin) { void openResume().catch(error); return true; }
+      skillChoice=skill; nodes.message.value=`/${skill.name} `;nodes.skillPicker.hidden=true;return true;
     }
     return false;
   }

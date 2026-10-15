@@ -228,3 +228,17 @@ test('an exit note without a messageId does not mark a recorded turn as legacy g
   const turn = timeline.turns.get('m');
   assert.equal(turn.legacy.grouping, false); assert.equal(turn.notes.length, 1);
 });
+
+test('imported CLI history is projected apart from the turns', () => {
+  const journal = fixture('journal-resume.json');
+  const timeline = replay(journal.events);
+  assert.equal(timeline.imported.messages.length, 4);
+  assert.deepEqual(timeline.imported.messages.map(m => m.role), ['user', 'tool', 'assistant', 'user']);
+  assert.equal(timeline.imported.end.omitted, 12);
+  assert.equal(timeline.rows.length, 0, 'imported messages are not turns');
+  assert.equal(timeline.turnOrder.length, 0);
+  // Malformed entries are dropped, not shown.
+  const bad = new PanelTimeline();
+  bad.apply([{ sequence: 1, kind: 'importedHistory', data: { role: 'system', text: 'x' } }, { sequence: 2, kind: 'importedHistory', data: { role: 'user', text: { not: 'text' } } }], 2);
+  assert.deepEqual(bad.imported.messages, []);
+});
