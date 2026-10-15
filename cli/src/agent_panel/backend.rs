@@ -13,7 +13,12 @@ use tokio::sync::mpsc;
 pub(super) struct Setup {
     pub agent_id: String,
     pub executable: PathBuf,
+    /// The conversation's private folder: MCP configuration, attachments,
+    /// Pi's own sessions.
     pub workspace: PathBuf,
+    /// The continued CLI session, when the conversation resumed one that
+    /// was started outside the panel.
+    pub external: Option<super::conversation::External>,
     pub profile: String,
     pub browser_session: String,
     pub backend_session: Option<String>,
@@ -26,6 +31,23 @@ pub(super) struct Setup {
     /// server sends it with every action lease (`CHROME_USE_PANEL_GENERATION`).
     pub generation: u64,
 }
+impl Setup {
+    /// Where the CLI process runs: a continued Claude or Codex session's own
+    /// directory when it still exists, else the conversation folder. Pi
+    /// reads its MCP servers from the directory it runs in, and OpenCode is
+    /// told the session's directory in the protocol, so both stay in the
+    /// conversation folder: the user's project is never written to.
+    pub(super) fn process_directory(&self) -> &std::path::Path {
+        match (
+            self.agent_id.as_str(),
+            self.external.as_ref().and_then(|e| e.cwd.as_ref()),
+        ) {
+            ("claude" | "codex", Some(cwd)) if cwd.is_dir() => cwd,
+            _ => &self.workspace,
+        }
+    }
+}
+
 pub(super) enum Command {
     Start(Message),
     Interrupt,
@@ -188,7 +210,7 @@ async fn drive(
     let prompt = PROMPT;
     let mut command = tokio::process::Command::new(&setup.executable);
     command
-        .current_dir(&setup.workspace)
+        .current_dir(setup.process_directory())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -210,22 +232,34 @@ async fn drive(
     match setup.agent_id.as_str() {
         "pi" => {
             pi_workspace(setup, &browser_env)?;
-            // The conversation id is Pi's session id; its file lives in the
-            // conversation folder, so resume is exact and deletion removes it.
-            let session = setup
-                .backend_session
-                .clone()
-                .or_else(|| {
-                    setup
-                        .browser_session
-                        .strip_prefix("panel-")
-                        .map(String::from)
-                })
-                .ok_or("Pi conversation has no session identity")?;
-            command
-                .args(["--mode", "rpc", "--approve", "--session-dir"])
-                .arg(setup.workspace.join("sessions"))
-                .args(["--session-id", &session, "--append-system-prompt", prompt]);
+            command.args(["--mode", "rpc", "--approve"]);
+            if let Some(file) = setup
+                .external
+                .as_ref()
+                .and_then(|e| e.session_file.as_ref())
+            {
+                // A continued session: Pi appends to the file it was started
+                // with, while it runs here, beside its .pi/mcp.json.
+                command.arg("--session").arg(file);
+            } else {
+                // The conversation id is Pi's session id; its file lives in the
+                // conversation folder, so resume is exact and deletion removes it.
+                let session = setup
+                    .backend_session
+                    .clone()
+                    .or_else(|| {
+                        setup
+                            .browser_session
+                            .strip_prefix("panel-")
+                            .map(String::from)
+                    })
+                    .ok_or("Pi conversation has no session identity")?;
+                command
+                    .arg("--session-dir")
+                    .arg(setup.workspace.join("sessions"))
+                    .args(["--session-id", &session]);
+            }
+            command.args(["--append-system-prompt", prompt]);
             // Pi never asks before a tool runs, so without full access it gets
             // the browser tools only: no shell, file edits or other built-ins.
             let tools = match setup.options.effective_access("pi", setup.full_access) {
@@ -557,7 +591,7 @@ async fn protocol(
                                 servers.insert("chrome_use".into(),codex_browser_server(setup,&browser_env));
                                 next_id+=1;
                                 let method=if session.is_some(){"thread/resume"}else{"thread/start"};
-                                let mut params=json!({"cwd":setup.workspace,"approvalPolicy":codex_approval_policy(setup.full_access),"sandbox":setup.options.sandbox("codex",setup.full_access),"developerInstructions":prompt,"config":{"web_search":"disabled","features":{"apps":false,"goals":false,"multi_agent":false,"image_generation":false},"mcp_servers":servers}});
+                                let mut params=json!({"cwd":setup.process_directory(),"approvalPolicy":codex_approval_policy(setup.full_access),"sandbox":setup.options.sandbox("codex",setup.full_access),"developerInstructions":prompt,"config":{"web_search":"disabled","features":{"apps":false,"goals":false,"multi_agent":false,"image_generation":false},"mcp_servers":servers}});
                                 if let Some(s)=&session {params["threadId"]=s.clone().into();params["excludeTurns"]=true.into();}
                                 if let Some(model)=&setup.model {params["model"]=model.clone().into();}
                                 if let Some(effort)=&setup.options.effort {params["config"]["model_reasoning_effort"]=effort.clone().into();}
@@ -1319,6 +1353,7 @@ mod tests {
             agent_id: "codex".into(),
             executable: "codex".into(),
             workspace: "/WORK".into(),
+            external: None,
             profile: "default".into(),
             browser_session: "panel-test".into(),
             backend_session: None,
@@ -1332,6 +1367,33 @@ mod tests {
             full_access,
             generation: 1,
         }
+    }
+
+    #[test]
+    fn continued_sessions_run_in_their_directory_only_where_nothing_is_written_there() {
+        use std::path::Path;
+        let project = tempfile::tempdir().unwrap();
+        let mut s = setup(false, None);
+        assert_eq!(s.process_directory(), Path::new("/WORK"));
+        s.external = Some(super::super::conversation::External {
+            cwd: Some(project.path().into()),
+            session_file: None,
+        });
+        for (agent, expected) in [
+            ("claude", project.path()),
+            ("codex", project.path()),
+            // Pi needs its .pi/mcp.json beside it; OpenCode gets the
+            // directory in the protocol.
+            ("pi", Path::new("/WORK")),
+            ("opencode", Path::new("/WORK")),
+        ] {
+            s.agent_id = agent.into();
+            assert_eq!(s.process_directory(), expected, "{agent}");
+        }
+        // A directory that no longer exists falls back to the conversation's.
+        s.agent_id = "claude".into();
+        s.external.as_mut().unwrap().cwd = Some(project.path().join("gone"));
+        assert_eq!(s.process_directory(), Path::new("/WORK"));
     }
 
     #[test]

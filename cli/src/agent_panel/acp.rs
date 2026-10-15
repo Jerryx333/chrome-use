@@ -60,7 +60,13 @@ pub(super) async fn protocol(
         .iter()
         .map(|(name, value)| json!({"name":name,"value":value}))
         .collect();
-    let mut session_params = json!({"cwd":setup.workspace,"mcpServers":[{"name":"chrome_use","command":setup.mcp_executable,"args":["mcp","--tools","all"],"env":env}]});
+    // OpenCode restores a session only for the directory it was started in.
+    let cwd = setup
+        .external
+        .as_ref()
+        .and_then(|e| e.cwd.as_ref())
+        .unwrap_or(&setup.workspace);
+    let mut session_params = json!({"cwd":cwd,"mcpServers":[{"name":"chrome_use","command":setup.mcp_executable,"args":["mcp","--tools","all"],"env":env}]});
     let mut session = setup.backend_session.clone();
     let mut requests = HashMap::from([(1u64, "initialize".to_string())]);
     let mut next_id = 1u64;

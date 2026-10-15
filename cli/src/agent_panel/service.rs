@@ -6,10 +6,11 @@ use super::approval::{self, Pending};
 use super::backend::{self, Command as BackendCommand, Notice, Setup};
 use super::config_transaction::{atomic_write, private_open, private_tree};
 use super::conversation::{
-    Continuation, Conversation, LastTurn, Message, PageContext, Phase, Store,
+    Continuation, Conversation, External, LastTurn, Message, PageContext, Phase, Store,
 };
 use super::options::ModelOptions;
 use super::redact::{self, Redacted};
+use super::sessions;
 use super::DiscoveryContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -161,6 +162,9 @@ fn operation_seconds(operation: &str) -> u64 {
         "agentActionReport" => 60,
         "agentRecordingAuthorize" | "agentRecordingStop" => 20,
         "conversationRecoveryReview" | "conversationRecoveryTerminate" => 15,
+        // Listing or importing an OpenCode session starts OpenCode.
+        "conversationSessionList" => 30,
+        "conversationResume" => 45,
         _ => 10,
     }
 }
@@ -560,6 +564,108 @@ pub(super) fn call(
     )
 }
 
+/// The agent of a session listing or import: a panel agent, with an
+/// absolute executable when one is chosen.
+fn external_agent(agent: &str, executable: Option<&Path>) -> Result<(), String> {
+    if !super::CHAT_AGENTS.contains(&agent) {
+        return Err("Unknown panel agent".into());
+    }
+    if executable.is_some_and(|p| !p.is_absolute()) {
+        return Err("A custom agent executable must be an absolute path".into());
+    }
+    Ok(())
+}
+
+/// The CLI program of an agent, as a conversation of it would run.
+fn agent_executable(agent: &str, chosen: Option<PathBuf>) -> Result<PathBuf, String> {
+    let context = DiscoveryContext::current()?;
+    let executable = chosen
+        .or_else(|| context.executable(super::agent_binary(agent).ok()?))
+        .ok_or("The selected local agent CLI is not installed")?;
+    if !super::is_executable(&executable, cfg!(windows)) {
+        return Err("Selected agent program is not an executable file".into());
+    }
+    Ok(executable)
+}
+
+/// External sessions already continued by a conversation of this profile:
+/// session id to conversation id.
+fn bound_sessions(store: &Store, agent: &str) -> HashMap<String, String> {
+    store
+        .list()
+        .into_iter()
+        .filter(|row| row["agentId"] == agent)
+        .filter_map(|row| {
+            Some((
+                row["resumed"]["sessionId"].as_str()?.to_string(),
+                row["id"].as_str()?.to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// Recent sessions of an agent on this computer, without the panel's own.
+async fn external_sessions(
+    agent: &str,
+    query: &str,
+    limit: usize,
+    executable: Option<PathBuf>,
+    directory: &Path,
+    roots: Option<sessions::Roots>,
+) -> Result<Vec<sessions::Session>, String> {
+    let panel_root = data_root(&DiscoveryContext::current()?)?;
+    if agent == "opencode" {
+        let executable = agent_executable(agent, executable)?;
+        return sessions::opencode_list(&executable, directory, query, limit, &panel_root).await;
+    }
+    let roots = roots.map_or_else(sessions::Roots::current, Ok)?;
+    let (agent, query) = (agent.to_string(), query.to_string());
+    tokio::task::spawn_blocking(move || {
+        sessions::list_files(&agent, &roots, &query, limit, &panel_root)
+    })
+    .await
+    .map_err(|_| "Sessions could not be listed".into())
+}
+
+/// One session by id, found again from the CLI's own records.
+async fn external_session(
+    agent: &str,
+    id: &str,
+    executable: Option<PathBuf>,
+    directory: &Path,
+    roots: Option<sessions::Roots>,
+) -> Result<sessions::Session, String> {
+    if agent == "opencode" {
+        return external_sessions(agent, id, 100, executable, directory, roots)
+            .await?
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| "That session was not found on this computer".into());
+    }
+    let roots = roots.map_or_else(sessions::Roots::current, Ok)?;
+    let (agent, id) = (agent.to_string(), id.to_string());
+    tokio::task::spawn_blocking(move || sessions::find_file(&agent, &roots, &id))
+        .await
+        .map_err(|_| "The session could not be read".to_string())?
+}
+
+/// The first line of session text with secrets masked, for a title.
+fn redacted_line(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let data = redact::event(
+        "sessionTitle",
+        json!({ "title": line }),
+        &mut redact::Secrets::default(),
+    )?
+    .into_value();
+    Some(data["title"].as_str()?.chars().take(120).collect())
+}
+
+/// A picker row. Session text is redacted before it leaves the service.
+fn session_row(session: &sessions::Session, conversation: Option<&String>) -> Value {
+    json!({"sessionId":session.id,"agentId":session.agent,"title":session.title.as_deref().and_then(redacted_line),"cwd":session.cwd,"lastActive":session.last_active,"running":session.running,"resumable":true,"conversationId":conversation})
+}
+
 struct Job {
     generation: u64,
     full_access: bool,
@@ -737,6 +843,8 @@ struct Engine {
     profile: String,
     stop: bool,
     schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
+    /// Where CLI sessions are looked up; tests point it at fixtures.
+    session_roots: Option<sessions::Roots>,
 }
 
 impl Engine {
@@ -770,6 +878,7 @@ impl Engine {
             profile,
             stop: false,
             schedules,
+            session_roots: None,
         }
     }
     /// Answer every waiting approval for a full-access conversation exactly as
@@ -849,6 +958,33 @@ impl Engine {
         self.chats
             .get_mut(id)
             .ok_or_else(|| "Conversation was not found".into())
+    }
+    /// Journal the earlier transcript of a continued CLI session: one
+    /// `importedHistory` event per message, then one closing event. Each
+    /// goes through the redaction rules like every other journal write.
+    fn import_history(
+        &mut self,
+        id: &str,
+        agent: &str,
+        session: &sessions::Session,
+        history: &sessions::History,
+    ) -> Result<(), String> {
+        let import = uuid::Uuid::new_v4().to_string();
+        let mut events: Vec<Value> = history
+            .turns
+            .iter()
+            .enumerate()
+            .map(|(index, turn)| json!({"importId":import,"index":index,"role":turn.role,"text":turn.text}))
+            .collect();
+        events.push(json!({"importId":import,"end":true,"agentId":agent,"sessionId":session.id,"cwd":session.cwd,"imported":history.turns.len(),"omitted":history.omitted,"unparsed":history.unparsed,"partial":history.partial}));
+        for data in events {
+            let Some(data) = self.redact(id, "importedHistory", data) else {
+                continue;
+            };
+            let chat = self.chats.get_mut(id).ok_or("Conversation was not found")?;
+            self.store.event(chat, "importedHistory", data)?;
+        }
+        self.persist(id)
     }
     fn persist(&mut self, id: &str) -> Result<(), String> {
         let chat = self.chats.get(id).ok_or("Conversation was not found")?;
@@ -1581,6 +1717,30 @@ struct Create {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SessionList {
+    agent_id: String,
+    #[serde(default)]
+    query: String,
+    limit: Option<usize>,
+    executable: Option<PathBuf>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Resume {
+    agent_id: String,
+    session_id: String,
+    /// The user confirmed continuing a session that looks active elsewhere.
+    #[serde(default)]
+    confirm_running: bool,
+    #[serde(default)]
+    options: ModelOptions,
+    model: Option<String>,
+    executable: Option<PathBuf>,
+    #[serde(default)]
+    full_access: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SetOptions {
     conversation_id: String,
     options: ModelOptions,
@@ -1915,6 +2075,113 @@ async fn dispatch(
             e.controls.insert(chat.id.clone(), chat.control());
             e.chats.insert(chat.id.clone(), chat);
             Ok(json!({"schemaVersion":1,"conversation":result}))
+        }
+        "conversationSessionList" => {
+            let p: SessionList = serde_json::from_value(params.clone()).map_err(|_| {
+                "conversationSessionList requires agentId and optional query, limit and executable"
+            })?;
+            external_agent(&p.agent_id, p.executable.as_deref())?;
+            if p.query.len() > 200 {
+                return Err("Search text is too long".into());
+            }
+            if !sessions::supported(&p.agent_id) {
+                return Ok(
+                    json!({"schemaVersion":1,"agentId":p.agent_id,"supported":false,"sessions":[]}),
+                );
+            }
+            let limit = p.limit.unwrap_or(30).clamp(1, 100);
+            let (bound, directory, roots) = {
+                let e = engine.lock().await;
+                (
+                    bound_sessions(&e.store, &p.agent_id),
+                    e.store.directory.clone(),
+                    e.session_roots.clone(),
+                )
+            };
+            let found = external_sessions(
+                &p.agent_id,
+                &p.query,
+                limit,
+                p.executable,
+                &directory,
+                roots,
+            )
+            .await?;
+            let rows: Vec<Value> = found
+                .iter()
+                .map(|s| session_row(s, bound.get(&s.id)))
+                .collect();
+            Ok(json!({"schemaVersion":1,"agentId":p.agent_id,"supported":true,"sessions":rows}))
+        }
+        "conversationResume" => {
+            let p: Resume = serde_json::from_value(params.clone()).map_err(|_| {
+                "conversationResume requires agentId and sessionId, and optional model, executable and options"
+            })?;
+            external_agent(&p.agent_id, p.executable.as_deref())?;
+            if !sessions::supported(&p.agent_id) {
+                return Err("This agent's sessions cannot be continued in the panel".into());
+            }
+            if !sessions::valid_id(&p.agent_id, &p.session_id) {
+                return Err("Invalid session id for this agent".into());
+            }
+            p.options.validate(&p.agent_id)?;
+            let (directory, roots) = {
+                let mut e = engine.lock().await;
+                if let Some(existing) = bound_sessions(&e.store, &p.agent_id).get(&p.session_id) {
+                    // Already continued here: open that conversation instead of
+                    // driving one CLI session from two conversations.
+                    let summary = e.chat(existing)?.summary();
+                    return Ok(json!({"schemaVersion":1,"conversation":summary,"existing":true}));
+                }
+                (e.store.directory.clone(), e.session_roots.clone())
+            };
+            let session = external_session(
+                &p.agent_id,
+                &p.session_id,
+                p.executable.clone(),
+                &directory,
+                roots,
+            )
+            .await?;
+            // Checked now, not from the picker's listing: it may be stale.
+            if session.running && !p.confirm_running {
+                return Ok(
+                    json!({"schemaVersion":1,"confirmRequired":"running","session":session_row(&session,None)}),
+                );
+            }
+            let history = if p.agent_id == "opencode" {
+                let executable = agent_executable(&p.agent_id, p.executable.clone())?;
+                sessions::opencode_history(
+                    &sessions::opencode_export(&executable, &directory, &p.session_id).await?,
+                )
+            } else {
+                let session = session.clone();
+                tokio::task::spawn_blocking(move || sessions::file_history(&session))
+                    .await
+                    .map_err(|_| "The session history could not be read")?
+            };
+            let mut chat = Conversation::new(&p.agent_id, p.model, p.executable)?;
+            chat.options = p.options;
+            chat.full_access = p.full_access;
+            chat.session_id = Some(p.session_id.clone());
+            if let Some(title) = session.title.as_deref().and_then(redacted_line) {
+                chat.title = title.chars().take(80).collect();
+            }
+            chat.external = Some(External {
+                cwd: session.cwd.clone(),
+                session_file: (p.agent_id == "pi").then(|| session.file.clone()).flatten(),
+            });
+            let id = chat.id.clone();
+            let mut e = engine.lock().await;
+            if let Some(existing) = bound_sessions(&e.store, &p.agent_id).get(&p.session_id) {
+                let summary = e.chat(existing)?.summary();
+                return Ok(json!({"schemaVersion":1,"conversation":summary,"existing":true}));
+            }
+            e.store.create(&chat)?;
+            e.controls.insert(id.clone(), chat.control());
+            e.chats.insert(id.clone(), chat);
+            e.import_history(&id, &p.agent_id, &session, &history)?;
+            Ok(json!({"schemaVersion":1,"conversation":e.chat(&id)?.summary()}))
         }
         "conversationRead" => {
             let p: Events = serde_json::from_value(params.clone()).map_err(|_| {
@@ -2707,6 +2974,7 @@ fn start<'a>(
             agent_id: chat.agent_id,
             executable,
             workspace,
+            external: chat.external,
             profile,
             browser_session: format!("panel-{id}"),
             backend_session: chat.session_id,
@@ -3414,6 +3682,240 @@ mod schedule_tests {
             "fixture".into(),
             std::collections::BTreeMap::new(),
         )))
+    }
+    const EXTERNAL_SESSION: &str = "49aa0704-6349-4d60-80f9-9d691cbe67fc";
+    const SESSION_SECRET: &str = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz";
+
+    /// An engine whose CLI session lookups read fixtures under `root`.
+    fn resume_engine(root: &Path) -> Arc<Mutex<Engine>> {
+        let engine = engine(root);
+        engine.try_lock().unwrap().session_roots = Some(sessions::Roots {
+            claude: root.join(".claude"),
+            codex: root.join(".codex"),
+            pi: root.join("pi-sessions"),
+        });
+        engine
+    }
+
+    /// A Claude session started in `project` that last wrote `age` ago,
+    /// whose transcript repeats a secret.
+    fn claude_session(root: &Path, project: &Path, age: Duration) {
+        let cwd = project.to_string_lossy();
+        let lines = [
+            json!({"type":"user","cwd":cwd,"sessionId":EXTERNAL_SESSION,"message":{"role":"user","content":format!("Deploy with key {SESSION_SECRET} please")}}),
+            json!({"type":"assistant","cwd":cwd,"message":{"id":"m1","role":"assistant","content":[{"type":"text","text":format!("Using {SESSION_SECRET} now")}]}}),
+            json!({"type":"assistant","cwd":cwd,"message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"deploy"}}]}}),
+            json!({"type":"user","cwd":cwd,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}),
+            json!({"type":"assistant","cwd":cwd,"message":{"id":"m3","role":"assistant","content":[{"type":"text","text":"Deployed."}]}}),
+        ];
+        let path = root
+            .join(".claude/projects/-project")
+            .join(format!("{EXTERNAL_SESSION}.jsonl"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&path, text).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn external_sessions_are_listed_redacted_and_resumed_with_their_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        claude_session(dir.path(), &project, Duration::from_secs(3600));
+        let engine = resume_engine(dir.path());
+        let listed = dispatch(
+            &engine,
+            "conversationSessionList",
+            &json!({"agentId":"claude"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed["supported"], true);
+        let row = &listed["sessions"][0];
+        assert_eq!(row["sessionId"], EXTERNAL_SESSION);
+        assert_eq!(row["running"], false);
+        assert_eq!(row["cwd"], json!(project));
+        let title = row["title"].as_str().unwrap();
+        assert!(title.starts_with("Deploy with key"), "{title}");
+        assert!(!title.contains(SESSION_SECRET), "{title}");
+        assert!(row["conversationId"].is_null());
+
+        let resumed = dispatch(
+            &engine,
+            "conversationResume",
+            &json!({"agentId":"claude","sessionId":EXTERNAL_SESSION}),
+        )
+        .await
+        .unwrap();
+        let conversation = &resumed["conversation"];
+        let id = conversation["id"].as_str().unwrap().to_string();
+        assert_eq!(conversation["resumed"]["sessionId"], EXTERNAL_SESSION);
+        assert!(!conversation["title"]
+            .as_str()
+            .unwrap()
+            .contains(SESSION_SECRET));
+        assert_eq!(conversation["phase"], "idle", "nothing was sent");
+        {
+            let mut e = engine.lock().await;
+            let chat = e.chat(&id).unwrap();
+            assert_eq!(chat.session_id.as_deref(), Some(EXTERNAL_SESSION));
+            let external = chat.external.as_ref().unwrap();
+            assert_eq!(external.cwd.as_deref(), Some(project.as_path()));
+            assert!(external.session_file.is_none());
+        }
+
+        let read = dispatch(
+            &engine,
+            "conversationRead",
+            &json!({"conversationId":id,"after":0}),
+        )
+        .await
+        .unwrap();
+        let imported: Vec<&Value> = read["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "importedHistory")
+            .collect();
+        let roles: Vec<_> = imported
+            .iter()
+            .filter_map(|e| e["data"]["role"].as_str())
+            .collect();
+        assert_eq!(roles, ["user", "assistant", "tool", "assistant"]);
+        let end = &imported.last().unwrap()["data"];
+        assert_eq!(end["end"], true);
+        assert_eq!(end["imported"], 4);
+        assert_eq!(end["sessionId"], EXTERNAL_SESSION);
+        assert!(imported[1]["data"]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Using "));
+        // Secrets in the old transcript never reach the journal file.
+        let journal = std::fs::read_to_string(
+            dir.path()
+                .join("conversations")
+                .join(&id)
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(!journal.contains(SESSION_SECRET));
+        assert!(journal.contains("importedHistory"));
+
+        // The listing now points at the conversation, and resuming again
+        // opens it rather than binding the session twice.
+        let listed = dispatch(
+            &engine,
+            "conversationSessionList",
+            &json!({"agentId":"claude"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed["sessions"][0]["conversationId"], json!(id));
+        let again = dispatch(
+            &engine,
+            "conversationResume",
+            &json!({"agentId":"claude","sessionId":EXTERNAL_SESSION}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(again["existing"], true);
+        assert_eq!(again["conversation"]["id"], json!(id));
+        let all = dispatch(&engine, "conversationList", &json!({}))
+            .await
+            .unwrap();
+        assert_eq!(all["conversations"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_session_active_elsewhere_needs_confirmation() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        claude_session(dir.path(), &project, Duration::ZERO);
+        let engine = resume_engine(dir.path());
+        let listed = dispatch(
+            &engine,
+            "conversationSessionList",
+            &json!({"agentId":"claude"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(listed["sessions"][0]["running"], true);
+        let request = json!({"agentId":"claude","sessionId":EXTERNAL_SESSION});
+        let held = dispatch(&engine, "conversationResume", &request)
+            .await
+            .unwrap();
+        assert_eq!(held["confirmRequired"], "running");
+        assert!(held.get("conversation").is_none());
+        let all = dispatch(&engine, "conversationList", &json!({}))
+            .await
+            .unwrap();
+        assert!(all["conversations"].as_array().unwrap().is_empty());
+        let mut confirmed = request;
+        confirmed["confirmRunning"] = true.into();
+        let resumed = dispatch(&engine, "conversationResume", &confirmed)
+            .await
+            .unwrap();
+        assert_eq!(
+            resumed["conversation"]["resumed"]["sessionId"],
+            EXTERNAL_SESSION
+        );
+    }
+
+    #[tokio::test]
+    async fn session_requests_are_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = resume_engine(dir.path());
+        for (operation, params) in [
+            (
+                "conversationResume",
+                json!({"agentId":"claude","sessionId":"../../etc/passwd"}),
+            ),
+            (
+                "conversationResume",
+                json!({"agentId":"gemini","sessionId":EXTERNAL_SESSION}),
+            ),
+            (
+                "conversationResume",
+                json!({"agentId":"claude","sessionId":EXTERNAL_SESSION,"cwd":"/tmp"}),
+            ),
+            (
+                "conversationResume",
+                json!({"agentId":"claude","sessionId":EXTERNAL_SESSION,"executable":"claude"}),
+            ),
+            (
+                "conversationResume",
+                json!({"agentId":"claude","sessionId":EXTERNAL_SESSION}),
+            ),
+            (
+                "conversationSessionList",
+                json!({"agentId":"claude","query":"x".repeat(201)}),
+            ),
+            (
+                "conversationSessionList",
+                json!({"agentId":"claude","path":"/etc"}),
+            ),
+            ("conversationSessionList", json!({})),
+        ] {
+            assert!(
+                dispatch(&engine, operation, &params).await.is_err(),
+                "{operation} {params}"
+            );
+        }
+        let none = dispatch(
+            &engine,
+            "conversationSessionList",
+            &json!({"agentId":"pi","limit":5}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(none["sessions"], json!([]));
     }
     #[tokio::test]
     async fn scheduling_does_not_escalate_or_allow_recursive_mutation() {
