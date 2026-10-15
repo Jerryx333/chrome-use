@@ -164,7 +164,6 @@ mod unix {
     }
 
     /// The session the service created with `setsid`; recorded in `ready`.
-    #[cfg_attr(not(test), allow(dead_code))] // backend.rs reads it with its own call.
     pub(in super::super) fn current_session() -> Option<i32> {
         let sid = unsafe { libc::getsid(0) };
         (sid > 1).then_some(sid)
