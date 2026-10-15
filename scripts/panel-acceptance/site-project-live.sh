@@ -17,7 +17,8 @@ tar -xzf "$WORK/release/$ASSET" -C "$WORK/bin"
 export HOST_BIN="$(find "$WORK/bin" -type f -name chrome-use -perm -u+x | head -1)"
 "$HOST_BIN" --version
 ROOT=$(git rev-parse --show-toplevel)
-git -C "$ROOT" fetch -q origin
+# A shallow single-branch clone has no other branches until fetched.
+git -C "$ROOT" fetch -q --depth 1 origin "+refs/heads/main:refs/remotes/origin/main"
 git -C "$ROOT" archive "$REF" extensions/ab-connect | tar -x -C "$WORK/ext"
 export EXT_DIR="$WORK/ext/extensions/ab-connect"
 rm -f "$EXT_DIR"/*.test.js
