@@ -2025,32 +2025,42 @@ mod tests {
         let c = chat_with("claude", true).await;
         c.send("place the order", false).await;
         let expect = c.begin("chrome_use_expect", ToolClass::Observe).await;
-        c.send_report(&expect_report(&c, &expect, "text Order placed", true))
-            .await;
+        c.send_report(&expect_report(
+            &c,
+            &expect,
+            "text #status contains Order placed",
+            true,
+        ))
+        .await;
         let met = |predicate: &str, evidence: &str| json!({"status":"done","requirements":[{"text":"Order placed","status":"met","check":{"kind":"expect","predicate":predicate,"evidence":evidence}}]});
         let passed = c
-            .assess(0, met("text Order placed", &expect))
+            .assess(0, met("text #status contains Order placed", &expect))
             .await
             .unwrap();
         assert_eq!(passed["phase"], "provisional");
         assert_eq!(passed["status"], "checksPassed");
         assert_eq!(passed["requirements"][0]["computed"], "checked");
-        // The agent's restatement is only a label: a Codex-style paraphrase
-        // of the recorded predicate still checks, and the card shows the
-        // predicate the action recorded.
+        // A copy of the recorded predicate with the operand quoted still
+        // checks, and the card shows the predicate the action recorded; a
+        // paraphrase that drops the selector does not.
+        let copy = c
+            .assess(0, met("text #status contains \"Order placed\"", &expect))
+            .await
+            .unwrap();
+        assert_eq!(copy["requirements"][0]["computed"], "checked");
+        assert_eq!(
+            copy["requirements"][0]["check"]["predicate"],
+            "text #status contains Order placed"
+        );
+        assert_eq!(
+            copy["requirements"][0]["check"]["label"],
+            "text #status contains \"Order placed\""
+        );
         let paraphrase = c
             .assess(0, met("text == \"Order placed\"", &expect))
             .await
             .unwrap();
-        assert_eq!(paraphrase["requirements"][0]["computed"], "checked");
-        assert_eq!(
-            paraphrase["requirements"][0]["check"]["predicate"],
-            "text Order placed"
-        );
-        assert_eq!(
-            paraphrase["requirements"][0]["check"]["label"],
-            "text == \"Order placed\""
-        );
+        assert_eq!(paraphrase["requirements"][0]["computed"], "claimed");
         // A label naming another selector and value than the recorded
         // check (acceptance check 3) is only claimed.
         let unrelated = c
@@ -2067,21 +2077,16 @@ mod tests {
             unrelated["downgradedBecause"][0],
             "requirement 1: the cited check records something else"
         );
-        // No predicate named: checked only when the requirement itself
-        // names something the recorded check holds.
-        let undescribed = |text: &str| json!({"status":"done","requirements":[{"text":text,"status":"met","check":{"kind":"expect","evidence":expect}}]});
-        let named = c.assess(0, undescribed("Order placed")).await.unwrap();
-        assert_eq!(named["requirements"][0]["computed"], "checked");
-        assert_eq!(
-            named["requirements"][0]["because"],
-            "the browser recorded this check; the check was not described"
-        );
-        let unnamed = c.assess(0, undescribed("Totals equal 42")).await.unwrap();
-        assert_eq!(unnamed["requirements"][0]["computed"], "claimed");
-        assert_eq!(
-            unnamed["requirements"][0]["because"],
-            "the cited check does not match the requirement"
-        );
+        // No predicate named: only claimed, whatever the requirement says.
+        let undescribed = |text: &str| json!({"status":"done","requirements":[{"text":text,"status":"met","check":{"kind":"expect","predicate":"","evidence":expect}}]});
+        for text in ["Order placed", "Totals equal 42"] {
+            let out = c.assess(0, undescribed(text)).await.unwrap();
+            assert_eq!(out["requirements"][0]["computed"], "claimed");
+            assert_eq!(
+                out["requirements"][0]["because"],
+                "the check was not described"
+            );
+        }
         // A failed expect fails the requirement whatever its label.
         let failing = c.begin("chrome_use_expect", ToolClass::Observe).await;
         c.send_report(&expect_report(&c, &failing, "text Paid", false))
@@ -2100,7 +2105,10 @@ mod tests {
         let unknown = c
             .assess(
                 0,
-                met("text Order placed", &uuid::Uuid::new_v4().to_string()),
+                met(
+                    "text #status contains Order placed",
+                    &uuid::Uuid::new_v4().to_string(),
+                ),
             )
             .await
             .unwrap();
@@ -2111,12 +2119,12 @@ mod tests {
         c.send_report(&c.report(&click, "chrome_use_click", ToolClass::Act))
             .await;
         let stale = c
-            .assess(0, met("text Order placed", &expect))
+            .assess(0, met("text #status contains Order placed", &expect))
             .await
             .unwrap();
         assert_eq!(stale["requirements"][0]["computed"], "stale");
         // Final at turnEnded, recomputed; the badge never says more.
-        c.assess(0, met("text Order placed", &expect))
+        c.assess(0, met("text #status contains Order placed", &expect))
             .await
             .unwrap();
         c.complete().await;
@@ -2131,7 +2139,7 @@ mod tests {
         // Evidence from the earlier turn never checks the next one.
         c.send("next", false).await;
         let earlier = c
-            .assess(0, met("text Order placed", &expect))
+            .assess(0, met("text #status contains Order placed", &expect))
             .await
             .unwrap();
         assert_eq!(earlier["requirements"][0]["computed"], "claimed");

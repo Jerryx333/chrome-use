@@ -252,7 +252,7 @@ pub(super) fn assess(
             "unknown" => ("unknown", "declared unknown".to_string(), None),
             _ => match supplied {
                 None => ("claimed", "no check was named".to_string(), None),
-                Some(check) => verify(check, &text, message_id, leases, artifacts),
+                Some(check) => verify(check, message_id, leases, artifacts),
             },
         };
         if status == "met" && computed != "checked" {
@@ -346,12 +346,10 @@ pub(super) fn not_assessed(message_id: &str) -> Value {
 
 /// One requirement's check against the evidence: `(computed, because,
 /// recorded predicate)`. For expect, readBack and urlMatch the predicate is
-/// the one the cited action recorded. The agent's restatement of it may
-/// paraphrase (quotes, "==" for "contains") but must name nothing the
-/// recorded check does not: see [`consistent`].
+/// the one the cited action recorded, and the agent's copy of it must equal
+/// it up to the recorder's grammar: see [`canonical`].
 fn verify(
     check: &Value,
-    requirement: &str,
     message_id: &str,
     leases: &HashMap<String, Lease>,
     artifacts: &Artifacts,
@@ -400,17 +398,16 @@ fn verify(
             shown,
         );
     }
-    let against = raw.as_deref().unwrap_or(journaled);
-    let undescribed = predicate.trim().is_empty();
-    if undescribed {
-        if !shares_operand(requirement, against) {
-            return (
-                "claimed",
-                "the cited check does not match the requirement".into(),
-                shown,
-            );
-        }
-    } else if !consistent(predicate, against, wanted) {
+    if predicate.trim().is_empty() {
+        return ("claimed", "the check was not described".into(), shown);
+    }
+    // Compared with the raw predicate while this service holds it, else
+    // with the journaled one in the same redacted form.
+    let same = match raw {
+        Some(raw) => states(predicate, raw),
+        None => states(&super::redact::text_for_compare(predicate), journaled),
+    };
+    if !same {
         return (
             "claimed",
             "the cited check records something else".into(),
@@ -435,11 +432,7 @@ fn verify(
             shown,
         );
     }
-    let recorded_because = if undescribed {
-        "the browser recorded this check; the check was not described"
-    } else {
-        "the browser recorded this check"
-    };
+    let recorded_because = "the browser recorded this check";
     // Fresh: no later acting action of this turn on the same page.
     let (Some(sequence), Some(target)) = (lease.report_sequence, &lease.landing.target_id) else {
         return ("checked", recorded_because.into(), shown);
@@ -461,135 +454,185 @@ fn verify(
     }
 }
 
-/// Operator and filler words an agent may use when it restates a check;
-/// they name nothing to compare.
-const FILLER: &[&str] = &[
-    "eq",
-    "==",
-    "===",
-    "=",
-    ":",
-    "->",
-    "equals",
-    "equal",
-    "equaling",
-    "is",
-    "are",
-    "was",
-    "contains",
-    "contain",
-    "containing",
-    "includes",
-    "include",
-    "including",
-    "has",
-    "have",
-    "matches",
-    "match",
-    "matching",
-    "to",
-    "be",
-    "should",
-    "must",
-    "the",
-    "a",
-    "an",
-    "of",
-    "on",
-    "in",
-    "at",
-    "with",
-    "and",
-    "shows",
-    "show",
-    "showing",
-    "displayed",
-    "display",
-    "displays",
-    "element",
-    "value",
-    "reads",
-    "read",
-    "says",
-    "now",
-    "that",
-    "it",
-    "its",
-    "this",
-    "does",
-    "do",
-];
-
-/// Words that turn a check around.
-const NEGATIONS: &[&str] = &[
-    "not", "!=", "!==", "no", "without", "isn't", "doesn't", "don't", "never", "absent",
-];
-
-/// A predicate as lowercase tokens, quotes dropped: `text == "Order
-/// placed"` and `text Order placed` give the same tokens.
-fn tokens(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .replace(
-            [
-                '"', '\'', '`', '\u{201c}', '\u{201d}', '\u{2018}', '\u{2019}',
-            ],
-            " ",
-        )
-        .split_whitespace()
-        .map(|t| {
-            t.trim_matches(|c: char| matches!(c, ',' | ';' | '(' | ')'))
-                .to_string()
-        })
-        .filter(|t| !t.is_empty())
-        .collect()
+/// A check predicate in one spelling, so an agent that copies the recorded
+/// predicate matches it and anything else does not. Only the recorder's
+/// grammar before the first operator is normalised: whitespace between
+/// words, the case of the leading kind and `not`, `==` glued to a selector,
+/// and the operator's vocabulary (`==`, `eq`, `equals`; `contain`,
+/// `includes`; `!=`, `doesn't contain`, `is not` as the recorder's leading
+/// `not`). Everything after the operator is one operand, compared byte for
+/// byte: only its outer whitespace is dropped, the agent may put one pair of
+/// quotes around all of it (the recorder writes it as given), and a trailing
+/// `(regex)` is a flag of its own.
+#[derive(Debug, PartialEq)]
+struct Canonical {
+    negated: bool,
+    prefix: Vec<String>,
+    operator: Option<&'static str>,
+    operand: Option<String>,
+    regex: bool,
 }
 
-/// Whether `needle` occurs in `hay` with no letter or digit right before
-/// or after it: `42` is in `contains 42` but not in `420`.
-fn occurs(hay: &str, needle: &str) -> bool {
-    hay.match_indices(needle).any(|(start, _)| {
-        let end = start + needle.len();
-        let before = hay[..start].chars().next_back();
-        let after = hay[end..].chars().next();
-        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
-    })
-}
-
-/// Whether the agent's wording of a check names only what the recorded
-/// predicate holds: every operand it gives (selector, expected text or
-/// number, URL) occurs in the recorded one, and both say "not" or neither
-/// does. Operators and quoting may differ. A read-back records no value, so
-/// there only selectors are compared; a URL match records the landed URL,
-/// so there only URL parts are.
-fn consistent(label: &str, recorded: &str, kind: CheckKind) -> bool {
-    let recorded_tokens = tokens(recorded);
-    let hay = recorded_tokens.join(" ");
-    let label_tokens = tokens(label);
-    let negated = |t: &[String]| t.iter().any(|w| NEGATIONS.contains(&w.as_str()));
-    if kind == CheckKind::Expect && negated(&label_tokens) != negated(&recorded_tokens) {
-        return false;
+fn canonical(text: &str) -> Canonical {
+    let mut text = text.trim();
+    let mut regex = false;
+    if let Some(rest) = text.strip_suffix("(regex)") {
+        if rest.is_empty() || rest.ends_with(char::is_whitespace) {
+            regex = true;
+            text = rest.trim_end();
+        }
     }
-    let selector = |t: &str| t.starts_with(['#', '.', '[']) || t.contains(['[', '>']);
-    label_tokens
-        .iter()
-        .filter(|t| !FILLER.contains(&t.as_str()) && !NEGATIONS.contains(&t.as_str()))
-        .filter(|t| match kind {
-            CheckKind::ReadBack => selector(t),
-            CheckKind::UrlMatch => t.contains(['.', '/', ':', '?', '=']),
-            _ => true,
-        })
-        .all(|t| occurs(&hay, t))
+    let words = words(text);
+    let mut out = Canonical {
+        negated: false,
+        prefix: Vec::new(),
+        operator: None,
+        operand: None,
+        regex,
+    };
+    let mut i = 0;
+    // The recorder's leading `not`.
+    while words
+        .get(i)
+        .is_some_and(|(w, _)| w.eq_ignore_ascii_case("not"))
+    {
+        out.negated = !out.negated;
+        i += 1;
+    }
+    if let Some((w, _)) = words.get(i) {
+        if KINDS.iter().any(|k| w.eq_ignore_ascii_case(k)) {
+            out.prefix.push(w.to_ascii_lowercase());
+            i += 1;
+        }
+    }
+    let lower = |k: usize| words.get(k).map(|(w, _)| w.to_lowercase());
+    let mut operand_start = None;
+    while i < words.len() {
+        let (word, end) = words[i];
+        let start = end - word.len();
+        // `#total==42`: the selector, the operator, the operand's start.
+        if let Some((at, op)) = ["!==", "===", "!=", "=="]
+            .iter()
+            .find_map(|op| word.find(op).map(|at| (at, *op)))
+            .filter(|(_, op)| word != *op)
+        {
+            if at > 0 {
+                out.prefix.push(word[..at].to_string());
+            }
+            let (name, inverted) = operator(op).unwrap_or(("equals", false));
+            out.operator = Some(name);
+            out.negated ^= inverted;
+            operand_start = Some(start + at + op.len());
+            break;
+        }
+        let this = lower(i).unwrap_or_default();
+        let next = lower(i + 1);
+        // "doesn't contain", "does not contain", "is not", "isn't", "not equals".
+        let found = match (this.as_str(), next.as_deref()) {
+            ("doesn't" | "doesnt" | "isn't" | "isnt" | "not", Some(n)) if operator(n).is_some() => {
+                operator(n).map(|op| (true, op, i + 1))
+            }
+            ("does" | "is", Some("not")) => match lower(i + 2).as_deref().and_then(operator) {
+                Some(op) => Some((true, op, i + 2)),
+                None if this == "is" => Some((true, ("equals", false), i + 1)),
+                None => None,
+            },
+            ("isn't" | "isnt", _) => Some((true, ("equals", false), i)),
+            _ => operator(&this).map(|op| (false, op, i)),
+        };
+        match found {
+            Some((flip, (name, inverted), last)) => {
+                out.operator = Some(name);
+                out.negated ^= flip ^ inverted;
+                operand_start = Some(words[last].1);
+                break;
+            }
+            None => out.prefix.push(word.to_string()),
+        }
+        i += 1;
+    }
+    out.operand = operand_start.map(|at| text[at..].trim().to_string());
+    out
 }
 
-/// Whether a requirement's own text names something the recorded predicate
-/// holds (used when the agent described no check).
-fn shares_operand(requirement: &str, recorded: &str) -> bool {
-    let hay = tokens(recorded).join(" ");
-    tokens(requirement)
-        .iter()
-        .filter(|t| !FILLER.contains(&t.as_str()) && !NEGATIONS.contains(&t.as_str()))
-        .filter(|t| t.chars().count() >= 2 || t.chars().all(|c| c.is_ascii_digit()))
-        .any(|t| occurs(&hay, t))
+/// Whether the agent's predicate states the recorded one.
+fn states(claimed: &str, recorded: &str) -> bool {
+    let (claimed, recorded) = (canonical(claimed), canonical(recorded));
+    let operand = match (&claimed.operand, &recorded.operand) {
+        (Some(c), Some(r)) => c == r || unquoted(c) == r,
+        (c, r) => c == r,
+    };
+    operand
+        && claimed.negated == recorded.negated
+        && claimed.prefix == recorded.prefix
+        && claimed.operator == recorded.operator
+        && claimed.regex == recorded.regex
+}
+
+/// Words of a predicate with the byte offset where each ends.
+fn words(text: &str) -> Vec<(&str, usize)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (at, c) in text
+        .char_indices()
+        .chain(std::iter::once((text.len(), ' ')))
+    {
+        match (start, c.is_whitespace()) {
+            (None, false) => start = Some(at),
+            (Some(s), true) => {
+                out.push((&text[s..at], at));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// An operand without one pair of quotes around all of it.
+fn unquoted(operand: &str) -> &str {
+    for (open, close) in [
+        ('"', '"'),
+        ('\'', '\''),
+        ('`', '`'),
+        ('\u{201c}', '\u{201d}'),
+        ('\u{2018}', '\u{2019}'),
+    ] {
+        if let Some(inner) = operand
+            .strip_prefix(open)
+            .and_then(|rest| rest.strip_suffix(close))
+        {
+            return inner;
+        }
+    }
+    operand
+}
+
+/// The expect kinds, as the recorder writes them first.
+const KINDS: &[&str] = &[
+    "element",
+    "count",
+    "text",
+    "value",
+    "attr",
+    "url",
+    "request",
+    "no-errors",
+];
+
+/// An operator word in the recorder's spelling, and whether it inverts.
+fn operator(word: &str) -> Option<(&'static str, bool)> {
+    Some(match word {
+        "==" | "===" | "eq" | "equals" | "equal" | "is" => ("equals", false),
+        "!=" | "!==" | "ne" => ("equals", true),
+        "contains" | "contain" | "includes" | "include" => ("contains", false),
+        "matches" | "match" => ("matches", false),
+        ">" => (">", false),
+        "<" => ("<", false),
+        ">=" => (">=", false),
+        "<=" => ("<=", false),
+        _ => return None,
+    })
 }
 
 fn download_type(
@@ -636,82 +679,117 @@ fn download_type(
 mod tests {
     use super::*;
 
+    fn same(label: &str, recorded: &str) -> bool {
+        states(label, recorded)
+    }
+
     #[test]
-    fn a_restated_check_must_name_only_what_was_recorded() {
-        let expect = CheckKind::Expect;
-        // Paraphrases of the recorded predicate.
+    fn an_exact_copy_and_operator_vocabulary_match() {
+        let recorded = "text #total contains 42";
         for label in [
-            "text Order placed",
-            "text == \"Order placed\"",
-            "text eq 'Order placed'",
-            "TEXT CONTAINS \"order placed\"",
+            "text #total contains 42",
+            "  text   #total contains   42 ",
+            "TEXT #total CONTAINS \"42\"",
+            "text #total includes '42'",
+            "text #total contain `42`",
         ] {
-            assert!(consistent(label, "text Order placed", expect), "{label}");
+            assert!(same(label, recorded), "{label}");
         }
-        assert!(consistent(
-            "#total == 42",
-            "text #total contains 42",
-            expect
+        assert!(same(
+            "text #title contains \"Page A\"",
+            "text #title contains Page A"
         ));
-        assert!(consistent(
-            "text #total contains 42",
-            "text #total contains 42",
-            expect
+        assert!(same(
+            "text #title == \"Page A\"",
+            "text #title equals Page A"
         ));
-        // Check 3 of the acceptance run: another selector and value.
-        assert!(!consistent(
-            "text #total contains 42",
-            "text #title contains Page",
-            expect
-        ));
-        assert!(!consistent(
-            "#total == 42",
-            "text #total contains 420",
-            expect
-        ));
-        assert!(!consistent("text Paid", "text Order placed", expect));
-        // A negation on one side only.
-        assert!(!consistent(
-            "text #err contains Error",
+        assert!(same("text #title eq Page A", "text #title equals Page A"));
+        assert!(same("count .item==3", "count .item == 3"));
+        assert!(same("count .item eq 3", "count .item == 3"));
+        // The recorder's leading `not` and the agent's negations.
+        let negated = "not text #err contains Error";
+        for label in [
             "not text #err contains Error",
-            expect
-        ));
-        assert!(consistent(
-            "#err does not contain Error",
-            "not text #err contains Error",
-            expect
-        ));
-        // URLs compare as text inside the landed URL.
-        assert!(consistent(
-            "url contains example.com/a",
-            "https://example.com/a",
-            CheckKind::UrlMatch
-        ));
-        assert!(!consistent(
-            "shop.example",
-            "https://example.com/a",
-            CheckKind::UrlMatch
-        ));
-        // A read-back records no value: only its selector is compared.
-        assert!(consistent(
-            "#email == a@b.example",
-            "#email has the typed value",
-            CheckKind::ReadBack
-        ));
-        assert!(!consistent(
-            "#name == a@b.example",
-            "#email has the typed value",
-            CheckKind::ReadBack
+            "NOT text #err contains \"Error\"",
+            "text #err doesn't contain Error",
+            "text #err does not contain Error",
+            "text #err not contains Error",
+        ] {
+            assert!(same(label, negated), "{label}");
+        }
+        assert!(same("text #s != Done", "not text #s equals Done"));
+        assert!(same("text #s is not Done", "not text #s equals Done"));
+        assert!(same("count .x != 3", "not count .x == 3"));
+        assert!(same("https://example.com/a", "https://example.com/a"));
+        assert!(same(
+            "#email  has the typed value",
+            "#email has the typed value"
         ));
     }
 
     #[test]
-    fn an_undescribed_check_must_share_an_operand_with_the_requirement() {
-        assert!(shares_operand("Open page A", "text #title contains Page A"));
-        assert!(shares_operand("Totals equal 42", "text #total contains 42"));
-        assert!(!shares_operand(
-            "Totals equal 42",
+    fn the_operand_after_the_operator_is_compared_whole() {
+        // Codex round 9: an operator inside the value is part of it.
+        assert!(!same("text #s equals \"a == b\"", "text #s equals a==b"));
+        assert!(same("text #s equals \"a==b\"", "text #s equals a==b"));
+        assert!(same(
+            "text #s contains \"a==b\" (regex)",
+            "text #s contains a==b (regex)"
+        ));
+        assert!(!same(
+            "text #s contains a==b",
+            "text #s contains a==b (regex)"
+        ));
+        // Inner whitespace is the value's own.
+        assert!(!same("text #s contains \"A  B\"", "text #s contains A B"));
+        assert!(same("text #s contains \"A  B\"", "text #s contains A  B"));
+        assert!(same("text #s contains   A  B  ", "text #s contains A  B"));
+        // Only one pair around the whole operand is dropped.
+        assert!(!same(
+            "text #s contains \"A\" \"B\"",
+            "text #s contains A B"
+        ));
+        // A value that has quotes of its own: copied as is, or quoted again.
+        assert!(same("text #s contains \"A\"", "text #s contains \"A\""));
+        assert!(same("text #s contains '\"A\"'", "text #s contains \"A\""));
+        assert!(!same("text #s contains A", "text #s contains \"A\""));
+    }
+
+    #[test]
+    fn anything_else_does_not_match() {
+        // Acceptance check 3 and Codex round 8's counterexamples.
+        assert!(!same(
+            "text #total contains 42",
             "text #title contains Page"
+        ));
+        assert!(!same(
+            "text #status contains \"on\"",
+            "text #status contains off"
+        ));
+        assert!(!same("contains", "text #status contains off"));
+        assert!(!same("input == alice", "#email has the typed value"));
+        assert!(!same("#total == 42", "text #total contains 42"));
+        assert!(!same("text #total contains 42", "text #total contains 420"));
+        assert!(!same(
+            "text #total contains 42",
+            "not text #total contains 42"
+        ));
+        assert!(!same(
+            "text #err doesn't contain Error",
+            "text #err contains Error"
+        ));
+        assert!(!same("text #x equals Page", "text #x contains Page"));
+        assert!(!same("text #x contains page a", "text #x contains Page A"));
+        assert!(!same("example.com/a", "https://example.com/a"));
+        assert!(!same("text Order placed", "text #x contains Order placed"));
+        // An operator word inside the value is an operand, not an operator.
+        assert!(!same(
+            "text #x contains \"found\"",
+            "text #x contains not found"
+        ));
+        assert!(same(
+            "text #x contains \"not found\"",
+            "text #x contains not found"
         ));
     }
 }

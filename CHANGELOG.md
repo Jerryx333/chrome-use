@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.216
+## 1.5.217
 
 <!-- release:start -->
+Patch release. Works with extension ab-connect 0.5.58 (no extension change).
+
+### Bug Fixes
+
+- **A browser check counts only when it is the same check.** A requirement is checked only when the agent's predicate equals the recorded one; operator words, quotes around the whole value and spacing between words may differ, the value itself must match byte for byte. An undescribed or different check is reported as claimed. Agents are told to copy the recorded predicate from the tool result.
+- **Passkey guard during `auth login --bwu`.** Restoring never reports "clean" while a guard still blocks `create()`: proxy chains, builtins the page replaced, a partial install, an out-of-process frame without the Page domain and an accessor `create` are reported as failures. Checked on Chrome for Testing and branded Chrome 155.
+- **Snapshot refs.** A ref named by an element's text is not handed on to new content in the same node.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.216
+
 Patch release for the agent panel shipped in 1.5.215. Works with extension ab-connect 0.5.58 (no extension change).
 
 ### Bug Fixes
@@ -15,7 +30,6 @@ Patch release for the agent panel shipped in 1.5.215. Works with extension ab-co
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.215
 
