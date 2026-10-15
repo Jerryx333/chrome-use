@@ -1,0 +1,13 @@
+{
+  "startedAt": "2026-10-14T23:28:10.053Z",
+  "manifest": {
+    "version": "0.5.57",
+    "hostPermissions": null,
+    "activeTab": true
+  },
+  "chrome": "Chrome/152.0.7977.82",
+  "pickerFromShortcut": true,
+  "target": "→ chrome-use-29 @ /Users/leo/github.com/chrome-use · localhost:5899 change",
+  "notice": "Sent to the session (wake: accepted). It is in the agent's queue; watch the agent for its answer.",
+  "ok": true
+}
