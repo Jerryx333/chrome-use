@@ -68,6 +68,8 @@ pub(super) struct Redaction {
 pub(super) struct Secrets {
     known: VecDeque<String>,
     streams: HashMap<String, TextScrubber>,
+    /// Tool calls whose input reads cookies; their results are cookie text.
+    cookie_calls: VecDeque<String>,
 }
 
 impl Secrets {
@@ -134,6 +136,7 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
     }
     let known = secrets.known();
     let mut walker = Walker::new(&known, kind);
+    walker.cookie = kind == "tool" && cookie_context(&data, secrets);
     walker.top(&mut data, kind);
     for secret in std::mem::take(&mut walker.learned) {
         secrets.learn(&secret);
@@ -141,6 +144,54 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
     let redactions = std::mem::take(&mut walker.redactions);
     stamp(&mut data, &redactions, walker.class);
     Some(Redacted(data))
+}
+
+/// Whether a tool event carries cookie text: the call's own input reads
+/// `document.cookie` (or the Cookie Store API), or it is the result of such a
+/// call seen earlier (Claude sends the result as a separate block). There a
+/// lone `name=value` is a cookie, not ordinary text.
+fn cookie_context(data: &Value, secrets: &mut Secrets) -> bool {
+    let item = &data["item"];
+    let reads_cookie = ["input", "arguments", "rawInput", "args"]
+        .iter()
+        .filter_map(|k| item.get(*k))
+        .any(|args| {
+            let text = args.to_string();
+            text.contains("document.cookie") || text.contains("cookieStore")
+        });
+    let call = data["toolCallId"]
+        .as_str()
+        .or_else(|| item["id"].as_str())
+        .or_else(|| item["tool_use_id"].as_str())
+        .or_else(|| item["toolCallId"].as_str())
+        .map(String::from);
+    if reads_cookie {
+        if let Some(call) = &call {
+            if !secrets.cookie_calls.contains(call) {
+                if secrets.cookie_calls.len() >= 256 {
+                    secrets.cookie_calls.pop_front();
+                }
+                secrets.cookie_calls.push_back(call.clone());
+            }
+        }
+        return true;
+    }
+    call.is_some_and(|call| secrets.cookie_calls.contains(&call))
+}
+
+/// Every `name=value` of cookie text, values masked whatever their length.
+fn cookie_masks(text: &str) -> Vec<Mask> {
+    let mut masks = Vec::new();
+    for c in patterns().cookie_pair.captures_iter(text) {
+        let (Some(name), Some(value)) = (c.get(1), c.get(2)) else {
+            continue;
+        };
+        if is_marker(value.as_str()) {
+            continue;
+        }
+        masks.push(Mask::value(text, value.start(), value.end(), "cookie").anchored(name.start()));
+    }
+    masks
 }
 
 /// Display minimization for events written before this build. Applied by
@@ -377,6 +428,7 @@ struct Patterns {
     header: Regex,
     cookie_header: Regex,
     cookie_run: Regex,
+    cookie_pair: Regex,
     bearer: Regex,
     shapes: Vec<(&'static str, Regex)>,
     binary: Regex,
@@ -393,6 +445,7 @@ fn patterns() -> &'static Patterns {
             json_key: r(r#"(?i)\\?"(password|passwd|pwd|secret|token|api_?key|authorization|proxy-authorization|cookie|set-cookie|otp|cvv|cvc|access_?token|refresh_?token|id_?token|client_?secret|x-api-key|x-auth-token|x-csrf-token)\\?"\s*:\s*\\?"([^"\\]+)"#),
             header: r(r"(?im)^[ \t]*(authorization|proxy-authorization|x-api-key|x-auth-token|x-csrf-token)[ \t]*:[ \t]*([^\r\n]+)"),
             cookie_header: r(r"(?im)^[ \t]*(set-cookie|cookie)[ \t]*:[ \t]*([^\r\n]+)"),
+            cookie_pair: r(r#"([A-Za-z_][A-Za-z0-9_.\-]*)=([^;\s"'&,\\]+)"#),
             cookie_run: r(r#"[A-Za-z0-9_.\-]+=[^;\s"'&]*(?:;[ \t]*[A-Za-z0-9_.\-]+=[^;\s"'&]*)+"#),
             bearer: r(r"(?i)\bbearer[ \t]+([A-Za-z0-9._~+/=\-]{8,})"),
             shapes: vec![
@@ -743,6 +796,8 @@ struct Walker<'a> {
     class: PrivacyClass,
     cap: Option<usize>,
     tool_text: bool,
+    /// Strings are cookie text (see [`cookie_context`]).
+    cookie: bool,
 }
 
 impl<'a> Walker<'a> {
@@ -754,6 +809,7 @@ impl<'a> Walker<'a> {
             class: PrivacyClass::Public,
             cap: None,
             tool_text: kind == "tool",
+            cookie: false,
         }
     }
     fn top(&mut self, data: &mut Value, kind: &str) {
@@ -830,7 +886,18 @@ impl<'a> Walker<'a> {
         }
     }
     fn text(&mut self, text: &mut String, path: &str) {
-        let masks = find_masks(text, self.known, self.tool_text);
+        let mut masks = find_masks(text, self.known, self.tool_text);
+        if self.cookie {
+            masks.extend(cookie_masks(text));
+            masks.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+            let mut kept: Vec<Mask> = Vec::new();
+            for mask in masks {
+                if kept.last().is_none_or(|last| mask.start >= last.end) {
+                    kept.push(mask);
+                }
+            }
+            masks = kept;
+        }
         if !masks.is_empty() {
             let (out, applied) = apply(text, &masks);
             for mask in &applied {
@@ -1461,6 +1528,59 @@ mod tests {
             &mut secrets,
         );
         assert!(secrets.flush().is_empty());
+    }
+
+    #[test]
+    fn a_lone_cookie_read_by_the_page_is_masked_and_its_echo_scrubbed() {
+        let mut secrets = Secrets::default();
+        // Codex: arguments and result in one item.
+        let out = event(
+            "tool",
+            json!({"completed":true,"toolCallId":"c1","item":{"type":"mcpToolCall","id":"c1","tool":"chrome_use_eval","arguments":{"script":"document.cookie"},"result":{"content":[{"type":"text","text":"sid=SYNTHCOOKIE42"}]}}}),
+            &mut secrets,
+        )
+        .unwrap()
+        .into_value();
+        let text = out["item"]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert_eq!(text, "sid=[redacted cookie, 13 chars]");
+        // The backend's echo in its answer is scrubbed too.
+        let echo = event(
+            "textFinal",
+            json!({"itemId":"a","text":"Your session cookie is sid=SYNTHCOOKIE42.","part":0,"last":true}),
+            &mut secrets,
+        )
+        .unwrap()
+        .into_value();
+        assert!(!echo["text"].as_str().unwrap().contains("SYNTHCOOKIE42"));
+        // Claude: the result block arrives separately, by tool_use_id.
+        let mut secrets = Secrets::default();
+        event(
+            "tool",
+            json!({"completed":false,"toolCallId":"t9","item":{"type":"tool_use","id":"t9","name":"mcp__chrome_use__chrome_use_eval","input":{"script":"return document.cookie"}}}),
+            &mut secrets,
+        );
+        let out = event(
+            "tool",
+            json!({"completed":true,"toolCallId":"t9","item":{"type":"tool_result","tool_use_id":"t9","content":"{\"stdout\":\"token_x=abc\"}"}}),
+            &mut secrets,
+        )
+        .unwrap()
+        .into_value();
+        assert!(
+            !out["item"]["content"].as_str().unwrap().contains("abc\""),
+            "{out}"
+        );
+        // Outside a cookie read, ordinary assignments stay.
+        let plain = event(
+            "tool",
+            json!({"completed":true,"item":{"type":"mcpToolCall","id":"c2","tool":"chrome_use_eval","arguments":{"script":"location.search"},"result":"page=2 sort=asc"}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert_eq!(plain["item"]["result"], "page=2 sort=asc");
     }
 
     #[test]
