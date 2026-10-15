@@ -404,8 +404,8 @@ fn verify(
     // Compared with the raw predicate while this service holds it, else
     // with the journaled one in the same redacted form.
     let same = match raw {
-        Some(raw) => canonical(predicate) == canonical(raw),
-        None => canonical(&super::redact::text_for_compare(predicate)) == canonical(journaled),
+        Some(raw) => states(predicate, raw),
+        None => states(&super::redact::text_for_compare(predicate), journaled),
     };
     if !same {
         return (
@@ -456,74 +456,156 @@ fn verify(
 
 /// A check predicate in one spelling, so an agent that copies the recorded
 /// predicate matches it and anything else does not. Only the recorder's
-/// grammar is normalised: whitespace, quotes around an operand, the case of
-/// the leading kind and `not`, and the operator's vocabulary (`==`, `eq`,
-/// `equals`; `contain`, `includes`; `!=`, `doesn't contain`, `is not` as
-/// the recorder's leading `not`). Only the first operator is read as one;
-/// operands (selectors, values, numbers, URLs) must be equal byte for byte.
-fn canonical(text: &str) -> (bool, String) {
-    let tokens = lex(text);
-    let mut negated = false;
-    let mut out: Vec<String> = Vec::new();
+/// grammar before the first operator is normalised: whitespace between
+/// words, the case of the leading kind and `not`, `==` glued to a selector,
+/// and the operator's vocabulary (`==`, `eq`, `equals`; `contain`,
+/// `includes`; `!=`, `doesn't contain`, `is not` as the recorder's leading
+/// `not`). Everything after the operator is one operand, compared byte for
+/// byte: only its outer whitespace is dropped, the agent may put one pair of
+/// quotes around all of it (the recorder writes it as given), and a trailing
+/// `(regex)` is a flag of its own.
+#[derive(Debug, PartialEq)]
+struct Canonical {
+    negated: bool,
+    prefix: Vec<String>,
+    operator: Option<&'static str>,
+    operand: Option<String>,
+    regex: bool,
+}
+
+fn canonical(text: &str) -> Canonical {
+    let mut text = text.trim();
+    let mut regex = false;
+    if let Some(rest) = text.strip_suffix("(regex)") {
+        if rest.is_empty() || rest.ends_with(char::is_whitespace) {
+            regex = true;
+            text = rest.trim_end();
+        }
+    }
+    let words = words(text);
+    let mut out = Canonical {
+        negated: false,
+        prefix: Vec::new(),
+        operator: None,
+        operand: None,
+        regex,
+    };
     let mut i = 0;
     // The recorder's leading `not`.
-    while let Some((t, false)) = tokens.get(i) {
-        if t.eq_ignore_ascii_case("not") {
-            negated = !negated;
+    while words
+        .get(i)
+        .is_some_and(|(w, _)| w.eq_ignore_ascii_case("not"))
+    {
+        out.negated = !out.negated;
+        i += 1;
+    }
+    if let Some((w, _)) = words.get(i) {
+        if KINDS.iter().any(|k| w.eq_ignore_ascii_case(k)) {
+            out.prefix.push(w.to_ascii_lowercase());
             i += 1;
-        } else {
+        }
+    }
+    let lower = |k: usize| words.get(k).map(|(w, _)| w.to_lowercase());
+    let mut operand_start = None;
+    while i < words.len() {
+        let (word, end) = words[i];
+        let start = end - word.len();
+        // `#total==42`: the selector, the operator, the operand's start.
+        if let Some((at, op)) = ["!==", "===", "!=", "=="]
+            .iter()
+            .find_map(|op| word.find(op).map(|at| (at, *op)))
+            .filter(|(_, op)| word != *op)
+        {
+            if at > 0 {
+                out.prefix.push(word[..at].to_string());
+            }
+            let (name, inverted) = operator(op).unwrap_or(("equals", false));
+            out.operator = Some(name);
+            out.negated ^= inverted;
+            operand_start = Some(start + at + op.len());
             break;
         }
-    }
-    if let Some((t, false)) = tokens.get(i) {
-        if KINDS.iter().any(|k| t.eq_ignore_ascii_case(k)) {
-            out.push(t.to_ascii_lowercase());
-            i += 1;
-        }
-    }
-    let mut operator_seen = false;
-    while i < tokens.len() {
-        let (token, quoted) = &tokens[i];
-        i += 1;
-        if *quoted || operator_seen {
-            out.push(token.clone());
-            continue;
-        }
-        let lower = token.to_lowercase();
-        let next = tokens
-            .get(i)
-            .filter(|(_, q)| !q)
-            .map(|(t, _)| t.to_lowercase());
+        let this = lower(i).unwrap_or_default();
+        let next = lower(i + 1);
         // "doesn't contain", "does not contain", "is not", "isn't", "not equals".
-        let (flip, operator, used) = match (lower.as_str(), next.as_deref()) {
+        let found = match (this.as_str(), next.as_deref()) {
             ("doesn't" | "doesnt" | "isn't" | "isnt" | "not", Some(n)) if operator(n).is_some() => {
-                (true, operator(n), 1)
+                operator(n).map(|op| (true, op, i + 1))
             }
-            ("does" | "is", Some("not")) => {
-                let after = tokens
-                    .get(i + 1)
-                    .filter(|(_, q)| !q)
-                    .map(|(t, _)| t.to_lowercase());
-                match after.as_deref().and_then(operator) {
-                    Some(op) => (true, Some(op), 2),
-                    None if lower == "is" => (true, Some(("equals", false)), 1),
-                    None => (false, None, 0),
-                }
-            }
-            ("isn't" | "isnt", _) => (true, Some(("equals", false)), 0),
-            _ => (false, operator(&lower), 0),
+            ("does" | "is", Some("not")) => match lower(i + 2).as_deref().and_then(operator) {
+                Some(op) => Some((true, op, i + 2)),
+                None if this == "is" => Some((true, ("equals", false), i + 1)),
+                None => None,
+            },
+            ("isn't" | "isnt", _) => Some((true, ("equals", false), i)),
+            _ => operator(&this).map(|op| (false, op, i)),
         };
-        match operator {
-            Some((op, inverted)) => {
-                negated ^= flip ^ inverted;
-                out.push(op.into());
-                operator_seen = true;
-                i += used;
+        match found {
+            Some((flip, (name, inverted), last)) => {
+                out.operator = Some(name);
+                out.negated ^= flip ^ inverted;
+                operand_start = Some(words[last].1);
+                break;
             }
-            None => out.push(token.clone()),
+            None => out.prefix.push(word.to_string()),
+        }
+        i += 1;
+    }
+    out.operand = operand_start.map(|at| text[at..].trim().to_string());
+    out
+}
+
+/// Whether the agent's predicate states the recorded one.
+fn states(claimed: &str, recorded: &str) -> bool {
+    let (claimed, recorded) = (canonical(claimed), canonical(recorded));
+    let operand = match (&claimed.operand, &recorded.operand) {
+        (Some(c), Some(r)) => c == r || unquoted(c) == r,
+        (c, r) => c == r,
+    };
+    operand
+        && claimed.negated == recorded.negated
+        && claimed.prefix == recorded.prefix
+        && claimed.operator == recorded.operator
+        && claimed.regex == recorded.regex
+}
+
+/// Words of a predicate with the byte offset where each ends.
+fn words(text: &str) -> Vec<(&str, usize)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (at, c) in text
+        .char_indices()
+        .chain(std::iter::once((text.len(), ' ')))
+    {
+        match (start, c.is_whitespace()) {
+            (None, false) => start = Some(at),
+            (Some(s), true) => {
+                out.push((&text[s..at], at));
+                start = None;
+            }
+            _ => {}
         }
     }
-    (negated, out.join(" "))
+    out
+}
+
+/// An operand without one pair of quotes around all of it.
+fn unquoted(operand: &str) -> &str {
+    for (open, close) in [
+        ('"', '"'),
+        ('\'', '\''),
+        ('`', '`'),
+        ('\u{201c}', '\u{201d}'),
+        ('\u{2018}', '\u{2019}'),
+    ] {
+        if let Some(inner) = operand
+            .strip_prefix(open)
+            .and_then(|rest| rest.strip_suffix(close))
+        {
+            return inner;
+        }
+    }
+    operand
 }
 
 /// The expect kinds, as the recorder writes them first.
@@ -551,62 +633,6 @@ fn operator(word: &str) -> Option<(&'static str, bool)> {
         "<=" => ("<=", false),
         _ => return None,
     })
-}
-
-/// Tokens of a predicate: whitespace separated, a quoted operand one token
-/// (its quotes dropped, inner whitespace collapsed), `==`/`!=` glued to
-/// their operands split off.
-fn lex(text: &str) -> Vec<(String, bool)> {
-    let mut tokens = Vec::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i].is_whitespace() {
-            i += 1;
-            continue;
-        }
-        let close = match chars[i] {
-            '"' => Some('"'),
-            '\'' => Some('\''),
-            '`' => Some('`'),
-            '\u{201c}' => Some('\u{201d}'),
-            '\u{2018}' => Some('\u{2019}'),
-            _ => None,
-        };
-        if let Some(close) = close {
-            // Closed by the quote that ends a token.
-            let end = (i + 1..chars.len())
-                .find(|&j| chars[j] == close && chars.get(j + 1).is_none_or(|c| c.is_whitespace()));
-            if let Some(end) = end {
-                let inner: String = chars[i + 1..end].iter().collect();
-                tokens.push((inner.split_whitespace().collect::<Vec<_>>().join(" "), true));
-                i = end + 1;
-                continue;
-            }
-        }
-        let start = i;
-        while i < chars.len() && !chars[i].is_whitespace() {
-            i += 1;
-        }
-        let word: String = chars[start..i].iter().collect();
-        split_glued(&word, &mut tokens);
-    }
-    tokens
-}
-
-/// `#total==42` as `#total`, `==`, `42`.
-fn split_glued(word: &str, tokens: &mut Vec<(String, bool)>) {
-    for op in ["!==", "===", "!=", "=="] {
-        if let Some(at) = word.find(op) {
-            if at > 0 && at + op.len() < word.len() {
-                split_glued(&word[..at], tokens);
-                tokens.push((op.into(), false));
-                split_glued(&word[at + op.len()..], tokens);
-                return;
-            }
-        }
-    }
-    tokens.push((word.into(), false));
 }
 
 fn download_type(
@@ -654,7 +680,7 @@ mod tests {
     use super::*;
 
     fn same(label: &str, recorded: &str) -> bool {
-        canonical(label) == canonical(recorded)
+        states(label, recorded)
     }
 
     #[test]
@@ -696,9 +722,37 @@ mod tests {
         assert!(same("count .x != 3", "not count .x == 3"));
         assert!(same("https://example.com/a", "https://example.com/a"));
         assert!(same(
-            "\"#email has the typed value\"",
+            "#email  has the typed value",
             "#email has the typed value"
         ));
+    }
+
+    #[test]
+    fn the_operand_after_the_operator_is_compared_whole() {
+        // Codex round 9: an operator inside the value is part of it.
+        assert!(!same("text #s equals \"a == b\"", "text #s equals a==b"));
+        assert!(same("text #s equals \"a==b\"", "text #s equals a==b"));
+        assert!(same(
+            "text #s contains \"a==b\" (regex)",
+            "text #s contains a==b (regex)"
+        ));
+        assert!(!same(
+            "text #s contains a==b",
+            "text #s contains a==b (regex)"
+        ));
+        // Inner whitespace is the value's own.
+        assert!(!same("text #s contains \"A  B\"", "text #s contains A B"));
+        assert!(same("text #s contains \"A  B\"", "text #s contains A  B"));
+        assert!(same("text #s contains   A  B  ", "text #s contains A  B"));
+        // Only one pair around the whole operand is dropped.
+        assert!(!same(
+            "text #s contains \"A\" \"B\"",
+            "text #s contains A B"
+        ));
+        // A value that has quotes of its own: copied as is, or quoted again.
+        assert!(same("text #s contains \"A\"", "text #s contains \"A\""));
+        assert!(same("text #s contains '\"A\"'", "text #s contains \"A\""));
+        assert!(!same("text #s contains A", "text #s contains \"A\""));
     }
 
     #[test]
