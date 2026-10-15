@@ -299,6 +299,14 @@ impl Engine {
             "actionAdmitted",
             json!({"v":1,"messageId":message.id,"generation":p.generation,"actionId":action,"tool":p.tool,"toolClass":p.tool_class,"argumentsDigest":p.arguments_digest,"outputs":entries,"quotaReserved":reserved.iter().sum::<u64>(),"requested":requested}),
         )?;
+        // Each capture is an artifact from its admission on (plan 2.2).
+        for output in &outputs {
+            self.record(
+                id,
+                "artifactCreated",
+                json!({"v":1,"messageId":message.id,"actionId":action,"artifactId":output.artifact_id,"kind":output.kind,"name":output.name,"state":"pending"}),
+            )?;
+        }
         let allocated: Vec<proto::AllocatedOutput> = outputs
             .iter()
             .map(|o| proto::AllocatedOutput {
@@ -1786,6 +1794,12 @@ mod tests {
         let path = output["path"].as_str().unwrap().to_string();
         assert!(path.contains(".chrome-use-out") && path.contains(&action));
         let artifact = output["artifactId"].as_str().unwrap().to_string();
+        let created = c.kinds("artifactCreated").await;
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0]["artifactId"], artifact);
+        assert_eq!(created[0]["actionId"], action);
+        assert_eq!(created[0]["kind"], "screenshot");
+        assert_eq!(created[0]["state"], "pending");
         let bytes = png();
         std::fs::write(&path, &bytes).unwrap();
         let mut report = c.report(&action, "chrome_use_screenshot", ToolClass::Capture);
@@ -1903,9 +1917,37 @@ mod tests {
         assert_eq!(passed["phase"], "provisional");
         assert_eq!(passed["status"], "checksPassed");
         assert_eq!(passed["requirements"][0]["computed"], "checked");
-        // A different predicate, an unknown action, no check at all.
-        let other = c.assess(0, met("text Cart", &expect)).await.unwrap();
+        // The agent's restatement is only a label: a Codex-style paraphrase
+        // of the recorded predicate still checks, and the card shows the
+        // predicate the action recorded.
+        let paraphrase = c
+            .assess(0, met("text == \"Order placed\"", &expect))
+            .await
+            .unwrap();
+        assert_eq!(paraphrase["requirements"][0]["computed"], "checked");
+        assert_eq!(
+            paraphrase["requirements"][0]["check"]["predicate"],
+            "text Order placed"
+        );
+        assert_eq!(
+            paraphrase["requirements"][0]["check"]["label"],
+            "text == \"Order placed\""
+        );
+        // A failed expect fails the requirement whatever its label.
+        let failing = c.begin("chrome_use_expect", ToolClass::Observe).await;
+        c.send_report(&expect_report(&c, &failing, "text Paid", false))
+            .await;
+        let other = c.assess(0, met("text Paid", &failing)).await.unwrap();
         assert_eq!(other["requirements"][0]["computed"], "checkFailed");
+        // Another kind than the one recorded is only claimed.
+        let wrong_kind = c
+            .assess(
+                0,
+                json!({"status":"done","requirements":[{"text":"x","status":"met","check":{"kind":"urlMatch","predicate":"shop.example","evidence":expect}}]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wrong_kind["requirements"][0]["computed"], "claimed");
         let unknown = c
             .assess(
                 0,

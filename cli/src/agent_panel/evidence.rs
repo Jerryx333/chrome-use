@@ -219,22 +219,6 @@ fn cap(text: &str) -> String {
     text.chars().take(MAX_TEXT).collect()
 }
 
-/// Whether a supplied URL (or host+path prefix) matches where the browser
-/// landed. Both sides are compared in their redacted form.
-fn url_matches(supplied: &str, landed: &str) -> bool {
-    let supplied = super::redact::url(supplied.trim());
-    let landed = super::redact::url(landed);
-    let strip = |u: &str| {
-        u.split_once("://")
-            .map(|(_, rest)| rest.to_string())
-            .unwrap_or_else(|| u.to_string())
-            .trim_start_matches("www.")
-            .to_string()
-    };
-    let (supplied, landed) = (strip(&supplied), strip(&landed));
-    !supplied.is_empty() && landed.starts_with(&supplied)
-}
-
 /// Compute a `taskAssessment` (plan 4.3) for `message_id` from what the
 /// agent declared and the evidence leased under that message. `outcome` is
 /// the turn's outcome for the final assessment, `None` while provisional.
@@ -267,21 +251,27 @@ pub(super) fn assess(
             .filter(|s| matches!(*s, "met" | "unmet" | "unknown"))
             .unwrap_or("unknown");
         let supplied = requirement.get("check").filter(|c| c.is_object());
-        let (computed, because) = match status {
-            "unmet" => ("unmet", "declared unmet".to_string()),
-            "unknown" => ("unknown", "declared unknown".to_string()),
+        let (computed, because, recorded) = match status {
+            "unmet" => ("unmet", "declared unmet".to_string(), None),
+            "unknown" => ("unknown", "declared unknown".to_string(), None),
             _ => match supplied {
-                None => ("claimed", "no check was named".to_string()),
+                None => ("claimed", "no check was named".to_string(), None),
                 Some(check) => verify(check, message_id, leases, artifacts),
             },
         };
         if status == "met" && computed != "checked" {
             downgraded.push(format!("requirement {}: {because}", index + 1));
         }
+        // The predicate shown is the one the cited action recorded; the
+        // agent's own wording is only a label.
         let check = supplied.map(|c| {
             json!({
                 "kind": c["kind"].as_str().map(cap),
-                "predicate": c["predicate"].as_str().map(cap),
+                "predicate": recorded
+                    .clone()
+                    .or_else(|| c["predicate"].as_str().map(String::from))
+                    .map(|p| cap(&p)),
+                "label": c["predicate"].as_str().map(cap),
                 "evidence": c["evidence"].as_str().map(cap),
             })
         });
@@ -358,105 +348,81 @@ pub(super) fn not_assessed(message_id: &str) -> Value {
     })
 }
 
-/// One requirement's check against the evidence: `(computed, because)`.
+/// One requirement's check against the evidence: `(computed, because,
+/// recorded predicate)`. For expect, readBack and urlMatch the predicate is
+/// the one the cited action recorded; the agent's restatement of it (quotes,
+/// "eq" for "==") is not compared.
 fn verify(
     check: &Value,
     message_id: &str,
     leases: &HashMap<String, Lease>,
     artifacts: &Artifacts,
-) -> (&'static str, String) {
+) -> (&'static str, String, Option<String>) {
     let evidence = check["evidence"].as_str().unwrap_or("");
     let predicate = check["predicate"].as_str().unwrap_or("");
     let kind = check["kind"].as_str().unwrap_or("");
     if kind == "downloadType" {
-        let Some(entry) = artifacts.entries.get(evidence) else {
-            return (
-                "claimed",
-                "the cited file is not one of this conversation's".into(),
-            );
-        };
-        if entry.message_id.as_deref() != Some(message_id) {
-            return (
-                "claimed",
-                "the cited file belongs to another request".into(),
-            );
-        }
-        if entry.kind != super::artifacts::Kind::Download {
-            return ("claimed", "the cited file is not a download".into());
-        }
-        return match &entry.state {
-            State::Ready(info) if info.bytes == 0 => ("checkFailed", "the file is empty".into()),
-            State::Ready(info) if info.type_matches != Some(true) => (
-                "checkFailed",
-                "the file's content does not match its extension".into(),
-            ),
-            State::Ready(info)
-                if info.mime.as_deref().map(str::to_ascii_lowercase)
-                    != Some(predicate.trim().to_ascii_lowercase()) =>
-            {
-                ("checkFailed", "the file is not of the stated type".into())
-            }
-            State::Ready(_) => ("checked", "a non-empty file of that type was saved".into()),
-            State::Unavailable(_) => ("checkFailed", "the file was not kept".into()),
-            _ => ("claimed", "the file is not ready".into()),
-        };
+        let (computed, because) = download_type(evidence, predicate, message_id, artifacts);
+        return (computed, because, None);
     }
     let wanted = match kind {
         "expect" => CheckKind::Expect,
         "readBack" => CheckKind::ReadBack,
         "urlMatch" => CheckKind::UrlMatch,
-        _ => return ("claimed", "this kind of check cannot be verified".into()),
+        _ => {
+            return (
+                "claimed",
+                "this kind of check cannot be verified".into(),
+                None,
+            )
+        }
     };
     let Some(lease) = leases.get(evidence) else {
         return (
             "claimed",
             "the cited action is not one of this conversation's".into(),
+            None,
         );
     };
     if lease.message_id != message_id {
         return (
             "claimed",
             "the cited action belongs to another request".into(),
+            None,
         );
     }
-    let Some((recorded, journaled, raw)) = &lease.check else {
-        return ("claimed", "the cited action recorded no check".into());
+    let Some((recorded, journaled, _)) = &lease.check else {
+        return ("claimed", "the cited action recorded no check".into(), None);
     };
+    let shown = Some(journaled.clone());
     if *recorded != wanted {
         return (
             "claimed",
             "the cited action recorded another kind of check".into(),
+            shown,
         );
     }
     match lease.verdict {
         Some(Verdict::Confirmed) => {}
-        Some(Verdict::Failed) => return ("checkFailed", "the check failed".into()),
-        _ => return ("claimed", "the check did not confirm anything".into()),
+        Some(Verdict::Failed) => return ("checkFailed", "the check failed".into(), shown),
+        _ => {
+            return (
+                "claimed",
+                "the check did not confirm anything".into(),
+                shown,
+            )
+        }
     }
-    let matches = match wanted {
-        CheckKind::UrlMatch => {
-            lease.landing.from_reply
-                && lease
-                    .landing
-                    .url
-                    .as_deref()
-                    .is_some_and(|url| url_matches(predicate, url))
-        }
-        CheckKind::Expect => {
-            raw.as_deref() == Some(predicate)
-                || *journaled == super::redact::text_for_compare(predicate)
-        }
-        CheckKind::ReadBack => true,
-    };
-    if !matches {
+    if wanted == CheckKind::UrlMatch && !lease.landing.from_reply {
         return (
-            "checkFailed",
-            "the recorded check is not the one named".into(),
+            "claimed",
+            "the landing page was not named by the action's own reply".into(),
+            shown,
         );
     }
     // Fresh: no later acting action of this turn on the same page.
     let (Some(sequence), Some(target)) = (lease.report_sequence, &lease.landing.target_id) else {
-        return ("checked", "the browser recorded this check".into());
+        return ("checked", "the browser recorded this check".into(), shown);
     };
     let stale = leases.values().any(|other| {
         other.message_id == message_id
@@ -465,8 +431,52 @@ fn verify(
             && other.landing.target_id.as_ref() == Some(target)
     });
     if stale {
-        ("stale", "a later action changed the same page".into())
+        (
+            "stale",
+            "a later action changed the same page".into(),
+            shown,
+        )
     } else {
-        ("checked", "the browser recorded this check".into())
+        ("checked", "the browser recorded this check".into(), shown)
+    }
+}
+
+fn download_type(
+    evidence: &str,
+    predicate: &str,
+    message_id: &str,
+    artifacts: &Artifacts,
+) -> (&'static str, String) {
+    let Some(entry) = artifacts.entries.get(evidence) else {
+        return (
+            "claimed",
+            "the cited file is not one of this conversation's".into(),
+        );
+    };
+    if entry.message_id.as_deref() != Some(message_id) {
+        return (
+            "claimed",
+            "the cited file belongs to another request".into(),
+        );
+    }
+    if entry.kind != super::artifacts::Kind::Download {
+        return ("claimed", "the cited file is not a download".into());
+    }
+    match &entry.state {
+        State::Ready(info) if info.bytes == 0 => ("checkFailed", "the file is empty".into()),
+        State::Ready(info) if info.type_matches != Some(true) => (
+            "checkFailed",
+            "the file's content does not match its extension".into(),
+        ),
+        State::Ready(info)
+            if !predicate.trim().is_empty()
+                && info.mime.as_deref().map(str::to_ascii_lowercase)
+                    != Some(predicate.trim().to_ascii_lowercase()) =>
+        {
+            ("checkFailed", "the file is not of the stated type".into())
+        }
+        State::Ready(_) => ("checked", "a non-empty file of that type was saved".into()),
+        State::Unavailable(_) => ("checkFailed", "the file was not kept".into()),
+        _ => ("claimed", "the file is not ready".into()),
     }
 }

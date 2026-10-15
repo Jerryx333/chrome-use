@@ -735,6 +735,7 @@ pub(crate) fn run_leased<E>(
     };
 
     let derived = derive(tool, arguments, &result);
+    let check = derived.verdict.as_ref().and_then(|v| v.check.clone());
     let mut notes = Vec::new();
     let recorded = send_report(&*context.client, &report(derived), budget);
     match &recorded {
@@ -755,6 +756,19 @@ pub(crate) fn run_leased<E>(
         ));
     }
     decorate(&mut result, Some(&action_id), &notes);
+    // The check this action recorded, for the agent to cite by action id in
+    // its assessment; the host checks against this record, not a restatement.
+    if let Some(check) = check {
+        result["structuredContent"]["chromeUseAction"]["check"] =
+            json!({"kind": check.kind, "predicate": check.predicate});
+        if let Some(content) = result["content"].as_array_mut() {
+            content.push(json!({"type": "text", "text": format!(
+                "recorded check {}: {} (cite action {action_id})",
+                serde_json::to_value(check.kind).ok().and_then(|k| k.as_str().map(String::from)).unwrap_or_default(),
+                check.predicate
+            )}));
+        }
+    }
     Ok(result)
 }
 
@@ -1397,6 +1411,44 @@ mod tests {
         })
         .unwrap();
         assert!(!ran && fake.sent(proto::OP_ACTION_BEGIN).is_empty());
+    }
+
+    #[test]
+    fn a_recorded_check_is_returned_for_the_agent_to_cite() {
+        let fake = Fake::default();
+        fake.answer(proto::OP_ACTION_BEGIN, vec![admitted()]);
+        fake.answer(proto::OP_ACTION_REPORT, vec![bound()]);
+        let result = run_leased::<()>(
+            &context(&fake),
+            "chrome_use_expect",
+            &json!({"kind": "text", "selector": "#total", "predicate": "contains", "expected": "42"}),
+            |_, _| Ok(cli(json!({"success": true, "data": {}}), Some(0))),
+        )
+        .unwrap();
+        let action = &result["structuredContent"]["chromeUseAction"];
+        assert_eq!(
+            action["check"],
+            json!({"kind": "expect", "predicate": "text #total contains 42"})
+        );
+        let id = action["actionId"].as_str().unwrap();
+        assert!(result["content"].as_array().unwrap().iter().any(|c| {
+            c["text"]
+                == format!("recorded check expect: text #total contains 42 (cite action {id})")
+        }));
+        // An action without a check carries none.
+        let fake = Fake::default();
+        fake.answer(proto::OP_ACTION_BEGIN, vec![admitted()]);
+        fake.answer(proto::OP_ACTION_REPORT, vec![bound()]);
+        let click = run_leased::<()>(
+            &context(&fake),
+            "chrome_use_click",
+            &json!({"selector": "#go"}),
+            |_, _| Ok(cli(json!({"success": true, "data": {}}), Some(0))),
+        )
+        .unwrap();
+        assert!(click["structuredContent"]["chromeUseAction"]
+            .get("check")
+            .is_none());
     }
 
     #[test]
