@@ -216,6 +216,14 @@ is sent. When tracking was already on (a user's `requests --clear`, the stream s
 `actions.rs:837`, `17150`) nothing changes; HAR uses its own `har_recording` flag
 (`actions.rs:1478`) and is untouched. Plain CLI `--observe` keeps today's behaviour.
 
+*Correction (acceptance).* The premise above was wrong: the daemon always starts its stream
+server (`daemon.rs:240`) and `DaemonState::new_with_stream` (`actions.rs:835-847`) turns
+`request_tracking` on whenever it did, so tracking is on from daemon start and the scoped
+save/restore never ran. The panel `observe` now leaves tracking alone (`panel_action.rs`), and
+the memory bound lives in the request log itself: `tracked_requests.rs` keeps the newest 1000
+entries, caps post data at 64 KiB and each header object at 16 KiB, and uses absolute sequence
+marks so `--observe` stays correct across eviction.
+
 **D4. Task assessment is a tool call whose requirements carry checkable predicates.**
 A new panel tool `chrome_use_task` (action `assess`) records the agent's verdict, bound to the
 caller's lease context (active message and generation). Each requirement the agent marks met
@@ -354,9 +362,8 @@ of a report's events are present and others are not, which 3.3 handles.
   the resulting page (navigate result URL, popup adoption, verified tab select), `after` is
   built from that reply with `provenance: "actionReply"`. Top-level commands only; script and
   batch steps are not stamped.
-- Scoped request tracking for `_panelActionId` + observe commands (D3): save
-  `request_tracking` and `tracked_requests.len()` before, restore both after, on success and
-  on error.
+- ~~Scoped request tracking for `_panelActionId` + observe commands (D3)~~: dropped, tracking is
+  on from daemon start (see the D3 correction); the request log is bounded instead.
 - `cli/src/native/actions.rs` `handle_download` (`14103-14263`) and the extension
   download-url path: give the three failures machine codes in the reply (`code`:
   `download_canceled`, `download_timeout`, `download_interrupted`) beside the existing messages.
@@ -1419,10 +1426,10 @@ Rust, in the module that owns the rule:
 - Native: `actionContext` present only with `_panelActionId`, no CDP traffic added (assert on
   the mock client's sent-command log), chromeTabId from `cb-tab-<id>` and null when launched,
   provenance `actionReply` for navigation, popup adoption and verified tab select and
-  `daemonState` otherwise; panel observe with tracking off leaves `request_tracking` false and
-  `tracked_requests` at its old length afterwards, on success and on error, and sends no
-  `Network.disable`; with tracking already on (after `requests --clear`) nothing changes; HAR
-  recording during a panel observe keeps its entries; plain CLI `--observe` unchanged.
+  `daemonState` otherwise; panel observe leaves tracking and the request log as the command
+  left them, on success and on error, and sends no `Network.disable` (D3 correction); the
+  request log evicts past 1000 entries with marks that stay correct across eviction; plain CLI
+  `--observe` unchanged.
 - Assessment: `checksPassed` only with every requirement checked through a matching predicate on
   this turn's evidence; counterexamples each yield `claimed` or `checkFailed` and never
   `checksPassed`: an expect whose recorded predicate differs from the supplied one, a successful
@@ -1553,7 +1560,7 @@ Each check asserts on `conversationRead` output and on the files in the conversa
     set that a v1.5.214 run of the same scenario sends (`Page.enable`, `Network.enable`,
     `Target.setAutoAttach`, focus emulation); the page DOM has no added attributes or nodes
     (MutationObserver fixture on the site); no recording without the message flag; after a
-    panel action with `observe: true`, the daemon's `request_tracking` is back to false.
+    panel action with `observe: true`, the request log holds no more than 1000 entries.
 17. **Recording**: with "Record this task", capturing → finalizing → ready and the blob sniffs as
     WebM; without ffmpeg on a second run, `encoderMissing`; with an ffmpeg lacking libvpx,
     `encoderFailed`; without the flag, `chrome_use_record start` is refused. Two consecutive
@@ -1616,8 +1623,8 @@ Each check asserts on `conversationRead` output and on the files in the conversa
     with real v1.5.214 fixtures.
 11. **Panel `observe` and request tracking.** No new CDP domain (Network is enabled at attach);
     the cost is a baseline and post snapshot and a settle wait on steps the agent marks, and
-    request bookkeeping that the daemon now drops after each panel observe instead of keeping
-    for its lifetime. Checked by live check 16.
+    request bookkeeping, which is on from daemon start regardless of the panel and is bounded
+    by the request log (1000 entries, capped per entry; see the D3 correction).
 12. **Assessment wording.** Users may still read "checks passed" as "done". The card lists each
     predicate beside its requirement and says the checks were chosen by the agent.
 13. **Generation retirement.** Every interrupted, failed or unknown turn, and every completed
