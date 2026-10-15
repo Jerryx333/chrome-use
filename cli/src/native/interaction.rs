@@ -1765,7 +1765,7 @@ async fn fill_input_trusted(
         if let Ok(actual) = verify_fill_value(client, session_id, object_id, value, "input").await {
             return Ok(FillOutcome {
                 engine: "input".to_string(),
-                warning: reformatted_warning(value, &actual),
+                warning: reformatted_warning(value, &actual, "input"),
             });
         }
     }
@@ -2221,7 +2221,7 @@ async fn finish_fill(
     )
     .await
     {
-        Ok(actual) => Ok(reformatted_warning(value, &actual)),
+        Ok(actual) => Ok(reformatted_warning(value, &actual, engine.as_str())),
         Err(first) => {
             if !value.is_empty() && first.contains("read back an empty value") {
                 let reapplied = reapply_value_without_focus_change(
@@ -2247,7 +2247,7 @@ async fn finish_fill(
                 // one whose focus handler fights writes, and the caller may need to
                 // know that before pressing Enter into it.
                 *engine = format!("{engine}+refocus-reset");
-                return Ok(reformatted_warning(value, &actual));
+                return Ok(reformatted_warning(value, &actual, engine.as_str()));
             }
             Err(first)
         }
@@ -2891,8 +2891,18 @@ fn join_warnings(main: String, extra: Option<String>) -> String {
 }
 
 /// A note for a fill the page reformatted, without echoing either value.
-fn reformatted_warning(expected: &str, actual: &str) -> Option<String> {
+fn reformatted_warning(expected: &str, actual: &str, engine: &str) -> Option<String> {
     (expected.replace("\r\n", "\n") != actual.replace("\r\n", "\n")).then(|| {
+        if engine.starts_with("contenteditable") {
+            // Douyin's editor ends every line with U+200B and wraps a topic
+            // in NBSPs: the words took, the markup around them is the editor's.
+            return format!(
+                "the editor formatted the text ({} chars written, it holds {}: invisible \
+                 characters, spacing or line breaks of its own); compared as visible text",
+                expected.chars().count(),
+                actual.chars().count()
+            );
+        }
         format!(
             "the page reformatted the value ({} chars written, the field shows {}); \
              compared ignoring spaces and separators",
@@ -3127,12 +3137,10 @@ pub async fn read_editable_value(
 /// Whitespace is normalized (textarea/contenteditable read-backs fold it), and
 /// a CRLF/LF difference never counts.
 pub(crate) fn type_read_back_warning(typed: &str, actual: &str) -> Option<String> {
-    let norm = |s: &str| {
-        s.replace("\r\n", "\n")
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
+    // Zero-width characters are dropped too: rich editors put U+200B around
+    // the nodes they convert a typed `#topic ` into, which split the typed
+    // words apart in the read-back although every one of them is there.
+    let norm = |s: &str| super::element::visible_text(s);
     let t = norm(typed);
     let a = norm(actual);
     if t.is_empty() || a.contains(&t) {
@@ -3153,9 +3161,11 @@ fn fill_values_match(expected: &str, actual: &str, engine: &str) -> bool {
         // Rich editors may render text as nested blocks, and innerText follows
         // layout whitespace rules. Validate the same non-whitespace content and
         // ordering without rejecting a successful edit over cosmetic line breaks.
-        normalized_actual
-            .split_whitespace()
-            .eq(normalized_expected.split_whitespace())
+        // Zero-width characters are not whitespace to Rust, so an editor that
+        // pads each line with U+200B glued it to the last word and failed a
+        // write that took (Douyin's description editor).
+        super::element::visible_text(&normalized_actual)
+            == super::element::visible_text(&normalized_expected)
     } else {
         normalized_actual == normalized_expected
             || same_after_formatting(&normalized_expected, &normalized_actual, engine)
@@ -6630,5 +6640,44 @@ mod hover_tests {
         let hidden = hover_refusal("#f1", &json!({ "error": "no-box" })).unwrap();
         assert!(hidden.contains("no visible box"), "{hidden}");
         assert!(hover_refusal("#f1", &json!({ "x": 1, "y": 2, "gx": 1, "gy": 2 })).is_none());
+    }
+}
+
+#[cfg(test)]
+mod rich_text_tests {
+    use super::*;
+
+    /// Douyin's description editor ends each line with U+200B: a write that
+    /// took was reported as a failed fill.
+    #[test]
+    fn zero_width_padding_is_not_a_failed_fill() {
+        let written =
+            "从1912年溥仪退位到1949年，用地图串起民国时期的军阀势力变迁。\n#少帅 #民国军阀";
+        let read = "从1912年溥仪退位到1949年，用地图串起民国时期的军阀势力变迁。\u{200b}\n#少帅 #民国军阀\u{200b}";
+        assert!(fill_values_match(written, read, "contenteditable"));
+        // A lost character is still a failure.
+        let short =
+            "从1912年溥仪退位到1949年，用地图串起民国时期的军阀势力变迁。\u{200b}\n#少帅 #民国军";
+        assert!(!fill_values_match(written, short, "contenteditable"));
+        // Plain inputs keep exact comparison.
+        assert!(!fill_values_match("ab", "ab\u{200b}", "input"));
+    }
+
+    #[test]
+    fn a_formatted_rich_text_fill_says_so() {
+        let w = reformatted_warning("a\nb", "a\u{200b}\nb\u{200b}", "contenteditable").unwrap();
+        assert!(w.contains("the editor formatted the text"), "{w}");
+        let w = reformatted_warning("1234", "12 / 34", "input").unwrap();
+        assert!(w.contains("the page reformatted the value"), "{w}");
+        assert!(reformatted_warning("x", "x", "contenteditable").is_none());
+    }
+
+    /// Topics committed by a typed space come back wrapped in U+200B and NBSP.
+    #[test]
+    fn committed_topics_still_contain_what_was_typed() {
+        let typed = " #民国历史 #历史地图 #中国近代史 ";
+        let read = "从1912年溥仪退位到1949年。 \u{200b}\u{a0}#少帅\u{a0} \u{200b}\u{a0}#民国历史\u{a0} \u{200b}\u{a0}#历史地图\u{a0} \u{200b}\u{a0}#中国近代史\u{a0} \u{200b}";
+        assert!(type_read_back_warning(typed, read).is_none());
+        assert!(type_read_back_warning("#民国历史 #世界地图", read).is_some());
     }
 }
