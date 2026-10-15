@@ -20,6 +20,7 @@ mod config_edit;
 mod config_transaction;
 mod configuration;
 mod conversation;
+mod evidence;
 pub(crate) mod evidence_proto;
 mod heic;
 mod inspect;
@@ -575,7 +576,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"heicConvert":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"requestRevision":1,"chatAgents":CHAT_AGENTS})
+    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"heicConvert":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"requestRevision":1,"turnEvidence":1,"artifacts":1,"recovery":1,"recording":1,"chatAgents":CHAT_AGENTS})
 }
 
 /// `chrome-use inspect link|unlink|list`; returns the process exit code.
@@ -618,6 +619,10 @@ pub fn handle_for_profile(
         | "conversationSetOptions"
         | "conversationAttachmentPut"
         | "conversationAttachmentRead"
+        | "conversationArtifactRead"
+        | "conversationRecoveryReview"
+        | "conversationRecoveryTerminate"
+        | "conversationRecoveryFork"
         | "conversationSkillSelect"
         | "skillList"
         | "skillRead"

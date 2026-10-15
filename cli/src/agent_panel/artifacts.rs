@@ -8,7 +8,6 @@
 //! This module computes event payloads and state; the engine journals them.
 //! `capture_request`, `rewrite_capture_arguments` and `deliver` run in the
 //! chrome_use MCP process, so they are visible to the crate.
-#![allow(dead_code)] // Wired into the service by the integration step.
 
 use super::config_transaction::private_tree;
 use super::conversation::Event;

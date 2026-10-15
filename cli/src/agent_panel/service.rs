@@ -158,6 +158,7 @@ fn operation_seconds(operation: &str) -> u64 {
         "agentActionBegin" | "agentDeliveryReport" => 5,
         "agentActionReport" => 60,
         "agentRecordingAuthorize" | "agentRecordingStop" => 20,
+        "conversationRecoveryReview" | "conversationRecoveryTerminate" => 15,
         _ => 10,
     }
 }
@@ -529,6 +530,10 @@ struct Job {
     sender: mpsc::Sender<BackendCommand>,
 }
 
+#[path = "service_evidence.rs"]
+mod evidence_ops;
+use evidence_ops::EvidenceState;
+
 /// What a backend process said about itself in its `ready` notice.
 #[derive(Clone, Default)]
 struct BackendInfo {
@@ -546,6 +551,8 @@ struct Turn {
     generation: u64,
     /// The turn was planned on the live process; `start` must find it there.
     reuse: bool,
+    /// The message was handed to a backend process.
+    dispatched: bool,
     first_sequence: u64,
     open_tools: std::collections::BTreeMap<String, OpenTool>,
     /// Tool names by call id, for results that only carry the id (Claude).
@@ -556,6 +563,7 @@ struct Turn {
 }
 
 struct OpenTool {
+    started: Instant,
     name: String,
     action_ids: Vec<String>,
     browser: bool,
@@ -644,6 +652,7 @@ struct Engine {
     reuse_allowlist: Vec<(String, String)>,
     /// How long a retired process may take to confirm its exit.
     retire_wait: Duration,
+    evidence: EvidenceState,
     profile: String,
     stop: bool,
     schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
@@ -673,6 +682,7 @@ impl Engine {
                 .map(|(agent, version)| (agent.to_string(), version.to_string()))
                 .collect(),
             retire_wait: Duration::from_secs(10),
+            evidence: EvidenceState::default(),
             profile,
             stop: false,
             schedules,
@@ -721,6 +731,7 @@ impl Engine {
         self.request_ids.remove(id);
         self.blocked.remove(id);
         self.controls.remove(id);
+        self.evidence.forget(id);
     }
     fn chat(&mut self, id: &str) -> Result<&mut Conversation, String> {
         if !self.chats.contains_key(id) {
@@ -739,6 +750,7 @@ impl Engine {
             let chat = self.store.load(id)?;
             self.controls.insert(id.into(), chat.control());
             self.chats.insert(id.into(), chat);
+            self.ensure_evidence(id)?;
         }
         self.chats
             .get_mut(id)
@@ -832,15 +844,6 @@ impl Engine {
             .as_ref()
             .ok_or("The conversation has no running request")
     }
-    /// Execution state of an action lease (`reported`, `admitted`), until
-    /// the lease store lands (plan 3.3): nothing is known.
-    fn lease_state(&self, _id: &str, _action_id: &str) -> Option<&'static str> {
-        None
-    }
-    /// Leases of this turn still open (plan 3.3); none until leases land.
-    fn open_leases(&self, _id: &str, _message_id: &str) -> Vec<String> {
-        Vec::new()
-    }
     /// Take the next message and journal `turnStarted` in the same lock.
     /// Plans the generation the turn runs on: the live process when it may
     /// be reused, otherwise a new one, retiring any process still around.
@@ -848,16 +851,26 @@ impl Engine {
         if self.is_blocked(id)? {
             return Ok(None);
         }
+        // The first message of a fork continues the recovered conversation.
+        let fork = if self.chat(id)?.generation == 0 {
+            evidence_ops::fork_preface(&self.store, id)
+        } else {
+            None
+        };
         let chat = self.chat(id)?;
         let after_stop = chat.phase == Phase::Interrupted;
         let Some(mut next) = chat.begin_next() else {
             return Ok(None);
         };
-        if after_stop {
+        if let Some(preface) = fork {
+            next.continuation = Some(Continuation::AfterRecovery);
+            next.preface = Some(preface);
+        } else if after_stop {
             next.continuation = Some(Continuation::AfterStop);
-            if let Some(active) = chat.active.as_mut() {
-                active.continuation = next.continuation;
-            }
+        }
+        if let Some(active) = chat.active.as_mut() {
+            active.continuation = next.continuation;
+            active.preface = next.preface.clone();
         }
         let direct = chat.active_direct;
         let (full_access, options) = (chat.full_access, chat.options.clone());
@@ -889,6 +902,7 @@ impl Engine {
                 message_id: next.id.clone(),
                 generation,
                 reuse,
+                dispatched: false,
                 first_sequence: self.last_sequence(id),
                 open_tools: Default::default(),
                 names: HashMap::new(),
@@ -897,8 +911,51 @@ impl Engine {
                 final_items: Default::default(),
             },
         );
+        let started = self.last_sequence(id);
+        self.evidence.detectors.insert(
+            id.into(),
+            super::progress::StallDetector::new(started, Instant::now()),
+        );
         self.sync_control(id, "turnStarted")?;
         Ok(Some(next))
+    }
+    /// Stop before the turn reached any process (start() still waits for a
+    /// retiring one): end it as interrupted without touching that process.
+    fn cancel_undispatched(&mut self, id: &str) -> Result<bool, String> {
+        let Some(turn) = self.turns.get(id).filter(|t| !t.dispatched) else {
+            return Ok(false);
+        };
+        let generation = turn.generation;
+        let chat = self.chat(id)?;
+        if !chat.phase.busy() || !chat.terminal(generation, "interrupted", None)? {
+            return Ok(false);
+        }
+        self.end_turn(id, "interrupted", &Value::Null)?;
+        self.sync_control(id, "conversationStop")?;
+        self.persist(id)?;
+        Ok(true)
+    }
+    /// Leases of the running turn admitted before this stop.
+    fn mark_stopped_leases(&mut self, id: &str) {
+        let Some(message) = self
+            .chats
+            .get(id)
+            .and_then(|c| c.active.as_ref())
+            .map(|m| m.id.clone())
+        else {
+            return;
+        };
+        for lease in self
+            .evidence
+            .leases
+            .entry(id.into())
+            .or_default()
+            .values_mut()
+        {
+            if lease.message_id == message {
+                lease.after_stop = true;
+            }
+        }
     }
     /// Follow a `tool` notice: which calls of the running turn are open.
     fn track_tool(&mut self, id: &str, data: &Value) {
@@ -962,6 +1019,7 @@ impl Engine {
             turn.open_tools.insert(
                 call,
                 OpenTool {
+                    started: Instant::now(),
                     name,
                     action_ids,
                     browser,
@@ -976,7 +1034,8 @@ impl Engine {
             return Ok(());
         };
         let last = self.last_sequence(id);
-        let open_leases = self.open_leases(id, &turn.message_id);
+        let open_leases = self.open_lease_ids(id, &turn.message_id);
+        self.evidence.detectors.remove(id);
         self.record(
             id,
             "turnEnded",
@@ -990,7 +1049,7 @@ impl Engine {
                 .map(|(call, tool)| {
                     let action = tool.action_ids.first();
                     let executed = action
-                        .and_then(|a| self.lease_state(id, a))
+                        .and_then(|a| self.lease_execution(id, a))
                         .unwrap_or("unknown");
                     json!({"toolCallId":call,"name":tool.name,"actionId":action,"executed":executed})
                 })
@@ -1001,6 +1060,10 @@ impl Engine {
             }
             self.record(id, "batchInterrupted", data)?;
         }
+        self.close_leases(id, &turn.message_id)?;
+        self.final_assessment(id, &turn.message_id, outcome)?;
+        self.summarize_turn(id, &turn.message_id, turn.first_sequence)?;
+        self.stop_recording_after(id, &turn.message_id);
         // Only what this generation's own process said counts.
         let info = self
             .backends
@@ -1314,9 +1377,38 @@ impl Engine {
             _ => {}
         }
         let error = notice.data["error"].clone();
+        if notice.kind == "contextCompacted" {
+            let message = notice.data["messageId"].clone();
+            notice.data = self.compacted(id, &notice.data)?;
+            notice.data["messageId"] = message;
+        }
+        let activity = matches!(
+            notice.kind,
+            "running"
+                | "textDelta"
+                | "textFinal"
+                | "textRole"
+                | "tool"
+                | "request"
+                | "requestResolved"
+                | "contextCompacted"
+        );
         match prepared {
             Some(data) => self.record_redacted(id, notice.kind, data)?,
             None => self.record(id, notice.kind, notice.data)?,
+        }
+        if activity {
+            let sequence = self.last_sequence(id);
+            let message = self.turns.get(id).map(|t| t.message_id.clone());
+            let signals = self
+                .evidence
+                .detectors
+                .get_mut(id)
+                .map(|d| d.backend_activity(sequence, Instant::now()))
+                .unwrap_or_default();
+            if let Some(message) = message {
+                self.journal_signals(id, &message, signals)?;
+            }
         }
         if let Some(outcome) = ended {
             self.end_turn(id, outcome, &error)?;
@@ -1369,6 +1461,9 @@ struct Send {
     #[serde(default)]
     attachments: Vec<super::attachments::Attachment>,
     skill_id: Option<String>,
+    /// The user allowed recording this request (plan 6.4).
+    #[serde(default)]
+    record: bool,
 }
 
 #[derive(Deserialize)]
@@ -1440,6 +1535,15 @@ async fn dispatch(
         | "agentScheduleSave"
         | "agentScheduleDelete"
         | "agentScheduleRun" => schedule_dispatch(engine, operation, params).await,
+        operation if super::evidence_proto::OPERATIONS.contains(&operation) => {
+            evidence_ops::evidence_dispatch(engine, operation, params).await
+        }
+        "conversationArtifactRead" => evidence_ops::artifact_read(engine, params).await,
+        "conversationRecoveryReview"
+        | "conversationRecoveryTerminate"
+        | "conversationRecoveryFork" => {
+            evidence_ops::recovery_dispatch(engine, operation, params).await
+        }
 
         "agentInspect" => {
             let root = engine.lock().await.store.directory.clone();
@@ -1711,6 +1815,8 @@ async fn dispatch(
                     attachments: Vec::new(),
                     skill: None,
                     continuation: None,
+                    record: false,
+                    preface: None,
                 },
             )?;
             e.record(
@@ -1761,6 +1867,15 @@ async fn dispatch(
                 .map_err(|_| "conversationSend requires conversationId, messageId and text")?;
             let mut e = engine.lock().await;
             let direct = operation == "conversationSendDirect";
+            // A turn still waiting for its process is ended here instead of
+            // interrupting the retiring process.
+            if direct
+                && e.turns
+                    .get(&p.conversation_id)
+                    .is_some_and(|t| !t.dispatched)
+            {
+                e.cancel_undispatched(&p.conversation_id)?;
+            }
             let interrupt = if direct && e.chat(&p.conversation_id)?.phase.busy() {
                 Some(
                     e.jobs
@@ -1797,6 +1912,8 @@ async fn dispatch(
                 text: p.text.clone(),
                 page: p.page.clone(),
                 continuation: None,
+                record: p.record,
+                preface: None,
             };
             if e.is_blocked(&p.conversation_id)?
                 && !e
@@ -1837,11 +1954,12 @@ async fn dispatch(
                 e.record(
                     &p.conversation_id,
                     "user",
-                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":page,"attachments":p.attachments,"skillId":p.skill_id}),
+                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":page,"attachments":p.attachments,"skillId":p.skill_id,"record":p.record}),
                 )?;
             }
             if added {
                 if let Some(sender) = interrupt {
+                    e.mark_stopped_leases(&p.conversation_id);
                     e.chat(&p.conversation_id)?.phase = Phase::Stopping;
                     e.persist(&p.conversation_id)?;
                     if sender.try_send(BackendCommand::Interrupt).is_err() {
@@ -2018,7 +2136,13 @@ async fn dispatch(
                 }
                 return Ok(json!({"schemaVersion":1,"conversation":summary}));
             }
+            if e.cancel_undispatched(&p.conversation_id)? {
+                return Ok(
+                    json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary()}),
+                );
+            }
             if e.chat(&p.conversation_id)?.phase.busy() {
+                e.mark_stopped_leases(&p.conversation_id);
                 let sender = e
                     .jobs
                     .get(&p.conversation_id)
@@ -2140,6 +2264,8 @@ fn stored_message(
         attachments,
         skill,
         continuation: None,
+        record: false,
+        preface: None,
     }))
 }
 
@@ -2308,6 +2434,9 @@ fn start<'a>(
         if let Some(job) = e.jobs.get_mut(id) {
             if !job.retiring && planned.is_some_and(|(g, reuse)| reuse && g == job.generation) {
                 let sender = job.sender.clone();
+                if let Some(turn) = e.turns.get_mut(id) {
+                    turn.dispatched = true;
+                }
                 drop(e);
                 return sender
                     .send(BackendCommand::Start(message))
@@ -2348,6 +2477,11 @@ fn start<'a>(
                     });
                 }
                 tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+            // Stopped while waiting: the turn already ended as interrupted
+            // and nothing is started for it.
+            if e.turns.get(id).map(|t| &t.message_id) != Some(&message.id) {
+                return Ok(());
             }
         }
         if e.jobs.len() >= 4 {
@@ -2428,6 +2562,9 @@ fn start<'a>(
             }
         };
         e.spawned.insert(id.into(), generation);
+        if let Some(turn) = e.turns.get_mut(id) {
+            turn.dispatched = true;
+        }
         e.persist(id)?;
         let (commands, receive) = mpsc::channel(32);
         let (events, mut notices) = mpsc::channel(256);
@@ -2466,12 +2603,21 @@ fn start<'a>(
             while let Some(notice) = notices.recv().await {
                 let mut e = owner.lock().await;
                 let next = e.notice(&chat_id, generation, notice);
+                let stops = !e.evidence.pending_stops.is_empty();
                 match next {
                     Ok(Some(message)) => {
                         drop(e);
+                        if stops {
+                            evidence_ops::run_pending_stops(&owner).await;
+                        }
                         let _ = launch(&owner, &chat_id, message).await;
                     }
-                    Ok(None) => {}
+                    Ok(None) => {
+                        drop(e);
+                        if stops {
+                            evidence_ops::run_pending_stops(&owner).await;
+                        }
+                    }
                     Err(error) => {
                         if let Some(chat) = e.chats.get_mut(&chat_id) {
                             chat.phase = Phase::RecoveryRequired;
@@ -2554,6 +2700,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             loop {
                 if scheduler.lock().await.stop { break; }
                 if let Err(error)=schedule_tick(&scheduler).await { eprintln!("Schedule check failed: {error}"); }
+                if let Err(error)=evidence_ops::progress_tick(&scheduler).await { eprintln!("Progress check failed: {error}"); }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         });
@@ -2944,7 +3091,7 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
         let message = Message {
             id: uuid::Uuid::new_v4().to_string(),
             text: format!("[Scheduled task: {}. Work in your own background browser session; no user tab is attached.]\n\n{}", schedule.name, schedule.prompt),
-            page: None, attachments: Vec::new(), skill, continuation: None,
+            page: None, attachments: Vec::new(), skill, continuation: None, record: false, preface: None,
         };
         chat.accept(message.clone())?;
         chat.title = schedule.name.clone();
@@ -3636,6 +3783,8 @@ mod redaction_tests {
                     attachments: Vec::new(),
                     skill: None,
                     continuation: None,
+                    record: false,
+                    preface: None,
                 });
             }
             // OpenCode only streams deltas; the tail must not be lost.
@@ -3733,6 +3882,8 @@ mod redaction_tests {
                 attachments: serde_json::from_value(raw["attachments"].clone()).unwrap(),
                 skill: None,
                 continuation: None,
+                record: false,
+                preface: None,
             };
             let hash = message.fingerprint().unwrap();
             let chat = e.chats.get_mut(&f.id).unwrap();

@@ -4,7 +4,6 @@
 //! comes from journaled evidence, never from model text.
 //!
 //! This module computes event payloads; the engine journals them.
-#![allow(dead_code)] // Wired into the service by the integration step.
 
 use super::conversation::Event;
 use serde_json::{json, Value};

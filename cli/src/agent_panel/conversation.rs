@@ -62,6 +62,13 @@ pub(super) struct Message {
     /// turn, never at accept, and never part of the message's identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<Continuation>,
+    /// The user allowed recording this request. Part of the identity only
+    /// when set, so earlier ids keep their fingerprints.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record: bool,
+    /// The fork preface of an `afterRecovery` message, set by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preface: Option<String>,
 }
 
 /// How a turn relates to the one before it.
@@ -79,8 +86,12 @@ impl Message {
     pub fn prompt_text(&self) -> String {
         let continuation = match self.continuation {
             Some(Continuation::AfterStop) => format!("{AFTER_STOP}\n\n"),
-            // The fork preface (recovery) is written by the fork itself.
-            Some(Continuation::AfterRecovery) | None => String::new(),
+            Some(Continuation::AfterRecovery) => self
+                .preface
+                .as_ref()
+                .map(|p| format!("{p}\n\n"))
+                .unwrap_or_default(),
+            None => String::new(),
         };
         let skill = self.skill.as_ref().map(|s| s.preface()).unwrap_or_default();
         let page = self
@@ -93,17 +104,27 @@ impl Message {
     /// Request identity. The rule is the one v1.5.214 used and runs on the
     /// raw input, before any redaction, so retries across the upgrade match.
     pub(super) fn fingerprint(&self) -> Result<String, String> {
-        if self.attachments.is_empty() && self.skill.is_none() {
+        if self.attachments.is_empty() && self.skill.is_none() && !self.record {
             return Ok(hex::encode(Sha256::digest(self.text.as_bytes())));
         }
-        Ok(hex::encode(Sha256::digest(
+        let bytes = if self.record {
+            serde_json::to_vec(&(
+                self.text.as_str(),
+                &self.attachments,
+                &self.page,
+                &self.skill,
+                true,
+            ))
+        } else {
             serde_json::to_vec(&(
                 self.text.as_str(),
                 &self.attachments,
                 &self.page,
                 &self.skill,
             ))
-            .map_err(|_| "Cannot fingerprint message")?,
+        };
+        Ok(hex::encode(Sha256::digest(
+            bytes.map_err(|_| "Cannot fingerprint message")?,
         )))
     }
     /// The form that is queued, saved and journaled: the page URL without
@@ -410,6 +431,7 @@ impl Conversation {
         replacement.attachments = self.queue[index].attachments.clone();
         replacement.page = self.queue[index].page.clone();
         replacement.skill = self.queue[index].skill.clone();
+        replacement.record = self.queue[index].record;
         self.accepted
             .insert(replacement.id.clone(), replacement.fingerprint()?);
         if self.direct_message_id.as_deref() == Some(id) {
@@ -794,6 +816,24 @@ impl Store {
         Ok(counts)
     }
 
+    /// Every event of one conversation, in order.
+    pub(super) fn all_events(&self, id: &str) -> Result<Vec<Event>, String> {
+        let mut events = Vec::new();
+        self.scan(id, |event| events.push(event))?;
+        Ok(events)
+    }
+
+    /// Events from `from` (a sequence) on.
+    pub(super) fn events_from(&self, id: &str, from: u64) -> Result<Vec<Event>, String> {
+        let mut events = Vec::new();
+        self.scan(id, |event| {
+            if event.sequence >= from {
+                events.push(event);
+            }
+        })?;
+        Ok(events)
+    }
+
     /// Whether a generation of this conversation was retired without a way
     /// to resume its agent session; the conversation cannot continue.
     pub(super) fn cannot_resume(&self, id: &str) -> Result<bool, String> {
@@ -931,6 +971,8 @@ mod tests {
             attachments: Vec::new(),
             skill: None,
             continuation: None,
+            record: false,
+            preface: None,
         }
     }
     fn rich(id: &str, url: &str) -> Message {
@@ -949,6 +991,8 @@ mod tests {
             }],
             skill: None,
             continuation: None,
+            record: false,
+            preface: None,
         }
     }
     const TOKEN_A: &str = "https://shop.example/orders?access_token=SYNTH_TOKEN_A&x=1";

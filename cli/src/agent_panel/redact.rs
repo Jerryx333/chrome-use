@@ -160,6 +160,13 @@ pub(super) fn url(text: &str) -> String {
     apply(text, &masks).0
 }
 
+/// Free text as the rules alone redact it, without known secrets: the form a
+/// predicate is compared in.
+pub(super) fn text_for_compare(text: &str) -> String {
+    let masks = find_masks(text, &[], false);
+    apply(text, &masks).0
+}
+
 /// Strings that are already a mask produced here. Never masked again, so
 /// redaction is a fixed point.
 fn is_marker(text: &str) -> bool {
