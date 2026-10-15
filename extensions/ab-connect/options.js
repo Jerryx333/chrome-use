@@ -4,13 +4,13 @@
 // Opens standalone (file://) too, with a friendly demo state, so the design is
 // viewable without the extension context.
 
-const DEFAULTS = { ab_notify: false, ab_cursor: false, ab_idle_detach_secs: 0 }
+const DEFAULTS = { ab_notify: false, ab_turn_notify: true, ab_cursor: false, ab_idle_detach_secs: 0 }
 const hasChrome = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync
 
 // ---- elements ----
 const el = (id) => document.getElementById(id)
 const dot = el('dot'), statusLabel = el('statusLabel'), statusSub = el('statusSub'), tabPill = el('tabPill')
-const optNotify = el('optNotify'), optCursor = el('optCursor'), optIdleSecs = el('optIdleSecs')
+const optNotify = el('optNotify'), optTurnNotify = el('optTurnNotify'), optCursor = el('optCursor'), optIdleSecs = el('optIdleSecs')
 const saved = el('saved')
 
 // ---- settings ----
@@ -62,11 +62,13 @@ el('ver').textContent = hasChrome ? 'v' + chrome.runtime.getManifest().version :
 
 loadSettings((s) => {
   optNotify.checked = !!s.ab_notify
+  optTurnNotify.checked = s.ab_turn_notify !== false
   optCursor.checked = !!s.ab_cursor
   optIdleSecs.value = Number.isFinite(Number(s.ab_idle_detach_secs)) ? Number(s.ab_idle_detach_secs) : 0
 })
 
 optNotify.addEventListener('change', () => save({ ab_notify: optNotify.checked }))
+optTurnNotify.addEventListener('change', () => save({ ab_turn_notify: optTurnNotify.checked }))
 optCursor.addEventListener('change', () => save({ ab_cursor: optCursor.checked }))
 optIdleSecs.addEventListener('change', () => {
   const n = Math.max(0, Math.min(3600, Number(optIdleSecs.value) || 0))

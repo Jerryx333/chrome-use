@@ -99,13 +99,22 @@
   <!-- Notifications -->
   <section class="card">
     <h2>Notifications</h2>
-    <p class="lead">A gentle heads-up when the bridge connects or drops.</p>
+    <p class="lead">A gentle heads-up when the bridge connects or drops, or a panel task finishes.</p>
     <div class="row">
       <div class="grow">
         <div class="name">Connection notifications</div>
         <div class="hint">Notify me when chrome-use links to or unlinks from Chrome.</div>
       </div>
       <label class="toggle"><input type="checkbox" id="optNotify" /><span class="track"></span><span class="knob"></span></label>
+    </div>
+    <div class="row">
+      <div class="grow">
+        <div class="name">Notify when a task finishes</div>
+        <div class="hint">When a side-panel task finishes, fails, stops or waits for your approval, show a
+          notification and a count on the toolbar icon. Nothing is shown for the conversation the panel
+          already has open in the focused window.</div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="optTurnNotify" /><span class="track"></span><span class="knob"></span></label>
     </div>
   </section>
 

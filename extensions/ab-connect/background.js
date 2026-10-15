@@ -18,6 +18,7 @@
 
 import { getRelayHealth, observeDebuggerCommand } from './relay-health.js';
 import { ScheduleNotifications } from './schedule-notifications.js';
+import { TurnNotifications, openFromNotification } from './turn-notifications.js';
 import { AgentPanelBridge, isAgentPanelSender, INSPECT_OPERATIONS } from './agent-panel-bridge.js';
 import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
@@ -149,12 +150,72 @@ function pollScheduleNotifications() {
   if (!state.connected || !state.agentPanel?.schedules || state.agentPanel.mode !== 'full') return;
   void scheduleNotifications.poll(() => agentPanelBridge.request('scheduleList')).catch(error => console.warn('Schedule notification check failed:', String(error.message || error)));
 }
+// Finished panel turns. Open side panels report the conversation they show
+// (port `ab-panel-presence`), so a turn the user is watching does not notify.
+/** port -> { windowId, conversationId, visible } */
+const panelPresence = new Map();
+let turnBadge = '';
+let lastFocusedWindowId = null;
+let pendingPanelSelect = null;
+const turnNotifications = new TurnNotifications({
+  storage: chrome.storage.local,
+  notifications: chrome.notifications,
+  badge(text) {
+    turnBadge = text;
+    try {
+      chrome.action.setBadgeText({ text });
+      chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
+      // A per-tab badge hides the global one; attached tabs show the count too.
+      for (const tabId of tabs.keys()) setBadge(tabId, port ? 'on' : 'connecting');
+    } catch {}
+  },
+});
+async function panelShowing(conversationId) {
+  for (const presence of panelPresence.values()) {
+    if (presence.conversationId !== conversationId || !presence.visible) continue;
+    try { if ((await chrome.windows.get(presence.windowId)).focused) return true; } catch {}
+  }
+  return false;
+}
+async function turnNotifyEnabled() {
+  try { return (await chrome.storage.sync.get({ ab_turn_notify: true })).ab_turn_notify !== false; } catch { return true; }
+}
+function pollTurnNotifications() {
+  const state = hostConnection.snapshot();
+  if (!port || !state.connected || !state.agentPanel) return;
+  void turnNotifyEnabled().then(enabled => turnNotifications.poll(() => agentPanelBridge.request('conversationList'), { enabled, showing: panelShowing }))
+    .catch(error => console.warn('Turn notification check failed:', String(error.message || error)));
+}
+chrome.runtime.onConnect.addListener(panelPort => {
+  if (panelPort.name !== 'ab-panel-presence' || !isAgentPanelSender(panelPort.sender, chrome.runtime)) return;
+  panelPresence.set(panelPort, {});
+  panelPort.onDisconnect.addListener(() => panelPresence.delete(panelPort));
+  panelPort.onMessage.addListener(message => {
+    if (message?.type !== 'presence' || !Number.isInteger(message.windowId)) return;
+    const presence = { windowId: message.windowId, conversationId: typeof message.conversationId === 'string' ? message.conversationId : '', visible: message.visible === true };
+    panelPresence.set(panelPort, presence);
+    // A panel opened from a notification may start before the stored selection lands.
+    if (pendingPanelSelect && pendingPanelSelect.windowId === presence.windowId && Date.now() - pendingPanelSelect.at < 30000) {
+      if (pendingPanelSelect.conversationId !== presence.conversationId) panelPort.postMessage({ type: 'select', conversationId: pendingPanelSelect.conversationId });
+      pendingPanelSelect = null;
+    }
+    if (presence.visible && presence.conversationId) void turnNotifications.seen(presence.conversationId).catch(() => {});
+  });
+});
+try {
+  void chrome.windows.getLastFocused().then(window => { lastFocusedWindowId ??= window?.id ?? null; }).catch(() => {});
+  chrome.windows.onFocusChanged.addListener(windowId => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    lastFocusedWindowId = windowId;
+    // Coming back to a window whose panel shows a finished turn is seeing it.
+    for (const presence of panelPresence.values()) {
+      if (presence.windowId === windowId && presence.visible && presence.conversationId) void turnNotifications.seen(presence.conversationId).catch(() => {});
+    }
+  });
+} catch {}
 chrome.notifications.onClicked.addListener(id => {
-  if (!/^schedule-run:[a-f0-9-]{36}$/.test(id)) return;
-  void chrome.storage.local.set({ ab_panel_conversation: id.slice('schedule-run:'.length) }).then(async () => {
-    const window = await chrome.windows.getLastFocused();
-    if (window?.id !== undefined) await chrome.sidePanel.open({windowId:window.id});
-  }).catch(error => console.warn('Open the side panel to read the scheduled run:', String(error.message || error)));
+  const pending = openFromNotification(id, { windowId: lastFocusedWindowId, chrome, panels: panelPresence });
+  if (pending) pendingPanelSelect = pending;
 });
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
 
@@ -603,8 +664,8 @@ function postToHost(msg, method) {
 }
 
 function setBadge(tabId, kind) {
-  const map = { on: '', connecting: '…', error: '!' };
-  const colors = { on: '#16a34a', connecting: '#d97706', error: '#b91c1c' };
+  const map = { on: turnBadge, connecting: '…', error: '!' };
+  const colors = { on: turnBadge ? '#2563eb' : '#16a34a', connecting: '#d97706', error: '#b91c1c' };
   try {
     chrome.action.setBadgeText({ tabId, text: map[kind] ?? '' });
     if (colors[kind]) chrome.action.setBadgeBackgroundColor({ tabId, color: colors[kind] });
@@ -743,6 +804,7 @@ function connectHost() {
       notifyConnChange(true);
       publishHostStatus();
       pollScheduleNotifications();
+      pollTurnNotifications();
     }
     void whenReady(() => {
       if (port === connectedPort) return onHostMessage(msg);
@@ -2579,6 +2641,7 @@ function scheduleKeepalivePing() {
     sweepIdleTabs();
     if (!port) return; // disconnected; connectHost() will restart the loop
     pollScheduleNotifications();
+    pollTurnNotifications();
     postToHost({ method: 'ping' }); // host pongs (or ignores); the send is what matters
     scheduleKeepalivePing();
   }, KEEPALIVE_PING_MS);
