@@ -308,7 +308,10 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
   function button(text, action, className = 'quiet') {
     const node = element('button', text, className); node.type = 'button'; node.addEventListener('click', () => void action().catch(error)); return node;
   }
-  function questionFields(questions, container) {
+  // `allowCustom(question)` decides whether a free-text answer is offered.
+  // `read()` returns the typed values; `answer()` the decision shape the
+  // service validates: {option}, {options} (multi-select) or {custom}.
+  function questionFields(questions, container, allowCustom = () => true) {
     return questions.map((question, index) => {
       const group = element('div', undefined, 'question'); group.append(element('label', question.question || question.header || 'Question'));
       const choices = [];
@@ -317,39 +320,58 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         input.type = question.multiSelect ? 'checkbox' : 'radio'; input.name = `question-${selectionEpoch}-${index}`; input.value = option.label;
         const text = element('span', option.label); if (option.description) text.append(element('small', option.description)); label.append(input, text); group.append(label); choices.push(input);
       }
-      const free = element('input'); free.placeholder = 'Your answer'; free.setAttribute('aria-label', `Answer: ${question.question || question.header || 'Question'}`); group.append(free); container.append(group);
-      return { question, read() { const text = free.value.trim(); return text ? [text] : choices.filter(c => c.checked).map(c => c.value); } };
+      const free = element('input'); free.placeholder = 'Your answer'; free.setAttribute('aria-label', `Answer: ${question.question || question.header || 'Question'}`);
+      const custom = allowCustom(question); if (custom) group.append(free); container.append(group);
+      const read = () => { const text = custom ? free.value.trim() : ''; return text ? [text] : choices.filter(c => c.checked).map(c => c.value); };
+      return { question, read, answer() {
+        const text = custom ? free.value.trim() : ''; const picked = choices.filter(c => c.checked).map(c => c.value);
+        return text ? { custom: text } : question.multiSelect ? { options: picked } : { option: picked[0] };
+      } };
     });
   }
-  async function respond(key, result) {
+  // A host that binds replies to request revisions gets only a decision; the
+  // service builds the agent's reply from the request it kept. The revision
+  // is the one this card was built for, never a newer request's.
+  function boundReplies(request) { return panelSupport?.requestRevision === 1 && Number.isInteger(request?.requestRevision) && Number.isInteger(request?.generation); }
+  async function respond(key, result, decision) {
     const request = timeline.requests.get(key); if (!request || request.sent) return;
     const id = selected, epoch = selectionEpoch;
-    const view = requestNodes.get(key); for (const node of view.container.querySelectorAll('button')) node.disabled = true;
+    const view = requestNodes.get(key);
+    if (view.revision !== request.requestRevision) throw new Error('This request changed. Review it again before answering.');
+    for (const node of view.container.querySelectorAll('button')) node.disabled = true;
+    const params = view.bound
+      ? { conversationId: id, requestId: request.requestId, generation: view.generation, requestRevision: view.revision, decision }
+      : { conversationId: id, requestId: request.requestId, result };
     try {
-      await api('conversationRespond', { conversationId: id, requestId: request.requestId, result });
+      await api('conversationRespond', params);
       if (selected === id && epoch === selectionEpoch) { request.sent = true; renderRequests(); }
     } catch (failure) { if (selected === id && epoch === selectionEpoch) { request.unconfirmed = true; view.status.textContent = 'Response unconfirmed. Read the current state before retrying.'; } throw failure; }
   }
   function requestView(key, request) {
     const container = element('section', undefined, 'request'); const status = element('p', '', 'hint');
     const params = request.params || {}; const method = request.method; const actions = element('div', undefined, 'actions');
+    const bound = boundReplies(request);
     container.append(element('h3', method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion' ? 'The agent needs your input' : 'Review the agent request'));
     if (params.truncated) { container.append(element('p', 'The request preview is incomplete. Stop this response before approving anything.')); }
     else if (method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion') {
-      const fields = questionFields(method === 'item/tool/requestUserInput' ? params.questions || [] : params.input?.questions || [], container);
+      const codex = method === 'item/tool/requestUserInput';
+      // Codex marks where free text is allowed; Claude always offers "Other".
+      const allowCustom = question => !bound || !codex || question.isOther === true || !(question.options || []).length;
+      const fields = questionFields(codex ? params.questions || [] : params.input?.questions || [], container, allowCustom);
       actions.append(button('Send answers', async () => {
-        const answers = fields.map(f => ({ question: f.question, values: f.read() }));
+        const answers = fields.map(f => ({ question: f.question, values: f.read(), answer: f.answer() }));
         if (answers.some(a => a.values.length === 0)) throw new Error('Answer each question before sending.');
-        const result = method === 'item/tool/requestUserInput'
+        const result = codex
           ? { answers: Object.fromEntries(answers.map(a => [a.question.id, { answers: a.values }])) }
           : { behavior: 'allow', updatedInput: { ...params.input, answers: Object.fromEntries(answers.map(a => [a.question.question, a.values.join(', ')])) } };
-        await respond(key, result);
+        const decision = { answers: Object.fromEntries(answers.map(a => [codex ? a.question.id : a.question.question, a.answer])) };
+        await respond(key, result, decision);
       }, 'primary'));
     } else if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {
       container.append(element('p', params.reason || 'This action requires a decision.'));
       if (params.command) container.append(element('pre', params.command));
       if (params.cwd) container.append(element('p', `Working folder: ${params.cwd}`, 'hint'));
-      actions.append(button('Allow once', () => respond(key, { decision: 'accept' }), 'primary'), button('Decline', () => respond(key, { decision: 'decline' })));
+      actions.append(button('Allow once', () => respond(key, { decision: 'accept' }, 'accept'), 'primary'), button('Decline', () => respond(key, { decision: 'decline' }, 'decline')));
     } else if (method === 'mcpServer/elicitation/request') {
       container.append(element('p', params.message || 'The MCP server needs a decision.'));
       const properties = params.requestedSchema?.properties;
@@ -358,27 +380,28 @@ export function createPanel({ document, runtime, storage, tabs, schedule = setTi
         container.dataset.approvalKind = 'mcpTool'; container.dataset.serverName = params.serverName;
         if (params._meta.tool_description) container.append(element('p', params._meta.tool_description, 'hint'));
         container.append(element('pre', JSON.stringify(params._meta.tool_params, null, 2), 'tool-arguments'));
-        actions.append(button('Allow once', () => respond(key, {action:'accept',content:{}}), 'primary'));
+        actions.append(button('Allow once', () => respond(key, {action:'accept',content:{}}, 'accept'), 'primary'));
       } else container.append(element('p', 'This form cannot be safely completed here. Decline or cancel this request.'));
-      actions.append(button('Decline', () => respond(key, {action:'decline',content:null})), button('Cancel request', () => respond(key, {action:'cancel',content:null})));
+      actions.append(button('Decline', () => respond(key, {action:'decline',content:null}, 'decline')), button('Cancel request', () => respond(key, {action:'cancel',content:null}, 'cancel')));
     } else if (method === 'session/request_permission') {
       container.append(element('p', params.toolCall?.title || 'OpenCode tool request'));
       container.append(element('pre', JSON.stringify(params.toolCall?.rawInput || {}, null, 2)));
-      for (const option of params.options || []) actions.append(button(option.name || option.optionId, () => respond(key, { outcome: { outcome: 'selected', optionId: option.optionId } }), option.kind === 'allow_once' ? 'primary' : 'quiet'));
-      actions.append(button('Cancel request', () => respond(key, { outcome: { outcome: 'cancelled' } })));
+      for (const option of params.options || []) actions.append(button(option.name || option.optionId, () => respond(key, { outcome: { outcome: 'selected', optionId: option.optionId } }, { optionId: option.optionId }), option.kind === 'allow_once' ? 'primary' : 'quiet'));
+      actions.append(button('Cancel request', () => respond(key, { outcome: { outcome: 'cancelled' } }, 'cancel')));
     } else if (method === 'can_use_tool') {
       container.append(element('p', params.tool_name || 'Tool request')); container.append(element('pre', JSON.stringify(params.input || {}, null, 2)));
-      actions.append(button('Allow once', () => respond(key, { behavior: 'allow', updatedInput: params.input || {} }), 'primary'), button('Decline', () => respond(key, { behavior: 'deny', message: 'User declined' })));
+      actions.append(button('Allow once', () => respond(key, { behavior: 'allow', updatedInput: params.input || {} }, 'allow'), 'primary'), button('Decline', () => respond(key, { behavior: 'deny', message: 'User declined' }, 'deny')));
     } else if (method === 'item/permissions/requestApproval') {
       container.append(element('p', params.reason || 'Review the requested access for this turn.')); container.append(element('pre', JSON.stringify(params.permissions || {}, null, 2)));
-      actions.append(button('Allow for this turn', () => respond(key, { permissions: params.permissions || {}, scope: 'turn' }), 'primary'));
+      actions.append(button('Allow for this turn', () => respond(key, { permissions: params.permissions || {}, scope: 'turn' }, 'accept'), 'primary'));
     } else { container.append(element('p', 'This request needs a response format this view cannot present. Stop the response and inspect the CLI request.')); }
     const question = method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion';
     if (!question && !params.truncated && panelSupport?.fullAccess && actions.querySelectorAll('button').length) actions.append(button('Allow all in this conversation', () => setAccess(true)));
-    container.append(actions, status); return { container, status };
+    container.append(actions, status); return { container, status, bound, revision: request.requestRevision, generation: request.generation };
   }
   function renderRequests() {
-    for (const [key, view] of requestNodes) if (!timeline.requests.has(key)) { view.container.remove(); requestNodes.delete(key); }
+    // A request re-sent under the same id is a new revision: its old card goes.
+    for (const [key, view] of requestNodes) if (!timeline.requests.has(key) || timeline.requests.get(key).requestRevision !== view.revision) { view.container.remove(); requestNodes.delete(key); }
     for (const [key, request] of timeline.requests) {
       if (!requestNodes.has(key)) { const view = requestView(key, request); requestNodes.set(key, view); nodes.requests.append(view.container); }
       const view = requestNodes.get(key); view.status.textContent = request.sent ? 'Choice sent; waiting for the agent to continue.' : request.unconfirmed ? 'Response unconfirmed. Waiting for the current agent state.' : '';

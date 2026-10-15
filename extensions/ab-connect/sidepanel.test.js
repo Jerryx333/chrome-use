@@ -600,3 +600,73 @@ test('composer keeps stop and send together in one right-aligned group', async (
   assert.match(css, /\.composer-send \{[^}]*margin-left:auto/);
   assert.match(css, /\.composer-send \{[^}]*flex:none/);
 });
+
+test('hosts with request revisions get a decision bound to the card the user saw', async () => {
+  const support = {...fullSupport, requestRevision: 1};
+  const params = {tool_name:'mcp__chrome_use__chrome_use_fill', input:{selector:'#password', value:'[redacted input, 8 chars]'}};
+  const reads = [
+    [{sequence:1,kind:'request',data:{requestId:'r',method:'can_use_tool',params,generation:3,requestRevision:7}}],
+    [{sequence:2,kind:'request',data:{requestId:'r',method:'can_use_tool',params:{...params,input:{selector:'#other',value:'x'}},generation:3,requestRevision:8}}],
+  ];
+  const f = await fixture({
+    status: () => ({connected:true, agentPanel:support}),
+    conversationRead: async ({after}) => { const events = reads[after] || []; return {success:true,result:{conversation:chat('a','waitingInput'),journal:{events,cursor:after+events.length,more:false}}}; },
+    conversationRespond: async () => ({success:true,result:{response:{dispatched:true,confirmed:false}}}),
+  });
+  f.hostUpdate({connected:true, agentPanel:support}); await settle();
+  f.panel.select('a'); await settle();
+  const first = f.nodes.get('requests').querySelectorAll('button').find(b => b.textContent === 'Allow once');
+  await f.panel.refresh(); await settle();
+  // The re-sent request replaced the card; the old card is gone.
+  const cards = f.nodes.get('requests').querySelectorAll('pre');
+  assert.equal(cards.length, 1); assert.match(cards[0].textContent, /#other/);
+  assert.equal(f.nodes.get('requests').querySelectorAll('button').includes(first), false);
+  f.nodes.get('requests').querySelectorAll('button').find(b => b.textContent === 'Allow once').fire('click'); await settle();
+  const sent = f.calls.find(call => call.operation === 'conversationRespond').params;
+  assert.deepEqual(sent, {conversationId:'a', requestId:'r', generation:3, requestRevision:8, decision:'allow'});
+  assert.equal(JSON.stringify(sent).includes('redacted'), false);
+  f.panel.close();
+});
+
+test('question answers are sent as validated decisions, never as echoed input', async () => {
+  const support = {...fullSupport, requestRevision: 1};
+  const input = {questions:[{question:'Which size?',multiSelect:false,options:[{label:'Small'},{label:'Large'}]},{question:'Extras?',multiSelect:true,options:[{label:'Bag'},{label:'Card'}]}], note:'[redacted secret, 9 chars]'};
+  const codex = {questions:[{id:'q1',question:'Pick',isOther:false,options:[{label:'A'}]},{id:'q2',question:'Name',isOther:false,options:null}]};
+  const f = await fixture({
+    status: () => ({connected:true, agentPanel:support}),
+    conversationRead: async () => ({success:true,result:{conversation:chat('a','waitingInput'),journal:{events:[
+      {sequence:1,kind:'request',data:{requestId:'q',method:'can_use_tool',params:{tool_name:'AskUserQuestion',input},generation:1,requestRevision:2}},
+      {sequence:2,kind:'request',data:{requestId:9,method:'item/tool/requestUserInput',params:codex,generation:1,requestRevision:3}},
+    ],cursor:2,more:false}}}),
+    conversationRespond: async () => ({success:true,result:{response:{dispatched:true,confirmed:false}}}),
+  });
+  f.hostUpdate({connected:true, agentPanel:support}); await settle();
+  f.panel.select('a'); await settle();
+  const [claude, codexCard] = f.nodes.get('requests').children;
+  const inputs = claude.querySelectorAll('input');
+  inputs.find(i => i.value === 'Large').checked = true;
+  inputs.find(i => i.value === 'Bag').checked = true; inputs.find(i => i.value === 'Card').checked = true;
+  claude.querySelectorAll('button').find(b => b.textContent === 'Send answers').fire('click'); await settle();
+  const answered = f.calls.filter(call => call.operation === 'conversationRespond').map(call => call.params);
+  assert.deepEqual(answered[0], {conversationId:'a', requestId:'q', generation:1, requestRevision:2, decision:{answers:{'Which size?':{option:'Large'}, 'Extras?':{options:['Bag','Card']}}}});
+  // Codex: free text only where the question allows it (q2 has no options).
+  const codexInputs = codexCard.querySelectorAll('input');
+  assert.equal(codexInputs.filter(i => i.placeholder === 'Your answer').length, 1);
+  codexInputs.find(i => i.value === 'A').checked = true;
+  codexInputs.find(i => i.placeholder === 'Your answer').value = 'Ada';
+  codexCard.querySelectorAll('button').find(b => b.textContent === 'Send answers').fire('click'); await settle();
+  assert.deepEqual(f.calls.filter(call => call.operation === 'conversationRespond')[1].params.decision, {answers:{q1:{option:'A'}, q2:{custom:'Ada'}}});
+  f.panel.close();
+});
+
+test('an older host without request revisions still gets the legacy result shape', async () => {
+  const params = {tool_name:'Bash', input:{command:'ls'}};
+  const f = await fixture({
+    conversationRead: async () => ({success:true,result:{conversation:chat('a','waitingInput'),journal:{events:[{sequence:1,kind:'request',data:{requestId:'r',method:'can_use_tool',params}}],cursor:1,more:false}}}),
+    conversationRespond: async () => ({success:true,result:{}}),
+  });
+  f.panel.select('a'); await settle();
+  f.nodes.get('requests').querySelectorAll('button').find(b => b.textContent === 'Allow once').fire('click'); await settle();
+  assert.deepEqual(f.calls.find(call => call.operation === 'conversationRespond').params, {conversationId:'a', requestId:'r', result:{behavior:'allow', updatedInput:{command:'ls'}}});
+  f.panel.close();
+});
