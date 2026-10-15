@@ -5,7 +5,7 @@
 // access to page context or delivery.
 
 import { plain, inlineCode } from './inspect-format.js';
-import { visibilityVerdict, editorUrl, deliveryMessage, LOCKED_STATES, newDeliveryId, scopeLabel, evidenceLabels, revisionText, reasonText, targetLabel, linkCommand } from './inspect-frame-logic.js';
+import { visibilityVerdict, editorUrl, deliveryMessage, LOCKED_STATES, newDeliveryId, scopeLabel, evidenceLabels, revisionText, reasonText, targetLabel, linkCommand, shortPath, tailPath } from './inspect-frame-logic.js';
 
 const $ = id => document.getElementById(id);
 const view = $('view');
@@ -220,11 +220,10 @@ function render() {
   view.replaceChildren();
   if (state.ended) { view.append(h('div', { class: 'pad muted', text: state.ended })); return; }
   if (!state.settings?.enabled) { view.append(enableView()); return; }
+  // Where it goes, then what is selected, then what to change.
   const body = h('div', { class: 'pad stack' });
-  const setup = setupView();
-  if (setup) body.append(setup);
-  body.append(cardsView(), instructionView(), targetView(), actionsView());
-  if (state.notice) body.append(h('div', { class: `notice ${state.notice.tone}`, text: state.notice.text }));
+  body.append(...[targetView(), setupView(), cardsView(), composerView(), deliveryView()].filter(Boolean));
+  if (state.notice) body.append(h('div', { class: `notice small ${state.notice.tone}`, text: state.notice.text }));
   view.append(body);
 }
 
@@ -327,16 +326,17 @@ function confirmCard(status) {
   const card = status.card || { pairs: [] };
   const pairs = card.pairs || [];
   const reason = reasonText(status.reason, status.binding);
-  const box = h('div', { class: 'notice stack' });
-  if (reason) box.append(h('div', { class: 'small', text: reason }));
+  const box = h('div', { class: 'chooser stack' });
+  if (reason) box.append(h('div', { class: 'notice warn small', text: reason }));
   if (!pairs.length) {
     const command = linkCommand(state.ctx.pageUrl, status.platform);
     box.append(h('strong', { text: 'No running agent session matches this page' }),
-      h('div', { class: 'small', text: 'Start Claude Code, Codex or Pi in the project, then press Check again. Or, in the session that should receive requests, run:' }),
+      h('div', { class: 'small muted', text: 'Start Claude Code, Codex or Pi in the project, then press Check again. Or, in the session that should receive requests, run:' }),
       h('pre', { class: 'cmd', text: command }),
       h('div', { class: 'actions' },
         h('button', { onclick: () => copy(command) }, 'Copy command'),
-        h('button', { onclick: refreshStatus }, 'Check again')));
+        h('button', { onclick: refreshStatus }, 'Check again'),
+        cancelButton()));
     return box;
   }
   // A candidate project without a running session can be shown but not
@@ -346,32 +346,40 @@ function confirmCard(status) {
   if (!state.chosenPair || !pairs.some(p => key(p) === state.chosenPair && live(p))) state.chosenPair = card.preselected && live(card.preselected) ? key(card.preselected) : null;
   const chosen = pairs.find(p => key(p) === state.chosenPair && live(p)) || null;
   const expanded = state.expandPairs || !card.preselected;
-  if (chosen) box.append(pairSummary(chosen));
-  if (expanded) {
-    box.append(h('div', { class: 'small muted', text: card.preselected ? 'Other matches:' : 'Choose where requests from this page go:' }),
-      h('div', { class: 'list' }, pairs.map(p => h('label', {},
-        h('input', { type: 'radio', name: 'pair', disabled: !live(p), checked: live(p) && key(p) === state.chosenPair, onchange: () => { state.chosenPair = key(p); render(); } }),
-        h('span', {}, h('strong', { text: live(p) ? p.sessionLabel || p.sessionId : 'no running session here' }), ' ', h('span', { class: 'muted small', text: `${p.kind || ''}${p.status ? ' · ' + p.status : ''} · ${scopeLabel(p.origin, p.pathScope)}` }), h('br'),
-          h('span', { class: 'mono muted', text: p.root }), h('br'),
-          h('span', { class: 'muted small', text: [...evidenceLabels(p), revisionText(p.revision)].filter(Boolean).join(' · ') }))))));
-  }
+  const shown = expanded ? pairs : pairs.filter(p => key(p) === key(card.preselected));
+  const host = scopeLabel(pairs[0].origin, '/');
+  box.append(h('div', { class: 'chooser-head' },
+    expanded && !chosen ? 'Choose where requests from ' : 'Send requests from ',
+    h('strong', { text: host }), expanded && !chosen ? ' go:' : ' to:'));
+  box.append(h('div', { class: 'list' }, shown.map(p => optionRow(p, live(p), key(p) === state.chosenPair))));
+  if (!expanded && pairs.length > 1) box.append(h('button', { class: 'link small', onclick: () => { state.expandPairs = true; render(); } }, `Other matches (${pairs.length - 1})`));
   if (pairs.some(p => !live(p))) box.append(h('div', { class: 'small muted' }, 'To use a project without a running session, start Claude Code or Codex there, or run ', h('span', { class: 'mono', text: linkCommand(state.ctx.pageUrl, status.platform) }), ' in the session that should receive requests.'));
   box.append(h('div', { class: 'actions' },
-    h('button', { class: 'primary', disabled: !chosen, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'default'); } }, 'Hand over'),
-    h('button', { disabled: !chosen, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'tab'); } }, 'Only this tab'),
-    card.preselected && !state.expandPairs ? h('button', { class: 'link', onclick: () => { state.expandPairs = true; render(); } }, 'Choose another') : null,
-    state.choosing ? h('button', { class: 'link', onclick: () => { state.choosing = false; render(); } }, 'Cancel') : null));
+    h('button', { class: 'primary', disabled: !chosen, title: `Every tab of ${host} sends here`, onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'default'); } }, 'Use for this site'),
+    h('button', { disabled: !chosen, title: 'Only this tab, until it reloads', onclick: event => { if (event.isTrusted && chosen) void confirmPair(chosen, 'tab'); } }, 'This tab only'),
+    cancelButton()));
   return box;
 }
 
-function pairSummary(p) {
+function cancelButton() {
+  if (!state.choosing) return null;
+  return h('button', { class: 'ghost push', onclick: () => { state.choosing = false; state.expandPairs = false; render(); } }, 'Cancel');
+}
+
+function optionRow(p, isLive, checked) {
   const extra = (p.sourceRoots || []).filter(r => r !== p.root);
-  return h('div', { class: 'stack' },
-    h('strong', { text: `Send requests from ${scopeLabel(p.origin, p.pathScope)} to ${p.sessionLabel || p.sessionId}` }),
-    h('div', { class: 'small' }, `${p.kind || 'session'}${p.status ? ' · ' + p.status : ''} · session folder `, h('span', { class: 'mono', text: p.sessionCwd })),
-    h('div', { class: 'small' }, 'Project: ', h('span', { class: 'mono', text: p.root })),
-    extra.length ? h('div', { class: 'small' }, 'Also counts as this page\u2019s source: ', h('span', { class: 'mono', text: extra.join(', ') })) : null,
-    h('div', { class: 'small muted', text: [...evidenceLabels(p), revisionText(p.revision)].filter(Boolean).join(' · ') }));
+  const meta = [p.kind, p.status].filter(Boolean).join(' · ');
+  const facts = [...evidenceLabels(p), revisionText(p.revision)].filter(Boolean);
+  return h('label', { class: 'option' + (isLive ? '' : ' off') },
+    h('input', { type: 'radio', name: 'pair', disabled: !isLive, checked: isLive && checked, onchange: () => { state.chosenPair = p.fingerprint; render(); } }),
+    h('span', { class: 'option-body' },
+      h('span', { class: 'option-head' },
+        h('strong', { class: 'ellipsis', text: isLive ? p.sessionLabel || p.sessionId : 'no running session here' }),
+        meta ? h('span', { class: 'chip', text: meta }) : null),
+      h('span', { class: 'mono path', title: p.root, text: shortPath(p.root) + (p.pathScope && p.pathScope !== '/' ? `  (${p.pathScope})` : '') }),
+      isLive && p.sessionCwd && p.sessionCwd !== p.root ? h('span', { class: 'small muted', title: p.sessionCwd }, 'runs in ', h('span', { class: 'mono', text: shortPath(p.sessionCwd) })) : null,
+      extra.length ? h('span', { class: 'small muted', title: extra.join('\n') }, 'also source: ', h('span', { class: 'mono', text: extra.map(shortPath).join(', ') })) : null,
+      facts.length ? h('span', { class: 'small muted', text: facts.join(' · ') }) : null));
 }
 
 async function confirmPair(pair, mode) {
@@ -458,23 +466,26 @@ function consentCard(kind) {
 }
 
 function cardsView() {
-  if (!state.annotations.length) return h('div', { class: 'muted small', text: 'Click an element on the page to start. Shift+click or drag to select several.' });
+  if (!state.annotations.length) return h('div', { class: 'empty small muted', text: 'Click an element on the page to start. Shift+click or drag to select several.' });
   const root = state.status?.binding?.root;
   const cards = h('div', { class: 'cards' }, state.annotations.map((a, i) => {
     const image = state.edited.get(i) || state.images[i] || null;
     const attach = state.attach.get(i) !== false;
     const link = root && a.sourceKind !== 'none' ? editorUrl(state.settings.editor, root, parseSource(a.source)) : null;
+    const title = (a.component ? `<${a.component}> ` : '') + (a.label || '');
     return h('div', { class: 'card' },
-      image ? h('img', { class: 'thumb', src: image, alt: `Screenshot of element ${i + 1}`, title: 'Click to draw on the screenshot', onclick: () => openDraw(i) }) : h('div', { class: 'nothumb', text: state.imageReason ? 'no screenshot' : '…' }),
-      h('div', { class: 'stack' },
-        h('div', { class: 'title' }, h('span', { class: 'num', text: String(a.number) }), a.component ? `<${a.component}> ` : '', a.label),
-        h('div', { class: 'row small' },
-          h('span', { class: 'mono ' + (a.sourceKind === 'none' ? 'muted' : ''), text: a.source }),
-          link ? h('a', { href: link, onclick: event => { event.preventDefault(); openExternal(link); } }, 'Open in editor') : null),
+      image ? h('img', { class: 'thumb' + (attach ? '' : ' detached'), src: image, alt: `Screenshot of element ${i + 1}`, title: 'Click to draw on the screenshot', onclick: () => openDraw(i) }) : h('div', { class: 'thumb nothumb', text: state.imageReason ? 'no screenshot' : '…' }),
+      h('div', { class: 'card-body' },
+        h('div', { class: 'card-head' },
+          h('span', { class: 'num', text: String(a.number) }),
+          h('span', { class: 'title', title, text: title }),
+          h('button', { class: 'icon remove', title: 'Remove this element', 'aria-label': `Remove element ${a.number}`, onclick: () => pickerPort?.postMessage({ type: 'remove', index: i }) }, '✕')),
+        a.sourceKind === 'none'
+          ? h('div', { class: 'small muted', text: 'no source location' })
+          : h('div', { class: 'src' }, h('span', { class: 'mono ellipsis', title: a.source, text: tailPath(a.source, 30) }),
+            link ? h('a', { href: link, class: 'small', onclick: event => { event.preventDefault(); openExternal(link); } }, 'Open') : null),
         h('input', { type: 'text', 'data-annotation': a.id, disabled: state.busy || locked(), placeholder: 'Note for this element (optional)', value: a.note || '', oninput: event => { a.note = event.target.value; refreshSend(); syncNote(a); } }),
-        h('div', { class: 'row small muted' },
-          image ? h('label', {}, h('input', { type: 'checkbox', checked: attach, onchange: event => { state.attach.set(i, event.target.checked); } }), ' attach screenshot') : null,
-          h('button', { class: 'link', onclick: () => pickerPort?.postMessage({ type: 'remove', index: i }) }, 'remove'))));
+        image ? h('label', { class: 'small muted toggle' }, h('input', { type: 'checkbox', checked: attach, onchange: event => { state.attach.set(i, event.target.checked); render(); } }), 'Attach screenshot') : null));
   }));
   const wrap = h('div', { class: 'stack' }, cards);
   if (state.imageReason) wrap.append(h('div', { class: 'small muted' }, state.imageReason, ' ', h('button', { class: 'link', onclick: () => guarded(async () => { state.imageReason = null; await request('recapture'); }) }, 'Retake screenshots')));
@@ -487,8 +498,10 @@ function parseSource(text) {
   return match ? { path: match[1], line: match[2] ? Number(match[2]) : null, column: match[3] ? Number(match[3]) : null } : null;
 }
 
-function instructionView() {
-  const area = h('textarea', { id: 'instruction', rows: '3', placeholder: 'What should change? Enter sends, Shift+Enter for a new line.', disabled: locked() });
+// The instruction box and its buttons are one unit, so the next step after
+// typing is always right under the cursor.
+function composerView() {
+  const area = h('textarea', { id: 'instruction', rows: '3', placeholder: 'What should change?', disabled: locked() });
   area.value = state.instruction;
   area.addEventListener('input', debounce(() => { state.instruction = area.value; saveDraft(locked() ? undefined : 'editing'); }, 400));
   area.addEventListener('input', () => { state.instruction = area.value; refreshSend(); });
@@ -499,23 +512,42 @@ function instructionView() {
     }
   });
   setTimeout(() => { if (!locked() && document.activeElement !== area && state.annotations.length) area.focus(); }, 0);
-  return area;
+  return h('div', { class: 'composer' + (locked() ? ' locked' : '') }, area,
+    h('div', { class: 'composer-bar' },
+      h('button', { class: 'ghost', title: 'Pick another element on the page', onclick: () => pickerPort?.postMessage({ type: 'pick' }) }, '+ Add element'),
+      h('button', { class: 'ghost', title: 'Copy the request as Markdown', onclick: copyBatch, disabled: !state.annotations.length && !state.instruction.trim() }, 'Copy'),
+      h('span', { class: 'grow' }),
+      h('span', { class: 'hint', text: '⏎ send · ⇧⏎ new line' }),
+      h('button', { id: 'send', class: 'primary', disabled: !sendable(), onclick: event => { if (event.isTrusted) void submit(); } }, state.busy ? 'Sending…' : 'Send')));
 }
 
+// One line naming the receiver, at the top. While the chooser is open it
+// replaces this line, so the panel never shows two different targets.
 function targetView() {
+  if (state.choosing) return null;
   if (!state.legacy && state.status) {
-    if (state.tabTarget) return h('div', { class: 'target' }, '→ ', h('strong', { text: state.tabTarget.sessionLabel || state.tabTarget.sessionId }), ' @ ', h('span', { class: 'mono', text: state.tabTarget.root }), ' (this tab only) ',
-      h('button', { class: 'link', onclick: async () => { await request('clearTabTarget'); await refreshStatus(); } }, 'use site default'));
+    if (state.tabTarget) return targetBar(state.tabTarget.sessionLabel || state.tabTarget.sessionId, state.tabTarget.root, 'this tab only',
+      h('button', { class: 'ghost', onclick: async () => { await request('clearTabTarget'); await refreshStatus(); } }, 'Use site default'));
     const b = state.status.binding;
-    if (state.status.state !== 'bound' || !b) return h('div', { class: 'target', text: 'Target: not confirmed yet' });
-    return h('div', { class: 'target' }, '→ ', h('strong', { text: b.sessionLabel || b.sessionId }), ' @ ', h('span', { class: 'mono', text: b.root }), ` · ${scopeLabel(b.origin, b.pathScope)} `,
-      h('button', { class: 'link', onclick: () => { state.choosing = true; state.expandPairs = true; render(); } }, 'change'));
+    if (state.status.state !== 'bound' || !b) return null;
+    return targetBar(b.sessionLabel || b.sessionId, b.root, b.pathScope && b.pathScope !== '/' ? b.pathScope : null,
+      h('button', { class: 'ghost', onclick: () => { state.choosing = true; state.expandPairs = true; render(); } }, 'Change'));
   }
   const binding = state.status?.binding;
-  if (!binding) return h('div', { class: 'target', text: 'Target: not chosen yet' });
+  if (!binding) return h('div', { class: 'target muted small', text: 'Target: not chosen yet' });
   const session = (state.status.sessions || []).find(s => s.id === binding.sessionId);
-  return h('div', { class: 'target' }, '→ ', h('strong', { text: session ? session.name || session.id : binding.sessionLabel || 'no session' }), ' @ ', h('span', { class: 'mono', text: binding.root }), ' ',
-    h('button', { class: 'link', onclick: () => { state.choosing = true; render(); } }, 'change'));
+  return targetBar(session ? session.name || session.id : binding.sessionLabel || 'no session', binding.root, null,
+    h('button', { class: 'ghost', onclick: () => { state.choosing = true; render(); } }, 'Change'));
+}
+
+function targetBar(name, root, tag, action) {
+  return h('div', { class: 'target', title: `${name} @ ${root}` },
+    h('span', { class: 'arrow', text: '→' }),
+    h('span', { class: 'target-text' },
+      h('strong', { class: 'ellipsis', text: name }),
+      h('span', { class: 'mono path', text: shortPath(root) })),
+    tag ? h('span', { class: 'chip', text: tag }) : null,
+    action);
 }
 
 // What the panel shows as the receiver; the host refuses to send elsewhere.
@@ -543,20 +575,12 @@ function locked() {
   return !!state.delivery && deliveryMessage(state.delivery).locked;
 }
 
-function actionsView() {
-  const canSend = sendable();
-  const row = h('div', { class: 'actions' },
-    h('button', { id: 'send', class: 'primary', disabled: !canSend, onclick: event => { if (event.isTrusted) void submit(); } }, state.busy ? 'Sending…' : 'Send'),
-    h('button', { onclick: copyBatch, disabled: !state.annotations.length && !state.instruction.trim() }, 'Copy'),
-    h('button', { onclick: () => pickerPort?.postMessage({ type: 'pick' }) }, '+ Add element'));
-  if (locked()) {
-    row.append(h('button', { onclick: checkDelivery }, 'Check status'), h('button', { onclick: newBatch }, 'New batch'));
-  }
-  if (state.delivery) {
-    const message = deliveryMessage(state.delivery);
-    return h('div', { class: 'stack' }, row, h('div', { class: `notice ${message.tone} small`, text: message.text }));
-  }
-  return row;
+function deliveryView() {
+  if (!state.delivery) return null;
+  const message = deliveryMessage(state.delivery);
+  return h('div', { class: `notice ${message.tone} small stack` },
+    h('div', { text: message.text }),
+    locked() ? h('div', { class: 'actions' }, h('button', { onclick: checkDelivery }, 'Check status'), h('button', { onclick: newBatch }, 'New batch')) : null);
 }
 
 // ---- actions ---------------------------------------------------------------

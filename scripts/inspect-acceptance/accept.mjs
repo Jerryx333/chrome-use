@@ -132,8 +132,8 @@ async function bindFirst(page, frame) {
   const t = await frameText(frame);
   if (/Send requests from|Choose where/.test(t)) {
     if (!/Send requests from/.test(t)) await A.clickInFrame(page.sid, frame.sid, `([...document.querySelectorAll('label')].find(l => /react-main/.test(l.textContent))?.querySelector('input:not([disabled])')) || document.querySelector('input[name="pair"]:not([disabled])')`);
-    await A.clickInFrame(page.sid, frame.sid, byText('Hand over'));
-    await waitFor(async () => /→ /.test(await frameText(frame)), { label: 'bound' });
+    await A.clickInFrame(page.sid, frame.sid, byText('Use for this site'));
+    await waitFor(async () => /→/.test(await frameText(frame)), { label: 'bound' });
     return;
   }
   if (/Which project/.test(t)) {
@@ -255,7 +255,7 @@ await scenario('overlay-blocks-send', async () => {
   await startOn(page);
   await pick(page, '.save-button');
   const frame = await A.realFrame();
-  if (!/→ /.test(await frameText(frame))) await bindFirst(page, frame);
+  if (!/→/.test(await frameText(frame))) await bindFirst(page, frame);
   await waitFor(async () => /→/.test(await frameText(frame)), { label: 'bound target' });
   await A.evaluate(page.sid, `(() => { const d = document.createElement('div'); d.id = 'ov'; d.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,.01);z-index:2147483647;pointer-events:none'; document.documentElement.append(d); return 1; })()`);
   const before = dms().length;
@@ -296,7 +296,7 @@ await scenario('unknown-delivery-not-resent', async () => {
   const tabId = await startOn(page);
   await pick(page, '.save-button');
   const frame = await A.realFrame();
-  if (!/→ /.test(await frameText(frame))) await bindFirst(page, frame);
+  if (!/→/.test(await frameText(frame))) await bindFirst(page, frame);
   await waitFor(async () => /→/.test(await frameText(frame)), { label: 'bound target' });
   const before = dms().length;
   await typeAndEnter(page, frame, 'Hang please');
@@ -330,7 +330,7 @@ await scenario('note-only-immediate-send', async () => {
   await startOn(page);
   await pick(page, '.save-button');
   const frame = await A.realFrame();
-  if (!/→ /.test(await frameText(frame))) await bindFirst(page, frame);
+  if (!/→/.test(await frameText(frame))) await bindFirst(page, frame);
   await waitFor(async () => /→/.test(await frameText(frame)), { label: 'bound target' });
   await A.clickInFrame(page.sid, frame.sid, 'document.querySelector("input[data-annotation]")');
   await b.send('Input.insertText', { text: 'Only a note: make this green' }, page.sid);
