@@ -14489,6 +14489,18 @@ ed.addEventListener('input',()=>setTimeout(()=>{
     )
     .await;
     assert_eq!(get_data(&hits)["result"], "topic,post");
+    // A fresh snapshot gives the re-used node a new ref, not the old one.
+    let again = run(
+        &mut state,
+        json!({"id":"8b","action":"snapshot","interactive":true}),
+    )
+    .await;
+    let again = get_data(&again)["snapshot"].as_str().unwrap_or_default();
+    let post_line = again.lines().find(|l| l.contains("id=post")).unwrap();
+    assert!(
+        !post_line.contains(&format!("ref={}]", &post[1..])),
+        "{post} handed on to new content: {post_line}"
+    );
 
     // 2. A class shared by two controls is refused, with both listed.
     let amb = run(

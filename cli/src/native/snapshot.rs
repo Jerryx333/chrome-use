@@ -776,11 +776,13 @@ async fn take_snapshot_at_depth(
         // fallback label passes run differently for `snapshot` and
         // `snapshot -i`, so keying on the display name would hand the same DOM
         // node a different ref depending on which command asked (issue #155).
+        // A name that is the element's own text is the exception (see
+        // [`ref_identity_name`]).
         let ref_id = ref_map.snapshot_ref(
             tree_nodes[*idx].backend_node_id,
             frame_id,
             &tree_nodes[*idx].role,
-            &tree_nodes[*idx].ax_name,
+            ref_identity_name(&tree_nodes[*idx]),
         );
 
         ref_map.add_with_frame(
@@ -1813,6 +1815,20 @@ fn derived_ax_identity(node: &TreeNode) -> Option<AxIdentity> {
         name: node.ax_name.clone(),
         source: node.derived_name.unwrap_or(DerivedName::Context),
     })
+}
+
+/// The name a node's ref is kept under across snapshots. Normally the raw AX
+/// name; for a name that is the element's own text, that text — every
+/// clickable `<div>` is `generic ""` to the AX tree, so keying on that would
+/// hand `@e6` ("投稿") on to the same node once it says "充钻石" (#162). The
+/// cursor scan that supplies the text runs in `snapshot` and `snapshot -i`
+/// alike, so both modes still agree on the ref (#155).
+fn ref_identity_name(node: &TreeNode) -> &str {
+    if node.derived_name == Some(DerivedName::OwnText) {
+        &node.name
+    } else {
+        &node.ax_name
+    }
 }
 
 fn promote_hidden_inputs(
@@ -4373,6 +4389,8 @@ mod derived_name_tests {
             ("generic", "", DerivedName::OwnText)
         );
         assert!(derived_ax_identity(&node("button", "Save")).is_none());
+        assert_eq!(ref_identity_name(&n), "投稿");
+        assert_eq!(ref_identity_name(&node("button", "Save")), "Save");
         let mut promoted = node("LabelText", "Express");
         promoted.ax_role = Some("LabelText".into());
         promoted.role = "radio".into();
@@ -4381,5 +4399,15 @@ mod derived_name_tests {
             (ax.role.as_str(), ax.name.as_str(), ax.source),
             ("LabelText", "Express", DerivedName::Context)
         );
+    }
+
+    /// A text-named node keeps its ref only while it says the same thing: the
+    /// same `generic ""` node now reading "充钻石" gets a fresh ref.
+    #[test]
+    fn a_text_named_ref_is_not_handed_to_new_content() {
+        let mut map = RefMap::new();
+        let first = map.snapshot_ref(Some(6), None, "generic", "投稿");
+        assert_eq!(map.snapshot_ref(Some(6), None, "generic", "投稿"), first);
+        assert_ne!(map.snapshot_ref(Some(6), None, "generic", "充钻石"), first);
     }
 }
