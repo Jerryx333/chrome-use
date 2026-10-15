@@ -95,7 +95,8 @@
         <li>
           <strong>找元素不往页面 DOM 里写任何东西。</strong><code>snapshot</code>、<code>find</code>、<code>nth</code>、
           <code>pick</code>、<code>auth login</code> 用节点句柄记住选中的元素，不打临时标记属性；那种属性写上再删掉，页面的
-          <code>MutationObserver</code> 两次都看得见。
+          <code>MutationObserver</code> 两次都看得见。命令在页面里要记的状态（点击观察、按键回执、上传缓冲）同样只用句柄拿着，
+          不挂到 <code>window</code> 上，也不放进 <code>Symbol.for</code> 键。
         </li>
       </ul>
       <div class="du-callout tip">
