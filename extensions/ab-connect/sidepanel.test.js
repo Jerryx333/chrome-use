@@ -1,3 +1,4 @@
+import './test-i18n.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createPanel } from './sidepanel.js';
@@ -701,5 +702,155 @@ test('the panel reports the conversation it shows and switches when a notificati
   assert.deepEqual(f.presence.posted.at(-1), { type: 'presence', windowId: 7, conversationId: 'b', visible: true });
   f.nodes.get('agentsTab').fire('click'); await settle();
   assert.equal(f.presence.posted.at(-1).visible, false);
+  f.panel.close();
+});
+
+test('agent replies to Inspect & Ask batches are listed and reported as seen once shown', async () => {
+  const replies = [{ deliveryId: 'd', channel: 'dm-a', seq: 4, from: 'chrome-use-91', text: 'Fixed **it**', receivedAt: 1 }];
+  const f = await fixture({ presence: true, status: () => ({ connected: true, agentPanel: { ...fullSupport, inspectReplies: 1 } }), inspectReplies: async () => ({ success: true, result: { replies } }) }, { ab_panel_conversation: 'a' });
+  await settle();
+  const box = f.nodes.get('inspectReplies');
+  assert.equal(box.hidden, false);
+  assert.match(f.nodes.get('inspectReplyList').children[0].children[0].children[0].textContent, /Reply from chrome-use-91/);
+  assert.equal(f.presence.posted.at(-1).repliesShown, undefined, 'collapsed replies are not seen');
+  f.presence.listeners.message({ type: 'showReplies' }); await settle();
+  assert.equal(box.open, true);
+  assert.equal(f.presence.posted.at(-1).repliesShown, true);
+  f.panel.close();
+});
+
+test('a host without inspectReplies is never asked for replies', async () => {
+  const f = await fixture({ presence: true });
+  assert.equal(f.calls.some(call => call.operation === 'inspectReplies'), false);
+  assert.equal(f.nodes.get('inspectReplies').hidden, true);
+  f.panel.close();
+});
+
+// ---- /resume ----------------------------------------------------------------
+const walk = (node, predicate) => [...(predicate(node) ? [node] : []), ...node.children.flatMap(child => walk(child, predicate))];
+const textOf = node => [node.textContent, ...node.children.map(textOf)].filter(Boolean).join(' ');
+const session = (id, extra = {}) => ({ sessionId: id, agentId: 'codex', title: `Session ${id}`, cwd: '/work/project', lastActive: Date.now() - 120000, running: false, resumable: true, conversationId: null, ...extra });
+const resumeSupport = () => ({ connected: true, agentPanel: { ...fullSupport, sessionResume: 1, chatAgents: ['codex', 'claude'] } });
+
+test('/resume is a built-in command: it opens the session picker instead of a skill lookup', async () => {
+  const lists = [];
+  const f = await fixture({ status: resumeSupport, conversationSessionList: params => { lists.push(params); return { success: true, result: { schemaVersion: 1, agentId: params.agentId, supported: true, sessions: [session('s1'), session('s2', { running: true })] } }; } });
+  f.panel.select('b'); await settle();
+  f.nodes.get('message').value = '/resume login bug'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(lists.length, 1);
+  assert.equal(lists[0].query, 'login bug');
+  assert.equal(lists[0].limit, 50);
+  assert.ok(!f.calls.some(c => ['conversationSkillSelect', 'conversationSend', 'conversationCreate'].includes(c.operation)));
+  assert.equal(f.nodes.get('message').value, '', 'the command is consumed');
+  const host = f.nodes.get('resumeHost');
+  const rows = walk(host, n => typeof n.className === 'string' && n.className.split(' ').includes('resume-item'));
+  assert.equal(rows.length, 2);
+  assert.match(textOf(rows[0]), /Session s1 Codex · project/);
+  assert.match(textOf(rows[1]), /Active elsewhere/);
+  f.panel.close();
+});
+
+test('an older CLI without session resume says to update it', async () => {
+  const f = await fixture({});
+  f.nodes.get('message').value = '/resume'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.match(f.nodes.get('notice').textContent, /Update the chrome-use CLI to resume sessions/);
+  assert.ok(!f.calls.some(c => c.operation === 'conversationSessionList'));
+  f.panel.close();
+});
+
+test('choosing a session resumes it and selects the new conversation; an active one needs confirmation', async () => {
+  const resumes = [], created = { ...chat('resumed'), agentId: 'codex', resumed: { sessionId: 's2', cwd: '/work/project' } };
+  const f = await fixture({
+    status: resumeSupport,
+    conversationSessionList: params => ({ success: true, result: { schemaVersion: 1, agentId: params.agentId, supported: true, sessions: [session('s2', { running: true })] } }),
+    conversationResume: params => { resumes.push(params); return { success: true, result: params.confirmRunning ? { schemaVersion: 1, conversation: created } : { schemaVersion: 1, confirmRequired: 'running', session: session('s2', { running: true }) } }; },
+  });
+  f.chats.push(created);
+  f.nodes.get('message').value = '/resume'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  const host = f.nodes.get('resumeHost');
+  walk(host, n => typeof n.className === 'string' && n.className.split(' ').includes('resume-item'))[0].fire('click'); await settle(); await settle();
+  assert.deepEqual(resumes, [{ agentId: 'codex', sessionId: 's2' }]);
+  assert.match(textOf(host), /still active in another terminal; continuing here can corrupt its history/);
+  assert.notEqual(f.nodes.get('conversation').value, 'resumed', 'nothing is attached before the user confirms');
+  walk(host, n => n.tag === 'button' && n.textContent === 'Continue here anyway')[0].fire('click'); await settle(); await settle(); await settle();
+  assert.deepEqual(resumes[1], { agentId: 'codex', sessionId: 's2', confirmRunning: true });
+  assert.equal(f.nodes.get('conversation').value, 'resumed');
+  assert.ok(f.calls.some(c => c.operation === 'conversationRead' && c.params.conversationId === 'resumed'));
+  f.panel.close();
+});
+
+test('the conversation menu offers to resume a session only when the CLI can', async () => {
+  for (const [status, shown] of [[resumeSupport, true], [undefined, false]]) {
+    const f = await fixture(status ? { status } : {});
+    f.nodes.get('conversationButton').fire('click');
+    const items = walk(f.nodes.get('conversationItems'), n => n.tag === 'button').map(textOf);
+    assert.equal(items.some(t => /Resume a session…/.test(t)), shown);
+    f.panel.close();
+  }
+});
+
+// ---- project folder ------------------------------------------------------------
+test('a new conversation is created in the chosen project folder, shown in the header', async () => {
+  const created = [];
+  const made = { ...chat('p'), agentId: 'codex', project: '/work/app' };
+  const f = await fixture({
+    tabs: { async query() { return [{ id: 5, url: 'http://localhost:3000/dash', title: 'Dash' }]; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, projectDirectory: 1, inspect: true, chatAgents: ['codex', 'claude'] } }),
+    inspectProject: () => ({ success: true, result: { schemaVersion: 1, binding: null } }),
+    conversationProjectList: () => ({ success: true, result: { schemaVersion: 1, projects: [{ path: '/work/app', sources: ['claude'] }] } }),
+    conversationCreate: params => { created.push(params); return { success: true, result: { conversation: made } }; },
+    conversationSend: () => ({ success: true, result: { conversation: made, message: { id: 'x', accepted: true, replayed: false } } }),
+  });
+  f.chats.push(made);
+  f.panel.select(''); await settle(); await settle();
+  assert.equal(f.nodes.get('projectChip').hidden, false);
+  const select = f.nodes.get('project');
+  select.value = '/work/app'; select.fire('change');
+  f.nodes.get('message').value = 'Fix the build'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(created[0].project, '/work/app');
+  assert.equal(f.nodes.get('projectPath').hidden, false);
+  assert.match(f.nodes.get('projectPath').textContent, /Project: app/);
+  assert.equal(f.nodes.get('projectPath').title, '/work/app');
+  // The remember question stays up after creation (a reset must not hide it).
+  const host = f.nodes.get('projectHost');
+  assert.equal(host.children.find(c => c.className === 'project-remember').hidden, false);
+  f.panel.close();
+});
+
+test('an older CLI without project folders is never sent one', async () => {
+  const created = [];
+  const f = await fixture({ conversationCreate: params => { created.push(params); return { success: true, result: { conversation: chat('n') } }; }, conversationSend: () => ({ success: true, result: { conversation: chat('n'), message: { id: 'x', accepted: true, replayed: false } } }) });
+  f.panel.select(''); await settle();
+  assert.equal(f.nodes.get('projectChip').hidden, true);
+  assert.ok(!f.calls.some(c => c.operation === 'conversationProjectList'));
+  f.nodes.get('message').value = 'Hello'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(created[0].project, undefined);
+  f.panel.close();
+});
+
+test('the host\'s default conversation title is shown in the panel\'s language', async () => {
+  const { titleOf } = await import('./sidepanel.js');
+  const { installI18n } = await import('./test-i18n.js');
+  installI18n('zh_CN');
+  try {
+    assert.equal(titleOf({ title: 'New conversation' }, 'panel_new_conversation'), '新会话');
+    assert.equal(titleOf({ title: '' }, 'panel_new_conversation'), '新会话');
+    assert.equal(titleOf({ title: 'Fix the build' }, 'panel_new_conversation'), 'Fix the build');
+  } finally { installI18n('en'); }
+});
+
+test('a resumed session whose folder cannot be a project says so', async () => {
+  const created = { ...chat('resumed'), agentId: 'codex', resumed: { sessionId: 's9', cwd: '/' } };
+  const f = await fixture({
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, sessionResume: 1, chatAgents: ['codex'] } }),
+    conversationSessionList: params => ({ success: true, result: { schemaVersion: 1, agentId: params.agentId, supported: true, sessions: [{ sessionId: 's9', agentId: 'codex', title: 'x', cwd: '/', lastActive: 0, running: false, resumable: true, conversationId: null }] } }),
+    conversationResume: () => ({ success: true, result: { schemaVersion: 1, conversation: created, projectRefused: '/' } }),
+  });
+  f.chats.push(created);
+  f.nodes.get('message').value = '/resume'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  const row = walk(f.nodes.get('resumeHost'), n => typeof n.className === 'string' && n.className.split(' ').includes('resume-item'))[0];
+  row.fire('click'); await settle(); await settle(); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'resumed');
+  assert.match(f.nodes.get('notice').textContent, /folder \/ is a system or home folder/);
   f.panel.close();
 });

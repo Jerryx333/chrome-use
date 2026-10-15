@@ -27,6 +27,8 @@ mod config;
 mod facts;
 #[cfg(test)]
 mod match_tests;
+mod project;
+mod replies;
 mod resolve;
 mod scope;
 #[cfg(test)]
@@ -34,6 +36,7 @@ mod testkit;
 
 pub(super) use cli::run as run_cli;
 use facts::{Facts, Probe, Relation};
+pub(super) use project::bound_projects;
 use scope::Target;
 
 const MAX_BINDINGS: usize = 256;
@@ -65,13 +68,23 @@ pub(super) const OPERATIONS: &[&str] = &[
     "inspectDeliver",
     "inspectLaunchCommand",
     "inspectDeliveryStatus",
+    "inspectReplies",
+    "inspectProject",
+    "inspectProjectBind",
 ];
 
-pub(super) fn handle(operation: &str, params: &Value) -> Result<Value, String> {
+/// `profile` is the Chrome profile the native host was bound to; it picks
+/// the sender identity deliveries go out as and whose replies are read.
+pub(super) fn handle(
+    operation: &str,
+    params: &Value,
+    profile: Option<&str>,
+) -> Result<Value, String> {
     let home = dirs::home_dir().ok_or("Cannot locate the user's home directory")?;
     Inspect {
         root: home.join(".chrome-use").join("inspect"),
         sys: &Host,
+        profile,
     }
     .handle(operation, params)
 }
@@ -485,6 +498,10 @@ struct Session {
     cwd: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
+    /// Every other name ocs answers to for this session (native name, ocs
+    /// name, workspace alias); a sender identity must avoid all of them.
+    #[serde(skip)]
+    addresses: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -513,7 +530,12 @@ trait System {
     /// Raw `git ls-files -z` output for `*.chrome-use/inspect.json`.
     fn git_configs(&self, top: &Path, timeout: Duration) -> Probe<String>;
     fn git_revision(&self, top: &Path, rev: &str, timeout: Duration) -> Probe<Relation>;
-    fn dm(&self, ocs: &Path, id: &str, text: &str) -> Result<Run, String>;
+    /// `ocs dm <id> <text> --as <sender> --json`.
+    fn dm(&self, ocs: &Path, id: &str, text: &str, sender: &str) -> Result<Run, String>;
+    /// Another bounded `ocs` command (`read`, `inbox`), argv only.
+    fn ocs_json(&self, _ocs: &Path, _args: &[&str]) -> Result<Run, String> {
+        Err("unsupported".into())
+    }
 }
 
 struct Host;
@@ -818,7 +840,7 @@ impl System for Host {
             Probe::TimedOut => Probe::TimedOut,
         }
     }
-    fn dm(&self, ocs: &Path, id: &str, text: &str) -> Result<Run, String> {
+    fn dm(&self, ocs: &Path, id: &str, text: &str, sender: &str) -> Result<Run, String> {
         run(
             ocs,
             &[
@@ -826,11 +848,15 @@ impl System for Host {
                 OsStr::new(id),
                 OsStr::new(text),
                 OsStr::new("--as"),
-                OsStr::new("chrome-use"),
+                OsStr::new(sender),
                 OsStr::new("--json"),
             ],
             DELIVER_TIMEOUT,
         )
+    }
+    fn ocs_json(&self, ocs: &Path, args: &[&str]) -> Result<Run, String> {
+        let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
+        run(ocs, &args, replies::READ_TIMEOUT)
     }
 }
 
@@ -914,12 +940,17 @@ fn parse_roster(text: &str) -> Result<Vec<Session>, String> {
             .or_else(|| text_field(entry, "name"))
             .or_else(|| text_field(entry, "summary"))
             .map(|n| line(&n, 120));
+        let addresses = ["name", "ocsName", "workspaceAlias", "id", "target"]
+            .iter()
+            .filter_map(|key| text_field(entry, key))
+            .collect();
         sessions.push(Session {
             id,
             kind,
             name,
             cwd: PathBuf::from(cwd),
             status: text_field(entry, "status").map(|s| line(&s, 40)),
+            addresses,
         });
     }
     Ok(sessions)
@@ -1630,6 +1661,7 @@ fn compose(
 struct Inspect<'a> {
     root: PathBuf,
     sys: &'a dyn System,
+    profile: Option<&'a str>,
 }
 
 impl Inspect<'_> {
@@ -1729,6 +1761,9 @@ impl Inspect<'_> {
                 let delivery = self.recorded(&id)?.map(|r| delivery_view(&r));
                 Ok(json!({ "delivery": delivery }))
             }
+            "inspectReplies" => self.replies(parse(operation, params)?),
+            "inspectProject" => self.project(parse(operation, params)?),
+            "inspectProjectBind" => self.project_bind(parse(operation, params)?),
             _ => Err(format!("Unsupported agent panel operation: {operation}")),
         }
     }
@@ -1742,8 +1777,16 @@ impl Inspect<'_> {
     /// released when the file closes, so a crashed holder never leaves it
     /// stale. Readers need no lock: the store is replaced by rename.
     fn locked<T>(&self, change: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+        self.locked_on("bindings.lock", change)
+    }
+
+    fn locked_on<T>(
+        &self,
+        lock: &str,
+        change: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
         private_tree(&self.root)?;
-        let file = private_open(&self.root.join("bindings.lock"), true)?;
+        let file = private_open(&self.root.join(lock), true)?;
         let deadline = Instant::now() + LOCK_WAIT;
         loop {
             match file.try_lock() {
@@ -2179,6 +2222,10 @@ impl Inspect<'_> {
         let root = target.root.clone();
         let id = target.session_id.clone().unwrap_or_default();
         let source_roots = SourceRoot::of(&facts, &root, &target.source_roots);
+        // Never a name a session answers to: the agent's reply to it must not
+        // wake an unrelated session.
+        let sender = replies::pick(self.profile, &roster, replies::ocs_home().as_deref())
+            .ok_or("Every Inspect & Ask sender name is held by a live session or ocs name; nothing was sent")?;
 
         let mut random = [0u8; 16];
         getrandom::getrandom(&mut random).map_err(|_| "Cannot create a context identifier")?;
@@ -2298,6 +2345,7 @@ impl Inspect<'_> {
                         dir.display()
                     ));
                 }
+                tail_lines.push(replies::reply_hint(&sender));
                 let message = compose(
                     &[header],
                     Some(
@@ -2319,7 +2367,10 @@ impl Inspect<'_> {
                 };
                 let task = template.replace("{root}", &root_text);
                 let md = format!("# Inspect & Ask context\n\nProject: {root_text}\n\n{task}\n");
-                let message = format!("{header}\n{task}\nProject: {root_text}");
+                let message = format!(
+                    "{header}\n{task}\nProject: {root_text}\n{}",
+                    replies::reply_hint(&sender)
+                );
                 if message.len() > MESSAGE_BUDGET {
                     return Err("Project path is too long for a setup message".into());
                 }
@@ -2366,6 +2417,7 @@ impl Inspect<'_> {
             "origin": origin,
             "sessionId": id,
             "contextDir": dir,
+            "as": sender,
         });
         let path = self.record_path(&delivery_id);
         let encoded = serde_json::to_vec(&started).map_err(|e| e.to_string())?;
@@ -2379,7 +2431,7 @@ impl Inspect<'_> {
             }
             Err(_) => return Err("Cannot record the delivery; nothing was sent".into()),
         }
-        let mut result = match self.sys.dm(&ocs.path, &id, &message) {
+        let mut result = match self.sys.dm(&ocs.path, &id, &message, &sender) {
             Ok(run) => delivery(&run),
             Err(e) => json!({ "state": "failed", "error": clamp(&e, 500) }),
         };
@@ -2777,6 +2829,72 @@ mod tests {
         );
         let again = call(&w, &sys, "inspectUnbind", json!({"origin": ORIGIN})).unwrap();
         assert_eq!(again["existed"], false);
+    }
+
+    #[test]
+    fn a_site_remembers_the_project_its_panel_conversations_use() {
+        let w = world();
+        let sys = Fake::default();
+        let none = call(
+            &w,
+            &sys,
+            "inspectProject",
+            json!({"origin": ORIGIN, "pagePath": "/app"}),
+        )
+        .unwrap();
+        assert_eq!(none["binding"], Value::Null);
+        // Nothing was shown, so nothing is replaced.
+        let bound = call(
+            &w,
+            &sys,
+            "inspectProjectBind",
+            json!({"origin": ORIGIN, "root": w.project, "replaces": null}),
+        )
+        .unwrap();
+        let fingerprint = bound["binding"]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let found = call(
+            &w,
+            &sys,
+            "inspectProject",
+            json!({"origin": ORIGIN, "pagePath": "/app/x"}),
+        )
+        .unwrap();
+        assert_eq!(found["binding"]["root"], json!(w.project));
+        assert_eq!(found["binding"]["exists"], true);
+        assert_eq!(found["binding"]["fingerprint"], json!(fingerprint));
+        // The same shared store the options page lists.
+        let list = call(&w, &sys, "inspectBindings", json!({})).unwrap();
+        assert_eq!(list["bindings"].as_array().unwrap().len(), 1);
+        // A stale view never overwrites a binding that changed meanwhile.
+        let other = w.project.join("src");
+        assert!(call(
+            &w,
+            &sys,
+            "inspectProjectBind",
+            json!({"origin": ORIGIN, "root": other, "replaces": null})
+        )
+        .is_err());
+        let moved = call(
+            &w,
+            &sys,
+            "inspectProjectBind",
+            json!({"origin": ORIGIN, "root": other, "replaces": fingerprint}),
+        )
+        .unwrap();
+        assert_eq!(moved["binding"]["root"], json!(other));
+        for bad in [
+            json!({"origin": "not a url", "root": w.project, "replaces": null}),
+            json!({"origin": ORIGIN, "root": "relative", "replaces": null}),
+            json!({"origin": ORIGIN, "root": w.project}),
+        ] {
+            assert!(
+                call(&w, &sys, "inspectProjectBind", bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
@@ -3457,7 +3575,7 @@ mod tests {
             fn git_revision(&self, _: &Path, _: &str, _: Duration) -> Probe<Relation> {
                 Probe::Absent
             }
-            fn dm(&self, _: &Path, _: &str, _: &str) -> Result<Run, String> {
+            fn dm(&self, _: &Path, _: &str, _: &str, _: &str) -> Result<Run, String> {
                 Err("offline".into())
             }
         }
@@ -3469,6 +3587,7 @@ mod tests {
                     let inspect = Inspect {
                         root: data,
                         sys: &Offline,
+                        profile: None,
                     };
                     let origin = format!("http://localhost:{}", 3000 + n);
                     inspect
@@ -3489,6 +3608,7 @@ mod tests {
         let all = Inspect {
             root: w.data.clone(),
             sys: &Offline,
+            profile: None,
         }
         .handle("inspectBindings", &json!({}))
         .unwrap();

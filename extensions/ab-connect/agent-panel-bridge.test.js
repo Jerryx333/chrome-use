@@ -136,11 +136,15 @@ test('only packaged extension pages may invoke native agent services', () => {
   const runtime = { id: 'own', getURL: path => `chrome-extension://own/${path}` };
   assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('sidepanel.html') }, runtime), true);
   assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('options.html') }, runtime), true);
+  // options_ui.open_in_tab: the options page runs as the top frame of a tab.
+  assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('options.html'), tab: { id: 7 }, frameId: 0 }, runtime), true);
   for (const sender of [
     { id: 'other', url: runtime.getURL('sidepanel.html') },
     { id: 'own', url: 'https://example.com/' },
     { id: 'own', url: runtime.getURL('sidepanel.html'), tab: { id: 1 } },
     { id: 'own', url: runtime.getURL('sidepanel.html') + '?spoof' },
+    { id: 'own', url: runtime.getURL('options.html'), tab: { id: 7 }, frameId: 3 },
+    { id: 'own', url: runtime.getURL('options.html') + '#x', tab: { id: 7 }, frameId: 0 },
   ]) assert.equal(isAgentPanelSender(sender, runtime), false);
 });
 
@@ -289,5 +293,94 @@ test('HEIC conversion waits past the host converter budget and must return a JPE
     const pending = bridge.request('imageConvert', { data: 'AAAA' });
     bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result });
     if (ok) assert.equal((await pending).data, '/9j/'); else await assert.rejects(pending, /Malformed/);
+  }
+});
+
+test('an Inspect & Ask reply list must be a list', async () => {
+  const { bridge, messages } = setup();
+  const good = bridge.request('inspectReplies', { deliveryId: '11111111-2222-4333-8444-555555555555' });
+  bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, replies: [] } });
+  assert.deepEqual((await good).replies, []);
+  const bad = bridge.request('inspectReplies');
+  bridge.receive({ method: 'agentPanelReply', requestId: messages[1].requestId, result: { schemaVersion: 1, replies: {} } });
+  await assert.rejects(bad, /Malformed/);
+});
+
+test('session listing and resume replies must match the request', async () => {
+  const row = { sessionId: 's1', agentId: 'codex', title: null, cwd: '/p', lastActive: 1, running: false, resumable: true, conversationId: null };
+  const conversation = { id: 'c', agentId: 'codex', phase: 'idle', resumed: { sessionId: 's1', cwd: '/p' } };
+  for (const [operation, params, result, valid] of [
+    ['conversationSessionList', { agentId: 'codex' }, { agentId: 'codex', supported: true, sessions: [row] }, true],
+    ['conversationSessionList', { agentId: 'codex' }, { agentId: 'codex', supported: false, sessions: [] }, true],
+    ['conversationSessionList', { agentId: 'codex' }, { agentId: 'claude', supported: true, sessions: [] }, false],
+    ['conversationSessionList', { agentId: 'codex' }, { agentId: 'codex', supported: true, sessions: [{ ...row, running: 'yes' }] }, false],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { conversation }, true],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { conversation, existing: true }, true],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { conversation: { ...conversation, resumed: { sessionId: 'other' } } }, false],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { conversation: { ...conversation, resumed: undefined } }, false],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { confirmRequired: 'running', session: row }, true],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { confirmRequired: 'running', session: row, conversation }, false],
+    ['conversationResume', { agentId: 'codex', sessionId: 's1' }, { confirmRequired: 'other', session: row }, false],
+  ]) {
+    const { bridge, messages } = setup();
+    const reply = bridge.request(operation, params);
+    bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, ...result } });
+    if (valid) await reply; else await assert.rejects(reply, /Malformed/, `${operation} ${JSON.stringify(result)}`);
+  }
+});
+
+test('session listing is a read; an unanswered resume is unconfirmed', async () => {
+  const timers = [];
+  const bridge = new AgentPanelBridge({ send() {}, schedule: (callback, delay) => { timers.push({ callback, delay }); return timers.length; }, cancel() {} });
+  const listing = bridge.request('conversationSessionList', { agentId: 'codex' });
+  const resume = bridge.request('conversationResume', { agentId: 'codex', sessionId: 's1' });
+  assert.deepEqual(timers.map(t => t.delay), [35000, 50000]);
+  for (const timer of timers) timer.callback();
+  await assert.rejects(listing, /did not answer/);
+  await assert.rejects(resume, /unconfirmed/);
+});
+
+test('project folder replies must match what was asked', async () => {
+  for (const [operation, params, result, valid] of [
+    ['conversationProjectList', {}, { projects: [{ path: '/w', sources: ['panel'] }] }, true],
+    ['conversationProjectList', {}, { projects: [{ path: 3, sources: [] }] }, false],
+    ['conversationProjectChoose', {}, { path: '/w' }, true],
+    ['conversationProjectChoose', {}, { cancelled: true }, true],
+    ['conversationProjectChoose', {}, { unavailable: true }, true],
+    ['conversationProjectChoose', {}, {}, false],
+    ['conversationCreate', { agentId: 'codex', project: '/w' }, { conversation: { id: 'c', agentId: 'codex', phase: 'idle', project: '/w' } }, true],
+    ['conversationCreate', { agentId: 'codex', project: '/w' }, { conversation: { id: 'c', agentId: 'codex', phase: 'idle' } }, false],
+    ['inspectProject', { origin: 'http://a', pagePath: '/' }, { binding: null }, true],
+    ['inspectProject', { origin: 'http://a', pagePath: '/' }, { binding: { root: '/w', fingerprint: 'f', exists: true } }, true],
+    ['inspectProject', { origin: 'http://a', pagePath: '/' }, { binding: { root: '/w' } }, false],
+    ['inspectProjectBind', { origin: 'http://a', root: '/w' }, { binding: { origin: 'http://a', root: '/w' } }, true],
+  ]) {
+    const { bridge, messages } = setup();
+    const reply = bridge.request(operation, params);
+    bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, ...result } });
+    if (valid) await reply; else await assert.rejects(reply, /Malformed/, `${operation} ${JSON.stringify(result)}`);
+  }
+});
+
+test('every host operation an extension page calls passes the background page allowlist', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { pageOperationAllowed, INSPECT_OPERATIONS } = await import('./agent-panel-bridge.js');
+  const used = new Set();
+  for (const file of ['sidepanel.js', 'project-picker.js', 'resume-picker.js', 'options.js', 'image-attachment.js']) {
+    const text = readFileSync(new URL(file, import.meta.url), 'utf8');
+    for (const m of text.matchAll(/\b(?:api|inspectRequest)\(\s*'([A-Za-z]+)'/g)) used.add(m[1]);
+  }
+  for (const operation of ['inspectProject', 'inspectProjectBind', 'conversationProjectList', 'conversationSessionList']) assert.ok(used.has(operation), `${operation} found in the page sources`);
+  for (const operation of used) {
+    assert.ok(pageOperationAllowed(operation), `${operation} is refused for extension pages`);
+    const { bridge } = setup();
+    const pending = bridge.request(operation, {});
+    pending.catch(() => {});
+    assert.equal(bridge.pending.size, 1, `${operation} is not a supported bridge operation`);
+  }
+  // The authenticated input frame keeps delivery and session binding.
+  for (const operation of ['inspectDeliver', 'inspectBind', 'inspectStatus', 'inspectResolve']) {
+    assert.ok(INSPECT_OPERATIONS.includes(operation));
+    assert.equal(pageOperationAllowed(operation), false, operation);
   }
 });

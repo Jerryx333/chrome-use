@@ -258,3 +258,18 @@ and `opencode_waits_for_a_slow_mcp_call` in `backend.rs`;
 `only_versions_whose_timeouts_are_recognised_are_allowlisted` and
 `a_call_closed_by_the_client_timeout_retires_even_an_allowlisted_version` in
 `service.rs`.
+
+## Session resume fixtures (`resume/`)
+
+`/resume` reads CLI sessions that were started outside the panel. Each fixture
+is a throwaway session created for this purpose in a scratch directory
+(2026-10-15), never a user's session, then minimized: only the record kinds
+and fields the parsers in `sessions.rs` read are kept, and scratch paths are
+replaced with `/WORK/...`.
+
+| file | backend | how it was made |
+|---|---|---|
+| `claude-session.jsonl` | Claude Code 2.1.300 (laptop) | `claude -p` in `/WORK/claude-a`, then `claude -p --resume <id>` from `/WORK/claude-b` (the second turn shows Claude resumes from another directory and appends to the original file) |
+| `codex-session.jsonl` | codex-cli 0.162.1 (build host) | `codex exec` in `/WORK/a` with a private `CODEX_HOME`, then app-server `thread/resume` with `cwd` `/WORK/b` and one turn |
+| `pi-session.jsonl` | Pi 1.1.0 (laptop) | `pi -p` in `/WORK/pi-a`, then `pi --session <file>` from `/WORK/pi-b`; the model gateway was down, so the assistant entries are failed answers without content |
+| `opencode-export.json` | OpenCode 2.0.25 (build host) | `opencode run --standalone` in `/WORK/od` with private `XDG_DATA_HOME`/`XDG_STATE_HOME`, ACP `session/resume` with `cwd` `/WORK/od` and one turn, then `opencode session export --standalone <id>` |

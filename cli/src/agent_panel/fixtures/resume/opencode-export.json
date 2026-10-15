@@ -1,0 +1,86 @@
+{
+ "info": {
+  "id": "ses_ebfef45e6ffer5XeO5YfrzRn5s",
+  "title": "Codeword memory test",
+  "time": {
+   "created": 1792076200486,
+   "updated": 1792076236615,
+   "idle": 1792076236619
+  },
+  "location": {
+   "directory": "/WORK/od"
+  }
+ },
+ "messages": [
+  {
+   "id": "msg_14010baab001mCPb2Cknvn7RHm",
+   "time": {
+    "created": 1792076200761
+   },
+   "text": "\"Remember the codeword EGRET-55. Reply with just OK.\"",
+   "files": [],
+   "type": "user"
+  },
+  {
+   "id": "msg_14010bb3f001ZjPeMi2gB8tXRH",
+   "time": {
+    "created": 1792076200772,
+    "streamed": 1792076208335,
+    "completed": 1792076208339
+   },
+   "type": "assistant",
+   "agent": "build",
+   "content": [
+    {
+     "type": "text",
+     "text": "OK"
+    }
+   ],
+   "finish": "stop",
+   "rawFinish": "STOP"
+  },
+  {
+   "id": "msg_14010d8d800124AMHByuUlAu6c",
+   "time": {
+    "created": 1792076208344
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_140110de2001CsW4bySkXhrpzN",
+   "time": {
+    "created": 1792076221943
+   },
+   "text": "What codeword did I ask you to remember? Reply with just the codeword.",
+   "files": [],
+   "type": "user"
+  },
+  {
+   "id": "msg_140110dfc001pv21rK1id1pxnz",
+   "time": {
+    "created": 1792076221953,
+    "streamed": 1792076236612,
+    "completed": 1792076236615
+   },
+   "type": "assistant",
+   "agent": "build",
+   "content": [
+    {
+     "type": "text",
+     "text": "EGRET-55"
+    }
+   ],
+   "finish": "stop",
+   "rawFinish": "STOP"
+  },
+  {
+   "id": "msg_14011474b001Uynizqd1dYRoUP",
+   "time": {
+    "created": 1792076236619
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  }
+ ]
+}

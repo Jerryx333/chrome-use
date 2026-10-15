@@ -1,3 +1,4 @@
+import './test-i18n.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -269,5 +270,32 @@ test('the v1.5.214 panel renders a journal written by this build without [object
   allow.fire('click'); await settle();
   // The legacy echo is exactly the frozen projection the host journaled.
   assert.deepEqual(responded[0].result, { behavior: 'allow', updatedInput: request.data.params.input });
+  f.panel.close();
+});
+
+const resumeJournal = fixtureFile('journal-resume.json');
+
+test('history imported from a CLI session shows as one collapsed block above the turns', async () => {
+  const f = await panel({ support: resumeJournal.capabilities, conversation: resumeJournal.conversation, events: resumeJournal.events });
+  const [block] = byClass(f.transcript, 'imported-history');
+  assert.ok(block, 'imported block rendered');
+  assert.equal(f.transcript.children[0], block, 'it comes first');
+  const details = all(block, n => n.tag === 'details')[0];
+  assert.equal(details.open, undefined, 'collapsed');
+  assert.match(text(block), /Continued from a Claude Code session in \/WORK\/project/);
+  assert.match(text(block), /Earlier in this session · 4 messages/);
+  assert.match(text(block), /Earlier history not recorded\. 12 earlier messages were not imported\./);
+  assert.match(text(block), /\[redacted secret, 40 chars\]/);
+  assert.equal(byClass(block, 'imported-message').length, 4);
+  assert.doesNotMatch(text(f.transcript), /\[object Object\]|undefined/);
+  assert.equal(f.nodes.get('empty').hidden, true);
+  f.panel.close();
+});
+
+test('the v1.5.214 panel ignores imported history it does not know', async () => {
+  const { createPanel: oldPanel } = await import('../../cli/src/agent_panel/fixtures/panel/v1.5.214/sidepanel.js');
+  const f = await panel({ create: oldPanel, support: legacyJournal.capabilities, conversation: resumeJournal.conversation, events: resumeJournal.events });
+  assert.doesNotMatch(text(f.transcript), /\[object Object\]|undefined/);
+  assert.equal(byClass(f.transcript, 'imported-history').length, 0);
   f.panel.close();
 });

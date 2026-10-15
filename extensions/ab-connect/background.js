@@ -19,9 +19,10 @@
 import { getRelayHealth, observeDebuggerCommand } from './relay-health.js';
 import { ScheduleNotifications } from './schedule-notifications.js';
 import { TurnNotifications, openFromNotification } from './turn-notifications.js';
-import { AgentPanelBridge, isAgentPanelSender, INSPECT_OPERATIONS } from './agent-panel-bridge.js';
+import { AgentPanelBridge, isAgentPanelSender, pageOperationAllowed } from './agent-panel-bridge.js';
 import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
+import { t } from './i18n.js';
 import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import {
@@ -138,12 +139,10 @@ const inspectController = new InspectController({
   request: (operation, params) => agentPanelBridge.request(operation, params),
   hostReady: () => { const state = hostConnection.snapshot(); return !!port && state.connected && state.agentPanel?.inspect === true; },
   resolveReady: () => hostConnection.snapshot().agentPanel?.inspectResolve === true,
+  repliesReady: () => hostConnection.snapshot().agentPanel?.inspectReplies >= 1,
 });
 inspectController.install();
 if (chrome.runtime.getManifest().key) globalThis.__chromeUseInspect = inspectController;
-// Extension pages may manage bindings and consents (options page); delivery,
-// binding and status belong to the authenticated input frame only.
-const PAGE_INSPECT_OPERATIONS = ['inspectBindings', 'inspectUnbind', 'inspectConsent', 'inspectClaimDecide'];
 const scheduleNotifications = new ScheduleNotifications({ storage: chrome.storage.local, notifications: chrome.notifications });
 function pollScheduleNotifications() {
   const state = hostConnection.snapshot();
@@ -185,6 +184,11 @@ function pollTurnNotifications() {
   if (!port || !state.connected || !state.agentPanel) return;
   void turnNotifyEnabled().then(enabled => turnNotifications.poll(() => agentPanelBridge.request('conversationList'), { enabled, showing: panelShowing }))
     .catch(error => console.warn('Turn notification check failed:', String(error.message || error)));
+  // Agent replies to Inspect & Ask batches, from hosts that keep them.
+  if (state.agentPanel.inspectReplies >= 1) {
+    void turnNotifyEnabled().then(enabled => turnNotifications.pollReplies(() => agentPanelBridge.request('inspectReplies'), { enabled }))
+      .catch(error => console.warn('Inspect reply check failed:', String(error.message || error)));
+  }
 }
 chrome.runtime.onConnect.addListener(panelPort => {
   if (panelPort.name !== 'ab-panel-presence' || !isAgentPanelSender(panelPort.sender, chrome.runtime)) return;
@@ -200,6 +204,7 @@ chrome.runtime.onConnect.addListener(panelPort => {
       pendingPanelSelect = null;
     }
     if (presence.visible && presence.conversationId) void turnNotifications.seen(presence.conversationId).catch(() => {});
+    if (message.repliesShown === true) void turnNotifications.repliesSeen().catch(() => {});
   });
 });
 try {
@@ -717,10 +722,10 @@ function notifyConnChange(connected) {
     chrome.notifications.create('ab-conn-' + Date.now(), {
       type: 'basic',
       iconUrl: 'icons/icon128.png',
-      title: connected ? 'chrome-use connected' : 'chrome-use disconnected',
+      title: connected ? t('bg_notify_connected_title') : t('bg_notify_disconnected_title'),
       message: connected
-        ? 'Bridged to your local CLI — ready to drive your tabs.'
-        : 'The bridge to your local CLI dropped.',
+        ? t('bg_notify_connected_message')
+        : t('bg_notify_disconnected_message'),
       silent: true,
     });
   } catch {}
@@ -2603,7 +2608,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ success: false, error: 'Agent services require the packaged extension panel' });
       return false;
     }
-    if (INSPECT_OPERATIONS.includes(msg.operation) && !PAGE_INSPECT_OPERATIONS.includes(msg.operation)) {
+    if (!pageOperationAllowed(msg.operation)) {
       sendResponse({ success: false, error: 'This Inspect & Ask operation is only available from the input panel' });
       return false;
     }

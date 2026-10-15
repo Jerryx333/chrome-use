@@ -1,6 +1,10 @@
-import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, stepActions, actingPages } from './panel-state.js';
+import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
+import { t, messageMap, applyI18n } from './i18n.js';
+import { renderReplies, validReplies } from './inspect-replies.js';
+import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } from './resume-picker.js';
+import { createProjectChoice, folderLabel } from './project-picker.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -12,28 +16,36 @@ export function mainDomain(host) {
   const labels = clean.split('.');
   return labels.slice(secondLevel.has(labels.slice(-2).join('.')) ? -3 : -2).join('.');
 }
+// The host names a conversation "New conversation" until its first message;
+// that default is shown in the panel's language, a real title as it is.
+const HOST_DEFAULT_TITLE = 'New conversation';
+export function titleOf(chat, fallbackKey) {
+  return chat?.title && chat.title !== HOST_DEFAULT_TITLE ? chat.title : t(fallbackKey);
+}
 function relativeTime(at) {
   const seconds = Math.max(0, (Date.now() - Number(at || 0)) / 1000);
   if (!at || !Number.isFinite(seconds)) return '';
-  if (seconds < 60) return 'just now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
+  if (seconds < 60) return t('panel_time_just_now');
+  if (seconds < 3600) return t('panel_time_minutes_ago', Math.floor(seconds / 60));
+  if (seconds < 86400) return t('panel_time_hours_ago', Math.floor(seconds / 3600));
+  return t('panel_time_days_ago', Math.floor(seconds / 86400));
 }
 const agentNames = { codex: 'Codex', claude: 'Claude Code', opencode: 'OpenCode', pi: 'Pi' };
 const chatAgents = new Set(Object.keys(agentNames));
-const fieldLabels = { model: 'Model', provider: 'Provider', effort: 'Reasoning effort', serviceTier: 'Service tier', smallModel: 'Small model', opusModel: 'Opus model', sonnetModel: 'Sonnet model', haikuModel: 'Haiku model' };
+const fieldLabels = messageMap({ model: 'panel_field_model', provider: 'panel_field_provider', effort: 'panel_field_effort', serviceTier: 'panel_field_service_tier', smallModel: 'panel_field_small_model', opusModel: 'panel_field_opus_model', sonnetModel: 'panel_field_sonnet_model', haikuModel: 'panel_field_haiku_model' });
 
 // What `control` means is this conversation's agent process only; nothing
 // here says the user has the browser to themselves.
-export const controlLabels = { agent: 'Agent working', stopRequested: 'Stop requested, waiting for confirmation', stopped: "This conversation's agent has stopped", resuming: 'Resuming', unknown: 'Agent state unknown' };
+export const controlLabels = messageMap({ agent: 'panel_control_agent', stopRequested: 'panel_control_stop_requested', stopped: 'panel_control_stopped', resuming: 'panel_control_resuming', unknown: 'panel_control_unknown' });
+// Step verdicts arrive as English values from panel-state.js; they key the
+// chip's class and are translated only for display.
 const verdictClass = { Confirmed: 'confirmed', Failed: 'failed', 'Not checked': 'unchecked', 'No browser record': 'missing', 'Page not recorded': 'missing' };
-const computedLabels = { checked: 'Checked', checkFailed: 'Check failed', stale: 'Check is stale: the page was acted on afterwards', claimed: 'Agent claimed', unmet: 'Not met', unknown: 'Unknown' };
-const stallText = { repeatedIdenticalResult: n => `The agent repeated the same step with the same result${n ? ` ${n} times` : ''}.`, repeatedFailure: n => `The same step failed${n ? ` ${n} times` : ''}.`, noActivity: () => 'The agent has shown no activity for a while.', nativeNoProgress: () => 'The page did not change after the last step.' };
-const unavailableText = { cancelled: 'The download was cancelled', interrupted: 'Capture was interrupted', timeout: 'Capture timed out', failed: 'Capture failed', tooLargeToRetain: 'Too large to keep a copy', quotaExceeded: 'This conversation is out of file space', pathMismatch: 'The file was not where chrome-use put it', notRegularFile: 'Not a regular file', notOwned: 'The file belongs to another user', linked: 'The file was a link', missing: 'The file is missing', changed: 'The file changed while it was copied', encoderMissing: 'ffmpeg is not installed', encoderFailed: 'ffmpeg could not encode the recording' };
+const computedLabels = messageMap({ checked: 'panel_check_checked', checkFailed: 'panel_check_failed', stale: 'panel_check_stale', claimed: 'panel_check_claimed', unmet: 'panel_check_unmet', unknown: 'panel_check_unknown' });
+const stallText = { repeatedIdenticalResult: n => n ? t('panel_stall_repeated_result_times', n) : t('panel_stall_repeated_result'), repeatedFailure: n => n ? t('panel_stall_repeated_failure_times', n) : t('panel_stall_repeated_failure'), noActivity: () => t('panel_stall_no_activity'), nativeNoProgress: () => t('panel_stall_no_progress') };
+const unavailableText = messageMap({ cancelled: 'panel_unavailable_cancelled', interrupted: 'panel_unavailable_interrupted', timeout: 'panel_unavailable_timeout', failed: 'panel_unavailable_failed', tooLargeToRetain: 'panel_unavailable_too_large', quotaExceeded: 'panel_unavailable_quota', pathMismatch: 'panel_unavailable_path_mismatch', notRegularFile: 'panel_unavailable_not_regular', notOwned: 'panel_unavailable_not_owned', linked: 'panel_unavailable_linked', missing: 'panel_unavailable_missing', changed: 'panel_unavailable_changed', encoderMissing: 'panel_unavailable_encoder_missing', encoderFailed: 'panel_unavailable_encoder_failed' });
 const ARTIFACT_CHUNK = 384 * 1024;
 function hostOf(url) { try { return new URL(url).host; } catch { return ''; } }
-function pageName(target) { const host = hostOf(target?.url); let path = ''; try { path = new URL(target.url).pathname; } catch {} return target?.title ? `${target.title}${host ? ` · ${host}` : ''}` : `${host}${path === '/' ? '' : path}` || 'a page'; }
+function pageName(target) { const host = hostOf(target?.url); let path = ''; try { path = new URL(target.url).pathname; } catch {} return target?.title ? `${target.title}${host ? ` · ${host}` : ''}` : `${host}${path === '/' ? '' : path}` || t('panel_page_fallback'); }
 function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
@@ -62,11 +74,47 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   const turnCards = new Map(), liveUrls = new Set(), dismissedStalls = new Set();
   let viewMode = null, forkView = null;
   const turnView = () => Boolean(panelSupport?.turnEvidence);
+  // `/resume`: continue a CLI session started outside the panel.
+  const resumePicker = createResumePicker({
+    document, api, onError: error, relativeTime, schedule, cancel,
+    agents: () => (panelSupport?.chatAgents || ['codex', 'claude']).filter(id => chatAgents.has(id)).map(id => ({ id, name: agentNames[id] })),
+    preferredAgent: () => conversation?.agentId || nodes.agent.value || preferredAgent,
+    executable: agentId => agentId === nodes.agent.value ? nodes.executable.value.trim() : '',
+    onResumed: async (resumed, existing, refused) => {
+      await list(); rememberAgent(conversations.find(c => c.id === resumed.id)?.agentId || preferredAgent); select(resumed.id);
+      // The session's folder could not be the project (a system or home folder).
+      if (refused) error(t('panel_resume_project_refused', refused));
+    },
+  });
+  document.getElementById('resumeHost')?.append(resumePicker.container);
+  // The project folder a new conversation's agent works in.
+  const projectChip = document.getElementById('projectChip'), projectPath = document.getElementById('projectPath');
+  const projectChoice = createProjectChoice({
+    document, api, onError: error, select: document.getElementById('project'), host: document.getElementById('projectHost'),
+    supported: () => Boolean(panelSupport?.projectDirectory), canRemember: () => Boolean(panelSupport?.inspect),
+  });
+  function refreshProjects() { if (!selected && connected) void projectChoice.refresh(page).catch(() => {}); }
+  let importedNode = null, importedCount = -1;
+  async function openResume(query = '') {
+    if (!panelSupport?.sessionResume) throw new Error(RESUME_TEXT.updateCli);
+    closeConversationMenu(); nodes.skillPicker.hidden = true; nodes.message.value = '';
+    await resumePicker.open(query);
+  }
+  // The imported block sits above everything else and is rebuilt only when
+  // more of it arrived.
+  function renderImported() {
+    const imported = timeline.imported;
+    const count = imported ? imported.messages.length + (imported.end ? 1 : 0) : 0;
+    if (count === importedCount) return;
+    importedNode?.remove?.(); importedCount = count;
+    importedNode = importedView(document, imported, { agentName: id => agentNames[id] || id || '', renderMarkdown });
+    if (importedNode) nodes.transcript.insertBefore(importedNode, nodes.transcript.children[0] || null);
+  }
 
   // Keep only correlation IDs in extension storage. Chat text lives in the
   // native journal; closing the view must not turn an uncertain send into a retry.
   async function savePending() {
-    if (!storage?.local?.set) throw new Error('Message identity storage is unavailable; the message was not sent.');
+    if (!storage?.local?.set) throw new Error(t('panel_error_pending_storage'));
     await storage.local.set({ ab_panel_pending: Object.fromEntries([...pendingMessages].map(([id, message]) => [id, message.id])) });
   }
 
@@ -79,9 +127,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   function error(error) { nodes.notice.textContent = String(error?.message || error); nodes.notice.hidden = false; }
   function clearError() { nodes.notice.hidden = true; nodes.notice.textContent = ''; }
   async function api(operation, params = {}) {
-    if (!runtime?.sendMessage) throw new Error('Open this page from the chrome-use extension.');
+    if (!runtime?.sendMessage) throw new Error(t('panel_error_open_from_extension'));
     const reply = await runtime.sendMessage({ type: 'ab-agent-request', operation, params });
-    if (!reply?.success) throw new Error(reply?.error || 'The local host did not confirm this operation.');
+    if (!reply?.success) throw new Error(reply?.error || t('panel_error_host_unconfirmed'));
     return reply.result;
   }
   const convertHeif = heifConverter(api);
@@ -90,9 +138,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     panelSupport = state?.agentPanel?.schemaVersion === 1 ? state.agentPanel : null;
     nodes.connection.classList.toggle('disconnected', !connected);
     nodes.connection.classList.toggle('ok', connected && panelSupport?.mode === 'full');
-    nodes.connection.textContent = connected ? 'Local bridge connected' : state?.connectionState === 'connecting' ? 'Waiting for local bridge…' : state?.connectionError || 'Local bridge unavailable. Run chrome-use extension install, then refresh.';
-    if (connected && !panelSupport) nodes.connection.textContent = 'Bridge connected. Update the chrome-use CLI, then refresh to enable the agent panel.';
-    if (connected && panelSupport?.mode === 'readOnly') nodes.connection.textContent = 'Connected. This Windows panel is read-only; browser CLI automation remains available.';
+    nodes.connection.textContent = connected ? t('panel_connection_connected') : state?.connectionState === 'connecting' ? t('panel_connection_waiting') : state?.connectionError || t('panel_connection_unavailable');
+    if (connected && !panelSupport) nodes.connection.textContent = t('panel_connection_update_cli');
+    if (connected && panelSupport?.mode === 'readOnly') nodes.connection.textContent = t('panel_connection_read_only');
     const previousAgent = nodes.agent.value || preferredAgent;
     const supported = panelSupport?.chatAgents || ['codex', 'claude'];
     nodes.agent.replaceChildren(...supported.filter(id => chatAgents.has(id)).map(id => { const option = element('option', agentNames[id]); option.value = id; return option; }));
@@ -105,7 +153,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   }
   async function connectionStatus() {
     const epoch = ++connectionEpoch;
-    if (!runtime?.sendMessage) { renderConnection(null); throw new Error('Open this page from the chrome-use extension.'); }
+    if (!runtime?.sendMessage) { renderConnection(null); throw new Error(t('panel_error_open_from_extension')); }
     const state = await runtime.sendMessage({ type: 'ab-status' });
     if (epoch === connectionEpoch) renderConnection(state);
   }
@@ -125,16 +173,23 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     nodes.scheduleSettings.hidden = !panelSupport?.schedules || settingsSection !== 'schedules';
     nodes.agentsView.dataset.section = settingsSection;
     nodes.newOptions.hidden = Boolean(selected); nodes.modelChip.hidden = Boolean(selected);
+    if (projectChip) projectChip.hidden = Boolean(selected) || !panelSupport?.projectDirectory;
+    if (projectPath) {
+      // Fixed at creation: shown, never edited.
+      projectPath.hidden = !conversation?.project;
+      projectPath.textContent = conversation?.project ? t('panel_project_header', folderLabel(conversation.project).split(' · ')[0]) : '';
+      projectPath.title = conversation?.project || '';
+    }
     const optionAgent = conversation?.agentId || nodes.agent.value;
     const optionOwner = `${selected}:${optionAgent}`;
     if (optionsOwner !== optionOwner) {
       optionsOwner = optionOwner;
-      const first = element('option', 'CLI default'); first.value = '';
+      const first = element('option', t('panel_cli_default')); first.value = '';
       const efforts = optionAgent === 'codex' ? ['minimal','low','medium','high','xhigh'] : optionAgent === 'claude' ? ['low','medium','high','max'] : [];
       nodes.turnEffort.replaceChildren(first, ...efforts.map(value => { const node = element('option', value); node.value = value; return node; }));
-      const access = element('option','Follow permission switch'); access.value = '';
+      const access = element('option',t('panel_access_follow_switch')); access.value = '';
       const modes = optionAgent === 'opencode' ? ['runCommands'] : optionAgent === 'codex' ? ['readFiles','writeFiles','runCommands'] : ['browserOnly','readFiles','writeFiles','runCommands'];
-      const labels = { browserOnly:'Browser only', readFiles: optionAgent === 'codex' ? 'Browser and file reads (Codex shell remains)' : 'Browser and file reads', writeFiles:'Browser, file reads and writes', runCommands:'Browser, files and commands' };
+      const labels = { browserOnly:t('panel_tools_browser_only'), readFiles: optionAgent === 'codex' ? t('panel_tools_read_files_codex') : t('panel_tools_read_files'), writeFiles:t('panel_tools_write_files'), runCommands:t('panel_tools_run_commands') };
       nodes.turnAccess.replaceChildren(access,...modes.map(value => { const node=element('option',labels[value]); node.value=value; return node; }));
       nodes.turnAccess.value = conversation?.options?.toolAccess || '';
       nodes.turnEffort.value = conversation?.options?.effort || '';
@@ -152,14 +207,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const accessAgent = conversation?.agentId || nodes.agent.value;
     const cliPermissions = accessAgent === 'opencode', browserOnly = accessAgent === 'pi';
     if (browserOnly && conversation?.options?.toolAccess) nodes.access.hidden = true;
-    nodes.accessLabel.textContent = conversation?.options?.toolAccess ? (full ? 'Allow tools automatically' : 'Review tool approvals') : full ? 'Full access' : cliPermissions ? 'CLI permissions' : browserOnly ? 'Browser only' : 'Ask first';
+    nodes.accessLabel.textContent = conversation?.options?.toolAccess ? (full ? t('panel_access_allow_tools') : t('panel_access_review_tools')) : full ? t('panel_access_full') : cliPermissions ? t('panel_access_cli_permissions') : browserOnly ? t('panel_tools_browser_only') : t('panel_access_ask_first');
     nodes.access.setAttribute('aria-pressed', String(full));
-    nodes.access.title = full ? (browserOnly ? 'Pi runs browser tools, commands and file changes. Click for browser tools only.' : 'Automatically allows permission requests in this conversation. Click to turn this off.') : cliPermissions ? 'OpenCode uses its own permission rules and may allow tools without asking. Requests it does send appear here. Click to automatically allow those requests.' : browserOnly ? 'Pi never asks before a tool runs, so it gets only the browser tools: no shell or file changes. Click for full access.' : 'Asks before each tool, command or file change. Click for full access.';
+    nodes.access.title = full ? (browserOnly ? t('panel_access_title_pi_full') : t('panel_access_title_full')) : cliPermissions ? t('panel_access_title_opencode') : browserOnly ? t('panel_access_title_pi_browser') : t('panel_access_title_ask');
     nodes.deleteChat.hidden = !selected || !writable || !panelSupport?.conversationDelete;
     nodes.deleteChat.disabled = sending || !connected || busyPhases.has(conversation?.phase);
     if (nodes.deleteChat.hidden) nodes.deleteConfirm.hidden = true;
     nodes.confirmDelete.disabled = nodes.deleteChat.disabled;
-    nodes.phase.textContent = panelSupport?.mode === 'readOnly' ? 'Read-only discovery' : conversation ? phaseLabels[conversation.phase] || 'Unknown response state' : 'Ready';
+    nodes.phase.textContent = panelSupport?.mode === 'readOnly' ? t('panel_phase_read_only') : conversation ? phaseLabels[conversation.phase] || t('panel_phase_unknown') : t('panel_phase_ready');
     nodes.effectiveModel.textContent = conversation?.model || '';
     const control = turnView() && conversation?.phase !== 'idle' ? controlLabels[conversation?.control] : null;
     nodes.control.hidden = !control; nodes.control.textContent = control || '';
@@ -167,9 +222,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     nodes.recordTask.disabled = !connected || sending;
     const busy = busyPhases.has(conversation?.phase);
     renderWorking();
-    nodes.status.classList.toggle('idle', !conversation || (conversation.phase === 'idle' && !conversation.model));
+    nodes.status.classList.toggle('idle', !conversation || (conversation.phase === 'idle' && !conversation.model && !conversation.project));
     nodes.status.classList.toggle('busy', busy);
-    nodes.queue.textContent = pending ? 'Send unconfirmed; checking stored message' : conversation?.queued ? `${conversation.queued} queued${conversation.queuePaused ? ', paused' : ''}` : '';
+    nodes.queue.textContent = pending ? t('panel_queue_unconfirmed') : conversation?.queued ? (conversation.queuePaused ? t('panel_queue_count_paused', conversation.queued) : t('panel_queue_count', conversation.queued)) : '';
     nodes.resume.hidden = !conversation?.queuePaused || !conversation?.queued;
     nodes.resume.disabled = !connected || !writable || conversation?.phase === 'recoveryRequired';
     nodes.stop.disabled = !connected || !writable || !busy || conversation?.phase === 'stopping';
@@ -178,14 +233,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     nodes.send.disabled = convertingImages || !connected || !writable || sending || Boolean(pending) || conversation?.phase === 'recoveryRequired';
     nodes.sendDirect.hidden = !busyPhases.has(conversation?.phase) && !conversation?.queuePaused;
     nodes.sendDirect.disabled = nodes.send.disabled || Boolean(conversation?.directMessageId);
-    nodes.sendDirect.textContent = busyPhases.has(conversation?.phase) ? 'Stop & send' : 'Send now';
-    nodes.send.title = busy ? 'Queue — sends after the current response' : 'Send';
-    nodes.send.setAttribute('aria-label', busy ? 'Queue message' : 'Send message');
+    nodes.sendDirect.textContent = busyPhases.has(conversation?.phase) ? t('panel_send_stop_and_send') : t('panel_send_now');
+    nodes.send.title = busy ? t('panel_send_queue_title') : t('panel_send');
+    nodes.send.setAttribute('aria-label', busy ? t('panel_send_queue_label') : t('panel_send_label'));
   }
   function conversationChoices() {
-    nodes.conversation.replaceChildren(element('option', 'New conversation'));
+    nodes.conversation.replaceChildren(element('option', t('panel_new_conversation')));
     nodes.conversation.firstElementChild.value = '';
-    for (const chat of conversations) { const option = element('option', chat.title || 'Conversation'); option.value = chat.id; nodes.conversation.append(option); }
+    for (const chat of conversations) { const option = element('option', titleOf(chat, 'panel_conversation_untitled')); option.value = chat.id; nodes.conversation.append(option); }
     nodes.conversation.value = selected;
     renderConversationMenu();
   }
@@ -196,24 +251,30 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   }
   function renderConversationMenu() {
     const chat = conversations.find(c => c.id === selected);
-    nodes.conversationTitle.textContent = chat?.title || 'New conversation';
+    nodes.conversationTitle.textContent = titleOf(chat, 'panel_new_conversation');
     const domain = currentDomain(), siteScope = scope === 'site' && Boolean(domain);
-    nodes.scopeSite.textContent = domain ? `This site · ${domain}` : 'This site';
+    nodes.scopeSite.textContent = domain ? t('panel_scope_site_domain', domain) : t('panel_scope_site');
     nodes.scopeSite.disabled = !domain;
     nodes.scopeSite.setAttribute('aria-selected', String(siteScope)); nodes.scopeAll.setAttribute('aria-selected', String(!siteScope));
     const shown = siteScope ? conversations.filter(c => c.site && mainDomain(c.site) === domain) : conversations;
     const newItem = element('button', undefined, 'conversation-item new'); newItem.type = 'button';
-    newItem.append(element('span', '＋ New conversation', 'title'));
+    newItem.append(element('span', t('panel_new_conversation_item'), 'title'));
     newItem.addEventListener('click', () => { closeConversationMenu(); nodes.conversation.value = ''; select(''); loadModels(); });
     const items = [newItem];
+    if (panelSupport?.sessionResume) {
+      const resumeItem = element('button', undefined, 'conversation-item new'); resumeItem.type = 'button';
+      resumeItem.append(element('span', RESUME_TEXT.menuItem, 'title'));
+      resumeItem.addEventListener('click', () => void openResume().catch(error));
+      items.push(resumeItem);
+    }
     for (const c of shown) {
       const item = element('button', undefined, `conversation-item${c.id === selected ? ' selected' : ''}`); item.type = 'button';
       item.setAttribute('role', 'option'); item.setAttribute('aria-selected', String(c.id === selected));
-      item.append(element('span', c.title || 'Conversation', 'title'), element('span', [agentNames[c.agentId] || c.agentId, !siteScope && c.site, relativeTime(c.updated)].filter(Boolean).join(' · '), 'meta'));
+      item.append(element('span', titleOf(c, 'panel_conversation_untitled'), 'title'), element('span', [agentNames[c.agentId] || c.agentId, !siteScope && c.site, relativeTime(c.updated)].filter(Boolean).join(' · '), 'meta'));
       item.addEventListener('click', () => { closeConversationMenu(); select(c.id); });
       items.push(item);
     }
-    if (!shown.length) items.push(element('p', siteScope ? `No conversations on ${domain} yet.` : 'No conversations yet.', 'conversation-empty'));
+    if (!shown.length) items.push(element('p', siteScope ? t('panel_no_conversations_on', domain) : t('panel_no_conversations'), 'conversation-empty'));
     nodes.conversationItems.replaceChildren(...items);
   }
   function closeConversationMenu() { nodes.conversationMenu.hidden = true; nodes.conversationButton.setAttribute('aria-expanded', 'false'); }
@@ -227,9 +288,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     selected = id; skillChoice = null; renderImageDrafts(); selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
     void loadSkills().catch(error);
     timeline = new PanelTimeline(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
-    toolTail = null; toolGroups.clear(); clearTurnView();
+    toolTail = null; toolGroups.clear(); clearTurnView(); importedNode = null; importedCount = -1;
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
+    if (!id) refreshProjects(); else projectChoice.hideQuestion();
     reportPresence();
     void poll().catch(error);
   }
@@ -239,12 +301,35 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   function reportPresence() {
     if (!presencePort || windowId === null) return;
     const visible = document.visibilityState !== 'hidden' && !nodes.chatView.hidden;
-    try { presencePort.postMessage({ type: 'presence', windowId, conversationId: selected, visible }); } catch {}
+    const repliesShown = visible && replyCount > 0 && replyBox.open === true;
+    try { presencePort.postMessage({ type: 'presence', windowId, conversationId: selected, visible, ...(repliesShown ? { repliesShown } : {}) }); } catch {}
   }
+  // Inspect & Ask replies: agents answer batches sent from the page picker,
+  // and hosts that report `inspectReplies` keep them for this list.
+  const replyBox = document.getElementById('inspectReplies'), replyList = document.getElementById('inspectReplyList');
+  let replyCount = 0, replyTimer = null;
+  async function loadReplies() {
+    if (!panelSupport?.inspectReplies) { replyBox.hidden = true; replyCount = 0; return; }
+    replyCount = renderReplies(document, replyList, validReplies(await api('inspectReplies')), renderMarkdown, { showBatch: true });
+    replyBox.hidden = !replyCount;
+    reportPresence();
+  }
+  function replyLoop() {
+    cancel(replyTimer);
+    replyTimer = schedule(() => { if (!closed) void loadReplies().catch(() => {}).finally(replyLoop); }, 20000);
+  }
+  function showReplies() {
+    replyBox.open = true;
+    void loadReplies().then(() => replyBox.scrollIntoView?.({ block: 'nearest' })).catch(error);
+  }
+  replyBox.addEventListener('toggle', reportPresence);
   function connectPresence() {
     if (closed || !runtime?.connect) return;
     try { presencePort = runtime.connect({ name: 'ab-panel-presence' }); } catch { return; }
-    presencePort.onMessage.addListener(message => { if (message?.type === 'select' && typeof message.conversationId === 'string') select(message.conversationId); });
+    presencePort.onMessage.addListener(message => {
+      if (message?.type === 'select' && typeof message.conversationId === 'string') select(message.conversationId);
+      if (message?.type === 'showReplies') showReplies();
+    });
     // The service worker restarting closes the port; reconnect to the new one.
     presencePort.onDisconnect.addListener(() => { presencePort = null; schedule(connectPresence, 1000); });
     reportPresence();
@@ -260,12 +345,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   function renderTimeline() {
     const mode = turnView() ? 'turns' : 'rows';
     if (viewMode !== mode) {
-      if (viewMode) { rendered.clear(); toolTail = null; toolGroups.clear(); clearTurnView(); nodes.transcript.replaceChildren(nodes.empty); }
+      if (viewMode) { rendered.clear(); toolTail = null; toolGroups.clear(); clearTurnView(); importedNode = null; importedCount = -1; nodes.transcript.replaceChildren(nodes.empty); }
       viewMode = mode;
     }
+    renderImported();
     if (mode === 'turns') { renderTurns(); return; }
     const follow = nodes.transcript.scrollHeight - nodes.transcript.scrollTop - nodes.transcript.clientHeight < 80;
-    nodes.empty.hidden = timeline.rows.length > 0;
+    nodes.empty.hidden = timeline.rows.length > 0 || Boolean(timeline.imported);
     // A tool still open when the response ended is not running any more.
     const live = busyPhases.has(conversation?.phase);
     for (const row of timeline.rows) {
@@ -288,27 +374,27 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   }
   function messageView(row, showPage = true) {
     const container = element('article', undefined, `message-row ${row.type}`);
-    const speaker = element('div', row.type === 'user' ? 'You' : row.type === 'assistant' ? 'Assistant' : 'Response status', 'speaker');
+    const speaker = element('div', row.type === 'user' ? t('panel_speaker_you') : row.type === 'assistant' ? t('panel_speaker_assistant') : t('panel_speaker_status'), 'speaker');
     const content = element('div', undefined, 'content'); container.append(content, speaker); const view = { container, content, speaker };
     if (row.attachments?.length) {
       const images = element('div', undefined, 'attachment-images'); container.append(images);
       const chatId = selected;
       for (const attachment of row.attachments) {
-        const image = element('img'); image.alt = 'Attached image'; images.append(image);
+        const image = element('img'); image.alt = t('panel_image_attached'); images.append(image);
         void api('conversationAttachmentRead', { conversationId: chatId, attachment }).then(result => {
           image.src = `data:${result.attachment.mediaType};base64,${result.data}`;
-        }).catch(() => { image.alt = 'Saved image unavailable'; });
+        }).catch(() => { image.alt = t('panel_image_unavailable'); });
       }
     }
     if (showPage && row.page?.title) container.append(element('div', row.page.title, 'page-ref'));
-    if (row.detail) { const raw = element('details'); raw.append(element('summary', 'Details'), element('pre', row.detail)); container.append(raw); }
+    if (row.detail) { const raw = element('details'); raw.append(element('summary', t('panel_details')), element('pre', row.detail)); container.append(raw); }
     if (row.type === 'note' && row.failed && conversation?.agentId) {
       const agentId = conversation.agentId;
       const prompt = [...timeline.rows].reverse().find(r => r.type === 'user' && !r.queueStatus)?.text;
       // Only an explicitly chosen model can be dropped; a model from the
       // CLI's own configuration has to be changed there.
-      if (conversation.requestedModel && prompt) container.append(button('Retry with default model', () => retryWithDefaultModel(agentId, prompt), 'retry'));
-      else if (conversation.model) container.append(button('Change default model', async () => { showAgents(); await loadConfig(agentId, agentNames[agentId] || agentId); }, 'retry'));
+      if (conversation.requestedModel && prompt) container.append(button(t('panel_retry_default_model'), () => retryWithDefaultModel(agentId, prompt), 'retry'));
+      else if (conversation.model) container.append(button(t('panel_change_default_model'), async () => { showAgents(); await loadConfig(agentId, agentNames[agentId] || agentId); }, 'retry'));
     }
     return view;
   }
@@ -327,8 +413,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     if (row.type === 'user') view.speaker.textContent = row.queueStatus || '';
     if (row.type === 'tool') {
       view.name.textContent = row.name; view.hint.textContent = row.hint || ''; view.row = row;
-      view.state.textContent = row.failed ? 'Failed' : ''; view.running = live && !row.failed && !row.completed;
-      view.state.title = row.failed ? 'Failed' : view.running ? 'Running' : '';
+      view.state.textContent = row.failed ? t('panel_tool_failed') : ''; view.running = live && !row.failed && !row.completed;
+      view.state.title = row.failed ? t('panel_tool_failed') : view.running ? t('panel_tool_running') : '';
       view.container.classList.toggle('failed', row.failed); view.container.classList.toggle('running', view.running);
     }
   }
@@ -345,11 +431,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const count = group.tools.length, failed = group.tools.filter(t => t.row.failed).length;
     const running = group.tools.some(t => t.running);
     group.container.classList.toggle('single', count === 1); group.container.classList.toggle('running', running);
-    group.summary.textContent = `${running ? 'Working · ' : ''}${count} step${count === 1 ? '' : 's'}${failed ? ` · ${failed} failed` : ''}`;
+    group.summary.textContent = [running && t('panel_working'), stepCount(count), failed && t('panel_steps_failed', failed)].filter(Boolean).join(' · ');
     if (count === 1) group.container.open = true;
     else if (!group.touched && running !== group.wasRunning) group.container.open = running;
     group.wasRunning = running;
   }
+  function stepCount(count) { return count === 1 ? t('panel_steps_one', count) : t('panel_steps_many', count); }
   // ---- Turn view -----------------------------------------------------------
   // Every section is rebuilt only when its own data changed (`section`); steps,
   // texts and result cards are keyed so open details and loaded files survive.
@@ -378,7 +465,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   }
   function renderTurns() {
     const follow = nodes.transcript.scrollHeight - nodes.transcript.scrollTop - nodes.transcript.clientHeight < 80;
-    nodes.empty.hidden = timeline.rows.length > 0 || Boolean(timeline.recovery.context);
+    nodes.empty.hidden = timeline.rows.length > 0 || Boolean(timeline.recovery.context) || Boolean(timeline.imported);
     const live = busyPhases.has(conversation?.phase);
     renderForkContext();
     for (const id of timeline.turnOrder) {
@@ -395,14 +482,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const context = timeline.recovery.context;
     if (!context || forkView) return;
     forkView = element('section', undefined, 'turn-banner');
-    forkView.append(element('p', 'This conversation continues one whose last request ended with an unknown outcome. Actions listed there may already have taken effect.'));
-    if (typeof context.fromConversationId === 'string') forkView.append(button('Open the earlier conversation', async () => { await list(); select(context.fromConversationId); }));
+    forkView.append(element('p', t('panel_fork_context')));
+    if (typeof context.fromConversationId === 'string') forkView.append(button(t('panel_open_earlier_conversation'), async () => { await list(); select(context.fromConversationId); }));
     nodes.transcript.insertBefore(forkView, nodes.transcript.children[0] || null);
   }
   function renderTurn(card, turn, live) {
     if (card.user) updateRowView(card.user, turn.user, live);
     const pageSent = turn.attachedPage;
-    section(card, 'sentWith', pageSent, () => pageSent ? [element('span', `Sent with: ${pageName(pageSent)}`)] : []);
+    section(card, 'sentWith', pageSent, () => pageSent ? [element('span', t('panel_sent_with', pageName(pageSent)))] : []);
     renderActing(card, turn);
     renderSteps(card, turn, live);
     renderUnlinked(card, turn);
@@ -418,18 +505,18 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const browserSteps = turn.steps.some(key => timeline.items.get(key)?.browser);
     section(card, 'acting', { pages, recorded: turn.recorded, browserSteps }, () => {
       const lines = [];
-      const list = targets => `${targets.slice(0, 3).map(target => target.attached ? 'the page you sent' : pageName(target)).join(', ')}${targets.length > 3 ? ` +${targets.length - 3}` : ''}`;
-      if (!turn.recorded) { if (browserSteps) lines.push(element('div', 'Pages acted on: not recorded')); return lines; }
-      if (pages.actedOn.length) lines.push(element('div', `Acted on: ${list(pages.actedOn)}`));
-      if (pages.pointedAt.length) lines.push(element('div', `Browser tools pointed at: ${list(pages.pointedAt)}`));
-      for (const redirect of pages.redirects.slice(0, 3)) lines.push(element('div', `Asked for ${redirect.asked}, landed on ${redirect.landed}`));
+      const list = targets => `${targets.slice(0, 3).map(target => target.attached ? t('panel_page_you_sent') : pageName(target)).join(', ')}${targets.length > 3 ? ` +${targets.length - 3}` : ''}`;
+      if (!turn.recorded) { if (browserSteps) lines.push(element('div', t('panel_acted_not_recorded'))); return lines; }
+      if (pages.actedOn.length) lines.push(element('div', t('panel_acted_on', list(pages.actedOn))));
+      if (pages.pointedAt.length) lines.push(element('div', t('panel_pointed_at', list(pages.pointedAt))));
+      for (const redirect of pages.redirects.slice(0, 3)) lines.push(element('div', t('panel_redirect', redirect.asked, redirect.landed)));
       return lines;
     });
   }
   function stepNote(turn, row) {
     const unresolved = turn.batchInterrupted?.unresolved?.find(entry => entry.toolCallId && entry.toolCallId === row.toolCallId);
-    if (unresolved) return unresolved.executed === 'unknown' ? 'No record that it ran' : 'Did not finish; may have run';
-    if (stepActions(timeline, row).some(action => action.late)) return 'Reported after the request ended';
+    if (unresolved) return unresolved.executed === 'unknown' ? t('panel_step_no_record') : t('panel_step_unfinished');
+    if (stepActions(timeline, row).some(action => action.late)) return t('panel_step_reported_late');
     return '';
   }
   function renderSteps(card, turn, live) {
@@ -440,7 +527,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       updateRowView(view, row, live);
       const verdict = stepVerdict(timeline, turn, row);
       view.verdict = verdict;
-      view.chip.textContent = verdict || ''; view.chip.hidden = !verdict; view.chip.className = `verdict-chip ${verdictClass[verdict] || ''}`;
+      view.chip.textContent = verdict ? verdictLabels[verdict] || verdict : ''; view.chip.hidden = !verdict; view.chip.className = `verdict-chip ${verdictClass[verdict] || ''}`;
       if (verdict === 'Failed') view.state.textContent = '';
       view.note.textContent = stepNote(turn, row); view.note.hidden = !view.note.textContent;
     }
@@ -449,8 +536,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     // A folded group names its failed steps, so folding never hides a failure.
     const failed = views.filter(view => view.row.failed || view.verdict === 'Failed').map(view => view.row.name);
     const running = views.some(view => view.running);
-    const compacted = turn.compactions.length ? ' · memory summarized' : '';
-    card.groupSummary.textContent = `${running ? 'Working · ' : ''}${count} step${count === 1 ? '' : 's'}${failed.length ? ` · ${failed.length} failed: ${[...new Set(failed)].join(', ')}` : ''}${compacted}`;
+    card.groupSummary.textContent = [running && t('panel_working'), stepCount(count), failed.length && t('panel_steps_failed_named', failed.length, [...new Set(failed)].join(', ')), turn.compactions.length && t('panel_memory_summarized')].filter(Boolean).join(' · ');
     card.group.classList.toggle('single', count === 1); card.group.classList.toggle('running', running);
     if (count === 1) card.group.open = true;
     else if (!card.touched && running !== card.wasRunning) card.group.open = running;
@@ -462,13 +548,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const compactions = turn.compactions.length;
     section(card, 'unlinked', { unlinked, stray, compactions }, () => {
       const lines = [];
-      if (compactions) lines.push(element('p', "The agent's memory was summarized during this request; the history shown is complete.", 'hint'));
+      if (compactions) lines.push(element('p', t('panel_memory_summarized_note'), 'hint'));
       if (unlinked.length) {
-        const box = element('details', undefined, 'unlinked-actions'); box.append(element('summary', `${unlinked.length} browser record${unlinked.length === 1 ? '' : 's'} not matched to a step`));
-        for (const action of unlinked) box.append(element('div', `${(action.tool || 'browser tool').replace(/^chrome_use_/, '')} · ${action.unreported ? 'admitted, never reported' : action.verdict === 'confirmed' ? 'Confirmed' : action.verdict === 'failed' ? 'Failed' : 'Not checked'}${action.late ? ' · reported after the request ended' : ''}`));
+        const box = element('details', undefined, 'unlinked-actions'); box.append(element('summary', unlinked.length === 1 ? t('panel_unlinked_one', unlinked.length) : t('panel_unlinked_many', unlinked.length)));
+        for (const action of unlinked) box.append(element('div', [(action.tool || t('panel_browser_tool')).replace(/^chrome_use_/, ''), action.unreported ? t('panel_action_unreported') : verdictLabels[action.verdict === 'confirmed' ? 'Confirmed' : action.verdict === 'failed' ? 'Failed' : 'Not checked'], action.late && t('panel_action_reported_late')].filter(Boolean).join(' · ')));
         lines.push(box);
       }
-      for (const entry of stray) lines.push(element('div', `${entry.name || 'A tool'}: ${entry.executed === 'unknown' ? 'no record that it ran' : 'did not finish; may have run'}`, 'hint'));
+      for (const entry of stray) lines.push(element('div', entry.executed === 'unknown' ? t('panel_stray_no_record', entry.name || t('panel_a_tool')) : t('panel_stray_unfinished', entry.name || t('panel_a_tool')), 'hint'));
       return lines;
     });
   }
@@ -479,12 +565,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       let view = card.texts.get(key);
       if (!view) { view = messageView(row); card.texts.set(key, view); }
       const role = turn.roles.get(key);
-      view.speaker.textContent = role === 'commentary' ? 'Progress note' : role === 'final' ? 'Answer' : 'Response';
+      view.speaker.textContent = role === 'commentary' ? t('panel_role_progress') : role === 'final' ? t('panel_role_answer') : t('panel_role_response');
       view.container.className = `message-row assistant${role === 'commentary' ? ' commentary' : ''}`;
       if (card.answerTexts.children[index] !== view.container) card.answerTexts.insertBefore(view.container, card.answerTexts.children[index] || null);
       updateRowView(view, row, live);
     });
-    card.answerNote.textContent = turn.emptyAnswer ? 'The agent returned no answer text.' : '';
+    card.answerNote.textContent = turn.emptyAnswer ? t('panel_empty_answer') : '';
     card.answerNote.hidden = !turn.emptyAnswer;
     card.answer.hidden = !keys.length && !turn.emptyAnswer;
   }
@@ -501,26 +587,26 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       view.container.className = `result-card ${artifact.state}`;
       if (artifact.state === 'ready' && panelSupport?.artifacts) {
         if (artifact.kind === 'screenshot' && !view.url && !view.loading) void showArtifact(view, artifact, true);
-        else if (artifact.kind !== 'screenshot' && !view.save) { view.save = button('Save a copy', () => showArtifact(view, artifact, false)); view.media.append(view.save); }
+        else if (artifact.kind !== 'screenshot' && !view.save) { view.save = button(t('panel_artifact_save_copy'), () => showArtifact(view, artifact, false)); view.media.append(view.save); }
       }
     }
   }
   // A result card reports what happened to the file, never that it meets the request.
   function artifactLines(artifact) {
-    const kind = { screenshot: 'Screenshot', download: 'Download', recording: 'Recording' }[artifact.kind] || 'File';
+    const kind = { screenshot: t('panel_artifact_screenshot'), download: t('panel_artifact_download'), recording: t('panel_artifact_recording') }[artifact.kind] || t('panel_artifact_file');
     const lines = [element('div', `${kind}${artifact.name ? ` · ${artifact.name}` : ''}`, 'result-title')];
     if (artifact.state === 'unavailable') {
-      lines.push(element('div', `Unavailable: ${unavailableText[artifact.reason] || 'the file could not be kept'}`));
+      lines.push(element('div', t('panel_artifact_unavailable', unavailableText[artifact.reason] || t('panel_artifact_not_kept'))));
       if (artifact.detail) lines.push(element('div', artifact.detail, 'hint'));
-      if (artifact.reason === 'tooLargeToRetain' && Number.isFinite(artifact.bytes)) lines.push(element('div', `Size: ${sizeText(artifact.bytes)}`, 'hint'));
-    } else if (artifact.state !== 'ready') lines.push(element('div', { capturing: artifact.kind === 'recording' ? 'Recording…' : 'Capturing…', finalizing: 'Finishing the recording…' }[artifact.state] || 'Waiting for the file…'));
+      if (artifact.reason === 'tooLargeToRetain' && Number.isFinite(artifact.bytes)) lines.push(element('div', t('panel_artifact_size', sizeText(artifact.bytes)), 'hint'));
+    } else if (artifact.state !== 'ready') lines.push(element('div', { capturing: artifact.kind === 'recording' ? t('panel_artifact_recording_now') : t('panel_artifact_capturing'), finalizing: t('panel_artifact_finalizing') }[artifact.state] || t('panel_artifact_waiting')));
     else {
-      lines.push(element('div', 'File captured: yes'));
-      if (artifact.declaredExtension) lines.push(element('div', `Type matches .${artifact.declaredExtension}: ${artifact.typeMatches === true ? 'yes' : artifact.typeMatches === false ? `no (${artifact.mime || 'unknown type'})` : 'not checked'}`));
-      lines.push(element('div', `Not empty: ${artifact.bytes > 0 ? 'yes' : 'no, the file is empty'}`));
+      lines.push(element('div', t('panel_artifact_captured')));
+      if (artifact.declaredExtension) lines.push(element('div', artifact.typeMatches === true ? t('panel_artifact_type_yes', artifact.declaredExtension) : artifact.typeMatches === false ? t('panel_artifact_type_no', artifact.declaredExtension, artifact.mime || t('panel_artifact_unknown_type')) : t('panel_artifact_type_unchecked', artifact.declaredExtension)));
+      lines.push(element('div', artifact.bytes > 0 ? t('panel_artifact_not_empty') : t('panel_artifact_empty')));
       lines.push(element('div', [artifact.mime, sizeText(artifact.bytes)].filter(Boolean).join(' · '), 'hint'));
     }
-    if (artifact.delivery) lines.push(element('div', artifact.delivery.state === 'delivered' ? 'Saved to your path: yes' : `Saved to your path: no${artifact.delivery.detail ? ` (${artifact.delivery.detail})` : ''}`));
+    if (artifact.delivery) lines.push(element('div', artifact.delivery.state === 'delivered' ? t('panel_artifact_delivered') : artifact.delivery.detail ? t('panel_artifact_not_delivered_detail', artifact.delivery.detail) : t('panel_artifact_not_delivered')));
     return lines;
   }
   // Files are read in chunks, sequentially, at most two at a time (the bridge
@@ -550,19 +636,19 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   async function showArtifact(view, artifact, inline) {
     if (view.loading) return;
     const id = selected, epoch = selectionEpoch;
-    view.loading = true; view.status.textContent = 'Reading the file…';
+    view.loading = true; view.status.textContent = t('panel_artifact_reading');
     try {
       const blob = await artifactSlot(() => readArtifact(id, artifact));
       if (id !== selected || epoch !== selectionEpoch) return;
       if (view.url) { objectUrls.revoke(view.url); liveUrls.delete(view.url); }
       view.url = objectUrls.create(blob); liveUrls.add(view.url);
-      if (inline) { const image = element('img'); image.alt = artifact.name || 'Screenshot'; image.src = view.url; view.media.replaceChildren(image); }
-      const save = element('a', 'Save', 'quiet'); save.href = view.url; save.download = artifact.name || 'artifact';
+      if (inline) { const image = element('img'); image.alt = artifact.name || t('panel_artifact_screenshot'); image.src = view.url; view.media.replaceChildren(image); }
+      const save = element('a', t('panel_artifact_save'), 'quiet'); save.href = view.url; save.download = artifact.name || 'artifact';
       if (inline) view.media.append(save); else save.click?.();
       view.status.textContent = '';
     } catch (failure) {
       if (id !== selected || epoch !== selectionEpoch) return;
-      view.status.textContent = failure?.message === 'changed' ? 'Not shown: the file changed while it was read.' : /artifact_unavailable/.test(failure?.message || '') ? 'The file is no longer available.' : `The file could not be read: ${failure?.message || 'no answer'}`;
+      view.status.textContent = failure?.message === 'changed' ? t('panel_artifact_changed') : /artifact_unavailable/.test(failure?.message || '') ? t('panel_artifact_gone') : t('panel_artifact_read_failed', failure?.message || t('panel_no_answer'));
       view.status.className = 'hint changed';
     } finally { view.loading = false; }
   }
@@ -571,20 +657,20 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const label = assessmentLabel(turn);
     section(card, 'assessment', { label, final, provisional: Boolean(provisional) }, () => {
       const box = element('details', undefined, 'assessment');
-      const summary = element('summary'); summary.append(element('span', label, `badge ${final?.status || (label === 'Assessment pending' ? 'pending' : 'none')}`)); box.append(summary);
+      const summary = element('summary'); summary.append(element('span', label, `badge ${final?.status || (!final && turn.recorded && turn.state !== 'ended' ? 'pending' : 'none')}`)); box.append(summary);
       if (!final) return [box];
-      if (final.blocker?.text) box.append(element('p', `Blocked: ${final.blocker.text}`));
-      if (final.reason === 'notAssessed') box.append(element('p', 'The agent did not assess this request.', 'hint'));
+      if (final.blocker?.text) box.append(element('p', t('panel_assessment_blocked', final.blocker.text)));
+      if (final.reason === 'notAssessed') box.append(element('p', t('panel_assessment_not_assessed'), 'hint'));
       for (const requirement of final.requirements || []) {
         const line = element('div', undefined, `requirement ${requirement.computed}`);
-        line.append(element('span', requirement.text || 'Requirement'), element('span', computedLabels[requirement.computed] || 'Unknown', 'requirement-state'));
+        line.append(element('span', requirement.text || t('panel_requirement')), element('span', computedLabels[requirement.computed] || t('panel_check_unknown'), 'requirement-state'));
         const detail = checkDetail(requirement);
         if (detail) line.append(element('div', detail, 'hint'));
         else if (requirement.because) line.append(element('div', requirement.because, 'hint'));
         box.append(line);
       }
-      for (const reason of final.downgradedBecause || []) box.append(element('div', `Lowered: ${reason}`, 'hint'));
-      if (final.requirements?.length) box.append(element('p', 'These are the checks the agent chose; they do not prove the whole request was done.', 'hint'));
+      for (const reason of final.downgradedBecause || []) box.append(element('div', t('panel_assessment_lowered', reason), 'hint'));
+      if (final.requirements?.length) box.append(element('p', t('panel_assessment_disclaimer'), 'hint'));
       return [box];
     });
   }
@@ -592,14 +678,17 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   // requirements, and only from the cited evidence's own recorded target.
   function checkDetail(requirement) {
     const check = requirement.check;
-    if (requirement.computed !== 'checked' || !check) return check?.predicate ? `Check: ${check.predicate}` : '';
+    if (requirement.computed !== 'checked' || !check) return check?.predicate ? t('panel_check_predicate', check.predicate) : '';
     const action = timeline.actions.get(check.evidence), artifact = timeline.artifacts.get(check.evidence);
-    if (artifact) return `File ${artifact.name || ''} is ${check.predicate}`.replace('  ', ' ');
+    if (artifact) return t('panel_check_file', artifact.name || '', check.predicate).replace('  ', ' ');
     const target = action?.observed?.check?.target;
-    const where = target?.url ? ` on ${hostOf(target.url)}${(() => { try { return new URL(target.url).pathname; } catch { return ''; } })()}` : '';
-    const when = action?.observed?.at ? ` at ${new Date(action.observed.at).toLocaleTimeString()}` : '';
-    const verb = { expect: 'page showed', readBack: 'field check:', urlMatch: 'browser landed on' }[check.kind] || 'check:';
-    return `${verb} '${check.predicate}'${where}${when}`;
+    const where = target?.url ? `${hostOf(target.url)}${(() => { try { return new URL(target.url).pathname; } catch { return ''; } })()}` : '';
+    const when = action?.observed?.at ? new Date(action.observed.at).toLocaleTimeString() : '';
+    const verb = { expect: t('panel_check_verb_expect'), readBack: t('panel_check_verb_read_back'), urlMatch: t('panel_check_verb_url') }[check.kind] || t('panel_check_verb_other');
+    if (where && when) return t('panel_check_evidence_where_when', verb, check.predicate, where, when);
+    if (where) return t('panel_check_evidence_where', verb, check.predicate, where);
+    if (when) return t('panel_check_evidence_when', verb, check.predicate, when);
+    return t('panel_check_evidence', verb, check.predicate);
   }
   function renderOutcome(card, turn) {
     const label = outcomeLabel(turn);
@@ -615,9 +704,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     section(card, 'stall', stall, () => {
       if (!stall) return [];
       const banner = element('div', undefined, 'stall-banner');
-      banner.append(element('p', `${(stallText[stall.kind] || stallText.noActivity)(stall.count)} Nothing was stopped automatically.`));
+      banner.append(element('p', t('panel_stall_banner', (stallText[stall.kind] || stallText.noActivity)(stall.count))));
       const actions = element('div', undefined, 'actions');
-      actions.append(button('Stop', () => controlConversation('conversationStop'), 'quiet'), button('Keep going', async () => { dismissedStalls.add(`${turn.messageId}:${stall.sequence}`); renderTurns(); }));
+      actions.append(button(t('panel_stop'), () => controlConversation('conversationStop'), 'quiet'), button(t('panel_keep_going'), async () => { dismissedStalls.add(`${turn.messageId}:${stall.sequence}`); renderTurns(); }));
       banner.append(actions); return [banner];
     });
   }
@@ -628,21 +717,21 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     section(card, 'recovery', { show: Boolean(show), forkedTo: turn.forkedTo, review, phase: conversation?.phase }, () => {
       if (!show) return [];
       const block = element('section', undefined, 'recovery-block');
-      if (turn.forkedTo) { block.append(element('p', 'This request was continued in a new conversation.'), button('Open the new conversation', async () => { await list(); select(turn.forkedTo); })); return [block]; }
-      block.append(element('p', 'The outcome of this request is unknown. Browser actions may already have taken effect.'));
+      if (turn.forkedTo) { block.append(element('p', t('panel_recovery_forked')), button(t('panel_open_new_conversation'), async () => { await list(); select(turn.forkedTo); })); return [block]; }
+      block.append(element('p', t('panel_recovery_unknown')));
       const actions = element('div', undefined, 'actions');
-      actions.append(button('Review what may have happened', () => recoveryReview(card)));
+      actions.append(button(t('panel_recovery_review'), () => recoveryReview(card)));
       if (review?.error) block.append(element('p', review.error, 'hint'));
       if (review?.process) {
         const state = review.process.state;
-        block.append(element('p', state === 'alive' ? 'The old agent process is still running.' : state === 'exited' ? 'The old agent process has exited.' : 'chrome-use cannot tell whether the old agent process is still running.'));
+        block.append(element('p', state === 'alive' ? t('panel_recovery_alive') : state === 'exited' ? t('panel_recovery_exited') : t('panel_recovery_state_unknown')));
         if (review.process.reason) block.append(element('p', review.process.reason, 'hint'));
         const executed = (review.actions || []).filter(action => action.possiblyExecuted);
-        if (executed.length) { const list = element('ul'); for (const action of executed.slice(0, 20)) list.append(element('li', `${String(action.tool || 'browser tool').replace(/^chrome_use_/, '')}${action.target?.url ? ` on ${hostOf(action.target.url)}` : ''} · may have taken effect`)); block.append(list); }
-        if (review.terminated) block.append(element('p', review.terminated.confirmed ? 'The old agent process was ended.' : 'Ending the old agent process was not confirmed.', 'hint'));
-        if (state === 'alive') actions.append(button('End the old agent process', () => recoveryTerminate(card), 'danger'));
-        else if (state === 'exited' && conversation?.phase === 'recoveryRequired') actions.append(button('Continue in a new conversation', () => recoveryFork(), 'primary'));
-        else if (state === 'unknown') block.append(element('p', 'Ending it or continuing in a new conversation is not offered, because its state cannot be proven. A new conversation started normally does not stop the old agent.', 'hint'));
+        if (executed.length) { const list = element('ul'); for (const action of executed.slice(0, 20)) { const tool = String(action.tool || t('panel_browser_tool')).replace(/^chrome_use_/, ''); list.append(element('li', action.target?.url ? t('panel_recovery_action_on', tool, hostOf(action.target.url)) : t('panel_recovery_action', tool))); } block.append(list); }
+        if (review.terminated) block.append(element('p', review.terminated.confirmed ? t('panel_recovery_ended') : t('panel_recovery_end_unconfirmed'), 'hint'));
+        if (state === 'alive') actions.append(button(t('panel_recovery_end'), () => recoveryTerminate(card), 'danger'));
+        else if (state === 'exited' && conversation?.phase === 'recoveryRequired') actions.append(button(t('panel_recovery_continue'), () => recoveryFork(), 'primary'));
+        else if (state === 'unknown') block.append(element('p', t('panel_recovery_no_options'), 'hint'));
       }
       block.append(actions); return [block];
     });
@@ -652,7 +741,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     try {
       const review = await api('conversationRecoveryReview', { conversationId: id });
       if (id === selected && epoch === selectionEpoch) { card.review = { ...review, terminated: card.review?.terminated || null }; renderTurns(); }
-    } catch (failure) { if (id === selected && epoch === selectionEpoch) { card.review = { error: `Review failed: ${failure?.message || 'no answer'}` }; renderTurns(); } }
+    } catch (failure) { if (id === selected && epoch === selectionEpoch) { card.review = { error: t('panel_recovery_review_failed', failure?.message || t('panel_no_answer')) }; renderTurns(); } }
   }
   async function recoveryTerminate(card) {
     const id = selected, epoch = selectionEpoch;
@@ -685,14 +774,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   // what the agent gets.
   function questionFields(questions, container, allowCustom = () => true) {
     return questions.map((question, index) => {
-      const group = element('div', undefined, 'question'); group.append(element('label', question.question || question.header || 'Question'));
+      const group = element('div', undefined, 'question'); group.append(element('label', question.question || question.header || t('panel_question')));
       const choices = [];
       for (const [optionIndex, option] of (question.options || []).entries()) {
         const label = element('label', undefined, 'choice'); const input = element('input'); input.dataset.index = String(optionIndex);
         input.type = question.multiSelect ? 'checkbox' : 'radio'; input.name = `question-${selectionEpoch}-${index}`; input.value = option.label;
         const text = element('span', option.label); if (option.description) text.append(element('small', option.description)); label.append(input, text); group.append(label); choices.push(input);
       }
-      const free = element('input'); free.placeholder = 'Your answer'; free.setAttribute('aria-label', `Answer: ${question.question || question.header || 'Question'}`);
+      const free = element('input'); free.placeholder = t('panel_your_answer'); free.setAttribute('aria-label', t('panel_answer_label', question.question || question.header || t('panel_question')));
       const custom = allowCustom(question); if (custom) group.append(free); container.append(group);
       const read = () => { const text = custom ? free.value.trim() : ''; return text ? [text] : choices.filter(c => c.checked).map(c => c.value); };
       return { question, read, answer() {
@@ -709,7 +798,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const request = timeline.requests.get(key); if (!request || request.sent) return;
     const id = selected, epoch = selectionEpoch;
     const view = requestNodes.get(key);
-    if (view.revision !== request.requestRevision) throw new Error('This request changed. Review it again before answering.');
+    if (view.revision !== request.requestRevision) throw new Error(t('panel_request_changed'));
     for (const node of view.container.querySelectorAll('button')) node.disabled = true;
     const params = view.bound
       ? { conversationId: id, requestId: request.requestId, generation: view.generation, requestRevision: view.revision, decision }
@@ -717,7 +806,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     try {
       await api('conversationRespond', params);
       if (selected === id && epoch === selectionEpoch) { request.sent = true; renderRequests(); }
-    } catch (failure) { if (selected === id && epoch === selectionEpoch) { request.unconfirmed = true; view.status.textContent = 'Response unconfirmed. Read the current state before retrying.'; } throw failure; }
+    } catch (failure) { if (selected === id && epoch === selectionEpoch) { request.unconfirmed = true; view.status.textContent = t('panel_respond_unconfirmed'); } throw failure; }
   }
   // Buttons that let a requested action run. They stay disabled once Stop was
   // requested; the service refuses them then as well (decline still works).
@@ -726,16 +815,16 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     const container = element('section', undefined, 'request'); const status = element('p', '', 'hint');
     const params = request.params || {}; const method = request.method; const actions = element('div', undefined, 'actions');
     const bound = boundReplies(request);
-    container.append(element('h3', method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion' ? 'The agent needs your input' : 'Review the agent request'));
-    if (params.truncated) { container.append(element('p', 'The request preview is incomplete. Stop this response before approving anything.')); }
+    container.append(element('h3', method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion' ? t('panel_request_needs_input') : t('panel_request_review')));
+    if (params.truncated) { container.append(element('p', t('panel_request_truncated'))); }
     else if (method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion') {
       const codex = method === 'item/tool/requestUserInput';
       // Codex marks where free text is allowed; Claude always offers "Other".
       const allowCustom = question => !bound || !codex || question.isOther === true || !(question.options || []).length;
       const fields = questionFields(codex ? params.questions || [] : params.input?.questions || [], container, allowCustom);
-      actions.append(allow(button('Send answers', async () => {
+      actions.append(allow(button(t('panel_send_answers'), async () => {
         const answers = fields.map(f => ({ question: f.question, values: f.read(), answer: f.answer() }));
-        if (answers.some(a => a.values.length === 0)) throw new Error('Answer each question before sending.');
+        if (answers.some(a => a.values.length === 0)) throw new Error(t('panel_answer_each'));
         const result = codex
           ? { answers: Object.fromEntries(answers.map(a => [a.question.id, { answers: a.values }])) }
           : { behavior: 'allow', updatedInput: { ...params.input, answers: Object.fromEntries(answers.map(a => [a.question.question, a.values.join(', ')])) } };
@@ -744,35 +833,35 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
         await respond(key, result, decision);
       }, 'primary')));
     } else if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {
-      container.append(element('p', params.reason || 'This action requires a decision.'));
+      container.append(element('p', params.reason || t('panel_request_decision')));
       if (params.command) container.append(element('pre', params.command));
-      if (params.cwd) container.append(element('p', `Working folder: ${params.cwd}`, 'hint'));
-      actions.append(allow(button('Allow once', () => respond(key, { decision: 'accept' }, 'accept'), 'primary')), button('Decline', () => respond(key, { decision: 'decline' }, 'decline')));
+      if (params.cwd) container.append(element('p', t('panel_working_folder', params.cwd), 'hint'));
+      actions.append(allow(button(t('panel_allow_once'), () => respond(key, { decision: 'accept' }, 'accept'), 'primary')), button(t('panel_decline'), () => respond(key, { decision: 'decline' }, 'decline')));
     } else if (method === 'mcpServer/elicitation/request') {
-      container.append(element('p', params.message || 'The MCP server needs a decision.'));
+      container.append(element('p', params.message || t('panel_request_mcp')));
       const properties = params.requestedSchema?.properties;
       const approval = params.serverName === 'chrome_use' && params.mode === 'form' && params._meta?.codex_approval_kind === 'mcp_tool_call' && params.requestedSchema?.type === 'object' && properties && typeof properties === 'object' && Object.keys(properties).length === 0 && (params.requestedSchema.required === undefined || (Array.isArray(params.requestedSchema.required) && params.requestedSchema.required.length === 0)) && params._meta.tool_params && typeof params._meta.tool_params === 'object' && !Array.isArray(params._meta.tool_params);
       if (approval) {
         container.dataset.approvalKind = 'mcpTool'; container.dataset.serverName = params.serverName;
         if (params._meta.tool_description) container.append(element('p', params._meta.tool_description, 'hint'));
         container.append(element('pre', JSON.stringify(params._meta.tool_params, null, 2), 'tool-arguments'));
-        actions.append(allow(button('Allow once', () => respond(key, {action:'accept',content:{}}, 'accept'), 'primary')));
-      } else container.append(element('p', 'This form cannot be safely completed here. Decline or cancel this request.'));
-      actions.append(button('Decline', () => respond(key, {action:'decline',content:null}, 'decline')), button('Cancel request', () => respond(key, {action:'cancel',content:null}, 'cancel')));
+        actions.append(allow(button(t('panel_allow_once'), () => respond(key, {action:'accept',content:{}}, 'accept'), 'primary')));
+      } else container.append(element('p', t('panel_request_form_unsafe')));
+      actions.append(button(t('panel_decline'), () => respond(key, {action:'decline',content:null}, 'decline')), button(t('panel_cancel_request'), () => respond(key, {action:'cancel',content:null}, 'cancel')));
     } else if (method === 'session/request_permission') {
-      container.append(element('p', params.toolCall?.title || 'OpenCode tool request'));
+      container.append(element('p', params.toolCall?.title || t('panel_request_opencode')));
       container.append(element('pre', JSON.stringify(params.toolCall?.rawInput || {}, null, 2)));
       for (const option of params.options || []) { const choice = button(option.name || option.optionId, () => respond(key, { outcome: { outcome: 'selected', optionId: option.optionId } }, { optionId: option.optionId }), option.kind === 'allow_once' ? 'primary' : 'quiet'); actions.append(String(option.kind || '').startsWith('allow') ? allow(choice) : choice); }
-      actions.append(button('Cancel request', () => respond(key, { outcome: { outcome: 'cancelled' } }, 'cancel')));
+      actions.append(button(t('panel_cancel_request'), () => respond(key, { outcome: { outcome: 'cancelled' } }, 'cancel')));
     } else if (method === 'can_use_tool') {
-      container.append(element('p', params.tool_name || 'Tool request')); container.append(element('pre', JSON.stringify(params.input || {}, null, 2)));
-      actions.append(allow(button('Allow once', () => respond(key, { behavior: 'allow', updatedInput: params.input || {} }, 'allow'), 'primary')), button('Decline', () => respond(key, { behavior: 'deny', message: 'User declined' }, 'deny')));
+      container.append(element('p', params.tool_name || t('panel_request_tool'))); container.append(element('pre', JSON.stringify(params.input || {}, null, 2)));
+      actions.append(allow(button(t('panel_allow_once'), () => respond(key, { behavior: 'allow', updatedInput: params.input || {} }, 'allow'), 'primary')), button(t('panel_decline'), () => respond(key, { behavior: 'deny', message: 'User declined' }, 'deny')));
     } else if (method === 'item/permissions/requestApproval') {
-      container.append(element('p', params.reason || 'Review the requested access for this turn.')); container.append(element('pre', JSON.stringify(params.permissions || {}, null, 2)));
-      actions.append(allow(button('Allow for this turn', () => respond(key, { permissions: params.permissions || {}, scope: 'turn' }, 'accept'), 'primary')));
-    } else { container.append(element('p', 'This request needs a response format this view cannot present. Stop the response and inspect the CLI request.')); }
+      container.append(element('p', params.reason || t('panel_request_permissions'))); container.append(element('pre', JSON.stringify(params.permissions || {}, null, 2)));
+      actions.append(allow(button(t('panel_allow_turn'), () => respond(key, { permissions: params.permissions || {}, scope: 'turn' }, 'accept'), 'primary')));
+    } else { container.append(element('p', t('panel_request_unsupported'))); }
     const question = method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion';
-    if (!question && !params.truncated && panelSupport?.fullAccess && actions.querySelectorAll('button').length) actions.append(allow(button('Allow all in this conversation', () => setAccess(true))));
+    if (!question && !params.truncated && panelSupport?.fullAccess && actions.querySelectorAll('button').length) actions.append(allow(button(t('panel_allow_all'), () => setAccess(true))));
     container.append(actions, status); return { container, status, bound, revision: request.requestRevision, generation: request.generation };
   }
   function renderRequests() {
@@ -780,11 +869,11 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     for (const [key, view] of requestNodes) if (!timeline.requests.has(key) || timeline.requests.get(key).requestRevision !== view.revision) { view.container.remove(); requestNodes.delete(key); }
     for (const [key, request] of timeline.requests) {
       if (!requestNodes.has(key)) { const view = requestView(key, request); requestNodes.set(key, view); nodes.requests.append(view.container); }
-      const view = requestNodes.get(key); view.status.textContent = request.sent ? 'Choice sent; waiting for the agent to continue.' : request.unconfirmed ? 'Response unconfirmed. Waiting for the current agent state.' : '';
+      const view = requestNodes.get(key); view.status.textContent = request.sent ? t('panel_request_sent') : request.unconfirmed ? t('panel_request_unconfirmed') : '';
       if (request.sent || request.unconfirmed) for (const node of view.container.querySelectorAll('button')) node.disabled = true;
       else if (conversation?.control === 'stopRequested') {
         for (const node of view.container.querySelectorAll('button')) if (node.dataset.decision === 'allow') node.disabled = true;
-        view.status.textContent = 'Stop requested; allowing is disabled. You can still decline.';
+        view.status.textContent = t('panel_request_stop_requested');
       }
     }
   }
@@ -795,30 +884,30 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     for (const message of messages) {
       if (queuedNodes.has(message.id)) continue;
       const container = element('details', undefined, 'queued-message');
-      container.append(element('summary', `${message.direct ? 'Send after stop' : 'Queued'}: ${message.text.split('\n')[0].slice(0, 100)}`));
+      container.append(element('summary', t(message.direct ? 'panel_queued_direct' : 'panel_queued', message.text.split('\n')[0].slice(0, 100))));
       let expectedText = message.truncated ? null : message.text;
-      const input = element('textarea'); input.readOnly = message.truncated === true; input.value = message.text; input.maxLength = 32768; input.setAttribute('aria-label', 'Edit queued message');
+      const input = element('textarea'); input.readOnly = message.truncated === true; input.value = message.text; input.maxLength = 32768; input.setAttribute('aria-label', t('panel_queued_edit_label'));
       const actions = element('div', undefined, 'actions'); const status = element('p', '', 'hint');
       const id = selected, epoch = selectionEpoch;
       const mutate = async (operation, extra = {}) => {
         if (selected !== id || selectionEpoch !== epoch) return;
-        if (expectedText === null) throw new Error('Load the full queued message before changing it.');
+        if (expectedText === null) throw new Error(t('panel_queued_load_first'));
         for (const node of actions.querySelectorAll('button')) node.disabled = true;
         try {
           await api(operation, { conversationId: id, messageId: message.id, expectedText, ...extra });
-          if (selected === id && selectionEpoch === epoch) { status.textContent = 'Change saved; reading the queue.'; await poll(); }
-        } catch (failure) { if (selected === id && selectionEpoch === epoch) status.textContent = 'Change unconfirmed. Refresh the queue before editing again.'; throw failure; }
+          if (selected === id && selectionEpoch === epoch) { status.textContent = t('panel_queued_saved'); await poll(); }
+        } catch (failure) { if (selected === id && selectionEpoch === epoch) status.textContent = t('panel_queued_unconfirmed'); throw failure; }
       };
-      if (message.truncated) actions.append(button('Load full text', async () => {
+      if (message.truncated) actions.append(button(t('panel_queued_load_full'), async () => {
         const result = await api('conversationQueueMessageRead', { conversationId: id, messageId: message.id });
         if (selected !== id || selectionEpoch !== epoch) return;
-        expectedText = result.queuedMessage.text; input.value = expectedText; input.readOnly = false; status.textContent = 'Full queued message loaded.';
+        expectedText = result.queuedMessage.text; input.value = expectedText; input.readOnly = false; status.textContent = t('panel_queued_loaded');
       }));
-      actions.append(button('Save edit', async () => {
-        if (!input.value.trim()) throw new Error('Enter a message, or remove it from the queue.');
+      actions.append(button(t('panel_queued_save'), async () => {
+        if (!input.value.trim()) throw new Error(t('panel_queued_empty'));
         if (input.value === expectedText) return;
         await mutate('conversationQueueEdit', { replacementId: crypto.randomUUID(), text: input.value });
-      }), button('Remove', () => mutate('conversationQueueRemove')));
+      }), button(t('panel_queued_remove'), () => mutate('conversationQueueRemove')));
       container.append(input, actions, status); queuedNodes.set(message.id, { container }); nodes.queuedMessages.append(container);
     }
     for (const [index, message] of messages.entries()) {
@@ -862,7 +951,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   async function recoverPending(retry) {
     const id = selected, pending = pendingMessages.get(id);
     if (!pending?.unconfirmed || sending) return;
-    if (retry && typeof pending.text !== 'string') throw new Error('The original text is unavailable; clear the warning or inspect the conversation history.');
+    if (retry && typeof pending.text !== 'string') throw new Error(t('panel_pending_text_missing'));
     sending = true; controls();
     try {
       if (retry) {
@@ -877,9 +966,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   nodes.retryPending.addEventListener('click', () => void recoverPending(true).catch(error));
   nodes.clearPending.addEventListener('click', () => void recoverPending(false).catch(error));
   async function send(direct = false) {
-    if (panelSupport?.mode !== 'full') throw new Error('Local agent conversations require a supported current CLI.');
+    if (panelSupport?.mode !== 'full') throw new Error(t('panel_error_cli_required'));
     if (!connected || sending || convertingImages || pendingMessages.has(selected) || conversation?.phase === 'recoveryRequired' || !nodes.message.value.trim()) return;
-    if (direct && conversation?.directMessageId) throw new Error('A direct message is already waiting for stop confirmation.');
+    // A built-in command, looked up before skills.
+    const command = parseResumeCommand(nodes.message.value);
+    if (command) { await openResume(command.query); return; }
+    if (direct && conversation?.directMessageId) throw new Error(t('panel_error_direct_waiting'));
     const text = nodes.message.value, chosen = chosenSkill(text);
     const images = [...(imageDrafts.get(selected) || [])];
     sending = true; clearError(); controls();
@@ -891,7 +983,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
         if (panelSupport?.conversationOptions) options.options = readTurnOptions();
         if (nodes.executable.value.trim()) options.executable = nodes.executable.value.trim();
         if (panelSupport?.fullAccess) options.fullAccess = newFullAccess;
-        const result = await api('conversationCreate', options); rememberAgent(options.agentId); conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        const project = panelSupport?.projectDirectory ? projectChoice.value() : '';
+        if (project) options.project = project;
+        const result = await api('conversationCreate', options); rememberAgent(options.agentId);
+        conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        // After selecting it: selecting another conversation hides the question.
+        if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); }
       }
       const id = selected, pending = { id: crypto.randomUUID(), text, direct };
       imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();
@@ -937,14 +1034,16 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   function renderPage() {
     nodes.pageChip.hidden = !page || pageDetached || !panelSupport?.pageContext || panelSupport?.mode !== 'full';
     nodes.pageTitle.textContent = page?.title || '';
-    nodes.pageChip.title = page ? `Sent with your message: ${page.url}` : '';
+    nodes.pageChip.title = page ? t('panel_page_chip_title', page.url) : '';
   }
   async function refreshPage() {
     if (!tabs?.query) return;
     const [tab] = await tabs.query({ active: true, currentWindow: true });
     const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
     if (next?.tabId !== page?.tabId) pageDetached = false;
+    const moved = next?.url !== page?.url;
     page = next; renderPage(); renderConversationMenu();
+    if (moved) refreshProjects();
   }
   // New conversations use the remembered choice; an existing one switches in
   // place, and the service answers requests that are already waiting.
@@ -966,10 +1065,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       if (selected === id) { drafts.delete(''); select(''); nodes.message.value = ''; }
       conversationChoices();
       const problems = [];
-      if (deleted.cliHistory.failed.length) problems.push(`Could not remove: ${deleted.cliHistory.failed.join(', ')}`);
-      if (deleted.cliHistory.error) problems.push(`Agent session files were not removed: ${deleted.cliHistory.error}`);
-      if (!deleted.browserSession.closed) problems.push('chrome-use could not confirm that all of its browser tabs closed; a leftover tab may remain in the AI window.');
-      if (problems.length) error(`Conversation deleted. ${problems.join(' ')}`);
+      if (deleted.cliHistory.failed.length) problems.push(t('panel_delete_not_removed', deleted.cliHistory.failed.join(', ')));
+      if (deleted.cliHistory.error) problems.push(t('panel_delete_session_files', deleted.cliHistory.error));
+      if (!deleted.browserSession.closed) problems.push(t('panel_delete_tabs_unconfirmed'));
+      if (problems.length) error(t('panel_delete_done_with_problems', problems.join(' ')));
       await list();
     } finally { nodes.deleteConfirm.hidden = true; controls(); }
   }
@@ -996,26 +1095,29 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     return modelCache.get(key);
   }
   function modelOptions(models = []) {
-    const keep = nodes.model.value; const first = element('option', 'Default model'); first.value = '';
+    const keep = nodes.model.value; const first = element('option', t('panel_default_model')); first.value = '';
     nodes.model.replaceChildren(first);
     for (const model of models) { const option = element('option', model.label || model.id); option.value = model.id; nodes.model.append(option); }
     nodes.model.value = models.some(model => model.id === keep) ? keep : '';
   }
-  function clearModels() { modelEpoch++; modelOptions(); nodes.modelStatus.textContent = 'CLI model access has not been checked.'; nodes.inspectAgent.disabled = !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection; }
+  function clearModels() { modelEpoch++; modelOptions(); nodes.modelStatus.textContent = t('panel_model_not_checked'); nodes.inspectAgent.disabled = !connected || panelSupport?.mode !== 'full' || !panelSupport?.modelInspection; }
   function showInspection(inspection) {
     modelOptions(inspection.models);
-    const account = { reportedSignedIn: 'CLI reports signed in', reportedSignedOut: 'CLI reports signed out', reportedMetadata: 'CLI reports account metadata', unverified: 'Account state unverified' }[inspection.account.status];
-    nodes.modelStatus.textContent = `${inspection.versionReported ? `CLI ${inspection.versionReported}. ` : 'CLI version unverified. '}${inspection.models.length} models${inspection.complete ? '' : ' (partial catalog)'}. ${account}. Model execution access is unverified.`;
+    const account = { reportedSignedIn: t('panel_cli_signed_in'), reportedSignedOut: t('panel_cli_signed_out'), reportedMetadata: t('panel_cli_account_metadata'), unverified: t('panel_cli_account_unverified') }[inspection.account.status];
+    const count = inspection.models.length, version = inspection.versionReported;
+    nodes.modelStatus.textContent = version
+      ? (inspection.complete ? t('panel_model_status_version', version, count, account) : t('panel_model_status_version_partial', version, count, account))
+      : (inspection.complete ? t('panel_model_status', count, account) : t('panel_model_status_partial', count, account));
   }
   async function inspectModels(force = true) {
-    if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) throw new Error('CLI model inspection is unavailable for this host.');
+    if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) throw new Error(t('panel_model_inspection_unavailable'));
     const epoch = ++modelEpoch, agentId = nodes.agent.value, executable = nodes.executable.value.trim();
-    nodes.inspectAgent.disabled = true; nodes.modelStatus.textContent = 'Reading CLI model metadata…';
+    nodes.inspectAgent.disabled = true; nodes.modelStatus.textContent = t('panel_model_reading');
     try {
       const inspection = await readInspection(agentId, executable, force);
       if (closed || epoch !== modelEpoch || agentId !== nodes.agent.value || executable !== nodes.executable.value.trim() || inspection.agentId !== agentId) return;
       showInspection(inspection);
-    } catch (failure) { if (epoch === modelEpoch) nodes.modelStatus.textContent = `Model metadata unavailable: ${failure?.message || 'the CLI did not answer'}. No fallback list was substituted; you can still enter a custom model ID.`; throw failure; }
+    } catch (failure) { if (epoch === modelEpoch) nodes.modelStatus.textContent = t('panel_model_metadata_failed', failure?.message || t('panel_cli_no_answer')); throw failure; }
     finally { if (epoch === modelEpoch) nodes.inspectAgent.disabled = false; }
   }
   // Read the menu automatically for a new conversation; failures stay in the
@@ -1034,27 +1136,27 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     list.append(...values.map(value => { const option = element('option'); option.value = value; return option; }));
     input.setAttribute('list', id); return list;
   }
-  const accountLabels = { reportedSignedIn: 'Signed in', reportedSignedOut: 'Signed out', reportedMetadata: 'Account reported', unverified: 'Login unknown' };
+  const accountLabels = messageMap({ reportedSignedIn: 'panel_account_signed_in', reportedSignedOut: 'panel_account_signed_out', reportedMetadata: 'panel_account_reported', unverified: 'panel_account_login_unknown' });
   // One line per agent that answers "can I use this?" from the CLI's own report.
   // The report is not proof of model access; that is settled by the first turn.
   async function agentStatus(agent, line, epoch, row) {
     const mark = state => { if (row) row.className = `agent-row ${state}${configuration?.agentId === agent.id && !nodes.configuration.hidden ? ' selected' : ''}`; };
-    if (!agent.executable) { mark('missing'); line.textContent = agent.configFiles?.length ? 'Configuration found; program not installed' : 'Not installed'; return; }
+    if (!agent.executable) { mark('missing'); line.textContent = agent.configFiles?.length ? t('panel_agent_config_only') : t('panel_agent_not_installed'); return; }
     mark('installed');
-    if (!(panelSupport?.chatAgents || ['codex', 'claude']).includes(agent.id)) { line.textContent = 'Installed · chat not supported in the panel yet'; return; }
-    if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) { line.textContent = 'Installed'; return; }
-    line.textContent = 'Installed · checking…';
+    if (!(panelSupport?.chatAgents || ['codex', 'claude']).includes(agent.id)) { line.textContent = t('panel_agent_chat_unsupported'); return; }
+    if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) { line.textContent = t('panel_agent_installed'); return; }
+    line.textContent = t('panel_agent_checking');
     try {
       const inspection = await readInspection(agent.id);
       if (epoch !== discoverEpoch) return;
       const account = inspection.account || {};
-      const parts = [inspection.versionReported ? `v${String(inspection.versionReported).replace(/^v/, '')}` : 'Installed', `${accountLabels[account.status] || 'Login unknown'}${account.status === 'reportedSignedIn' && typeof account.kind === 'string' ? ` (${account.kind})` : ''}`];
-      if (inspection.models?.length) parts.push(`${inspection.models.length} models`);
+      const parts = [inspection.versionReported ? `v${String(inspection.versionReported).replace(/^v/, '')}` : t('panel_agent_installed'), `${accountLabels[account.status] || t('panel_account_login_unknown')}${account.status === 'reportedSignedIn' && typeof account.kind === 'string' ? ` (${account.kind})` : ''}`];
+      if (inspection.models?.length) parts.push(t('panel_models_count', inspection.models.length));
       line.textContent = parts.join(' · ');
       line.classList.toggle('signed-out', account.status === 'reportedSignedOut');
       mark(account.status === 'reportedSignedOut' ? 'signed-out' : account.status === 'reportedSignedIn' ? 'ready' : 'installed');
-      line.title = 'Reported by the CLI. Model access is confirmed when a conversation runs.';
-    } catch (failure) { if (epoch === discoverEpoch) { line.textContent = `Installed · status unavailable${failure?.message ? `: ${failure.message}` : ''}`; } }
+      line.title = t('panel_agent_status_title');
+    } catch (failure) { if (epoch === discoverEpoch) { line.textContent = failure?.message ? t('panel_agent_status_failed_reason', failure.message) : t('panel_agent_status_failed'); } }
   }
   async function discover() {
     const epoch = ++discoverEpoch;
@@ -1062,24 +1164,24 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     for (const agent of result.agents) {
       const row = element('div', undefined, 'agent-row'), info = element('div', undefined, 'agent-info'), line = element('div', undefined, 'agent-evidence');
       info.append(element('div', agent.name, 'agent-name'), line);
-      row.append(info, button('Configure', () => loadConfig(agent.id, agent.name))); nodes.agentList.append(row); agentRows.set(agent.id, row);
-      if (nodes.agentsView.hidden) line.textContent = agent.executable ? 'Installed' : 'Not installed'; else void agentStatus(agent, line, epoch, row);
+      row.append(info, button(t('panel_agent_configure'), () => loadConfig(agent.id, agent.name))); nodes.agentList.append(row); agentRows.set(agent.id, row);
+      if (nodes.agentsView.hidden) line.textContent = agent.executable ? t('panel_agent_installed') : t('panel_agent_not_installed'); else void agentStatus(agent, line, epoch, row);
     }
   }
   async function loadConfig(agentId, name) {
     const epoch = ++configEpoch; const result = await api('configRead', { agentId }); if (epoch !== configEpoch) return;
     configuration = result.configuration; configuration.name = name; preview = null; applied = null;
-    nodes.configuration.hidden = false; nodes.configTitle.textContent = `${name} configuration`; nodes.configPath.textContent = configuration.path;
+    nodes.configuration.hidden = false; nodes.configTitle.textContent = t('panel_config_title', name); nodes.configPath.textContent = configuration.path;
     nodes.configWarnings.textContent = (configuration.warnings || []).join('\n'); nodes.configFields.replaceChildren(); nodes.configPreview.hidden = true; nodes.restoreConfig.hidden = true; nodes.configResult.textContent = '';
     for (const button of nodes.configForm.querySelectorAll('button')) button.disabled = panelSupport?.mode !== 'full';
     for (const [id, row] of agentRows) row.classList.toggle('selected', id === agentId);
     const modelInputs = [];
     for (const field of configuration.fields) {
-      const label = element('label', fieldLabels[field.id] || field.id); const input = element('input'); input.disabled = panelSupport?.mode !== 'full'; input.value = field.value || ''; input.placeholder = 'CLI default'; input.dataset.field = field.id;
+      const label = element('label', fieldLabels[field.id] || field.id); const input = element('input'); input.disabled = panelSupport?.mode !== 'full'; input.value = field.value || ''; input.placeholder = t('panel_cli_default'); input.dataset.field = field.id;
       input.addEventListener('input', () => { input.dataset.changed = 'true'; preview = null; nodes.configPreview.hidden = true; });
       const choices = field.id === 'effort' ? choiceList(input, `config-${field.id}-choices`, effortChoices[agentId]) : null;
       if (modelFields.has(field.id)) modelInputs.push(input);
-      label.append(input); if (choices) label.append(choices); if (field.validType === false) label.append(element('span', 'Stored value has an unsupported type; enter a replacement to repair it.', 'hint')); nodes.configFields.append(label);
+      label.append(input); if (choices) label.append(choices); if (field.validType === false) label.append(element('span', t('panel_config_invalid_type'), 'hint')); nodes.configFields.append(label);
     }
     nodes.configuration.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
     // Model names come from the probe the agent list already started; the
@@ -1090,12 +1192,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       for (const input of modelInputs) { const list = choiceList(input, `config-${input.dataset.field}-choices`, (inspection.models || []).map(m => m.id)); if (list) input.after?.(list); }
     }, () => {});
   }
-  function diffValue(value) { return value?.redacted ? 'Hidden structured or sensitive value' : value?.state === 'absent' ? 'CLI default' : typeof value?.value === 'string' ? value.value : JSON.stringify(value?.value); }
+  function diffValue(value) { return value?.redacted ? t('panel_config_hidden_value') : value?.state === 'absent' ? t('panel_cli_default') : typeof value?.value === 'string' ? value.value : JSON.stringify(value?.value); }
   async function previewConfig() {
-    if (panelSupport?.mode !== 'full') throw new Error('Configuration changes are unavailable for this host.');
+    if (panelSupport?.mode !== 'full') throw new Error(t('panel_config_unavailable'));
     if (!configuration) return; const agentId = configuration.agentId, epoch = configEpoch; const changes = {};
     for (const input of nodes.configFields.querySelectorAll('input')) if (input.dataset.changed) changes[input.dataset.field] = input.value.trim() || null;
-    if (!Object.keys(changes).length) throw new Error('Change a field before previewing.');
+    if (!Object.keys(changes).length) throw new Error(t('panel_config_no_changes'));
     const result = await api('configPlan', { agentId, changes }); if (epoch !== configEpoch) return; preview = result.configuration; nodes.configDiff.replaceChildren();
     for (const file of preview.files) for (const change of file.changes) {
       const row = element('div', undefined, 'config-change'), values = element('div', undefined, 'values');
@@ -1107,12 +1209,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   async function applyConfig() {
     if (!preview) return; const plan = preview, epoch = configEpoch; nodes.applyConfig.disabled = true;
     const result = await api('configApply', { agentId: plan.agentId, planId: plan.planId }); if (epoch !== configEpoch) return;
-    applied = result.configuration; preview = null; nodes.configPreview.hidden = true; nodes.restoreConfig.hidden = false; nodes.configResult.textContent = 'Configuration saved and read back. Existing conversations keep their current settings.';
+    applied = result.configuration; preview = null; nodes.configPreview.hidden = true; nodes.restoreConfig.hidden = false; nodes.configResult.textContent = t('panel_config_saved');
   }
   async function restoreConfig() {
     if (!applied) return; const plan = applied, epoch = configEpoch; nodes.restoreConfig.disabled = true;
     try { const result = await api('configRestore', { agentId: plan.agentId, planId: plan.planId }); if (epoch !== configEpoch) return;
-      nodes.configResult.textContent = result.configuration.phase === 'restoreConflicts' ? `Restored unchanged fields. Preserved later edits to: ${result.configuration.conflicts.map(p => p.join('.')).join(', ')}` : 'The original configuration was restored and read back.';
+      nodes.configResult.textContent = result.configuration.phase === 'restoreConflicts' ? t('panel_config_restore_conflicts', result.configuration.conflicts.map(p => p.join('.')).join(', ')) : t('panel_config_restored');
       nodes.restoreConfig.hidden = result.configuration.phase === 'restored';
     } finally { nodes.restoreConfig.disabled = false; }
   }
@@ -1127,6 +1229,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       else if (!conversation || conversation.id !== selected) select(selected);
     }
     await poll(); loop(); loadModels(); void loadSkills().catch(error); void loadSchedules().catch(error); void refreshPage().catch(() => {});
+    void loadReplies().catch(() => {}); replyLoop();
   }
   nodes.composer.addEventListener('submit', event => { event.preventDefault(); void send().catch(error); });
   nodes.message.addEventListener('keydown', event => { if (skillPickerKey(event)) return; if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void send(event.ctrlKey || event.metaKey).catch(error); } });
@@ -1148,11 +1251,11 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     schedules=result.schedules;
     nodes.scheduleEntries.replaceChildren(...schedules.map(task => {
       const row=element('div',undefined,'skill-entry');
-      row.append(element('strong',task.name),element('small',`${task.enabled?'Enabled':'Disabled'} · ${agentNames[task.agentId]} · ${task.lastResult || 'Not run yet'} · Next: ${new Date(task.nextRun).toLocaleString()}`));
-      row.append(button('Edit',async()=>editSchedule(task)),button('Run now',async()=>{await api('scheduleRun',{id:task.id});await loadSchedules();await list();}),button(task.enabled?'Disable':'Enable',async()=>{await api('scheduleSave',{id:task.id,enabled:!task.enabled});await loadSchedules();}));
-      if(task.lastChat) row.append(button('Open run',async()=>{await list();select(task.lastChat);view(false);}));
-      if(task.lastResult==='unconfirmed') row.append(button('Acknowledge unknown outcome',async()=>{await api('scheduleSave',{id:task.id,acknowledgeUnconfirmed:true});await loadSchedules();}));
-      row.append(button('Delete schedule',async()=>{await api('scheduleDelete',{id:task.id});await loadSchedules();}));
+      row.append(element('strong',task.name),element('small',[task.enabled?t('panel_schedule_enabled'):t('panel_schedule_disabled'),agentNames[task.agentId],task.lastResult || t('panel_schedule_not_run'),t('panel_schedule_next',new Date(task.nextRun).toLocaleString())].join(' · ')));
+      row.append(button(t('panel_edit'),async()=>editSchedule(task)),button(t('panel_schedule_run_now'),async()=>{await api('scheduleRun',{id:task.id});await loadSchedules();await list();}),button(task.enabled?t('panel_disable'):t('panel_enable'),async()=>{await api('scheduleSave',{id:task.id,enabled:!task.enabled});await loadSchedules();}));
+      if(task.lastChat) row.append(button(t('panel_schedule_open_run'),async()=>{await list();select(task.lastChat);view(false);}));
+      if(task.lastResult==='unconfirmed') row.append(button(t('panel_schedule_acknowledge'),async()=>{await api('scheduleSave',{id:task.id,acknowledgeUnconfirmed:true});await loadSchedules();}));
+      row.append(button(t('panel_schedule_delete'),async()=>{await api('scheduleDelete',{id:task.id});await loadSchedules();}));
       return row;
     }));
   }
@@ -1183,18 +1286,18 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     if (epoch !== skillsEpoch || agentId !== skillAgent()) return;
     skillCatalog = result.skills;
     renderSkills(); renderSkillPicker();
-    const skill = nodes.scheduleSkill.value, none = element('option','No skill'); none.value='';
+    const skill = nodes.scheduleSkill.value, none = element('option',t('panel_skill_none')); none.value='';
     nodes.scheduleSkill.replaceChildren(none,...skillCatalog.filter(s=>s.enabled).map(s=>{const node=element('option',`${s.name} · ${s.source}`);node.value=s.id;return node;}));
     nodes.scheduleSkill.value=skillCatalog.some(s=>s.id===skill)?skill:'';
   }
   function renderSkills() {
     nodes.skillEntries.replaceChildren(...skillCatalog.map(skill => {
-      const row = element('div', undefined, 'skill-entry'); row.append(element('strong', skill.name), element('small', `${skill.source}${skill.enabled ? '' : ' · disabled'} · ${skill.description}`));
-      row.append(button('Use', async () => { skillChoice = skill; nodes.message.value = `/${skill.name} `; view(false); renderSkillPicker(); }));
-      if (skill.editable) row.append(button('Edit', async () => {
+      const row = element('div', undefined, 'skill-entry'); row.append(element('strong', skill.name), element('small', [skill.source, !skill.enabled && t('panel_skill_disabled'), skill.description].filter(part => part !== false).join(' · ')));
+      row.append(button(t('panel_skill_use'), async () => { skillChoice = skill; nodes.message.value = `/${skill.name} `; view(false); renderSkillPicker(); }));
+      if (skill.editable) row.append(button(t('panel_edit'), async () => {
         const result = await api('skillRead', { agentId: skillAgent(), id: skill.id });
         nodes.skillName.value = skill.name; nodes.skillContent.value = result.skill.instructions;
-      }), button(skill.enabled ? 'Disable' : 'Enable', async () => {
+      }), button(skill.enabled ? t('panel_disable') : t('panel_enable'), async () => {
         await api('skillSetEnabled', { agentId: skillAgent(), id: skill.id, enabled: !skill.enabled }); await loadSkills();
       }));
       return row;
@@ -1205,15 +1308,18 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     if (!match || !panelSupport?.skillLibrary) return null;
     if (skillChoice?.name === match[1] && skillChoice.enabled) return skillChoice;
     const matches = skillCatalog.filter(skill => skill.enabled && skill.name === match[1]);
-    if (matches.length !== 1) throw new Error(matches.length ? 'Choose which skill source to use from the picker.' : 'Unknown or disabled skill. Refresh skills or choose an entry from the picker.');
+    if (matches.length !== 1) throw new Error(matches.length ? t('panel_skill_ambiguous') : t('panel_skill_unknown'));
     return matches[0];
   }
   function renderSkillPicker() {
     const match = /^\/([^\s]*)$/.exec(nodes.message.value);
-    const skills = match ? skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match[1].toLowerCase())).slice(0, 12) : [];
+    // Built-in commands come first and open their own view when chosen.
+    const builtins = match && panelSupport?.sessionResume && RESUME_TEXT.command.startsWith(match[1].toLowerCase()) ? [{ name: RESUME_TEXT.command, source: 'chrome-use', description: RESUME_TEXT.commandHint, builtin: true }] : [];
+    const skills = match ? [...builtins, ...skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match[1].toLowerCase()))].slice(0, 12) : [];
     visibleSkills = skills; skillPickerIndex = Math.min(skillPickerIndex,Math.max(0,skills.length-1));
     nodes.skillPicker.hidden = !skills.length;
     nodes.skillPicker.replaceChildren(...skills.map(skill => button(`${skill.name} · ${skill.source} · ${skill.description}`, async () => {
+      if (skill.builtin) { await openResume(); return; }
       skillChoice = skill; nodes.message.value = `/${skill.name} `; nodes.skillPicker.hidden = true; nodes.message.focus?.();
     })));
   }
@@ -1227,7 +1333,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     }
     if (['Tab','Enter'].includes(event.key) && !event.ctrlKey && !event.metaKey) {
       const skill = visibleSkills[skillPickerIndex]; if(!skill)return false;
-      event.preventDefault(); skillChoice=skill; nodes.message.value=`/${skill.name} `;nodes.skillPicker.hidden=true;return true;
+      event.preventDefault();
+      if (skill.builtin) { void openResume().catch(error); return true; }
+      skillChoice=skill; nodes.message.value=`/${skill.name} `;nodes.skillPicker.hidden=true;return true;
     }
     return false;
   }
@@ -1246,13 +1354,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     nodes.attachmentDrafts.hidden = !images.length;
     nodes.attachmentDrafts.replaceChildren(...images.map((image, index) => {
       const item = element('div'); const preview = element('img'); preview.alt = image.name; preview.src = `data:${image.mediaType};base64,${image.data}`;
-      item.append(preview, button('Remove image', async () => { images.splice(index, 1); renderImageDrafts(); })); return item;
+      item.append(preview, button(t('panel_image_remove'), async () => { images.splice(index, 1); renderImageDrafts(); })); return item;
     }));
   }
   async function addImages(files) {
     if (!panelSupport?.imageAttachments || sending || convertingImages) return;
     const id = selected, list = imageDrafts.get(id) || [];
-    if (list.length + files.length > 5) throw new Error('Attach up to five images per message.');
+    if (list.length + files.length > 5) throw new Error(t('panel_image_limit'));
     convertingImages = true; controls();
     try {
       const added = []; for (const file of files) added.push(await encodeImage(file, { convertHeif: panelSupport?.heicConvert ? convertHeif : null }));
@@ -1304,11 +1412,16 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     } finally { controls(); }
   })().catch(error));
   nodes.access.addEventListener('click' , () => void setAccess(!(selected ? conversation?.fullAccess === true : newFullAccess)).catch(error));
-  nodes.deleteChat.addEventListener('click', () => { nodes.deleteConfirm.hidden = false; });
+  const deleteHint = nodes.deleteConfirm.querySelector?.('.hint');
+  nodes.deleteChat.addEventListener('click', () => {
+    // A continued CLI session is never deleted with the conversation.
+    if (deleteHint) deleteHint.textContent = conversation?.resumed ? RESUME_TEXT.deleteKeeps : t('sidepanel_delete_confirm_detail');
+    nodes.deleteConfirm.hidden = false;
+  });
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });
   nodes.confirmDelete.addEventListener('click', () => void deleteConversation().catch(error));
   nodes.inspectAgent.addEventListener('click', () => void inspectModels(true).catch(error));
-  nodes.agent.addEventListener('change', () => { rememberAgent(nodes.agent.value); clearModels(); loadModels(); skillChoice = null; void loadSkills().catch(error); controls(); });
+  nodes.agent.addEventListener('change', () => { rememberAgent(nodes.agent.value); projectChoice.setAgent(nodes.agent.value); clearModels(); loadModels(); skillChoice = null; void loadSkills().catch(error); controls(); });
   nodes.executable.addEventListener('change', () => { clearModels(); loadModels(); });
   nodes.discover.addEventListener('click', () => void discover().catch(error));
   nodes.settings.addEventListener('click', () => runtime?.openOptionsPage?.());
@@ -1335,7 +1448,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   controls(); closeConversationMenu();
   return { async start() {
     try {
-      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access', 'ab_panel_conversation_scope', 'ab_panel_agent']);
+      const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access', 'ab_panel_conversation_scope', 'ab_panel_agent', 'ab_panel_show_replies']);
+      // Opened from a reply notification.
+      if (Date.now() - Number(saved?.ab_panel_show_replies || 0) < 30000) replyBox.open = true;
       if (chatAgents.has(saved?.ab_panel_agent)) preferredAgent = saved.ab_panel_agent;
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
       selected = saved?.ab_panel_conversation || '';
@@ -1346,11 +1461,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
       document.addEventListener?.('visibilitychange', reportPresence);
       void Promise.resolve(windows?.getCurrent?.()).then(current => { if (Number.isInteger(current?.id)) { windowId = current.id; connectPresence(); } }).catch(() => {});
       await refresh();
+      projectChoice.setAgent(nodes.agent.value); refreshProjects();
     } catch (failure) { error(failure); }
-  }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
+  }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
 if (typeof document !== 'undefined') {
+  applyI18n(document);
   const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows });
   void panel.start();
   globalThis.addEventListener('pagehide', () => panel.close());

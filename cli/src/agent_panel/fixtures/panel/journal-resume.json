@@ -1,0 +1,135 @@
+{
+ "source": "Hand-built from the importedHistory events conversationResume journals (service.rs import_history): one per imported message, then a closing event. The last event is an unknown kind.",
+ "capabilities": {
+  "schemaVersion": 1,
+  "mode": "full",
+  "modelInspection": true,
+  "conversationDelete": true,
+  "fullAccess": true,
+  "pageContext": true,
+  "conversationOptions": true,
+  "imageAttachments": true,
+  "skillLibrary": true,
+  "schedules": true,
+  "inspect": true,
+  "inspectResolve": true,
+  "chatAgents": [
+   "codex",
+   "claude",
+   "opencode",
+   "pi"
+  ],
+  "turnEvidence": 1,
+  "artifacts": 1,
+  "recovery": 1,
+  "recording": 1,
+  "requestRevision": 1,
+  "sessionResume": 1
+ },
+ "conversation": {
+  "id": "7d0c3f8e-1c55-4a8e-9a43-2f1f6c0b5e21",
+  "agentId": "claude",
+  "title": "Fix the login bug",
+  "phase": "idle",
+  "control": "stopped",
+  "generation": 3,
+  "model": "gpt-6.1-sol",
+  "requestedModel": null,
+  "options": {},
+  "queued": 0,
+  "queuePaused": false,
+  "directMessageId": null,
+  "activeMessageId": null,
+  "lastError": "Backend did not confirm exit",
+  "lastSequence": 6,
+  "fullAccess": false,
+  "site": "shop.example",
+  "scheduleId": null,
+  "resumed": {
+   "sessionId": "49aa0704-6349-4d60-80f9-9d691cbe67fc",
+   "cwd": "/WORK/project"
+  }
+ },
+ "events": [
+  {
+   "sequence": 1,
+   "at": 1792076300000,
+   "kind": "importedHistory",
+   "data": {
+    "importId": "0b9c7a4e-5d2f-4c3b-9a1e-8f7d6c5b4a39",
+    "index": 0,
+    "role": "user",
+    "text": "Fix the login bug",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 2,
+   "at": 1792076300001,
+   "kind": "importedHistory",
+   "data": {
+    "importId": "0b9c7a4e-5d2f-4c3b-9a1e-8f7d6c5b4a39",
+    "index": 1,
+    "role": "tool",
+    "text": "Read, Bash",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 3,
+   "at": 1792076300002,
+   "kind": "importedHistory",
+   "data": {
+    "importId": "0b9c7a4e-5d2f-4c3b-9a1e-8f7d6c5b4a39",
+    "index": 2,
+    "role": "assistant",
+    "text": "The token check used `<` instead of `<=`. **Fixed** in `auth.ts`.",
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 4,
+   "at": 1792076300003,
+   "kind": "importedHistory",
+   "data": {
+    "importId": "0b9c7a4e-5d2f-4c3b-9a1e-8f7d6c5b4a39",
+    "index": 3,
+    "role": "user",
+    "text": "Deploy with key [redacted secret, 40 chars] please",
+    "privacyClass": "masked",
+    "redactions": [
+     {
+      "path": "/text",
+      "kind": "secret",
+      "length": 40
+     }
+    ]
+   }
+  },
+  {
+   "sequence": 5,
+   "at": 1792076300010,
+   "kind": "importedHistory",
+   "data": {
+    "importId": "0b9c7a4e-5d2f-4c3b-9a1e-8f7d6c5b4a39",
+    "end": true,
+    "agentId": "claude",
+    "sessionId": "49aa0704-6349-4d60-80f9-9d691cbe67fc",
+    "cwd": "/WORK/project",
+    "imported": 4,
+    "omitted": 12,
+    "unparsed": 0,
+    "partial": true,
+    "privacyClass": "public"
+   }
+  },
+  {
+   "sequence": 6,
+   "at": 1792076300020,
+   "kind": "futureKind",
+   "data": {
+    "note": "kinds a panel does not know are ignored"
+   }
+  }
+ ]
+}

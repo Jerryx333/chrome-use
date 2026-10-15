@@ -4,6 +4,7 @@
 // talks to this module; the picker content script and the extension frame do,
 // and both are checked against the instance registry on every message.
 
+import { t } from './i18n.js';
 import { InspectRegistry, INSPECT_PORT_NAME, isLocalOrigin } from './inspect-registry.js';
 import { inspectProbe, validateProbeResult } from './inspect-probe.js';
 import { captureVerdict, cropScreenshots } from './inspect-capture.js';
@@ -98,13 +99,15 @@ export function deliveryLocked(state) {
 }
 
 export class InspectController {
-  constructor({ chrome, request, hostReady, resolveReady = () => false }) {
+  constructor({ chrome, request, hostReady, resolveReady = () => false, repliesReady = () => false }) {
     this.chrome = chrome;
     this.request = request;
     this.hostReady = hostReady;
     // Hosts from v1.5.214 resolve path-scoped bindings, claims and tab
     // targets; older hosts only know one binding per origin.
     this.resolveReady = resolveReady;
+    // Hosts that send as a reply-safe identity and keep agent replies.
+    this.repliesReady = repliesReady;
     this.registry = new InspectRegistry({ runtimeId: chrome.runtime.id });
   }
 
@@ -152,11 +155,11 @@ export class InspectController {
   async start(tab) {
     const c = this.chrome;
     if (!tab?.id) [tab] = await c.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !/^https?:/.test(tab.url || '')) throw new Error('Inspect & Ask works on http(s) pages only.');
+    if (!tab?.id || !/^https?:/.test(tab.url || '')) throw new Error(t('inspect_error_http_only'));
     const frame = await c.webNavigation.getFrame({ tabId: tab.id, frameId: 0 });
-    if (!frame?.documentId) throw new Error('Could not identify the page document.');
+    if (!frame?.documentId) throw new Error(t('inspect_error_no_document'));
     const instance = this.registry.create({ tabId: tab.id, windowId: tab.windowId, documentId: frame.documentId, url: tab.url });
-    if (!instance) throw new Error('This page cannot be inspected.');
+    if (!instance) throw new Error(t('inspect_error_cannot_inspect'));
     await c.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, files: ['inspect-extract.js', 'inspect-picker.js'] });
     return { started: true };
   }
@@ -256,7 +259,7 @@ export class InspectController {
   // Bounded: a frozen or hidden page must not stall the capture queue.
   async pickerCall(instance, message, timeoutMs = 3000) {
     let timer;
-    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The page did not answer.')), timeoutMs); });
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(t('inspect_capture_page_no_answer'))), timeoutMs); });
     try {
       return await Promise.race([this.chrome.tabs.sendMessage(instance.tabId, { ...message, instanceId: instance.id }, { frameId: 0, documentId: instance.topDocumentId }), timeout]);
     } finally {
@@ -274,9 +277,9 @@ export class InspectController {
       const before = await c.tabs.get(instance.tabId);
       // A background tab cannot be captured, and its page does not run
       // animation frames, so ask nothing of the picker in that case.
-      if (!before.active) return fail('Screenshots need the page to be the visible tab.');
+      if (!before.active) return fail(t('inspect_capture_needs_visible_tab'));
       const prepared = await this.pickerCall(instance, { type: 'inspect:prepareCapture' });
-      if (!prepared?.ok) return fail('The page could not prepare a screenshot.');
+      if (!prepared?.ok) return fail(t('inspect_capture_prepare_failed'));
       // The picker's selection may already be ahead of this revision.
       if (stale() || prepared.layout?.selectionSeq !== instance.pickerSeq || prepared.layout?.rects?.length !== instance.annotations.length) { await this.pickerCall(instance, { type: 'inspect:finishCapture' }).catch(() => null); return; }
       let dataUrl;
@@ -284,7 +287,7 @@ export class InspectController {
       let layoutAfter;
       let documentAfter;
       try {
-        if (!before.active) return fail('Screenshots need the page to be the visible tab.');
+        if (!before.active) return fail(t('inspect_capture_needs_visible_tab'));
         dataUrl = await c.tabs.captureVisibleTab(before.windowId, { format: 'png' });
         after = await c.tabs.get(instance.tabId);
         documentAfter = (await c.webNavigation.getFrame({ tabId: instance.tabId, frameId: 0 }))?.documentId;
@@ -303,9 +306,9 @@ export class InspectController {
       if (!cropped.ok) return fail(cropped.reason);
       instance.images = new Map();
       cropped.images.forEach((image, i) => { if (image) instance.images.set(i, image); });
-      instance.port?.postMessage({ type: 'images', revision: selection, images: cropped.images, reason: cropped.images.some(x => !x) ? 'Some elements were outside the visible area.' : null });
+      instance.port?.postMessage({ type: 'images', revision: selection, images: cropped.images, reason: cropped.images.some(x => !x) ? t('inspect_capture_outside_view') : null });
     } catch (error) {
-      fail(`Screenshot unavailable: ${String(error.message || error)}`);
+      fail(t('inspect_capture_unavailable', String(error.message || error)));
     }
   }
 
@@ -353,7 +356,7 @@ export class InspectController {
   }
 
   async host(operation, params) {
-    if (!this.hostReady()) throw new Error('The chrome-use native host is not connected. Run `chrome-use doctor` or reinstall chrome-use, then press the shortcut again.');
+    if (!this.hostReady()) throw new Error(t('inspect_error_host_offline'));
     return this.request(operation, params);
   }
 
@@ -373,7 +376,7 @@ export class InspectController {
     const answer = payload => this.reply(instance, requestId, payload);
     switch (type) {
       case 'enable': {
-        if (message.trusted !== true) throw new Error('Enabling needs a click in the panel.');
+        if (message.trusted !== true) throw new Error(t('inspect_error_enable_needs_click'));
         return answer({ settings: await this.saveSettings({ enabled: true }) });
       }
       case 'status': {
@@ -388,7 +391,7 @@ export class InspectController {
         return answer({ status: await this.host('inspectResolve', params), tabTarget: instance.tabTarget || null, pagePath: params.pagePath, pageUrl: (await this.pageNow(instance)).pageUrl });
       }
       case 'confirm': {
-        if (!this.resolveReady()) throw new Error('This chrome-use CLI is too old for this choice; upgrade it with `chrome-use upgrade`.');
+        if (!this.resolveReady()) throw new Error(t('inspect_error_cli_too_old'));
         const pair = validPair(message.pair);
         if (!pair) throw new Error('Unknown target');
         if (message.mode === 'tab') {
@@ -433,13 +436,20 @@ export class InspectController {
         return answer({ ok: true });
       }
       case 'recapture':
-        if (!instance.annotations.length) throw new Error('Nothing selected');
+        if (!instance.annotations.length) throw new Error(t('inspect_error_nothing_selected'));
         await this.queueCapture(instance);
         return answer({ ok: true });
       case 'copyText':
         return answer({ revision: instance.selectionRevision || 0, annotations: instance.annotations.map((a, i) => formatAnnotation(a, i + 1)) });
       case 'deliver':
         return answer({ result: await this.deliver(instance, message) });
+      case 'replies': {
+        // `replies: null` tells the frame this host keeps none.
+        if (!this.repliesReady()) return answer({ replies: null });
+        const deliveryId = String(message.deliveryId || '');
+        if (!/^[0-9a-f-]{36}$/.test(deliveryId)) throw new Error('Missing delivery id');
+        return answer({ replies: (await this.host('inspectReplies', { deliveryId })).replies });
+      }
       case 'deliveryStatus':
         return answer({ result: await this.host('inspectDeliveryStatus', { deliveryId: String(message.deliveryId || '') }) });
       case 'setup': {
@@ -459,7 +469,7 @@ export class InspectController {
     // The frame names the selection it reviewed; a change since then (an
     // element added or removed while the send was being verified) is refused
     // rather than mixed into this batch. The batch is frozen from here on.
-    if (kind === 'edit' && message.revision !== (instance.selectionRevision || 0)) throw new Error('The selection changed while sending. Review it and send again.');
+    if (kind === 'edit' && message.revision !== (instance.selectionRevision || 0)) throw new Error(t('inspect_error_selection_changed_sending'));
     // Deep copy before the first await: later note edits or selection
     // changes cannot alter what this batch sends. Notes come from the frame's
     // own snapshot, keyed by the annotation ids of the reviewed revision.
@@ -469,12 +479,12 @@ export class InspectController {
     }
     const pageRevision = instance.revision;
     const instruction = String(message.instruction || '').slice(0, INSTRUCTION_MAX);
-    if (kind === 'edit' && !annotations.length) throw new Error('Select at least one element first.');
-    if (kind === 'edit' && !instruction.trim() && !annotations.some(a => a.note)) throw new Error('Write what should change first.');
+    if (kind === 'edit' && !annotations.length) throw new Error(t('inspect_error_select_first'));
+    if (kind === 'edit' && !instruction.trim() && !annotations.some(a => a.note)) throw new Error(t('inspect_error_write_first'));
     const drafts = (await this.chrome.storage.local.get(DRAFTS_KEY))?.[DRAFTS_KEY] || {};
     const prior = drafts[instance.origin];
     if (prior?.deliveryId === deliveryId && deliveryLocked(prior.state)) {
-      throw new Error('This batch was already sent or its outcome is unconfirmed. Check its status or start a new batch.');
+      throw new Error(t('inspect_error_already_sent'));
     }
     const include = Array.isArray(message.images) ? message.images : [];
     const images = [];

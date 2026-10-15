@@ -236,6 +236,18 @@ pub(super) fn answer_preview(kind: &str, data: &Value) -> Option<String> {
     Some(line.chars().take(120).collect())
 }
 
+/// Where a continued CLI session lives. The service found both from the
+/// session itself, never from a client.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct External {
+    /// The session's working directory: Claude and Codex run there, and
+    /// OpenCode only restores a session for its own directory.
+    pub cwd: Option<PathBuf>,
+    /// Pi's session file, which Pi is pointed at directly.
+    pub session_file: Option<PathBuf>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Conversation {
@@ -274,6 +286,16 @@ pub(super) struct Conversation {
     pub site: Option<String>,
     #[serde(default)]
     pub schedule_id: Option<String>,
+    /// The CLI session this conversation continues when it was started
+    /// outside the panel (`/resume`). Left out of every other state, so
+    /// those stay readable by builds that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<External>,
+    /// The user's project directory the agent works in, chosen when the
+    /// conversation was created and never changed. None: the agent works
+    /// in the conversation's private folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<PathBuf>,
     /// Older builds refuse unknown state fields, so this lives in the journal.
     #[serde(skip)]
     pub last_turn: Option<LastTurn>,
@@ -324,6 +346,8 @@ impl Conversation {
             full_access: false,
             site: None,
             schedule_id: None,
+            external: None,
+            project: None,
             last_turn: None,
             waiting_request: None,
         })
@@ -347,7 +371,14 @@ impl Conversation {
         }
     }
     pub(super) fn summary(&self) -> Value {
-        json!({"control":self.control(),"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"lastTurn":self.last_turn,"waitingRequest":self.waiting_request,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
+        let mut summary = json!({"control":self.control(),"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"lastTurn":self.last_turn,"waitingRequest":self.waiting_request,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}});
+        if let Some(project) = &self.project {
+            summary["project"] = json!(project);
+        }
+        if let Some(external) = &self.external {
+            summary["resumed"] = json!({"sessionId":self.session_id,"cwd":external.cwd});
+        }
+        summary
     }
     pub(super) fn queue_snapshot(&self) -> Value {
         Value::Array(
@@ -384,7 +415,8 @@ impl Conversation {
         if self.queue.len() >= 64 || self.accepted.len() >= 50000 {
             return Err("Conversation queue or deduplication capacity reached".into());
         }
-        if self.accepted.is_empty() {
+        // A continued session keeps the title it came with.
+        if self.accepted.is_empty() && self.external.is_none() {
             self.title = message
                 .text
                 .lines()
