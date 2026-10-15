@@ -77,6 +77,7 @@ impl Secrets {
         if value.len() < MIN_SECRET
             || value.len() > MAX_SECRET
             || is_marker(value)
+            || PROTOCOL_VALUES.contains(&value)
             || self.known.iter().any(|k| k == value)
         {
             return;
@@ -104,6 +105,9 @@ impl Secrets {
             let (text, masks) = scrubber.flush(&known);
             for secret in masks.iter().filter_map(|m| m.secret.as_deref()) {
                 self.learn(secret);
+            }
+            for secret in std::mem::take(&mut scrubber.revealed) {
+                self.learn(&secret);
             }
             let finished = key.starts_with("f:");
             if text.is_empty() && !finished {
@@ -149,7 +153,11 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
     let mut found: Vec<String> = Vec::new();
     let mut blanket = false;
     for secret in &walker.learned {
-        if secret.len() < IN_EVENT_MIN || is_marker(secret) || !seen.insert(secret.as_str()) {
+        if secret.len() < IN_EVENT_MIN
+            || is_marker(secret)
+            || PROTOCOL_VALUES.contains(&secret.as_str())
+            || !seen.insert(secret.as_str())
+        {
             continue;
         }
         if found.len() == MAX_EVENT_SECRETS {
@@ -172,8 +180,8 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
         };
         if let Some(object) = data.as_object_mut() {
             for (key, value) in object.iter_mut() {
-                if !exempt.contains(&key.as_str()) && !kept_field(key) {
-                    echo.walk(value, format!("/{}", pointer(key)));
+                if !exempt.contains(&key.as_str()) && !kept_field(key, value, Place::ROOT) {
+                    echo.walk(value, format!("/{}", pointer(key)), Place::ROOT.child(key));
                 }
             }
         }
@@ -241,6 +249,26 @@ fn fit(kind: &str, data: &mut Value) {
     match kind {
         "tool" => data["item"] = stub(&data["item"]),
         "request" => data["params"] = stub(&data["params"]),
+        // The text fits by itself (checked at accept); masks can lengthen
+        // the page, so its title, then its URL, are cut, then it is dropped.
+        "user" if data["page"].is_object() => {
+            let cut = |text: &Value, cap: usize| match text.as_str() {
+                Some(t) if t.chars().count() > cap => {
+                    let mut short: String = t.chars().take(cap).collect();
+                    short.push_str("…[shortened]");
+                    Value::String(short)
+                }
+                _ => text.clone(),
+            };
+            data["page"]["title"] = cut(&data["page"]["title"], 200);
+            if size(data) > EVENT_BUDGET {
+                data["page"]["url"] = cut(&data["page"]["url"], 1000);
+            }
+            if size(data) > EVENT_BUDGET {
+                data["page"] = Value::Null;
+                data["pageOmitted"] = true.into();
+            }
+        }
         _ => {}
     }
 }
@@ -256,7 +284,7 @@ struct Echoes<'a> {
 }
 
 impl Echoes<'_> {
-    fn walk(&mut self, value: &mut Value, path: String) {
+    fn walk(&mut self, value: &mut Value, path: String, place: Place) {
         match value {
             Value::String(text) if !is_marker(text) && !text.is_empty() => {
                 if self.blanket {
@@ -295,13 +323,13 @@ impl Echoes<'_> {
             }
             Value::Array(items) => {
                 for (i, item) in items.iter_mut().enumerate() {
-                    self.walk(item, child_path(&path, &i.to_string()));
+                    self.walk(item, child_path(&path, &i.to_string()), place);
                 }
             }
             Value::Object(object) => {
                 for (key, child) in object.iter_mut() {
-                    if !kept_field(key) {
-                        self.walk(child, child_path(&path, key));
+                    if !kept_field(key, child, place) {
+                        self.walk(child, child_path(&path, key), place.child(key));
                     }
                 }
             }
@@ -317,8 +345,9 @@ impl Echoes<'_> {
     }
 }
 
-/// Fields the panel and the service dispatch on. The echo pass leaves them
-/// as they are, also when it withholds everything else.
+/// Fields the panel and the service dispatch on. Both passes leave them as
+/// they are, also when the echo pass withholds everything else, but only
+/// where the protocol puts them (see [`kept_field`]).
 const PROTOCOL_KEYS: &[&str] = &[
     "method",
     "type",
@@ -342,8 +371,115 @@ const PROTOCOL_KEYS: &[&str] = &[
     "completed",
 ];
 
-fn kept_field(key: &str) -> bool {
-    ID_KEYS.contains(&key) || PROTOCOL_KEYS.contains(&key)
+/// Where a field sits in an event: inside argument or result data, and how
+/// many objects below the event root.
+#[derive(Clone, Copy)]
+struct Place {
+    data: bool,
+    depth: usize,
+}
+
+impl Place {
+    const ROOT: Place = Place {
+        data: false,
+        depth: 0,
+    };
+    fn child(self, key: &str) -> Place {
+        Place {
+            data: self.data || DATA_KEYS.contains(&key),
+            depth: self.depth + 1,
+        }
+    }
+}
+
+/// Keys holding arguments, results and other business data. Below them a
+/// `name`, `status` or `id` is data like any other, never kept by name.
+const DATA_KEYS: &[&str] = &[
+    "input",
+    "arguments",
+    "rawInput",
+    "raw_input",
+    "args",
+    "tool_params",
+    "updatedInput",
+    "output",
+    "rawOutput",
+    "result",
+    "structuredContent",
+    "content",
+    "contents",
+    "answers",
+    "questions",
+    "page",
+    "text",
+    "aggregatedOutput",
+    "changes",
+    "error",
+];
+
+/// Content block types, kept also inside data so a block still renders.
+const BLOCK_TYPES: &[&str] = &[
+    "text",
+    "image",
+    "audio",
+    "resource",
+    "resource_link",
+    "content",
+    "diff",
+    "terminal",
+    "tool_use",
+    "tool_result",
+    "thinking",
+    "redacted_thinking",
+];
+
+/// Protocol identifiers (request methods) never learned as secrets, so a
+/// password that happens to read `can_use_tool` cannot mask a dispatch.
+const PROTOCOL_VALUES: &[&str] = &[
+    "can_use_tool",
+    "session/request_permission",
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request",
+];
+
+/// Whether both passes leave `key: value` as it is: an identity or dispatch
+/// field in the protocol envelope (the event root, the tool item or request
+/// params, one level inside those), never inside argument or result data,
+/// and only with the shape of an identifier. A whole object is never kept.
+fn kept_field(key: &str, value: &Value, place: Place) -> bool {
+    if place.data {
+        return key == "type" && value.as_str().is_some_and(|t| BLOCK_TYPES.contains(&t));
+    }
+    if place.depth > 2 {
+        return false;
+    }
+    if place.depth == 0 && matches!(key, "privacyClass" | "redactions" | "redactionsOmitted") {
+        return true;
+    }
+    let id = ID_KEYS.contains(&key);
+    if !id && !PROTOCOL_KEYS.contains(&key) {
+        return false;
+    }
+    match value {
+        Value::Bool(_) | Value::Null => true,
+        Value::Number(_) => id,
+        Value::String(text) => identifier(text),
+        Value::Array(items) => {
+            id && items.len() <= 256 && items.iter().all(|i| i.as_str().is_some_and(identifier))
+        }
+        Value::Object(_) => false,
+    }
+}
+
+/// A short token without spaces, quotes or control characters.
+fn identifier(text: &str) -> bool {
+    text.len() <= 256
+        && text
+            .chars()
+            .all(|c| c.is_ascii_graphic() && c != '"' && c != '\\')
 }
 
 /// One spelling per number, so 483927, 483927.0 and "483927" compare equal.
@@ -625,6 +761,7 @@ fn stream(kind: &str, mut data: Value, secrets: &mut Secrets) -> Option<Redacted
     if let Some(id) = data.get("messageId") {
         scrubber.message_id = id.clone();
     }
+    let mut revealed_on_close = Vec::new();
     let (mut text, mut masks) = scrubber.push(&chunk, &known);
     if finished {
         scrubber.next_part = data["part"].as_u64().unwrap_or(0) + 1;
@@ -637,11 +774,20 @@ fn stream(kind: &str, mut data: Value, secrets: &mut Secrets) -> Option<Redacted
                 m.end += offset;
                 m
             }));
-            secrets.streams.remove(&key);
+            if let Some(mut closed) = secrets.streams.remove(&key) {
+                revealed_on_close = std::mem::take(&mut closed.revealed);
+            }
         }
     }
+    let revealed = match secrets.streams.get_mut(&key) {
+        Some(scrubber) => std::mem::take(&mut scrubber.revealed),
+        None => std::mem::take(&mut revealed_on_close),
+    };
     for secret in masks.iter().filter_map(|m| m.secret.as_deref()) {
         secrets.learn(secret);
+    }
+    for secret in revealed {
+        secrets.learn(&secret);
     }
     if text.is_empty() && !finished {
         return None;
@@ -676,6 +822,11 @@ pub(super) struct TextScrubber {
     /// Values this item's own text revealed to a rule (`"password":"…"`),
     /// masked wherever the item repeats them, short ones included.
     local: Vec<String>,
+    /// The item revealed more secrets than are scanned for one by one: the
+    /// rest of its text is withheld, like an event's free text.
+    withheld: bool,
+    /// Rule-masked values of withheld text, still learned as secrets.
+    revealed: Vec<String>,
     message_id: Value,
     item_id: String,
     next_part: u64,
@@ -707,15 +858,47 @@ impl TextScrubber {
                 && !is_marker(secret)
                 && !merged.contains(secret)
                 && !new.contains(secret)
-                && self.local.len() < MAX_EVENT_SECRETS
             {
+                if self.local.len() >= MAX_EVENT_SECRETS {
+                    self.withheld = true;
+                    break;
+                }
                 new.push(secret.clone());
                 self.local.push(secret.clone());
             }
         }
         new
     }
+    /// Withhold `text` whole, still learning what the rules find in it.
+    fn withhold(&mut self, text: &str) -> (String, Vec<Mask>) {
+        self.pending.clear();
+        self.run = false;
+        self.revealed.extend(
+            find_masks(text, &[], false)
+                .into_iter()
+                .filter_map(|m| m.secret),
+        );
+        if text.is_empty() {
+            return (String::new(), Vec::new());
+        }
+        let length = text.chars().count();
+        let out = marker("withheld", length);
+        let mask = Mask {
+            anchor: 0,
+            start: 0,
+            end: out.len(),
+            replacement: String::new(),
+            kind: "withheld".into(),
+            length,
+            secret: None,
+        };
+        (out, vec![mask])
+    }
     fn push(&mut self, chunk: &str, known: &[String]) -> (String, Vec<Mask>) {
+        if self.withheld {
+            let text = std::mem::take(&mut self.pending) + chunk;
+            return self.withhold(&text);
+        }
         let merged = self.merged(known);
         let known = merged.as_slice();
         let mut out = String::new();
@@ -745,6 +928,20 @@ impl TextScrubber {
         buffer.push_str(chunk);
         let mut masks = find_masks(&buffer, known, false);
         let new = self.adopt(&masks, known, buffer.len());
+        if self.withheld {
+            // The run marker, if any, stood for text before this buffer.
+            let (text, mut withheld) = self.withhold(&buffer);
+            let offset = out.len();
+            out.push_str(&text);
+            withheld.iter_mut().for_each(|m| {
+                m.start += offset;
+                m.end += offset;
+            });
+            out_masks.extend(withheld);
+            self.revealed
+                .extend(masks.into_iter().filter_map(|m| m.secret));
+            return (out, out_masks);
+        }
         if !new.is_empty() {
             // Find the echoes too, so no cut falls inside one.
             let all = self.merged(known);
@@ -808,8 +1005,16 @@ impl TextScrubber {
         let merged = self.merged(known);
         let buffer = std::mem::take(&mut self.pending);
         self.run = false;
+        if self.withheld {
+            return self.withhold(&buffer);
+        }
         let masks = find_masks(&buffer, &merged, false);
         let new = self.adopt(&masks, &merged, usize::MAX);
+        if self.withheld {
+            self.revealed
+                .extend(masks.into_iter().filter_map(|m| m.secret));
+            return self.withhold(&buffer);
+        }
         let (mut out, mut applied) = apply(&buffer, &masks);
         rescan(&mut out, &new, &mut applied);
         (out, applied)
@@ -1327,26 +1532,26 @@ impl<'a> Walker<'a> {
             _ => {}
         }
         let Some(object) = data.as_object_mut() else {
-            self.walk(data, String::new());
+            self.walk(data, String::new(), Place::ROOT);
             return;
         };
         self.fill_rule(object, "");
         for (key, value) in object.iter_mut() {
-            if exempt.contains(&key.as_str()) || ID_KEYS.contains(&key.as_str()) {
+            if exempt.contains(&key.as_str()) || kept_field(key, value, Place::ROOT) {
                 continue;
             }
             let path = format!("/{}", pointer(key));
             if let Some(kind) = secret_key(key) {
                 self.mask(value, path, &kind);
             } else {
-                self.walk(value, path);
+                self.walk(value, path, Place::ROOT.child(key));
             }
         }
     }
     fn raise(&mut self, class: PrivacyClass) {
         self.class = self.class.max(class);
     }
-    fn walk(&mut self, value: &mut Value, path: String) {
+    fn walk(&mut self, value: &mut Value, path: String, place: Place) {
         match value {
             Value::String(text) => self.text(text, &path),
             // A number that is one of the secrets (a numeric OTP repeated).
@@ -1364,21 +1569,22 @@ impl<'a> Walker<'a> {
             }
             Value::Array(items) => {
                 for (i, item) in items.iter_mut().enumerate() {
-                    self.walk(item, child_path(&path, &i.to_string()));
+                    self.walk(item, child_path(&path, &i.to_string()), place);
                 }
             }
             Value::Object(object) => {
                 self.image(object, &path);
                 self.fill_rule(object, &path);
                 for (key, child) in object.iter_mut() {
-                    if ID_KEYS.contains(&key.as_str()) {
+                    if kept_field(key, child, place) {
                         continue;
                     }
+                    let child_place = place.child(key);
                     let path = child_path(&path, key);
                     if let Some(kind) = secret_key(key) {
                         self.mask(child, path, &kind);
                     } else {
-                        self.walk(child, path);
+                        self.walk(child, path, child_place);
                     }
                 }
             }
@@ -2513,6 +2719,34 @@ mod tests {
             .unwrap()
             .into_value();
             check(&out, std::slice::from_ref(&s), &what);
+            // Echoes under dispatch-shaped keys inside arguments and results.
+            let out = event(
+                "tool",
+                json!({"completed":true,"item":{"type":"mcpToolCall","id":"c1","tool":"chrome_use_fill","status":"completed",
+                    "arguments":{"password":s,"name":s,"status":s,"outcome":s,"id":s,"type":s,"nested":{"method":s,"kind":s,"tool":[s]}},
+                    "result":{"content":[{"type":"text","text":"ok","name":s,"role":s}]}}}),
+                &mut Secrets::default(),
+            )
+            .unwrap()
+            .into_value();
+            check(&out, std::slice::from_ref(&s), &what);
+            assert_eq!(out["item"]["tool"], "chrome_use_fill");
+            assert_eq!(out["item"]["status"], "completed");
+            assert_eq!(out["item"]["id"], "c1");
+            assert_eq!(out["item"]["result"]["content"][0]["type"], "text");
+            // A user event whose page alone is near its limit: it still fits.
+            let filler = "\u{1}".repeat(1000 + rng.below(7000) as usize);
+            let params = format!("sid={}&", rng.secret()).repeat(1 + rng.below(400) as usize);
+            let url = format!("https://x.example/{filler}?access_token={s}&{params}");
+            let url: String = url.chars().take(8192).collect();
+            let out = event(
+                "user",
+                json!({"messageId":"m","text":"a".repeat(32 * 1024),"page":{"tabId":1,"url":url,"title":format!("echo {s} ").repeat(30)}}),
+                &mut Secrets::default(),
+            )
+            .unwrap()
+            .into_value();
+            check(&out, std::slice::from_ref(&s), &what);
             // More than 256 secrets: free text and numbers withheld, the
             // dispatch fields kept.
             if round % 50 == 0 {
@@ -2532,6 +2766,41 @@ mod tests {
                 check(&out, &all, &what);
                 assert_eq!(out["method"], "can_use_tool");
                 assert_eq!(out["params"]["tool_name"], "AskUserQuestion");
+                // The same in a text item, whole and streamed: the echo after
+                // the 257th secret is withheld.
+                let short: Vec<String> = (0..257).map(|i| format!("Q{i:03}")).collect();
+                let mut text: String = short
+                    .iter()
+                    .map(|v| format!("{{\"password\":\"{v}\"}} "))
+                    .collect();
+                text.push_str(&format!("echo {} and {}", short[256], many[0]));
+                let out = event(
+                    "textFinal",
+                    json!({"itemId":"i","text":text,"part":0,"last":true}),
+                    &mut Secrets::default(),
+                )
+                .unwrap()
+                .into_value();
+                check(&out, &[short[256].clone()], &what);
+                let mut secrets = Secrets::default();
+                let mut streamed = String::new();
+                let mut rest = text.as_str();
+                while !rest.is_empty() {
+                    let cut = (1 + rng.below(40) as usize).min(rest.len());
+                    let (piece, after) = rest.split_at(cut);
+                    rest = after;
+                    if let Some(r) = event(
+                        "textDelta",
+                        json!({"itemId":"i","text":piece}),
+                        &mut secrets,
+                    ) {
+                        streamed.push_str(r.value()["text"].as_str().unwrap());
+                    }
+                }
+                for (_, r) in secrets.flush() {
+                    streamed.push_str(r.value()["text"].as_str().unwrap());
+                }
+                assert!(!streamed.contains(&short[256]), "{what}: {streamed}");
             }
         }
     }
@@ -2573,6 +2842,79 @@ mod tests {
         assert!(!out.to_string().contains("100256"), "{out}");
         assert_eq!(out["method"], "can_use_tool");
         assert_eq!(out["params"]["tool_name"], "x");
+    }
+
+    #[test]
+    fn codex_round_six_cases() {
+        // Business fields named like protocol keys are not exempt.
+        let out = event(
+            "tool",
+            json!({"completed":true,"item":{"name":"x","input":{"password":"ABCD5678","name":"ABCD5678","status":"ABCD5678","outcome":"ABCD5678","id":"ABCD5678"}}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("ABCD5678"), "{out}");
+        assert_eq!(out["item"]["name"], "x");
+        // Kept only with an identifier's shape, and never a whole object.
+        let out = event(
+            "request",
+            json!({"requestId":"r","method":"can_use_tool","params":{"tool_name":"x","input":{"password":"ABCD5678"},
+                "status":"ABCD5678 leaked","outcome":{"note":"ABCD5678"}}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("ABCD5678"), "{out}");
+        // A value learned earlier never masks a later dispatch field, and a
+        // protocol identifier is never learned at all.
+        let mut secrets = Secrets::default();
+        event(
+            "tool",
+            json!({"item":{"name":"x","input":{"password":"can_use_tool","token":"mcp__chrome_use__chrome_use_fill"}}}),
+            &mut secrets,
+        );
+        assert!(!secrets.known().contains(&"can_use_tool".to_string()));
+        let out = event(
+            "request",
+            json!({"requestId":"r","method":"can_use_tool","params":{"subtype":"can_use_tool","tool_name":"mcp__chrome_use__chrome_use_fill","input":{"note":"mcp__chrome_use__chrome_use_fill"}}}),
+            &mut secrets,
+        )
+        .unwrap()
+        .into_value();
+        assert_eq!(out["method"], "can_use_tool");
+        assert_eq!(out["params"]["subtype"], "can_use_tool");
+        assert_eq!(
+            out["params"]["tool_name"],
+            "mcp__chrome_use__chrome_use_fill"
+        );
+        assert_ne!(
+            out["params"]["input"]["note"],
+            "mcp__chrome_use__chrome_use_fill"
+        );
+        // 257 short in-text secrets, then an echo of the last one.
+        let mut text: String = (0..257)
+            .map(|i| format!("{{\"password\":\"P{i:03}\"}} "))
+            .collect();
+        text.push_str("echo P256");
+        let out = event(
+            "textFinal",
+            json!({"itemId":"i","text":text,"part":0,"last":true}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("P256"), "{out}");
+        // A 32 KiB text with a page of 8000 control characters still fits.
+        let out = event(
+            "user",
+            json!({"messageId":"m","text":"a".repeat(32 * 1024),"page":{"tabId":1,"url":format!("https://x.example/{}", "\u{1}".repeat(8000)),"title":"t"}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(out.to_string().len() <= EVENT_BUDGET);
+        assert_eq!(out["text"].as_str().unwrap().len(), 32 * 1024);
     }
 
     #[test]

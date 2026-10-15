@@ -20,13 +20,26 @@ const MAX_EVENT: usize = 64 * 1024;
 /// A message's text as JSON in its `user` event, leaving room for the page,
 /// attachments and envelope within MAX_EVENT.
 const MAX_ENCODED_TEXT: usize = 40 * 1024;
+/// Text, page and attachments together as JSON in the `user` event, leaving
+/// room for the envelope. Masks that lengthen the page are cut by
+/// `redact::fit`.
+const MAX_ENCODED_USER: usize = 48 * 1024;
 const TOO_LONG_ENCODED: &str =
     "This message is too long to keep in the history once encoded; shorten it or remove control characters";
 
-/// Whether a message text, JSON-encoded, fits its history event. Control
-/// characters take six bytes each when encoded.
-fn fits_history(text: &str) -> bool {
-    serde_json::to_string(text).is_ok_and(|encoded| encoded.len() <= MAX_ENCODED_TEXT)
+/// Whether a message, JSON-encoded, fits its history event: its text, and
+/// its text with the page and attachments. Control characters take six bytes
+/// each when encoded.
+fn fits_history(message: &Message) -> bool {
+    let text =
+        serde_json::to_string(&message.text).is_ok_and(|encoded| encoded.len() <= MAX_ENCODED_TEXT);
+    let whole = serde_json::to_string(&serde_json::json!({
+        "text": message.text,
+        "page": message.page,
+        "attachments": message.attachments,
+    }))
+    .is_ok_and(|encoded| encoded.len() <= MAX_ENCODED_USER);
+    text && whole
 }
 
 pub(super) fn now() -> u64 {
@@ -349,7 +362,7 @@ impl Conversation {
     }
     pub(super) fn accept(&mut self, message: Message) -> Result<bool, String> {
         uuid::Uuid::parse_str(&message.id).map_err(|_| "A message needs a stable UUID")?;
-        if !fits_history(&message.text) {
+        if !fits_history(&message) {
             return Err(TOO_LONG_ENCODED.into());
         }
         if message.text.trim().is_empty() || message.text.len() > 32 * 1024 {
@@ -472,9 +485,6 @@ impl Conversation {
         // put the superseded text back in the queue.
         uuid::Uuid::parse_str(&replacement.id)
             .map_err(|_| "Replacement message needs a stable UUID")?;
-        if !fits_history(&replacement.text) {
-            return Err(TOO_LONG_ENCODED.into());
-        }
         if replacement.text.trim().is_empty() || replacement.text.len() > 32768 {
             return Err("Replacement text must contain between one and 32768 bytes".into());
         }
@@ -485,6 +495,9 @@ impl Conversation {
         replacement.page = self.queue[index].page.clone();
         replacement.skill = self.queue[index].skill.clone();
         replacement.record = self.queue[index].record;
+        if !fits_history(&replacement) {
+            return Err(TOO_LONG_ENCODED.into());
+        }
         self.accepted
             .insert(replacement.id.clone(), replacement.fingerprint()?);
         if self.direct_message_id.as_deref() == Some(id) {
@@ -1086,6 +1099,25 @@ mod tests {
             TOO_LONG_ENCODED
         );
         assert!(c.accept(message(&"a".repeat(32 * 1024))).unwrap());
+        // Text and page each pass their own checks but not together: the
+        // URL's control characters encode to six bytes each.
+        let mut paged = message(&"a".repeat(32 * 1024));
+        paged.page = Some(PageContext {
+            tab_id: 1,
+            url: format!("https://x.example/{}", "\u{1}".repeat(8000)),
+            title: "t".into(),
+        });
+        assert!(paged.page.as_ref().unwrap().validate().is_ok());
+        assert_eq!(c.accept(paged.clone()).unwrap_err(), TOO_LONG_ENCODED);
+        // An edit that would not fit with the queued page is refused too.
+        let mut queued = message("short");
+        queued.page = paged.page.clone();
+        c.accept(queued.clone()).unwrap();
+        assert_eq!(
+            c.edit_queued(&queued.id, "short", message(&"a".repeat(32 * 1024)))
+                .unwrap_err(),
+            TOO_LONG_ENCODED
+        );
     }
 
     #[test]
