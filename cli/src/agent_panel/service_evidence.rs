@@ -2181,6 +2181,6 @@ mod tests {
         }
         send.await.unwrap().unwrap();
         assert!(c.kinds("turnStartFailed").await.is_empty());
-        assert!(c.engine.lock().await.jobs.get(&c.id).is_none());
+        assert!(!c.engine.lock().await.jobs.contains_key(&c.id));
     }
 }

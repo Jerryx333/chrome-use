@@ -259,10 +259,10 @@ pub(super) fn assess(
     }
     for (index, requirement) in listed.iter().take(MAX_REQUIREMENTS).enumerate() {
         let text = cap(requirement["text"].as_str().unwrap_or(""));
-        let status = match requirement["status"].as_str() {
-            Some(s @ ("met" | "unmet" | "unknown")) => s,
-            _ => "unknown",
-        };
+        let status = requirement["status"]
+            .as_str()
+            .filter(|s| matches!(*s, "met" | "unmet" | "unknown"))
+            .unwrap_or("unknown");
         let supplied = requirement.get("check").filter(|c| c.is_object());
         let (computed, because) = match status {
             "unmet" => ("unmet", "declared unmet".to_string()),
@@ -292,13 +292,15 @@ pub(super) fn assess(
         }));
     }
     let blocker = declared.get("blocker").filter(|b| b.is_object()).map(|b| {
-        let kind = match b["kind"].as_str() {
-            Some(
-                k
-                @ ("humanCheck" | "login" | "permission" | "missingInput" | "siteError" | "other"),
-            ) => k,
-            _ => "other",
-        };
+        let kind = b["kind"]
+            .as_str()
+            .filter(|k| {
+                matches!(
+                    *k,
+                    "humanCheck" | "login" | "permission" | "missingInput" | "siteError" | "other"
+                )
+            })
+            .unwrap_or("other");
         json!({"kind": kind, "text": cap(b["text"].as_str().unwrap_or(""))})
     });
     let checked = requirements
