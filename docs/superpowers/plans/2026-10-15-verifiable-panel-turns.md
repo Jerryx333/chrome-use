@@ -21,8 +21,8 @@ into one release. Six capabilities ship together; none is staged for a later ver
 |---|---|---|
 | P1 a delayed `agentActionBegin` from turn A is admitted under turn B | Agreed. Begin had no turn identity of its own and took `chat.active` at processing time. Fixed by making the generation a turn epoch: the MCP sends the generation it was spawned with (`CHROME_USE_PANEL_GENERATION`, set per process in `drive`, `backend.rs:97`), every turn that ends other than cleanly retires its generation and the next message gets a new process, and Begin carries `notAfter`. The same rules bind `agentTaskAssess` and `agentRecordingAuthorize`. One code fact the design has to handle: `start()` hands the next message to any existing job (`service.rs:1585-1593`), so a retired job must go through the existing replace path (`service.rs:1556-1583`) instead. One case where a turn can complete while an MCP call still runs: the backend's own MCP client timeout. The plan sets it above the Begin window and falls back to retiring after every turn where that cannot be set. | D1, 3.2, 3.3, 4.1, 4.3, 6.4, 14.1, 14.2.20, risk 13 |
 | P2-1 projection fallback weakens different-payload rejection | Agreed. The projection match applies only when the retried message is already its own canonical projection. | 7.2, 14.1 |
-| P2-2 per-lease output silently replaces the caller's path | Agreed. The capture and the delivery to the requested path are two effects, recorded and checked separately. | 6.2, 2.2, 14.1 |
-| P2-3 crash points and concurrent duplicate reports | Agreed. A capture verdict is now written last, after the artifact outcome; duplicate reports during ingest get `pending`. | 3.3, 6.1, 14.1 |
+| P2-2 per-lease output silently replaces the caller's path | Agreed. The capture and the delivery to the requested path are two effects, recorded and checked separately. | 3.2, 6.2a, 2.2, 14.1, risk 14 |
+| P2-3 crash points and concurrent duplicate reports | Agreed. A capture verdict is now written last, after the artifact outcome; duplicate reports during ingest get `pending`. | 3.2, 3.3, 14.1 |
 | P2-4 pidfd kill and macOS proof | Agreed. Kill loops until the group is empty; the macOS loop test is observation only; proof comes from kernel source or the probe answers `unknown`. | 5.3, 5.4, risk 8 |
 | P2-5 naming | Agreed: `sentProjection`; the `sent` dispatched flag keeps its meaning. | 7.3 |
 
@@ -82,6 +82,50 @@ browser actions. If the service cannot be reached within 5 s the MCP also refuse
 action. Running it unleased would produce an action that Stop cannot gate and no turn can
 claim; the backend is a child of the service, so an unreachable service already means the turn
 is ending as unknown.
+
+**D1a. A generation is a turn epoch; a lease request can only be admitted into its own turn.**
+Lease admission must not depend on which message happens to be active when the service gets
+the engine lock: a Begin from turn A delayed past Stop could otherwise be admitted under turn B
+on the same process. Four rules close that:
+
+1. The generation comes from process context, never from service state. `drive` already builds
+   `browser_env` per process (`backend.rs:97`); it adds `CHROME_USE_PANEL_GENERATION`. The MCP
+   server is a child of that process and sends this value with every Begin, assess and
+   recording authorize.
+2. A generation is retired when a turn ends in anything but `completed` with no open chrome_use
+   tool call (4.4): `interrupted`, `failed`, `unknown`, or `completed` with an open chrome_use
+   tool. Retiring sets `Job.retiring` and sends `Shutdown`, as the options-change path does
+   (`service.rs:1556-1583`). `start()` today hands the next message to any existing job
+   (`service.rs:1585-1593`); it changes so a retiring job is waited out on that same path and the
+   next message runs on a new process with a new generation, resumed through the backend session
+   (Codex `thread/resume`, `backend.rs:429`; Claude `--resume`, `backend.rs:206-207`; Pi's session
+   file in the conversation folder, `backend.rs:127-129`; OpenCode `session/resume` or
+   `session/load`, `acp.rs:173-177`, which already refuses when neither is offered). The generation
+   counter lives in `state.json` (`Conversation.generation`) and only grows, so a retired
+   generation is refused forever, including after a service restart.
+3. For a turn that completed cleanly the same generation stays live, and this is safe: Begin
+   runs inside the MCP tool call before the CLI, so the backend cannot report the turn completed
+   until the tool call, and therefore its Begin, has returned. The open-tool guard in rule 2
+   covers a backend that breaks this. The known way to break it is the backend's own MCP client
+   timeout: if the client gives up on a tool call, the turn can finish while the MCP server is
+   still working. The service writes that timeout to at least 30 s for the chrome_use server
+   (Codex `tool_timeout_sec` in the server entry it injects, `backend.rs:426`; Claude
+   `MCP_TOOL_TIMEOUT` in the spawn environment), which is longer than the Begin window in rule 4.
+   Step 1 checks this for every backend with a fixture whose MCP call outlives the client; any
+   backend where the timeout cannot be set, or the fixture shows a completed turn with a call
+   still running, retires its generation after every turn instead.
+4. Begin carries `notAfter`, the MCP's send time plus its 5 s client budget, read from a
+   machine-wide monotonic clock (`CLOCK_MONOTONIC` on Unix, `QueryUnbiasedInterruptTime` on
+   Windows) so a wall-clock change cannot move it. The service refuses a Begin it processes after
+   `notAfter`, and the MCP never runs a tool whose Begin reply it did not receive by `notAfter`.
+   A Begin the MCP gave up on can therefore never be admitted later.
+
+Admission then requires: the job is live with exactly the caller's generation and not retiring,
+the phase admits leases, `chat.active` is `Some`, and `notAfter` has not passed. With a live,
+non-retired generation, the active message is the turn the calling tool belongs to. A lease that
+was admitted and never reported is closed at its turn's end as `unreported` with
+`executed: "unknown"`: the service cannot tell a tool that ran and lost its report from a reply
+that reached the MCP after `notAfter`, so it does not call it "not run".
 
 Reasons for the side channel at all: `short()` (`backend.rs:52-59`) replaces any item over
 24 KB with a 6000-character preview, so a screenshot result with its base64 block always loses
@@ -185,8 +229,10 @@ actionObserved     {v, messageId, actionId, verdict: "confirmed"|"failed"|"uncer
                     evaluator: "browser"|"host"|"none", basis: "expect"|"readBack"|"navigation"|"tabVerified"|
                     "download"|"capture"|"toolError"|"pageChanged"|"none", detail, possiblyExecuted: bool,
                     check: null|{kind, predicate, target: Target, observedSequence}}
-unboundActionReport{v, generation|null, actionId|null, tool, reason: "noLease"|"staleGeneration"|
-                    "otherConversation"|"malformed"}                (quarantine, never cited)
+unboundActionReport{v, generation|null, actionId|null, tool, reason: "noLease"|"otherConversation"|
+                    "malformed"}                                    (quarantine, never cited)
+fileDelivered      {v, messageId, actionId, artifactId, requestedDestination, state: "delivered"|
+                    "failed"|"notAttempted", digest|null, detail}   (the caller's own save path)
 taskAssessment     {v, messageId, phase: "provisional"|"final", source: "agent"|"host",
                     status: "checksPassed"|"someChecksPassed"|"notChecked"|"blocked",
                     declaredStatus, reason,
@@ -270,9 +316,11 @@ New module `cli/src/panel_evidence.rs`, used by `cli/src/mcp.rs` only when
 `crate::agent_panel::panel_mcp_context()` is `Some`.
 
 - `call_tool` (`mcp.rs:732-790`): for every chrome_use browser tool, mint `actionId`
-  (UUIDv4) and call `agentActionBegin` (3.3). On refusal or no answer, return a tool error and
-  do not run the CLI. On admission, replace any output `path` argument of `download`,
-  `download_url`, `screenshot` with the lease's allocated path (section 6.2), then pass the
+  (UUIDv4) and call `agentActionBegin` (3.3) with the generation from its own environment and
+  `notAfter` (D1a). On refusal, or no reply by `notAfter`, return a tool error and do not run
+  the CLI. On admission, record any output `path` argument of `download`, `download_url`,
+  `screenshot` as `requestedDestination`, run the CLI with the lease's allocated capture path
+  instead (section 6.2), deliver to `requestedDestination` afterwards as its own step, then pass the
   `actionId` to `run_cli` as env `CHROME_USE_PANEL_ACTION_ID` (add an `env` parameter to
   `run_tool` / `run_cli`, `mcp.rs:1781-1795`, `1982-2038`).
 - After the CLI returns, `panel_evidence::derive(tool, arguments, &CliRun, parsed)` builds the
@@ -294,9 +342,10 @@ New module `cli/src/panel_evidence.rs`, used by `cli/src/mcp.rs` only when
     requested URL after normalization; a different origin → `uncertain` with the landing origin
     in `detail`.
   - `tabs select` with `verified: "confirmed"` → `confirmed` / `tabVerified`.
-  - `download`, `download_url`, `screenshot`: `confirmed` / `download` or `capture` only after
-    the service reports the artifact `Ready` (it answers synchronously, 3.3). This confirms that
-    a file was captured, nothing about its content.
+  - `download`, `download_url`, `screenshot`: the verdict is computed by the service after the
+    artifact outcome (3.3, lock 2): `confirmed` / `download` or `capture` only when the artifact
+    is `Ready`, otherwise `failed`. This confirms that a file was captured, nothing about its
+    content, and nothing about delivery to the requested path (6.2a).
   - With `observe: true`: `observed.changed == true` → `uncertain` / `pageChanged` (a change is
     not the requested effect); `noProgress` present → feeds `progressStalled`
     (`nativeNoProgress`); `humanCheck` → `uncertain` and turn blocker hint.
@@ -328,40 +377,66 @@ through `call_panel_mcp`/`report_panel_evidence`, to `service::call`'s existing-
 `operation_seconds` (`service.rs:151-158`).
 
 `Engine` gains `leases: HashMap<conversation, HashMap<actionId, Lease>>`,
-`Lease {messageId, generation, admittedSequence, afterStop: bool, state: Open|Reported(reply),
-outputs, quotaReserved}`. Leases are rebuilt at load from `actionAdmitted` and the report events
-in the same pass that computes `last_sequence` (`conversation.rs:692-728`). At most 256 open
-leases per conversation; beyond that new leases are refused.
+`Lease {messageId, generation, admittedSequence, afterStop: bool,
+state: Open|Reporting|Reported(reply)|Unreported, outputs, quotaReserved}`. Leases are rebuilt at
+load from `actionAdmitted` and the report events in the same pass that computes `last_sequence`
+(`conversation.rs:692-728`). At most 256 open leases per conversation; beyond that new leases
+are refused.
 
-- `agentActionBegin {callerConversation, generation, actionId, tool, arguments}` (5 s). Under
-  the engine lock: the conversation exists; the job is live with this `generation`; `chat.active`
-  is `Some`; the phase is `Starting`, `Running` or `WaitingInput`; `actionId` is a UUID not seen
-  in this conversation. Otherwise refused with a reason the MCP shows the agent. On admission:
-  allocate outputs and reserve quota (6.1, 6.2), journal `actionAdmitted` with
-  `messageId = chat.active.id`, reply `{messageId, outputs: [{artifactId, path}]}`.
+- `agentActionBegin {callerConversation, generation, notAfter, actionId, tool, arguments}`
+  (5 s). Under the engine lock, in this order: `notAfter` not passed; the conversation exists;
+  the job is live with exactly this `generation` and not retiring (D1a); `chat.active` is
+  `Some`; the phase is `Starting`, `Running` or `WaitingInput`; `actionId` is a UUID not seen in
+  this conversation. Otherwise refused with a reason the MCP shows the agent. On admission:
+  allocate outputs and reserve quota in memory (6.1, 6.2), journal `actionAdmitted` with
+  `messageId = chat.active.id` and `quotaReserved`, reply `{messageId, outputs: [{artifactId,
+  path}]}`.
 - `agentActionReport {callerConversation, generation, actionId, tool, arguments, outcome,
   errorCode, actionContext, verdict, check, resultDigest, durationMs, artifacts: [{artifactId,
-  path}]}` (60 s).
+  path}], delivery}` (60 s). The report's `generation` is recorded but never used for
+  attribution; the lease decides.
   - Lock 1: look up the lease in this conversation. None → journal `unboundActionReport`
-    (`noLease`, or `otherConversation` when the id is leased elsewhere, or `staleGeneration`),
-    reply `{bound: false}`. Lease `Reported` → reply the stored answer unchanged (idempotent
-    retry; an artifact's recorded terminal state is returned, never recomputed or dropped).
-    Lease `Open` → mark it `Reporting`, journal `browserActionTarget` and `actionObserved` with
-    the lease's `messageId` and `generation`. Flags: `afterStop` when the lease was admitted
-    before a stop that has since been requested, `afterTurnEnd` when the lease's turn has a
-    `turnEnded`, `afterRecoveryRequired` when the conversation is `RecoveryRequired`. A late
-    action from an unconfirmed process is evidence recovery needs; it is kept, under its own
-    turn.
+    (`noLease`, or `otherConversation` when the id is leased elsewhere), reply `{bound: false}`.
+    `Reported` or `Unreported` → reply the stored answer unchanged (idempotent retry; recorded
+    terminal states are returned, never recomputed or dropped). `Reporting` → reply
+    `{state: "pending"}` without touching anything; the MCP polls with the same `actionId` until
+    its budget ends, so a concurrent duplicate never starts a second ingest. `Open` → mark it
+    `Reporting` and journal `browserActionTarget` (target and outcome, no verdict) with the
+    lease's `messageId` and `generation`. Flags: `afterStop` when the lease was admitted before a
+    stop that has since been requested, `afterTurnEnd` when the lease's turn has a `turnEnded`,
+    `afterRecoveryRequired` when the conversation is `RecoveryRequired`. A late action from an
+    unconfirmed process is evidence recovery needs; it is kept, under its own turn.
   - Off lock: ingest each reported artifact whose path is the lease's allocated output (6.2).
-  - Lock 2: journal each artifact's terminal event under the lease's `messageId`, set the lease
-    to `Reported(reply)`, reply `{bound: true, artifacts: [{artifactId, state}]}`.
-  - Partial completion: a lease left `Reporting` (service died between lock 1 and lock 2) is
-    rebuilt at load as reported-without-artifacts; every allocated artifact without a terminal
-    event gets `artifactUnavailable {reason: "interrupted", detectedBy: "load"}`. A retry after
-    that gets the recorded states. Terminal artifact states never change afterwards.
-- `agentTaskAssess` (10 s), `agentRecordingAuthorize` (20 s): sections 4.3 and 6.4. Both bind to
-  the caller's active message only when the caller's generation is the live one and the phase
-  admits leases.
+  - Lock 2: journal each artifact's terminal event under the lease's `messageId`, settle quota,
+    then journal `actionObserved`. For capture tools its verdict is computed here, after the
+    artifact outcome: `confirmed` only if every artifact is `Ready`; otherwise `failed` with the
+    artifact reason. The MCP's own verdict for a capture tool is advisory and never journaled
+    first. Set the lease to `Reported(reply)`, reply `{bound: true, verdict, artifacts:
+    [{artifactId, state}]}`.
+- Crash points. `actionObserved` is the last event of a report, so the journal says how far a
+  report got:
+  - Before `actionAdmitted` is written: nothing was admitted; the MCP had no reply and did not
+    run the tool. The in-memory reservation dies with the process.
+  - After `actionAdmitted`, before the reply reached the MCP: the lease reloads `Open`; the tool
+    may or may not have run.
+  - After `browserActionTarget`, before `actionObserved`: the lease reloads `Reporting`. On the
+    first engine access after load the service journals, for every allocated artifact without
+    a terminal event, `artifactUnavailable {reason: "interrupted", detectedBy: "load"}`, then
+    `actionObserved {verdict: "uncertain", basis: "none", detail: "report interrupted"}` (for
+    capture tools `failed`), and sets the lease `Reported`. A retry gets those states.
+  - Leftover `artifacts/incoming/*.part` files are removed at load.
+  - Quota at load is recomputed from the journal: `quotaReserved` of every lease without
+    terminal artifact events, plus the size of every `artifactReady`. A reservation is released
+    when its artifact ends unavailable and settled to the real size at `Ready`.
+- At `turnEnded`, every lease of that turn still `Open` becomes `Unreported` (journaled in
+  `turnEnded.openLeases`, `executed: "unknown"`), its reservations are released, and allocated
+  artifacts get `artifactUnavailable {reason: "interrupted", detectedBy: "turnEnd"}`. A report
+  arriving later for an `Unreported` lease still journals its `browserActionTarget` under the
+  original turn with `afterTurnEnd`, but cannot change those artifact states.
+- `agentTaskAssess {callerConversation, generation, notAfter, ...}` (10 s) and
+  `agentRecordingAuthorize {callerConversation, generation, notAfter, ...}` (20 s): sections 4.3
+  and 6.4. Same admission rules as Begin: generation from the MCP's environment, live and not
+  retiring, `notAfter` not passed, phase admits leases.
 
 ### 3.4 Backend adapters (link tool events to actions)
 
@@ -426,10 +501,13 @@ blocked and say why."
   `textFinal` with this `messageId` carried non-whitespace text. `finalItemIds` lists text items
   with `role: "final"`; empty when the backend does not say. `openLeases` lists leases of this
   turn still `Open`.
-- On `turnEnded`, in order: `batchInterrupted` if any open tool (4.4), the final
-  `taskAssessment` (4.3), `turnSummary`, and the recording stop (6.4).
-- Leases of an ended turn stay open for late reports, which keep their own turn's `messageId`
-  and carry `afterTurnEnd: true`. They are shown under that turn as "reported after the
+- On `turnEnded`, in order: `batchInterrupted` if any open tool (4.4), open leases closed as
+  `Unreported` (3.3), the final `taskAssessment` (4.3), `turnSummary`, the recording stop
+  (6.4), and generation retirement (D1a) when the outcome is not `completed` or a chrome_use
+  tool is still open. Retirement happens in the same lock as `turnEnded`, so no Begin can be
+  admitted on that generation afterwards.
+- A lease of an ended turn still accepts its late report, which keeps its own turn's `messageId`
+  and carries `afterTurnEnd: true`. They are shown under that turn as "reported after the
   request ended". They never change the next turn and never change the final assessment.
 
 ### 4.2 Message continuation (no auto-redo)
@@ -454,8 +532,9 @@ replacement with attachments, page and skill; `continuation` is never set on que
 
 Arguments: `status`, `requirements: [{text, status, check?: {kind, predicate, evidence: id}}]`
 (≤12), optional `blocker {kind: "humanCheck"|"login"|"permission"|"missingInput"|"siteError"|"other", text}`.
-The service binds it to the caller's active message (refused with no active message, a stale
-generation or a phase that admits no leases) and journals `taskAssessment {phase:
+The service binds it to the caller's active message under the D1a rules (generation from the
+MCP's environment, live and not retiring, `notAfter` not passed, a phase that admits leases;
+refused otherwise) and journals `taskAssessment {phase:
 "provisional"}`.
 
 Check kinds and what the host verifies. The cited evidence must be leased under this same
@@ -568,9 +647,13 @@ Unix:
   `proc_pidinfo` for the session) and require every member's session id to equal the recorded
   `serviceSid`. A process cannot join a process group in another session (`setpgid` returns
   `EPERM`), so members with that pgid inside that session are descendants of our backend. This
-  depends on the kernel not reusing a PID while it is a live pgid or sid; Linux guarantees it,
-  and step 1 runs a test on macOS that holds a group and cycles PIDs. Where the test fails, the
-  probe answers `unknown` for any live group. Proven → `alive`; members in another session, an
+  depends on the kernel not handing out a PID that is still in use as a pgid or sid. The proof
+  is the kernel's PID allocator, cited by source for the OS versions we support: Linux
+  `alloc_pid` keeps a `struct pid` alive while any task references it as pgid or sid; for macOS
+  step 1 reads the XNU `forkproc` PID allocation for the shipped versions and records whether it
+  skips live pgrp and session ids. A test that holds a group and cycles PIDs is run on both as
+  an observation only; it can contradict the source reading but never replaces it. Without a
+  source-backed guarantee for the running OS, the probe answers `unknown` for any live group. Proven → `alive`; members in another session, an
   empty enumeration racing a live `kill(-pgid, 0)`, or any read failure → `unknown`.
 - The same rule applies after a service restart: the recorded `serviceSid` is the old
   service's PID, and members still carrying it prove the old session.
@@ -582,11 +665,15 @@ Unix:
   admitted and reported actions with verdicts and `possiblyExecuted`, unresolved tools,
   artifacts, last targets with their provenance. It does not touch the browser.
 - `conversationRecoveryTerminate {conversationId}` (15 s): only in `RecoveryRequired` with probe
-  `alive`. Windows: `TerminateJobObject` on the held job, then `confirm_empty`. Unix: on Linux,
-  `pidfd_open` each proven member, re-check its pgid and sid through `/proc`, then
-  `pidfd_send_signal(SIGKILL)`; on macOS, `kill(-pgid, SIGKILL)` immediately after a fresh
-  ownership proof. Wait up to 5 s for `ESRCH` / zero active processes, re-probe, journal
-  `recoveryTerminated {method, confirmed}`. Never signals a group whose probe is `unknown`.
+  `alive`. Windows: `TerminateJobObject` on the held job, then `confirm_empty`. Unix, repeated
+  until the group is empty or 5 s pass: re-enumerate the group and re-prove ownership; on Linux
+  `pidfd_open` each member, re-check its pgid and sid through `/proc` after opening, then
+  `pidfd_send_signal(SIGKILL)`; on macOS `kill(-pgid, SIGKILL)` right after the fresh proof. A
+  member forked between enumeration and signal is caught by the next round. One enumeration is
+  never taken as the whole tree: `confirmed` needs `kill(-pgid, 0)` to return `ESRCH` after the
+  last round. If any round finds a member outside the recorded session, or the proof fails,
+  the loop stops and the probe becomes `unknown`. Journal `recoveryTerminated {method,
+  confirmed}`. Never signals a group whose probe is `unknown`.
 - `conversationRecoveryFork {conversationId}` (10 s): only when the probe says `exited`.
   Creates a new conversation (same agent, requested model, options, executable, full access,
   `site` so it stays in the per-site list; no backend session, so nothing is resumed
@@ -652,6 +739,28 @@ New `cli/src/agent_panel/artifacts.rs`, modelled on `attachments.rs`:
 - Failures from the native codes: `download_canceled` → `cancelled`, `download_interrupted` →
   `interrupted`, `download_timeout` → `timeout`.
 
+### 6.2a Delivery to the caller's path (a second, separate effect)
+
+The capture path replaces the caller's `path` only for the capture. Saving to the place the
+agent asked for is a second effect with its own record:
+- Begin records `requestedDestination` (the agent's `path`, or none) next to the allocated
+  `effectiveCapturePath`; both appear in `actionAdmitted` (the destination redacted per 7.2).
+- After the report returns `Ready`, the MCP, which runs with the same rights the CLI would have
+  used for that path, copies the capture to `requestedDestination` with today's destination
+  rules (`prepare_download_destination`, `actions.rs:14265`): write a temporary file in the
+  destination folder, fsync, rename over the target, read the result back and hash it.
+- The MCP reports that with `agentDeliveryReport {actionId, state, digest}` (5 s, idempotent per
+  `actionId`), which journals `fileDelivered` under the lease's turn. `delivered` requires the
+  read-back digest to equal the artifact digest; anything else is `failed` with the reason.
+  No `requestedDestination` → `notAttempted` and no event.
+- The tool result says "saved to <path>" only for `delivered`. Otherwise it says the requested
+  location was not written and gives the artifact id and the capture path, so the agent never
+  believes a file is where it asked.
+- The turn card shows "File captured" (artifact) and "Saved to your path" (delivery) as two
+  lines. The `downloadType` check (4.3) is about the captured artifact only; a failed delivery
+  never turns into a passed check, and a delivered file is never inferred from a `Ready`
+  artifact.
+
 ### 6.3 Restricted read
 
 `conversationArtifactRead {conversationId, artifactId, offset, length}` (10 s). The artifact
@@ -670,8 +779,9 @@ The panel never receives a path.
 - Consent per message: the composer gets a "Record this task" toggle, sent as `record: true`
   in `conversationSend` (`Send` struct, `service.rs:753-764`), stored as `Message.record`
   (in `fingerprint()` only when true, so existing IDs are unchanged).
-- `chrome_use_record start` → `agentRecordingAuthorize` refuses unless the active message has
-  `record`; otherwise allocates `<workspace>/.chrome-use-out/<artifactId>/recording.webm`,
+- `chrome_use_record start` → `agentRecordingAuthorize` refuses under the D1a rules (generation
+  from the MCP's environment, live and not retiring, `notAfter` not passed) and unless the
+  active message has `record`; otherwise allocates `<workspace>/.chrome-use-out/<artifactId>/recording.webm`,
   journals `artifactCreated {state: "capturing"}` and returns the path. The MCP runs the existing
   `record start <path>` (`commands.rs:3501-3523`).
 - `chrome_use_record stop`, or the host after `turnEnded` if still capturing: `record stop
@@ -732,11 +842,17 @@ Message identity and the stored projection (P1-4):
   map stores the legacy hash, so its format and meaning do not change.
 - A retry is a duplicate when (a) its legacy hash equals the stored one, which is the normal
   case because the panel retries from `pendingMessages.params`, the raw values it sent first
-  (`sidepanel.js:466`, stored at `508`); or (b) its projection equals the stored projection of that id,
-  for a client that only holds the redacted form. For (b) the service keeps a lazily built map
-  `messageId → hash(projection)`, filled from the journal's `user` events with `redact::legacy`
-  applied, so messages accepted by v1.5.214 (whose `user` events hold the raw URL) match too.
-  Neither matches → the existing "reused for different text" error.
+  (`sidepanel.js:466`, stored at `508`); or (b) the retried message is itself canonical,
+  meaning `project(m) == m` (it carries no value the rules would mask, its masked values are
+  already in marker form), and its projection hash equals the stored projection of that id.
+  Rule (b) exists for a client that only holds the redacted form. A message that still carries
+  a raw sensitive value is matched by (a) only: two different raw tokens with the same
+  projection are different payloads and get the existing "reused for different text" error. A
+  message with nothing sensitive is its own projection, so (a) and (b) agree and today's
+  rejection of changed text is unchanged. For (b) the service keeps a lazily built map
+  `messageId → hash(projection)`, filled from the journal's `user` events with
+  `redact::legacy` applied, so messages accepted by v1.5.214 (whose `user` events hold the raw
+  URL) match too. Neither matches → the existing error.
 - `edit_queued` fingerprints the replacement over the stored, projected page
   (`conversation.rs:332-336`). A replacement id is never accepted twice
   (`conversation.rs:319-321`), so there is no retry to match.
@@ -784,8 +900,9 @@ the journal holds redacted input, echoing it would send the masked text to Claud
 (`service.rs:1503-1506`).
 
 - `Engine.requests` keeps per request: the unredacted original, `generation`, a
-  `requestRevision` (engine-wide counter), and `sent`: the exact redacted projection journaled
-  in that revision's `request` event, frozen at that moment. The `request` event carries
+  `requestRevision` (engine-wide counter), `sentProjection`: the exact redacted projection
+  journaled in that revision's `request` event, frozen at that moment, and the existing `sent`
+  boolean, which still means only "a reply was dispatched". The `request` event carries
   `generation` and `requestRevision`.
 - A request arriving with an id already present in the conversation (a re-sent request, or a
   new process reusing JSON-RPC ids) gets a new revision; the old revision is dead.
@@ -802,11 +919,11 @@ the journal holds redacted input, echoing it would send the masked text to Claud
   a second allow for the same revision (the existing `sent` check, `service.rs:1397-1401`), and
   allow while `Stopping` (5.2). `dispatched` is not `confirmed`, as today.
 - Old panel reply (no `requestRevision`): accepted only while that request id has had exactly
-  one revision. `can_use_tool`: `updatedInput` must equal the frozen `sent.input`, then the
-  original is substituted. AskUserQuestion: `updatedInput` without `answers` must equal frozen
-  `sent.input` without `answers`, and `answers` is validated as above, then built from the
-  original. Codex `item/permissions/requestApproval`: `permissions` must equal the frozen
-  projection, then the original is used. The comparison is against the frozen projection, never
+  one revision. `can_use_tool`: `updatedInput` must equal `sentProjection.input`, then the
+  original is substituted. AskUserQuestion: `updatedInput` without `answers` must equal
+  `sentProjection.input` without `answers`, and `answers` is validated as above, then built from the
+  original. Codex `item/permissions/requestApproval`: `permissions` must equal
+  `sentProjection.permissions`, then the original is used. The comparison is against the frozen projection, never
   one recomputed with a secret set that grew since.
 - Raw inputs never reach disk through a side path: validation errors are fixed strings (as in
   `validate_reply` today), the service writes no request payloads to logs, and a test checks
@@ -1032,14 +1149,17 @@ build host.
    backend once with a chrome_use MCP that returns a marker block; save raw protocol lines as
    test fixtures under `cli/src/agent_panel/fixtures/`. Settles the *verify* cells of
    section 11 before anything depends on them. Also capture the v1.5.214 compatibility fixtures
-   (section 10) and run the macOS PID-reuse test for 5.3.
+   (section 10), record the kernel PID-allocation source reading and run the PID-cycling
+   observation for 5.3, and for each backend: set the MCP client timeout as in D1a rule 3 and run
+   a fixture whose chrome_use call outlives the client's timeout, to see whether the turn can
+   complete with the call still running (if so, that backend retires after every turn).
 2. **Redaction gate**: `redact.rs`, `Store::event(Redacted)`, type-preserving masks, message
    projection after fingerprint, legacy read redaction, request revisions and reply
    construction, stop-time approval rules. Everything after this writes through it. The
    existing `Store::event` tests (`conversation.rs:811-1057`) move to a test-only `Redacted`
    constructor.
 3. **Turn lifecycle**: `Engine::begin`, `turnStarted`, `turnEnded` from the message snapshot,
-   `toolCallId`, open tools, `batchInterrupted`, `emptyAnswer`, `continuation`, `control` in
+   generation retirement and the `start()` change for retiring jobs, `toolCallId`, open tools, `batchInterrupted`, `emptyAnswer`, `continuation`, `control` in
    summary, `textRole`/`phase`.
 4. **Native stamping**: `_panelActionId`, `acting_target`, `actionContext` with provenance,
    scoped request tracking, download codes, `record stop --expect-path`.
@@ -1072,8 +1192,12 @@ Rust, in the module that owns the rule:
   called with a raw `Value` (compile-time, plus a doc test); legacy read redaction leaves the
   file bytes unchanged.
 - Message identity: fingerprints of messages without new fields equal golden hashes from
-  v1.5.214; a raw retry and a projected retry of a message accepted by the v1.5.214 fixture
-  (token URL + attachment) are duplicates; a changed text under the same id is still refused;
+  v1.5.214. Four cells, each with a token URL and an attachment: (1) accepted by the v1.5.214
+  fixture, reply lost, raw retry after the upgrade → duplicate; (2) accepted by this build, raw
+  retry identical → duplicate; (3) retry that is the canonical projection → duplicate; (4) retry
+  with a different raw token whose projection equals the stored one → refused as different
+  payload. Also: a changed text under the same id is still refused; a message with nothing
+  sensitive and changed text is refused by the raw hash;
   `state.json` written by this build is read by the v1.5.214 `Conversation` type and dedupes.
 - Approvals: new shape allow sends the original; AskUserQuestion sets only `answers` from
   validated options; a custom answer where not allowed, an unknown question, an unknown option,
@@ -1087,10 +1211,23 @@ Rust, in the module that owns the rule:
   file under the profile directory contains it.
 - Stop rules: request during `Stopping` with full access is declined, not approved;
   `conversationRespond` accept during `Stopping` is refused, decline passes.
-- Leases: begin refused in `Stopping`, `RecoveryRequired`, `Idle` and for a stale generation;
-  same generation, turn A then turn B: an action leased in A and reported during B is journaled
-  under A with `afterTurnEnd`; a stale-generation report and a report with no lease go to
-  `unboundActionReport` and never appear in a turn, summary or assessment; an artifact copy
+- Leases: begin refused in `Stopping`, `RecoveryRequired`, `Idle`, for a retired or stale
+  generation and after `notAfter`; late Begin: A's Begin is held before it reaches the engine,
+  the user stops A, A ends `interrupted`, its generation retires and B starts on a new process;
+  releasing A's Begin is refused (by retirement, and again by `notAfter` in a variant where the
+  generation check is bypassed), the CLI for A's tool never runs, and nothing is journaled
+  under B; late report (a separate test): turn A completes cleanly, B runs on the same
+  generation, an action leased in A reports during B and is journaled under A with
+  `afterTurnEnd`; a turn that completes with a chrome_use tool still open retires its
+  generation and the next message gets a new process; `agentTaskAssess` and
+  `agentRecordingAuthorize` from a retired generation or past `notAfter` are refused; a report
+  with no lease goes to `unboundActionReport` and never appears in a turn, summary or
+  assessment; two concurrent reports for one lease: the second gets `pending` and only one
+  ingest runs; a capture whose artifact ends unavailable is journaled `failed`, never
+  `confirmed`; crash injection after `actionAdmitted`, after `browserActionTarget` and after one
+  of two artifact events reloads to the states in 3.3 and quota recomputed from the journal
+  equals the sum of live reservations and ready sizes; an `Open` lease at `turnEnded` becomes
+  `Unreported` with `executed: "unknown"`; an artifact copy
   that spans A's `turnEnded` and B's `turnStarted` lands under A; a report whose reply was lost
   and is retried returns the first answer, including an artifact's `Ready` or `Unavailable`
   state; a lease left `Reporting` across a simulated crash reloads with `interrupted` artifacts
@@ -1135,11 +1272,17 @@ Rust, in the module that owns the rule:
   `tooLargeToRetain` with digest; sniffing incl. HTML saved as PDF, zero bytes, WebM; chunk
   bounds; blob replaced between chunks → panel digest mismatch and server `changed`; deleted blob
   → one `artifactUnavailable`; cross-conversation read and cross-conversation ingest refused;
-  recording refused without `record`; encoder missing; encoder failed.
+  recording refused without `record`; encoder missing; encoder failed. Delivery: a download with
+  a requested path is delivered and the read-back digest matches → `fileDelivered: delivered`
+  and the tool result names the path; an unwritable destination → `failed`, the tool result
+  says the requested location was not written, and the artifact stays `Ready`; a destination
+  changed after the rename → `failed`; no requested path → no `fileDelivered`.
 - Recovery: Windows held job: probe counts processes, terminate empties it, after a simulated
   restart the probe is `unknown`. Unix: group gone → `exited`; leader dead, group alive with
-  members in the service session → `alive`, terminate confirms; a member in another session →
-  `unknown`, no signal sent; leader alive with mismatched start time → `unknown`; fork refused
+  members in the service session → `alive`, terminate confirms; a child forked by a member during
+  terminate is caught by a later round and `confirmed` waits for `ESRCH`; a member in another
+  session → `unknown`, no signal sent; with the OS proof flag off (no source-backed guarantee),
+  every live group is `unknown`; leader alive with mismatched start time → `unknown`; fork refused
   while `alive` or `unknown`; fork creates no queued message and no backend session; preface
   content bounded.
 - Progress: four identical reads stall; six paginated reads with differing digests never stall;
@@ -1253,6 +1396,12 @@ Each check asserts on `conversationRead` output and on the files in the conversa
 19. **Assessment counterexamples live**: a fixture backend assesses "paid" citing a successful
     `open`, a zero-byte download and a screenshot; the final badge is "Not checked" with each
     reason listed.
+20. **Late Begin across Stop**: a fixture MCP shim delays turn A's `agentActionBegin` until
+    after the user pressed Stop, A ended and B started. B runs on a new generation; A's Begin is
+    refused; the fixture site records no request from A's tool; B's card shows nothing from A.
+    Run once per installed backend. A second run with Stop & send checks the same through the
+    direct-message path. Also measures the restart cost of retirement per backend (target under
+    5 s from `turnEnded` to B's `ready`).
 
 ## 15. Risks
 
@@ -1283,7 +1432,9 @@ Each check asserts on `conversationRead` output and on the files in the conversa
    is `RecoveryRequired` after a restart, so no later text of that turn is written. Text written
    before a secret was known is not retracted.
 8. **Process identity.** Unix ownership rests on the kernel not reusing a PID that is a live
-   pgid or sid; Linux guarantees it, macOS is tested in step 1 and otherwise reports `unknown`.
+   pgid or sid; Linux guarantees it in `alloc_pid`; macOS needs the same from the XNU source for
+   the shipped versions, and without it every live macOS group is `unknown`. A PID-cycling test
+   is observation only.
    On macOS a group could in principle empty and be reused between the proof and `kill(-pgid)`;
    Linux avoids this with pidfds. Processes that leave both the group and the session
    (`setsid`) escape the probe, as they escape today's group kill. Windows after a service
@@ -1300,6 +1451,17 @@ Each check asserts on `conversationRead` output and on the files in the conversa
     for its lifetime. Checked by live check 16.
 12. **Assessment wording.** Users may still read "checks passed" as "done". The card lists each
     predicate beside its requirement and says the checks were chosen by the agent.
+13. **Generation retirement.** Every interrupted, failed or unknown turn, and every completed
+    turn with an open chrome_use tool, restarts the backend process, so the next message pays a
+    resume (seconds; measured in live check 20). A backend that cannot resume (OpenCode without
+    `session/resume` or `session/load`, `acp.rs:173-177`) fails that next message with its
+    existing error. A backend whose MCP client timeout cannot be held above the Begin window
+    retires after every turn. The safety of keeping a generation after a clean completion rests
+    on the backend not finishing a turn while a tool call is still running; step 1 tests this per
+    backend.
+14. **Delivery is a second effect.** Delivering to the agent's requested path is done by the MCP
+    with the agent's rights and verified by read-back digest; like other reports it is
+    "reported by chrome-use's browser tools".
 
 ## 16. Deliberately excluded (not deferred)
 
