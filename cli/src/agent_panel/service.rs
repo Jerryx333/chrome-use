@@ -348,31 +348,68 @@ fn spawn_detached(
         .map_err(|_| "Agent service could not be started".into())
 }
 
-/// Load a one-shot launchd job for the service. The label is per data
-/// directory; a finished job stays loaded but idle, so it is booted out
-/// before each start. The plist carries this process's environment, so it
-/// lives only until launchd has read it.
+/// `launchctl` with `args`, quietly; whether it succeeded.
 #[cfg(target_os = "macos")]
-fn launchd_start(
-    directory: &Path,
-    executable: &Path,
-    arguments: &[std::ffi::OsString],
-) -> Result<(), String> {
+fn launchctl(args: &[&std::ffi::OsStr]) -> bool {
+    std::process::Command::new("/bin/launchctl")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The pid of a launchd job's running process, if it has one.
+#[cfg(target_os = "macos")]
+fn launchd_job_pid(target: &str) -> Option<u32> {
+    let out = std::process::Command::new("/bin/launchctl")
+        .args(["print", target])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("pid = ")?.trim().parse().ok())
+}
+
+/// The launchd job (`gui/<uid>/<label>`) that starts the service of a data
+/// directory; one label per directory.
+#[cfg(target_os = "macos")]
+fn launchd_target(directory: &Path) -> (String, String) {
     let digest = Sha256::digest(directory.as_os_str().as_encoded_bytes());
     let label = format!(
         "com.chrome-use.panel-service.{}",
         &hex::encode(digest)[..16]
     );
     let domain = format!("gui/{}", unsafe { libc::getuid() });
-    let launchctl = |args: &[&std::ffi::OsStr]| {
-        std::process::Command::new("/bin/launchctl")
-            .args(args)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    };
+    (format!("{domain}/{label}"), domain)
+}
+
+/// Unload this directory's launchd job once the service owns the profile:
+/// the job only started it (the service left for a session of its own, see
+/// `run`), and a finished job would otherwise stay loaded for every data
+/// directory ever used. A job that is this very process stays.
+#[cfg(target_os = "macos")]
+fn unload_finished_job(directory: &Path) {
+    let (target, _) = launchd_target(directory);
+    if launchd_job_pid(&target) != Some(std::process::id()) {
+        let _ = launchctl(&["bootout".as_ref(), target.as_ref()]);
+    }
+}
+
+/// Load a one-shot launchd job for the service. A job left loaded by an
+/// earlier start is booted out first. The plist carries this process's
+/// environment, so it lives only until launchd has read it.
+#[cfg(target_os = "macos")]
+fn launchd_start(
+    directory: &Path,
+    executable: &Path,
+    arguments: &[std::ffi::OsString],
+) -> Result<(), String> {
+    let (target, domain) = launchd_target(directory);
+    let label = target.rsplit('/').next().unwrap_or_default().to_string();
     let plist = launchd_plist(&label, executable, arguments)?;
     let path = directory.join("service.plist");
     atomic_write(&path, plist.as_bytes(), None)?;
@@ -384,7 +421,6 @@ fn launchd_start(
             .map_err(|_| "Invalid agent-service plist path")?;
         unsafe { libc::removexattr(file.as_ptr(), c"com.apple.quarantine".as_ptr(), 0) };
     }
-    let target = format!("{domain}/{label}");
     let _ = launchctl(&["bootout".as_ref(), target.as_ref()]);
     // bootout returns before launchd forgets the label; retry briefly.
     let mut loaded = false;
@@ -2843,6 +2879,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|_|"Cannot bind private agent-service transport")?;
         let endpoint=Endpoint {schema_version:1,profile,address:listener.local_addr().map_err(|_|"Cannot inspect agent-service address")?,capability:format!("{}{}",uuid::Uuid::new_v4().simple(),uuid::Uuid::new_v4().simple()),binary_hash:BINARY_HASH.as_ref().map_err(Clone::clone)?.clone(),pid:std::process::id()};
         atomic_write(&directory.join("service.json"),&serde_json::to_vec(&endpoint).map_err(|_|"Cannot encode private service endpoint")?,None)?;
+        #[cfg(target_os = "macos")]
+        {
+            let directory=directory.clone();
+            std::thread::spawn(move || unload_finished_job(&directory));
+        }
         let scheduler=engine.clone();
         tokio::spawn(async move {
             // Give extension handshakes and profile registration time to settle.

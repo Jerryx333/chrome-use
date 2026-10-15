@@ -323,6 +323,27 @@ impl Drop for ServiceFixture {
     }
 }
 
+/// Loaded `com.chrome-use.panel-service.*` launchd jobs whose arguments name
+/// `root`. Starting the service must not leave one per data directory.
+#[cfg(target_os = "macos")]
+fn loaded_service_jobs(root: &std::path::Path) -> Vec<String> {
+    let name = root.file_name().unwrap().to_string_lossy().into_owned();
+    let uid = unsafe { libc::getuid() };
+    let list = Command::new("/bin/launchctl").arg("list").output().unwrap();
+    String::from_utf8_lossy(&list.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(2))
+        .filter(|label| label.starts_with("com.chrome-use.panel-service."))
+        .filter(|label| {
+            Command::new("/bin/launchctl")
+                .args(["print", &format!("gui/{uid}/{label}")])
+                .output()
+                .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).contains(&name))
+        })
+        .map(String::from)
+        .collect()
+}
+
 #[cfg(any(unix, windows))]
 fn conversation_poll(
     host: &mut Host,
@@ -1228,6 +1249,13 @@ fn deleting_a_conversation_stops_its_agent_and_leaves_siblings_intact() {
         conversation_poll(&mut host, &rx, &id, "idle");
         ids.push(id);
     }
+    // The service the host started left no launchd job loaded behind it.
+    #[cfg(target_os = "macos")]
+    assert_eq!(
+        loaded_service_jobs(registry.path()),
+        Vec::<String>::new(),
+        "a launchd job for this data directory stayed loaded"
+    );
     let folder = registry
         .path()
         .join(format!("agent-panel/profiles/{profile}/conversations"));
