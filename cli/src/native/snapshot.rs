@@ -7,7 +7,9 @@ use super::cdp::client::CdpClient;
 use super::cdp::types::{
     AXNode, AXProperty, AXValue, EvaluateParams, EvaluateResult, GetFullAXTreeResult,
 };
-use super::element::{resolve_ax_session, RefMap};
+use super::element::{
+    resolve_ax_session, visible_text, AxIdentity, DerivedName, RefMap, INVISIBLE_CHARS,
+};
 
 const INTERACTIVE_ROLES: &[&str] = &[
     "button",
@@ -76,14 +78,6 @@ const STRUCTURAL_ROLES: &[&str] = &[
     "RootWebArea",
 ];
 
-const INVISIBLE_CHARS: &[char] = &[
-    '\u{FEFF}', // BOM / Zero Width No-Break Space
-    '\u{200B}', // Zero Width Space
-    '\u{200C}', // Zero Width Non-Joiner
-    '\u{200D}', // Zero Width Joiner
-    '\u{2060}', // Word Joiner
-];
-
 /// Display form of an accessible name: zero-width characters removed, and a
 /// non-breaking space shown as the space it renders as. Deleting NBSP glued
 /// words together ("Capital&nbsp;Federal" read "CapitalFederal", so a
@@ -125,6 +119,12 @@ struct TreeNode {
     /// value in `snapshot` and `snapshot -i` — otherwise a synthesized label
     /// churns the ref between the two modes or fails its own identity check.
     ax_name: String,
+    /// Set when a pass below rewrote `role` (a label promoted to the hidden
+    /// radio it wraps): the role the AX tree reported.
+    ax_role: Option<String>,
+    /// Set when a pass below rewrote `name`: where the published name came
+    /// from. The ref then records the AX identity next to it.
+    derived_name: Option<DerivedName>,
     level: Option<i64>,
     checked: Option<String>,
     expanded: Option<bool>,
@@ -164,6 +164,8 @@ impl TreeNode {
             role: String::new(),
             name: String::new(),
             ax_name: String::new(),
+            ax_role: None,
+            derived_name: None,
             level: None,
             checked: None,
             expanded: None,
@@ -190,6 +192,8 @@ impl TreeNode {
         self.role = String::new();
         self.name = String::new();
         self.ax_name = String::new();
+        self.ax_role = None;
+        self.derived_name = None;
         self.level = None;
         self.checked = None;
         self.expanded = None;
@@ -675,13 +679,17 @@ async fn take_snapshot_at_depth(
     promote_hidden_inputs(&mut tree_nodes, &cursor_elements);
     for node in tree_nodes.iter_mut() {
         if node.name.is_empty() {
+            // Folded the way it is re-read before acting on the ref: an empty
+            // editor's text is a lone U+200B, which `.trim()` keeps and which
+            // then shows up as a name nobody can see.
             if let Some(fallback_name) = node
                 .backend_node_id
                 .and_then(|bid| cursor_elements.get(&bid))
-                .map(|info| info.fallback_name.as_str())
+                .map(|info| visible_text(&info.fallback_name))
                 .filter(|name| !name.is_empty())
             {
-                node.name = fallback_name.to_string();
+                node.name = fallback_name;
+                node.derived_name = Some(DerivedName::OwnText);
             }
         }
     }
@@ -703,6 +711,7 @@ async fn take_snapshot_at_depth(
                         .and_then(|bid| label_fallbacks.get(&bid))
                     {
                         node.name = label.clone();
+                        node.derived_name = Some(DerivedName::Context);
                     }
                 }
             }
@@ -783,6 +792,9 @@ async fn take_snapshot_at_depth(
             frame_id,
         );
         ref_map.set_fingerprint(&ref_id, build_ax_fingerprint(&tree_nodes, *idx));
+        if let Some(ax) = derived_ax_identity(&tree_nodes[*idx]) {
+            ref_map.set_ax_identity(&ref_id, ax);
+        }
 
         tree_nodes[*idx].has_ref = true;
         tree_nodes[*idx].ref_id = Some(ref_id);
@@ -1211,11 +1223,13 @@ async fn find_cursor_interactive_elements(
     // - Skips elements with interactive ARIA roles
     // - Deduplicates cursor styles inherited unchanged from a parent
     // - Skips empty text and zero-size elements
-    // - Tags each matched element with data-__ab-ci for batch backendNodeId resolution
+    // - Returns the matched elements themselves next to their descriptions, so
+    //   their backendNodeIds resolve without writing anything into the page
     let js = r#"
 (function() {
     var results = [];
-    if (!document.body) return results;
+    var nodes = [];
+    if (!document.body) return { items: results, nodes: nodes };
 
     var interactiveRoles = {
         'button':1, 'link':1, 'textbox':1, 'checkbox':1, 'radio':1, 'combobox':1, 'listbox':1,
@@ -1294,7 +1308,7 @@ async fn find_cursor_interactive_elements(
             }
         }
 
-        el.setAttribute('data-__ab-ci', String(results.length));
+        nodes.push(el);
         results.push({
             text: text,
             tagName: tagName,
@@ -1312,121 +1326,20 @@ async fn find_cursor_interactive_elements(
             hiddenInputChecked: hiddenInputChecked
         });
     }
-    return results;
+    return { items: results, nodes: nodes };
 })()
 "#;
 
-    let result: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression: js.to_string(),
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await?;
-
-    let elements: Vec<Value> = result
-        .result
-        .value
-        .and_then(|v| serde_json::from_value::<Vec<Value>>(v).ok())
-        .unwrap_or_default();
+    let (elements, idx_to_backend) = evaluate_items_with_nodes(
+        client,
+        session_id,
+        js.to_string(),
+        "chrome-use-snapshot-cursor",
+    )
+    .await?;
 
     if elements.is_empty() {
         return Ok(HashMap::new());
-    }
-
-    // Batch-resolve backendNodeIds: use DOM.getDocument to get the root nodeId,
-    // then DOM.querySelectorAll to get all tagged elements in a single call.
-    let doc: Value = client
-        .send_command(
-            "DOM.getDocument",
-            Some(serde_json::json!({ "depth": 0 })),
-            Some(session_id),
-        )
-        .await?;
-
-    let root_node_id = doc
-        .get("root")
-        .and_then(|r| r.get("nodeId"))
-        .and_then(|v| v.as_i64())
-        .ok_or("DOM.getDocument did not return root nodeId")?;
-
-    let query_result: Value = client
-        .send_command(
-            "DOM.querySelectorAll",
-            Some(serde_json::json!({
-                "nodeId": root_node_id,
-                "selector": "[data-__ab-ci]"
-            })),
-            Some(session_id),
-        )
-        .await?;
-
-    let node_ids: Vec<i64> = query_result
-        .get("nodeIds")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-        .unwrap_or_default();
-
-    // Resolve backendNodeIds for each DOM node using concurrent CDP calls.
-    let describe_futures: Vec<_> = node_ids
-        .iter()
-        .map(|&node_id| {
-            client.send_command(
-                "DOM.describeNode",
-                Some(serde_json::json!({ "nodeId": node_id })),
-                Some(session_id),
-            )
-        })
-        .collect();
-
-    let describe_results = futures_util::future::join_all(describe_futures).await;
-
-    // Build a map from data-__ab-ci index to backendNodeId.
-    let mut idx_to_backend: HashMap<usize, i64> = HashMap::new();
-    for desc in describe_results.into_iter().flatten() {
-        let backend_id = desc
-            .get("node")
-            .and_then(|n| n.get("backendNodeId"))
-            .and_then(|v| v.as_i64());
-        let ci_attr = desc
-            .get("node")
-            .and_then(|n| n.get("attributes"))
-            .and_then(|a| a.as_array())
-            .and_then(|attrs| {
-                // attributes is a flat array: [name, value, name, value, ...]
-                attrs
-                    .iter()
-                    .enumerate()
-                    .find(|(_, v)| v.as_str() == Some("data-__ab-ci"))
-                    .and_then(|(i, _)| attrs.get(i + 1))
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<usize>().ok())
-            });
-        if let (Some(bid), Some(idx)) = (backend_id, ci_attr) {
-            idx_to_backend.insert(idx, bid);
-        }
-    }
-
-    // Clean up the data attributes we injected for backendNodeId resolution.
-    let cleanup_js =
-        r#"(function(){ var els = document.querySelectorAll('[data-__ab-ci]'); for (var i = 0; i < els.length; i++) els[i].removeAttribute('data-__ab-ci'); return els.length; })()"#.to_string();
-    if let Err(e) = client
-        .send_command_typed::<EvaluateParams, EvaluateResult>(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression: cleanup_js,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await
-    {
-        eprintln!("[chrome-use] Warning: failed to clean up data-__ab-ci attributes: {e}");
     }
 
     // Build the map
@@ -1578,7 +1491,8 @@ async fn find_error_elements(
         r#"
 (function() {{
     var results = [];
-    if (!document.body) return results;
+    var nodes = [];
+    if (!document.body) return {{ items: results, nodes: nodes }};
     var SEL = {sel};
     var seen = {{}};
     var matched = document.body.querySelectorAll(SEL);
@@ -1598,38 +1512,20 @@ async fn find_error_elements(
         if (text.length > 200) text = text.slice(0, 200) + '…';
         if (seen[text]) continue;
         seen[text] = 1;
-        el.setAttribute('data-__ab-err', String(results.length));
+        nodes.push(el);
         results.push({{ text: text }});
     }}
-    return results;
+    return {{ items: results, nodes: nodes }};
 }})()
 "#,
         sel = serde_json::to_string(ERROR_SELECTOR).unwrap_or_default()
     );
 
-    let result: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression: js,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await?;
-
-    let elements: Vec<Value> = result
-        .result
-        .value
-        .and_then(|v| serde_json::from_value::<Vec<Value>>(v).ok())
-        .unwrap_or_default();
-
+    let (elements, idx_to_backend) =
+        evaluate_items_with_nodes(client, session_id, js, "chrome-use-snapshot-errors").await?;
     if elements.is_empty() {
         return Ok(Vec::new());
     }
-
-    let idx_to_backend = resolve_tagged_backend_ids(client, session_id, "data-__ab-err").await;
 
     Ok(elements
         .iter()
@@ -1655,7 +1551,7 @@ async fn find_error_elements(
 /// the AX tree (issue #90): Element-Plus `el-select` / custom comboboxes render
 /// their label as a placeholder span or a sibling form-item label, so the AX
 /// name is empty and `snapshot -i` shows a bare, indistinguishable
-/// `combobox [ref=eN]`. One batched scan tags each such control and computes a
+/// `combobox [ref=eN]`. One batched scan finds each such control and computes a
 /// label from (in order) its placeholder, an inner input's placeholder, an
 /// associated `<label>`, the nearest `.el-form-item__label` / `.ant-form-item`
 /// label, or leading sibling text. Returns backendNodeId → label; the caller
@@ -1667,7 +1563,8 @@ async fn find_control_label_fallbacks(
     let js = r#"
 (function() {
     var results = [];
-    if (!document.body) return results;
+    var nodes = [];
+    if (!document.body) return { items: results, nodes: nodes };
     var SEL = 'input:not([type=hidden]):not([type=submit]):not([type=button]),' +
               'select,textarea,[contenteditable="true"],' +
               '[role=combobox],[role=textbox],[role=searchbox],[role=listbox],[role=spinbutton]';
@@ -1701,37 +1598,19 @@ async fn find_control_label_fallbacks(
         var label = clean(labelFor(el));
         if (!label) continue;
         if (label.length > 40) label = label.slice(0, 40) + '…';
-        el.setAttribute('data-__ab-lbl', String(results.length));
+        nodes.push(el);
         results.push({ label: label });
     }
-    return results;
+    return { items: results, nodes: nodes };
 })()
 "#
     .to_string();
 
-    let result: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression: js,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await?;
-
-    let elements: Vec<Value> = result
-        .result
-        .value
-        .and_then(|v| serde_json::from_value::<Vec<Value>>(v).ok())
-        .unwrap_or_default();
-
+    let (elements, idx_to_backend) =
+        evaluate_items_with_nodes(client, session_id, js, "chrome-use-snapshot-labels").await?;
     if elements.is_empty() {
         return Ok(HashMap::new());
     }
-
-    let idx_to_backend = resolve_tagged_backend_ids(client, session_id, "data-__ab-lbl").await;
 
     let mut out: HashMap<i64, String> = HashMap::new();
     for (i, elem) in elements.iter().enumerate() {
@@ -1838,116 +1717,84 @@ async fn find_top_layer_backend_ids(
     Ok(ids)
 }
 
-/// Resolve the `backendNodeId` for every element previously tagged with a
-/// numeric-indexed data attribute (e.g. `data-__ab-err="3"`), then strip the
-/// attribute. Returns a map from that index to its `backendNodeId`.
+/// Run a page scan that returns `{ items, nodes }` — plain descriptions in
+/// `items`, and in `nodes` the element each description is about, at the same
+/// index — and resolve every node's `backendNodeId` from its handle.
 ///
-/// Mirrors the batch-resolution dance used by the cursor scan: `DOM.getDocument`
-/// for the root, one `DOM.querySelectorAll` to find tagged nodes, concurrent
-/// `DOM.describeNode` calls to read each backendNodeId + index, then a cleanup
-/// pass. On any CDP failure it returns an empty map (best-effort: callers still
-/// surface the text, just without a clickable ref).
-async fn resolve_tagged_backend_ids(
+/// The scan never marks the page: a MutationObserver sees an attribute write
+/// and its cleanup alike, so the elements come back as remote objects and are
+/// described with `DOM.describeNode`, then their object group is released.
+/// Only the scan itself failing is an error; a node that cannot be described
+/// is just left out of the map (callers still surface its text, without a
+/// ref).
+async fn evaluate_items_with_nodes(
     client: &CdpClient,
     session_id: &str,
-    attr: &str,
-) -> HashMap<usize, i64> {
-    let mut idx_to_backend: HashMap<usize, i64> = HashMap::new();
-
-    let Ok(doc) = client
+    expression: String,
+    group: &str,
+) -> Result<(Vec<Value>, HashMap<usize, i64>), String> {
+    let reply = client
         .send_command(
-            "DOM.getDocument",
-            Some(serde_json::json!({ "depth": 0 })),
-            Some(session_id),
-        )
-        .await
-    else {
-        return idx_to_backend;
-    };
-    let Some(root_node_id) = doc
-        .get("root")
-        .and_then(|r| r.get("nodeId"))
-        .and_then(|v| v.as_i64())
-    else {
-        return idx_to_backend;
-    };
-
-    let Ok(query_result) = client
-        .send_command(
-            "DOM.querySelectorAll",
+            "Runtime.evaluate",
             Some(serde_json::json!({
-                "nodeId": root_node_id,
-                "selector": format!("[{}]", attr),
+                "expression": expression,
+                "returnByValue": false,
+                "awaitPromise": false,
+                "objectGroup": group,
             })),
             Some(session_id),
         )
-        .await
-    else {
-        return idx_to_backend;
-    };
-
-    let node_ids: Vec<i64> = query_result
-        .get("nodeIds")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-        .unwrap_or_default();
-
-    let describe_futures: Vec<_> = node_ids
-        .iter()
-        .map(|&node_id| {
-            client.send_command(
-                "DOM.describeNode",
-                Some(serde_json::json!({ "nodeId": node_id })),
-                Some(session_id),
-            )
-        })
-        .collect();
-    let describe_results = futures_util::future::join_all(describe_futures).await;
-
-    for desc in describe_results.into_iter().flatten() {
-        let backend_id = desc
-            .get("node")
-            .and_then(|n| n.get("backendNodeId"))
-            .and_then(|v| v.as_i64());
-        let idx = desc
-            .get("node")
-            .and_then(|n| n.get("attributes"))
-            .and_then(|a| a.as_array())
-            .and_then(|attrs| {
-                // attributes is a flat [name, value, name, value, ...] array.
-                attrs
-                    .iter()
-                    .enumerate()
-                    .find(|(_, v)| v.as_str() == Some(attr))
-                    .and_then(|(i, _)| attrs.get(i + 1))
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<usize>().ok())
-            });
-        if let (Some(bid), Some(idx)) = (backend_id, idx) {
-            idx_to_backend.insert(idx, bid);
+        .await?;
+    let scanned = match reply["result"]["objectId"].as_str() {
+        Some(object) if reply.get("exceptionDetails").is_none() => {
+            read_items_and_nodes(client, session_id, object, group).await
         }
-    }
-
-    // Strip the data attributes we injected.
-    let cleanup_js = format!(
-        r#"(function(){{ var els = document.querySelectorAll('[{attr}]'); for (var i = 0; i < els.length; i++) els[i].removeAttribute('{attr}'); return els.length; }})()"#,
-    );
-    if let Err(e) = client
-        .send_command_typed::<EvaluateParams, EvaluateResult>(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression: cleanup_js,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
+        _ => (Vec::new(), HashMap::new()),
+    };
+    let _ = client
+        .send_command(
+            "Runtime.releaseObjectGroup",
+            Some(serde_json::json!({ "objectGroup": group })),
             Some(session_id),
         )
-        .await
-    {
-        eprintln!("[chrome-use] Warning: failed to clean up {attr} attributes: {e}");
-    }
+        .await;
+    Ok(scanned)
+}
 
-    idx_to_backend
+async fn read_items_and_nodes(
+    client: &CdpClient,
+    session_id: &str,
+    object: &str,
+    group: &str,
+) -> (Vec<Value>, HashMap<usize, i64>) {
+    let field = |name: &str, by_value: bool| {
+        client.send_command(
+            "Runtime.callFunctionOn",
+            Some(serde_json::json!({
+                "objectId": object,
+                "functionDeclaration": format!("function() {{ return this.{name}; }}"),
+                "returnByValue": by_value,
+                "objectGroup": group,
+            })),
+            Some(session_id),
+        )
+    };
+    let items: Vec<Value> = match field("items", true).await {
+        Ok(r) => r["result"]["value"].as_array().cloned().unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    if items.is_empty() {
+        return (items, HashMap::new());
+    }
+    let nodes = match field("nodes", false).await {
+        Ok(r) => r["result"]["objectId"].as_str().map(String::from),
+        Err(_) => None,
+    };
+    let idx_to_backend = match nodes {
+        Some(nodes) => super::element::array_backend_node_ids(client, session_id, &nodes).await,
+        None => HashMap::new(),
+    };
+    (items, idx_to_backend)
 }
 
 /// Promote LabelText/generic nodes that wrap a hidden radio/checkbox input.
@@ -1955,6 +1802,19 @@ async fn resolve_tagged_backend_ids(
 /// the input from the AX tree entirely, leaving only the label with role="LabelText"
 /// and an empty name. We detect these via cursor-interactive scanning and promote
 /// the label to the correct input role so consumers see role="radio" in data.refs.
+/// The AX identity to record next to a ref whose published role or name a
+/// snapshot pass rewrote; `None` when they are the AX tree's own.
+fn derived_ax_identity(node: &TreeNode) -> Option<AxIdentity> {
+    if node.ax_role.is_none() && (node.derived_name.is_none() || node.name == node.ax_name) {
+        return None;
+    }
+    Some(AxIdentity {
+        role: node.ax_role.clone().unwrap_or_else(|| node.role.clone()),
+        name: node.ax_name.clone(),
+        source: node.derived_name.unwrap_or(DerivedName::Context),
+    })
+}
+
 fn promote_hidden_inputs(
     tree_nodes: &mut [TreeNode],
     cursor_elements: &HashMap<i64, CursorElementInfo>,
@@ -1971,9 +1831,14 @@ fn promote_hidden_inputs(
             None => continue,
         };
         if let Some(input_kind) = cursor_info.hidden_input_kind {
-            node.role = input_kind.as_role().to_string();
-            if node.name.is_empty() && !cursor_info.text.is_empty() {
-                node.name = cursor_info.text.clone();
+            node.ax_role = Some(std::mem::replace(
+                &mut node.role,
+                input_kind.as_role().to_string(),
+            ));
+            let text = visible_text(&cursor_info.text);
+            if node.name.is_empty() && !text.is_empty() {
+                node.name = text;
+                node.derived_name = Some(DerivedName::OwnText);
             }
             if let Some(ref checked) = cursor_info.hidden_input_checked {
                 node.checked = Some(checked.clone());
@@ -2013,6 +1878,8 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
         tree_nodes.push(TreeNode {
             role,
             ax_name: name.clone(),
+            ax_role: None,
+            derived_name: None,
             name,
             level,
             checked,
@@ -2083,7 +1950,9 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
                     .map(|idx| tree_nodes[children_indices[idx]].name.clone())
                     .collect();
                 // Always aggregate into the first node of the sequence
-                tree_nodes[children_indices[start]].name = aggregated_name;
+                let first = &mut tree_nodes[children_indices[start]];
+                first.name = aggregated_name;
+                first.derived_name = Some(DerivedName::Context);
                 // Clear the rest of the nodes in the sequence (from start+1 to end-1)
                 for j in (start + 1)..end {
                     tree_nodes[children_indices[j]].clear();
@@ -3301,6 +3170,50 @@ fn collect_backend_node_ids(node: &Value, ids: &mut std::collections::HashSet<i6
 
 #[cfg(test)]
 mod tests {
+    /// Stealth: page scripts never mark nodes to find them again, and never
+    /// park state where the page can find it. A MutationObserver sees an
+    /// attribute write and its removal alike, and a page can enumerate its
+    /// globals and look up `Symbol.for` keys, so nodes and state are held by
+    /// remote handles / backendNodeIds instead. The needles are assembled so
+    /// this test does not match itself.
+    #[test]
+    fn page_scripts_never_write_marker_attributes() {
+        let files = [
+            ("snapshot.rs", include_str!("snapshot.rs")),
+            ("actions.rs", include_str!("actions.rs")),
+            ("browser.rs", include_str!("browser.rs")),
+            ("element.rs", include_str!("element.rs")),
+            ("interaction.rs", include_str!("interaction.rs")),
+            ("semantic_locator.rs", include_str!("semantic_locator.rs")),
+            ("report.rs", include_str!("../report.rs")),
+            ("upload.rs", include_str!("upload.rs")),
+            ("settle.rs", include_str!("settle.rs")),
+            ("observation.rs", include_str!("observation.rs")),
+        ];
+        let needles = [
+            [".set", "Attribute("].concat(),
+            [".remove", "Attribute("].concat(),
+            [".toggle", "Attribute("].concat(),
+            ["data-", "__ab-"].concat(),
+            ["data-", "cu-"].concat(),
+            // Page globals and Symbol registry keys: the page can enumerate
+            // its globals and look a `Symbol.for` key up by name.
+            ["window", ".__"].concat(),
+            ["window", "["].concat(),
+            ["Symbol", ".for("].concat(),
+            ["globalThis", ".__"].concat(),
+            ["globalThis", "["].concat(),
+        ];
+        for (file, src) in files {
+            for needle in &needles {
+                assert!(
+                    !src.contains(needle.as_str()),
+                    "{file} contains {needle:?}: a page-observable DOM write"
+                );
+            }
+        }
+    }
+
     use super::*;
     #[test]
     fn rendered_refs_ignore_page_text_and_match_complete_attribute_ids() {
@@ -4432,5 +4345,41 @@ mod tests {
         assert_eq!(b.tree.lines().count(), 1);
         assert!(b.truncated());
         assert_eq!(b.next, 1);
+    }
+}
+
+#[cfg(test)]
+mod derived_name_tests {
+    use super::*;
+
+    fn node(role: &str, name: &str) -> TreeNode {
+        let mut n = TreeNode::empty();
+        n.role = role.to_string();
+        n.ax_name = name.to_string();
+        n.name = name.to_string();
+        n
+    }
+
+    /// The ref of a clickable `<div>投稿</div>` records what the AX tree said
+    /// (`generic ""`), which is what the action-time check compares against.
+    #[test]
+    fn a_rewritten_name_records_the_ax_identity() {
+        let mut n = node("generic", "");
+        n.name = "投稿".into();
+        n.derived_name = Some(DerivedName::OwnText);
+        let ax = derived_ax_identity(&n).unwrap();
+        assert_eq!(
+            (ax.role.as_str(), ax.name.as_str(), ax.source),
+            ("generic", "", DerivedName::OwnText)
+        );
+        assert!(derived_ax_identity(&node("button", "Save")).is_none());
+        let mut promoted = node("LabelText", "Express");
+        promoted.ax_role = Some("LabelText".into());
+        promoted.role = "radio".into();
+        let ax = derived_ax_identity(&promoted).unwrap();
+        assert_eq!(
+            (ax.role.as_str(), ax.name.as_str(), ax.source),
+            ("LabelText", "Express", DerivedName::Context)
+        );
     }
 }

@@ -937,7 +937,13 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 .filter(|a| !a.starts_with("--"))
                 .collect();
             if let Some((x, y)) = parse_coords(&coord_args) {
-                return Ok(json!({ "id": id, "action": "click", "x": x, "y": y }));
+                let mut cmd = json!({ "id": id, "action": "click", "x": x, "y": y });
+                // A point can be a `target=_blank` link too: `--follow` used
+                // to be dropped here, so the click never looked for its tab.
+                if follow {
+                    cmd["follow"] = json!(true);
+                }
+                return Ok(cmd);
             }
             let sel = rest
                 .iter()
@@ -3520,7 +3526,21 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     }
                     Ok(cmd)
                 }
-                Some("stop") => Ok(json!({ "id": id, "action": "recording_stop" })),
+                Some("stop") => {
+                    let mut cmd = json!({ "id": id, "action": "recording_stop" });
+                    // `--expect-path <p>`: stop only the recording writing to
+                    // `p`, so a late stop never ends a newer recording.
+                    if let Some(i) = rest.iter().position(|a| *a == "--expect-path") {
+                        let path = rest
+                            .get(i + 1)
+                            .ok_or_else(|| ParseError::MissingArguments {
+                                context: "record stop --expect-path".to_string(),
+                                usage: "record stop [--expect-path <path>]",
+                            })?;
+                        cmd["expectPath"] = json!(path);
+                    }
+                    Ok(cmd)
+                }
                 Some("restart") => {
                     let path = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
                         context: "record restart".to_string(),
@@ -7091,6 +7111,15 @@ mod tests {
     }
 
     #[test]
+    fn test_click_coords_keep_follow() {
+        let cmd = parse_command(&args("click 449 320 --follow"), &default_flags()).unwrap();
+        assert_eq!(cmd["x"], 449.0);
+        assert_eq!(cmd["follow"], true);
+        let cmd = parse_command(&args("click 449 320"), &default_flags()).unwrap();
+        assert!(cmd.get("follow").is_none());
+    }
+
+    #[test]
     fn test_click_coords_comma() {
         let cmd = parse_command(&args("click 449,320"), &default_flags()).unwrap();
         assert_eq!(cmd["x"], 449.0);
@@ -8404,6 +8433,22 @@ mod tests {
     fn test_record_stop() {
         let cmd = parse_command(&args("record stop"), &default_flags()).unwrap();
         assert_eq!(cmd["action"], "recording_stop");
+        assert!(cmd.get("expectPath").is_none());
+    }
+
+    #[test]
+    fn test_record_stop_expect_path() {
+        let cmd = parse_command(
+            &args("record stop --expect-path /w/.chrome-use-out/a1/recording.webm"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["action"], "recording_stop");
+        assert_eq!(cmd["expectPath"], "/w/.chrome-use-out/a1/recording.webm");
+        assert!(matches!(
+            parse_command(&args("record stop --expect-path"), &default_flags()),
+            Err(ParseError::MissingArguments { .. })
+        ));
     }
 
     #[test]

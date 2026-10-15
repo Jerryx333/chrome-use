@@ -2,10 +2,14 @@
 //! The loopback protocol is private native IPC, not a page or browser endpoint.
 //! Each endpoint is authenticated by a capability kept in a mode-0600 file.
 
+use super::approval::{self, Pending};
 use super::backend::{self, Command as BackendCommand, Notice, Setup};
 use super::config_transaction::{atomic_write, private_open, private_tree};
-use super::conversation::{Conversation, Message, PageContext, Phase, Store};
+use super::conversation::{
+    Continuation, Conversation, LastTurn, Message, PageContext, Phase, Store,
+};
 use super::options::ModelOptions;
+use super::redact::{self, Redacted};
 use super::DiscoveryContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -153,15 +157,29 @@ fn operation_seconds(operation: &str) -> u64 {
         "agentInspect" => 30,
         "skillImport" => 40,
         "conversationDelete" => 45,
+        "agentActionBegin" | "agentDeliveryReport" => 5,
+        "agentActionReport" => 60,
+        "agentRecordingAuthorize" | "agentRecordingStop" => 20,
+        "conversationRecoveryReview" | "conversationRecoveryTerminate" => 15,
         _ => 10,
     }
 }
 
 fn exchange(endpoint: &Endpoint, operation: &str, params: Value) -> Result<Value, String> {
+    let wait = Duration::from_secs(operation_seconds(operation) + 2);
+    exchange_within(endpoint, operation, params, wait)
+}
+
+fn exchange_within(
+    endpoint: &Endpoint,
+    operation: &str,
+    params: Value,
+    wait: Duration,
+) -> Result<Value, String> {
     let mut stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_millis(750))
         .map_err(|_| "Agent service did not answer")?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(operation_seconds(operation) + 2)))
+        .set_read_timeout(Some(wait.max(Duration::from_millis(1))))
         .map_err(|_| "Cannot set agent service timeout")?;
     stream
         .set_write_timeout(Some(Duration::from_secs(3)))
@@ -442,12 +460,38 @@ fn launchd_plist(
     ))
 }
 
+/// Panel evidence calls from a tool: reach the running service of this
+/// profile or fail. A tool call never starts or replaces a service, and the
+/// whole exchange is bounded by the caller's budget.
+pub(super) fn call_existing(
+    operation: &str,
+    params: &Value,
+    profile: &str,
+    budget: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + budget;
+    let context = DiscoveryContext::current()?;
+    let root = data_root(&context)?;
+    let directory = profile_directory(&root, profile)?;
+    let existing = endpoint(&directory, profile)?;
+    exchange_within(
+        &existing,
+        operation,
+        params.clone(),
+        deadline.saturating_duration_since(Instant::now()),
+    )
+}
+
 pub(super) fn call(
     operation: &str,
     params: &Value,
     profile: Option<&str>,
 ) -> Result<Value, String> {
     let profile = profile.ok_or("Conversation operations require a bound Chrome profile")?;
+    if super::evidence_proto::OPERATIONS.contains(&operation) {
+        let budget = Duration::from_secs(operation_seconds(operation));
+        return call_existing(operation, params, profile, budget);
+    }
     let context = DiscoveryContext::current()?;
     let root = data_root(&context)?;
     let directory = profile_directory(&root, profile)?;
@@ -487,43 +531,265 @@ struct Job {
     retiring: bool,
     sender: mpsc::Sender<BackendCommand>,
 }
+
+#[path = "service_evidence.rs"]
+mod evidence_ops;
+use evidence_ops::EvidenceState;
+
+/// What a backend process said about itself in its `ready` notice.
+#[derive(Clone, Default)]
+struct BackendInfo {
+    generation: u64,
+    version: Option<String>,
+    resumable: Option<bool>,
+    /// The MCP client's tool timeout the service set; null where the
+    /// backend offers no way to set it (OpenCode).
+    client_timeout: Option<u64>,
+}
+
+/// The turn a conversation is running, from `turnStarted` to `turnEnded`.
+struct Turn {
+    message_id: String,
+    generation: u64,
+    /// The turn was planned on the live process; `start` must find it there.
+    reuse: bool,
+    /// The message was handed to a backend process.
+    dispatched: bool,
+    first_sequence: u64,
+    open_tools: std::collections::BTreeMap<String, OpenTool>,
+    /// Tool names by call id, for results that only carry the id (Claude).
+    names: HashMap<String, String>,
+    completed: Vec<String>,
+    answered: bool,
+    final_items: std::collections::BTreeSet<String>,
+    /// A chrome_use call of this turn was closed by its client's timeout.
+    client_timeout: bool,
+    /// First line of the last redacted answer, for `lastTurn.preview`.
+    preview: Option<String>,
+}
+
+struct OpenTool {
+    started: Instant,
+    name: String,
+    action_ids: Vec<String>,
+    browser: bool,
+}
+
+/// A failed turn start. `unconfirmed` names the old process generation whose
+/// exit was never confirmed; that leaves the conversation needing recovery.
+struct StartFailure {
+    reason: String,
+    unconfirmed: Option<u64>,
+}
+
+impl From<String> for StartFailure {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            unconfirmed: None,
+        }
+    }
+}
+impl From<&str> for StartFailure {
+    fn from(reason: &str) -> Self {
+        reason.to_string().into()
+    }
+}
+
+/// Backend versions whose committed fixtures show both a clean completion
+/// and what happens when the MCP client times out a chrome_use call (plan
+/// D1a rule 3). Only these keep their process after a cleanly completed
+/// turn; every other version, or a missing version, retires its generation
+/// after every turn. The `*-mcp-timeout` fixtures show Codex 0.162.1, Claude
+/// 2.1.300 and Pi 1.1.0 closing a timed-out call as a failed tool and
+/// completing the turn while the MCP server still runs it
+/// (`fixtures/README.md`). That close is recognisable ([`client_timed_out`])
+/// and retires the generation, so a turn that keeps its generation had every
+/// chrome_use call return first. Pi reports no version and stays off.
+const GENERATION_REUSE: &[(&str, &str)] = &[("codex", "0.162.1"), ("claude", "2.1.300")];
+
+/// A chrome_use call the backend's MCP client gave up on, from the closing
+/// tool notice. Matched on the structured error flag plus the text each
+/// backend uses in the `*-mcp-timeout` fixtures: Codex `mcpToolCall`
+/// `status: "failed"` with `error.message` "timed out awaiting tools/call";
+/// Claude `tool_result` `is_error` with "timed out after"; Pi
+/// `tool_execution_end` `isError` with "MCP request timed out".
+fn client_timed_out(item: &Value) -> bool {
+    fn texts(value: &Value) -> Vec<&str> {
+        match value {
+            Value::String(text) => vec![text.as_str()],
+            Value::Array(parts) => parts.iter().flat_map(texts).collect(),
+            Value::Object(map) => map.get("text").map(texts).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+    let says = |value: &Value, pattern: &str| texts(value).iter().any(|t| t.contains(pattern));
+    if item["type"] == "mcpToolCall" {
+        return item["status"] == "failed"
+            && says(&item["error"]["message"], "timed out awaiting tools/call");
+    }
+    if item["type"] == "tool_result" {
+        return item["is_error"] == true && says(&item["content"], "timed out after");
+    }
+    item["is_error"] == true
+        && (says(&item["result"]["content"], "MCP request timed out")
+            || says(&item["result"], "MCP request timed out"))
+}
+
+const NOT_RESUMABLE: &str =
+    "This agent cannot continue after an interrupted request. Start a new conversation.";
+
+/// Kinds that only add evidence; they skip the `state.json` rewrite.
+const EVIDENCE_KINDS: &[&str] = &[
+    "actionAdmitted",
+    "browserActionTarget",
+    "actionObserved",
+    "unboundActionReport",
+    "fileDelivered",
+    "artifactCreated",
+    "artifactState",
+    "artifactReady",
+    "artifactUnavailable",
+    "progressStalled",
+    "progressResumed",
+];
+
+/// Item types that are not tool calls (mirrors `panel-state.js`).
+const NOT_TOOLS: &[&str] = &[
+    "reasoning",
+    "userMessage",
+    "agentMessage",
+    "plan",
+    "contextCompaction",
+];
+
+static BROWSER_TOOL: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
+    regex_lite::Regex::new(r"^(?:mcp__chrome_use__)?chrome_use[_.][a-z_]+$")
+        .expect("browser tool pattern")
+});
+
 struct Engine {
     store: Store,
     chats: HashMap<String, Conversation>,
     jobs: HashMap<String, Job>,
-    requests: HashMap<(String, String), (Value, String, Value, bool)>,
+    requests: HashMap<(String, String), Pending>,
+    /// Per-conversation redaction state (known secrets, held stream text).
+    secrets: HashMap<String, redact::Secrets>,
+    /// Engine-wide request revision counter.
+    revision: u64,
+    /// Per conversation: how often each request id was journaled, loaded
+    /// from the journal on first need.
+    request_ids: HashMap<String, HashMap<String, u32>>,
+    turns: HashMap<String, Turn>,
+    backends: HashMap<String, BackendInfo>,
+    /// Highest generation spawned per conversation in this service's life.
+    spawned: HashMap<String, u64>,
+    /// Conversations whose agent cannot resume its session (from the journal).
+    blocked: HashMap<String, bool>,
+    /// Last journaled control per conversation.
+    controls: HashMap<String, &'static str>,
+    reuse_allowlist: Vec<(String, String)>,
+    /// How long a retired process may take to confirm its exit.
+    retire_wait: Duration,
+    /// Notified whenever a job leaves `jobs`.
+    job_exits: Arc<tokio::sync::Notify>,
+    evidence: EvidenceState,
+    /// Windows: jobs of process trees whose exit was not confirmed, with
+    /// their generation. Only these prove anything about such a tree.
+    #[cfg(windows)]
+    held_jobs: HashMap<String, (u64, Arc<super::windows::ProcessJob>)>,
     profile: String,
     stop: bool,
     schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
 }
 
 impl Engine {
+    fn new(
+        store: Store,
+        profile: String,
+        schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
+    ) -> Self {
+        Self {
+            store,
+            chats: HashMap::new(),
+            jobs: HashMap::new(),
+            requests: HashMap::new(),
+            secrets: HashMap::new(),
+            revision: 0,
+            request_ids: HashMap::new(),
+            turns: HashMap::new(),
+            backends: HashMap::new(),
+            spawned: HashMap::new(),
+            blocked: HashMap::new(),
+            controls: HashMap::new(),
+            reuse_allowlist: GENERATION_REUSE
+                .iter()
+                .map(|(agent, version)| (agent.to_string(), version.to_string()))
+                .collect(),
+            retire_wait: Duration::from_secs(10),
+            job_exits: Arc::new(tokio::sync::Notify::new()),
+            evidence: EvidenceState::default(),
+            #[cfg(windows)]
+            held_jobs: HashMap::new(),
+            profile,
+            stop: false,
+            schedules,
+        }
+    }
     /// Answer every waiting approval for a full-access conversation exactly as
-    /// the panel's "Allow once" would. Questions still go to the user.
+    /// the panel's "Allow once" would. Questions still go to the user. While
+    /// the user is stopping the turn, approvals are declined instead, so no
+    /// approval can start an action after Stop.
     fn approve_pending(&mut self, id: &str) {
         let Some(sender) = self.jobs.get(id).map(|j| j.sender.clone()) else {
             return;
         };
-        for ((chat, _), (request_id, method, original, sent)) in self.requests.iter_mut() {
-            if chat != id || *sent {
+        let stopping = self
+            .chats
+            .get(id)
+            .is_some_and(|chat| chat.phase == Phase::Stopping);
+        for ((chat, _), pending) in self.requests.iter_mut() {
+            if chat != id || pending.sent {
                 continue;
             }
-            let Some(result) = automatic_approval(method, original) else {
+            let answer = if stopping {
+                approval::automatic_decline(&pending.method, &pending.original)
+            } else {
+                automatic_approval(&pending.method, &pending.original)
+            };
+            let Some(result) = answer else {
                 continue;
             };
-            if validate_reply(method, original, &result).is_err() {
+            if validate_reply(&pending.method, &pending.original, &result).is_err() {
                 continue;
             }
             if sender
                 .try_send(BackendCommand::Reply {
-                    id: request_id.clone(),
+                    id: pending.request_id.clone(),
                     result,
                 })
                 .is_ok()
             {
-                *sent = true;
+                pending.sent = true;
             }
         }
+    }
+    /// Backend or page text for a field saved in `state.json` or the index,
+    /// redacted like the journal (rules and known secrets).
+    fn scrubbed(&mut self, id: &str, text: &str) -> String {
+        redact::display(text, self.secrets.entry(id.into()).or_default())
+    }
+    /// Drop a conversation's job and wake everyone waiting for it to go.
+    fn remove_job(&mut self, id: &str) {
+        self.jobs.remove(id);
+        self.job_exits.notify_waiters();
+    }
+    fn forget(&mut self, id: &str) {
+        self.secrets.remove(id);
+        self.request_ids.remove(id);
+        self.blocked.remove(id);
+        self.controls.remove(id);
+        self.evidence.forget(id);
     }
     fn chat(&mut self, id: &str) -> Result<&mut Conversation, String> {
         if !self.chats.contains_key(id) {
@@ -536,10 +802,13 @@ impl Engine {
                     .map(|(key, _)| key.clone());
                 if let Some(victim) = victim {
                     self.chats.remove(&victim);
+                    self.forget(&victim);
                 }
             }
             let chat = self.store.load(id)?;
+            self.controls.insert(id.into(), chat.control());
             self.chats.insert(id.into(), chat);
+            self.ensure_evidence(id)?;
         }
         self.chats
             .get_mut(id)
@@ -549,13 +818,391 @@ impl Engine {
         let chat = self.chats.get(id).ok_or("Conversation was not found")?;
         self.store.save(chat)
     }
+    /// Journal one event. Every write goes through the redaction rules.
     fn record(&mut self, id: &str, kind: &str, data: Value) -> Result<(), String> {
+        match self.redact(id, kind, data) {
+            Some(data) => self.record_redacted(id, kind, data),
+            None => Ok(()),
+        }
+    }
+    fn redact(&mut self, id: &str, kind: &str, data: Value) -> Option<Redacted> {
+        redact::event(kind, data, self.secrets.entry(id.into()).or_default())
+    }
+    fn record_redacted(&mut self, id: &str, kind: &str, data: Redacted) -> Result<(), String> {
+        // Only the redacted text may become a notification preview.
+        if let Some(line) = super::conversation::answer_preview(kind, data.value()) {
+            if let Some(turn) = self.turns.get_mut(id) {
+                turn.preview = Some(line);
+            }
+        }
         let chat = self.chats.get_mut(id).ok_or("Conversation was not found")?;
+        if matches!(kind, "terminal" | "exited" | "processUnconfirmed") {
+            // Streamed text held back by the scrubber ends with its turn.
+            let held = self
+                .secrets
+                .get_mut(id)
+                .map(|s| s.flush())
+                .unwrap_or_default();
+            for (held_kind, held_data) in held {
+                self.store.event(chat, held_kind, held_data)?;
+            }
+        }
         self.store.event(chat, kind, data)?;
-        if kind != "textDelta" {
+        if kind != "textDelta" && !EVIDENCE_KINDS.contains(&kind) {
             self.store.save(chat)?;
         }
         Ok(())
+    }
+    /// Sequence of the last journaled event.
+    fn last_sequence(&self, id: &str) -> u64 {
+        self.chats
+            .get(id)
+            .map_or(0, |chat| chat.next_sequence.saturating_sub(1))
+    }
+    /// Journal `controlChanged` when the derived control moved.
+    fn sync_control(&mut self, id: &str, reason: &str) -> Result<(), String> {
+        let Some(chat) = self.chats.get(id) else {
+            return Ok(());
+        };
+        let to = chat.control();
+        let message_id = chat.active.as_ref().map(|m| m.id.clone());
+        let from = self.controls.insert(id.into(), to);
+        if from == Some(to) {
+            return Ok(());
+        }
+        self.record(
+            id,
+            "controlChanged",
+            json!({"v":1,"messageId":message_id,"from":from,"to":to,"reason":reason}),
+        )
+    }
+    /// Whether this conversation's agent can no longer resume its session.
+    fn is_blocked(&mut self, id: &str) -> Result<bool, String> {
+        if let Some(blocked) = self.blocked.get(id) {
+            return Ok(*blocked);
+        }
+        let blocked = self.store.cannot_resume(id)?;
+        self.blocked.insert(id.into(), blocked);
+        Ok(blocked)
+    }
+    /// The live, non-retired process of `generation` may act for the active
+    /// message. Leases, assessments and recording use this (plan D1a).
+    #[allow(dead_code)]
+    fn admits(&self, id: &str, generation: u64) -> Result<&Message, &'static str> {
+        let job = self.jobs.get(id).ok_or("The agent process has ended")?;
+        if job.generation != generation || job.retiring {
+            return Err("This request belongs to an agent process that has been retired");
+        }
+        let chat = self.chats.get(id).ok_or("Conversation was not found")?;
+        if !matches!(
+            chat.phase,
+            Phase::Starting | Phase::Running | Phase::WaitingInput
+        ) {
+            return Err(if chat.phase == Phase::Stopping {
+                "The user stopped this request"
+            } else {
+                "The conversation needs recovery or has no running request"
+            });
+        }
+        chat.active
+            .as_ref()
+            .ok_or("The conversation has no running request")
+    }
+    /// Take the next message and journal `turnStarted` in the same lock.
+    /// Plans the generation the turn runs on: the live process when it may
+    /// be reused, otherwise a new one, retiring any process still around.
+    fn begin(&mut self, id: &str) -> Result<Option<Message>, String> {
+        if self.is_blocked(id)? {
+            return Ok(None);
+        }
+        // The first message of a fork continues the recovered conversation.
+        let fork = if self.chat(id)?.generation == 0 {
+            evidence_ops::fork_preface(&self.store, id)
+        } else {
+            None
+        };
+        let chat = self.chat(id)?;
+        let after_stop = chat.phase == Phase::Interrupted;
+        let Some(mut next) = chat.begin_next() else {
+            return Ok(None);
+        };
+        if let Some(preface) = fork {
+            next.continuation = Some(Continuation::AfterRecovery);
+            next.preface = Some(preface);
+        } else if after_stop {
+            next.continuation = Some(Continuation::AfterStop);
+        }
+        if let Some(active) = chat.active.as_mut() {
+            active.continuation = next.continuation;
+            active.preface = next.preface.clone();
+        }
+        let direct = chat.active_direct;
+        let (full_access, options) = (chat.full_access, chat.options.clone());
+        let reuse = self.jobs.get(id).is_some_and(|job| {
+            !job.retiring && job.full_access == full_access && job.options == options
+        });
+        if !reuse {
+            if let Some(job) = self.jobs.get_mut(id).filter(|job| !job.retiring) {
+                job.retiring = true;
+                let _ = job.sender.try_send(BackendCommand::Shutdown);
+            }
+        }
+        let generation = match self.jobs.get(id) {
+            Some(job) if reuse => job.generation,
+            _ => {
+                let chat = self.chat(id)?;
+                chat.generation += 1;
+                chat.generation
+            }
+        };
+        self.record(
+            id,
+            "turnStarted",
+            json!({"v":1,"messageId":next.id,"generation":generation,"direct":direct,"continuation":next.continuation}),
+        )?;
+        self.turns.insert(
+            id.into(),
+            Turn {
+                message_id: next.id.clone(),
+                generation,
+                reuse,
+                dispatched: false,
+                first_sequence: self.last_sequence(id),
+                open_tools: Default::default(),
+                names: HashMap::new(),
+                completed: Vec::new(),
+                answered: false,
+                final_items: Default::default(),
+                client_timeout: false,
+                preview: None,
+            },
+        );
+        let started = self.last_sequence(id);
+        self.evidence.detectors.insert(
+            id.into(),
+            super::progress::StallDetector::new(started, Instant::now()),
+        );
+        self.sync_control(id, "turnStarted")?;
+        Ok(Some(next))
+    }
+    /// Stop before the turn reached any process (start() still waits for a
+    /// retiring one): end it as interrupted without touching that process.
+    fn cancel_undispatched(&mut self, id: &str) -> Result<bool, String> {
+        let Some(turn) = self.turns.get(id).filter(|t| !t.dispatched) else {
+            return Ok(false);
+        };
+        let generation = turn.generation;
+        let chat = self.chat(id)?;
+        if !chat.phase.busy() || !chat.terminal(generation, "interrupted", None)? {
+            return Ok(false);
+        }
+        self.end_turn(id, "interrupted", &Value::Null)?;
+        self.sync_control(id, "conversationStop")?;
+        self.persist(id)?;
+        Ok(true)
+    }
+    /// Leases of the running turn admitted before this stop.
+    fn mark_stopped_leases(&mut self, id: &str) {
+        let Some(message) = self
+            .chats
+            .get(id)
+            .and_then(|c| c.active.as_ref())
+            .map(|m| m.id.clone())
+        else {
+            return;
+        };
+        for lease in self
+            .evidence
+            .leases
+            .entry(id.into())
+            .or_default()
+            .values_mut()
+        {
+            if lease.message_id == message {
+                lease.after_stop = true;
+            }
+        }
+    }
+    /// Follow a `tool` notice: which calls of the running turn are open.
+    fn track_tool(&mut self, id: &str, data: &Value) {
+        let agent = self
+            .chats
+            .get(id)
+            .map(|c| c.agent_id.clone())
+            .unwrap_or_default();
+        let Some(turn) = self.turns.get_mut(id) else {
+            return;
+        };
+        let item = &data["item"];
+        if item["type"]
+            .as_str()
+            .is_some_and(|kind| NOT_TOOLS.contains(&kind))
+        {
+            return;
+        }
+        let Some(call) = ["toolCallId"]
+            .iter()
+            .find_map(|k| data[*k].as_str())
+            .or_else(|| {
+                ["id", "tool_use_id", "toolCallId"]
+                    .iter()
+                    .find_map(|k| item[*k].as_str())
+            })
+            .filter(|call| !call.is_empty() && call.len() <= 1024)
+            .map(String::from)
+        else {
+            return;
+        };
+        let name = ["name", "tool", "toolName", "title"]
+            .iter()
+            .find_map(|k| item[*k].as_str())
+            .map(String::from)
+            .or_else(|| turn.names.get(&call).cloned())
+            .unwrap_or_default();
+        if turn.names.len() < 1024 {
+            turn.names.insert(call.clone(), name.clone());
+        }
+        let browser = BROWSER_TOOL.is_match(&name)
+            || item["server"] == "chrome_use"
+            || (agent == "opencode" && name == "execute");
+        if data["completed"] == true {
+            if browser && client_timed_out(item) {
+                turn.client_timeout = true;
+            }
+            turn.open_tools.remove(&call);
+            if turn.completed.len() < 256 {
+                turn.completed.push(call);
+            }
+            return;
+        }
+        let action_ids = data["actionIds"]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if turn.open_tools.len() < 256 {
+            turn.open_tools.insert(
+                call,
+                OpenTool {
+                    started: Instant::now(),
+                    name,
+                    action_ids,
+                    browser,
+                },
+            );
+        }
+    }
+    /// Journal `turnEnded` and what follows it, then retire the generation
+    /// when the turn did not end cleanly (plan 4.1, D1a rule 2).
+    fn end_turn(&mut self, id: &str, outcome: &str, error: &Value) -> Result<(), String> {
+        let Some(turn) = self.turns.remove(id) else {
+            return Ok(());
+        };
+        let last = self.last_sequence(id);
+        let open_leases = self.open_lease_ids(id, &turn.message_id);
+        self.evidence.detectors.remove(id);
+        // Set before `turnEnded` is journaled: that write saves the summary.
+        self.chat(id)?.last_turn = Some(LastTurn {
+            message_id: turn.message_id.clone(),
+            outcome: outcome.into(),
+            ended: super::conversation::now(),
+            preview: turn.preview.clone(),
+        });
+        self.record(
+            id,
+            "turnEnded",
+            json!({"v":1,"messageId":turn.message_id,"generation":turn.generation,"outcome":outcome,"error":error,"emptyAnswer":!turn.answered,"finalItemIds":turn.final_items,"sourceSequences":[turn.first_sequence,last],"openLeases":open_leases}),
+        )?;
+        if !turn.open_tools.is_empty() {
+            let unresolved: Vec<Value> = turn
+                .open_tools
+                .iter()
+                .take(64)
+                .map(|(call, tool)| {
+                    let action = tool.action_ids.first();
+                    let executed = action
+                        .and_then(|a| self.lease_execution(id, a))
+                        .unwrap_or("unknown");
+                    json!({"toolCallId":call,"name":tool.name,"actionId":action,"executed":executed})
+                })
+                .collect();
+            let mut data = json!({"v":1,"messageId":turn.message_id,"outcome":outcome,"completed":turn.completed.iter().take(256).collect::<Vec<_>>(),"unresolved":unresolved});
+            if turn.open_tools.len() > 64 {
+                data["truncated"] = (turn.open_tools.len() - 64).into();
+            }
+            self.record(id, "batchInterrupted", data)?;
+        }
+        self.close_leases(id, &turn.message_id)?;
+        self.final_assessment(id, &turn.message_id, outcome)?;
+        self.summarize_turn(id, &turn.message_id, turn.first_sequence)?;
+        self.stop_recording_after(id, &turn.message_id);
+        // Only what this generation's own process said counts.
+        let info = self
+            .backends
+            .get(id)
+            .filter(|info| info.generation == turn.generation)
+            .cloned()
+            .unwrap_or_default();
+        let agent = self.chat(id)?.agent_id.clone();
+        let reason = if outcome != "completed" {
+            Some("notCompleted")
+        } else if turn.open_tools.values().any(|tool| tool.browser) {
+            Some("openTool")
+        } else if turn.client_timeout {
+            Some("clientTimeout")
+        } else if !open_leases.is_empty() {
+            Some("openLease")
+        } else if !info.version.as_ref().is_some_and(|version| {
+            self.reuse_allowlist
+                .iter()
+                .any(|(a, v)| a == &agent && v == version)
+        }) || info.client_timeout.is_none_or(|secs| secs < 30)
+        {
+            // Without a client timeout above the Begin window, a turn can
+            // complete while a chrome_use call still runs (D1a rule 3).
+            Some("unlistedVersion")
+        } else {
+            None
+        };
+        let Some(reason) = reason else {
+            return Ok(());
+        };
+        if let Some(job) = self
+            .jobs
+            .get_mut(id)
+            .filter(|job| job.generation == turn.generation)
+        {
+            job.retiring = true;
+            let _ = job.sender.try_send(BackendCommand::Shutdown);
+        }
+        // Without a resumable session a new process would start an agent
+        // with no history, so the conversation stops here.
+        let resumable = info.resumable != Some(false) || self.chat(id)?.session_id.is_none();
+        self.record(
+            id,
+            "generationRetired",
+            json!({"v":1,"generation":turn.generation,"reason":reason,"resumable":resumable}),
+        )?;
+        if !resumable {
+            self.blocked.insert(id.into(), true);
+            self.chat(id)?.queue_paused = true;
+        }
+        Ok(())
+    }
+    /// Journal counts of request ids for one conversation.
+    fn request_counts(&mut self, id: &str) -> Result<&mut HashMap<String, u32>, String> {
+        if !self.request_ids.contains_key(id) {
+            let counts = self.store.request_ids(id)?;
+            self.request_ids.insert(id.into(), counts);
+        }
+        Ok(self
+            .request_ids
+            .get_mut(id)
+            .expect("request ids were loaded"))
     }
     fn notice(
         &mut self,
@@ -563,19 +1210,42 @@ impl Engine {
         generation: u64,
         mut notice: Notice,
     ) -> Result<Option<Message>, String> {
+        #[cfg(windows)]
+        if let Some(job) = notice.job.take() {
+            self.held_jobs.insert(id.into(), (generation, job));
+        }
         if self
             .jobs
             .get(id)
             .is_some_and(|job| job.generation == generation && job.retiring)
         {
-            if notice.kind == "exited" {
-                self.jobs.remove(id);
-                self.requests.retain(|(chat, _), _| chat != id);
-                return Ok(None);
+            match notice.kind {
+                "exited" => {
+                    self.remove_job(id);
+                    self.requests.retain(|(chat, _), _| chat != id);
+                }
+                "processUnconfirmed" => {
+                    // A retired process whose exit is unconfirmed may still
+                    // act; nothing starts until the user recovers.
+                    self.remove_job(id);
+                    self.requests.retain(|(chat, _), _| chat != id);
+                    let error = self.scrubbed(
+                        id,
+                        notice.data["error"]
+                            .as_str()
+                            .unwrap_or("The retired agent process did not confirm its exit"),
+                    );
+                    let chat = self.chat(id)?;
+                    chat.phase = Phase::RecoveryRequired;
+                    chat.queue_paused = true;
+                    chat.last_error = Some(error);
+                    notice.data["generation"] = generation.into();
+                    self.record(id, notice.kind, notice.data)?;
+                    self.sync_control(id, "processUnconfirmed")?;
+                }
+                _ => {}
             }
-            if notice.kind != "processUnconfirmed" {
-                return Ok(None);
-            }
+            return Ok(None);
         }
         if self.chat(id)?.generation != generation {
             return Ok(None);
@@ -590,6 +1260,8 @@ impl Engine {
         if let Some(message) = self.chat(id)?.active.as_ref() {
             notice.data["messageId"] = message.id.clone().into();
         }
+        // The turn's outcome, decided before `terminal()` changes the phase.
+        let mut ended: Option<&'static str> = None;
         // Claude confirms a permission round trip by returning the matching
         // tool_use_id. A stdin write alone never resolves the request.
         if notice.kind == "tool" && notice.data["completed"] == true {
@@ -597,27 +1269,72 @@ impl Engine {
                 let resolved: Vec<_> = self
                     .requests
                     .iter()
-                    .filter(|((chat, _), (_, method, params, sent))| {
+                    .filter(|((chat, _), pending)| {
                         chat == id
-                            && *sent
-                            && method == "can_use_tool"
-                            && params["tool_use_id"] == tool_id
+                            && pending.sent
+                            && pending.method == "can_use_tool"
+                            && pending.original["tool_use_id"] == tool_id
                     })
-                    .map(|(key, (request_id, _, _, _))| (key.clone(), request_id.clone()))
+                    .map(|(key, pending)| (key.clone(), pending.request_id.clone()))
                     .collect();
                 for (key, request_id) in resolved {
-                    self.requests.remove(&key);
-                    self.record(id, "requestResolved", json!({"requestId":request_id}))?;
+                    let revision = self.requests.remove(&key).map(|p| p.revision);
+                    self.record(
+                        id,
+                        "requestResolved",
+                        json!({"requestId":request_id,"requestRevision":revision}),
+                    )?;
                 }
             }
         }
+        let mut prepared = None;
         match notice.kind {
             "ready" => {
+                self.backends.insert(
+                    id.into(),
+                    BackendInfo {
+                        generation,
+                        version: notice.data["backendVersion"]
+                            .as_str()
+                            .filter(|v| v.len() <= 64)
+                            .map(String::from),
+                        resumable: notice.data["resumable"].as_bool(),
+                        client_timeout: notice.data["mcpToolTimeoutSecs"].as_u64(),
+                    },
+                );
                 let chat = self.chat(id)?;
                 chat.session_id = notice.data["sessionId"].as_str().map(String::from);
                 chat.model = notice.data["model"].as_str().map(String::from);
             }
+            "textFinal" | "textRole" => {
+                if let Some(turn) = self.turns.get_mut(id) {
+                    let item = notice.data["itemId"].as_str().unwrap_or("assistant");
+                    if notice.data["role"] == "final" && turn.final_items.len() < 64 {
+                        turn.final_items.insert(item.chars().take(256).collect());
+                    }
+                    if notice.data["text"]
+                        .as_str()
+                        .is_some_and(|t| !t.trim().is_empty())
+                    {
+                        turn.answered = true;
+                    }
+                }
+            }
             "running" | "textDelta" | "tool" => {
+                // A delta-only backend (OpenCode ACP) never sends textFinal;
+                // its streamed text is the answer.
+                if notice.kind == "textDelta"
+                    && notice.data["text"]
+                        .as_str()
+                        .is_some_and(|t| !t.trim().is_empty())
+                {
+                    if let Some(turn) = self.turns.get_mut(id) {
+                        turn.answered = true;
+                    }
+                }
+                if notice.kind == "tool" {
+                    self.track_tool(id, &notice.data);
+                }
                 let waiting = self.requests.keys().any(|(chat, _)| chat == id);
                 let chat = self.chat(id)?;
                 if chat.active.is_some() && chat.phase != Phase::Stopping {
@@ -635,15 +1352,59 @@ impl Engine {
                 if key.len() > 1024 || self.requests.len() >= 64 {
                     return Err("Backend request capacity reached".into());
                 }
+                // A re-sent request or a new process reusing an id gets a new
+                // revision; replies bound to the old one are refused.
+                self.revision += 1;
+                let revision = self.revision;
+                let count = {
+                    let counts = self.request_counts(id)?;
+                    let count = counts.entry(key.clone()).or_insert(0);
+                    *count += 1;
+                    *count
+                };
+                notice.data["generation"] = generation.into();
+                notice.data["requestRevision"] = revision.into();
+                let mut original = notice.data["params"].clone();
+                // Redacted whole first; a request too large to review is then
+                // journaled as a preview of the redacted text, and no reply
+                // to it is accepted (`validate_reply` refuses `truncated`).
+                let too_large = original.to_string().len() > redact::ITEM_BUDGET;
+                let mut journaled = self
+                    .redact(id, "request", notice.data.clone())
+                    .ok_or("Backend request could not be recorded")?;
+                if too_large {
+                    journaled = redact::preview_params(journaled);
+                    // Never approvable: keep only what resolving or
+                    // declining it needs, not the large original.
+                    let mut kept = serde_json::Map::new();
+                    for key in ["tool_use_id", "tool_name", "subtype", "options", "toolCall"] {
+                        if let Some(field) = original.get(key) {
+                            let field = match key {
+                                "toolCall" => json!({"toolCallId": field["toolCallId"]}),
+                                _ => field.clone(),
+                            };
+                            if field.to_string().len() <= 4096 {
+                                kept.insert(key.into(), field);
+                            }
+                        }
+                    }
+                    kept.insert("truncated".into(), true.into());
+                    original = Value::Object(kept);
+                }
                 self.requests.insert(
                     (id.into(), key),
-                    (
+                    Pending {
                         request_id,
-                        notice.data["method"].as_str().unwrap_or("").into(),
-                        notice.data["params"].clone(),
-                        false,
-                    ),
+                        method: notice.data["method"].as_str().unwrap_or("").into(),
+                        original,
+                        sent: false,
+                        generation,
+                        revision,
+                        sent_projection: journaled.value()["params"].clone(),
+                        single_revision: count == 1,
+                    },
                 );
+                prepared = Some(journaled);
                 if self.chat(id)?.phase != Phase::Stopping {
                     self.chat(id)?.phase = Phase::WaitingInput;
                 }
@@ -654,10 +1415,13 @@ impl Engine {
             "requestResolved" => {
                 let key = serde_json::to_string(&notice.data["requestId"])
                     .map_err(|_| "Invalid backend request id")?;
-                self.requests.remove(&(id.into(), key));
+                if let Some(pending) = self.requests.remove(&(id.into(), key)) {
+                    notice.data["requestRevision"] = pending.revision.into();
+                }
             }
             "title" => {
                 if let Some(title) = notice.data["title"].as_str() {
+                    let title = self.scrubbed(id, title);
                     self.chat(id)?.title = title.chars().take(80).collect();
                 }
             }
@@ -665,16 +1429,25 @@ impl Engine {
                 let status = notice.data["status"]
                     .as_str()
                     .ok_or("Missing backend terminal status")?;
-                self.chat(id)?.terminal(
-                    generation,
-                    status,
-                    notice.data["error"].as_str().map(String::from),
-                )?;
+                let error = notice.data["error"].as_str().map(|e| self.scrubbed(id, e));
+                if self.chat(id)?.terminal(generation, status, error)? {
+                    ended = Some(match status {
+                        "completed" => "completed",
+                        "interrupted" => "interrupted",
+                        _ => "failed",
+                    });
+                }
                 self.requests.retain(|(chat, _), _| chat != id);
             }
             "exited" => {
-                self.jobs.remove(id);
+                self.remove_job(id);
                 self.requests.retain(|(chat, _), _| chat != id);
+                let error = self.scrubbed(
+                    id,
+                    notice.data["error"]
+                        .as_str()
+                        .unwrap_or("Backend process ended before the turn completed"),
+                );
                 let chat = self.chat(id)?;
                 if chat.active.is_some() {
                     let status = if chat.phase == Phase::Stopping {
@@ -682,40 +1455,77 @@ impl Engine {
                     } else {
                         "failed"
                     };
-                    chat.terminal(
-                        generation,
-                        status,
-                        Some(
-                            notice.data["error"]
-                                .as_str()
-                                .unwrap_or("Backend process ended before the turn completed")
-                                .into(),
-                        ),
-                    )?;
+                    ended = Some(status);
+                    chat.terminal(generation, status, Some(error))?;
                 }
             }
             "processUnconfirmed" => {
-                self.jobs.remove(id);
+                self.remove_job(id);
                 self.requests.retain(|(chat, _), _| chat != id);
-                let chat = self.chat(id)?;
-                chat.phase = Phase::RecoveryRequired;
-                chat.queue_paused = true;
-                chat.last_error = Some(
+                let error = self.scrubbed(
+                    id,
                     notice.data["error"]
                         .as_str()
-                        .unwrap_or("Backend process state is unconfirmed")
-                        .into(),
+                        .unwrap_or("Backend process state is unconfirmed"),
                 );
+                let chat = self.chat(id)?;
+                if chat.active.is_some() {
+                    ended = Some("unknown");
+                }
+                chat.phase = Phase::RecoveryRequired;
+                chat.queue_paused = true;
+                chat.last_error = Some(error);
             }
             _ => {}
         }
-        self.record(id, notice.kind, notice.data)?;
-        if ["terminal", "exited"].contains(&notice.kind) {
-            let next = self.chat(id)?.begin_next();
-            if next.is_some() {
-                self.persist(id)?;
+        // Recomputed before journaling, which saves the summary.
+        let waiting = self
+            .requests
+            .iter()
+            .filter(|((chat, _), pending)| chat == id && !pending.sent)
+            .map(|(_, pending)| pending.revision)
+            .max();
+        self.chat(id)?.waiting_request = waiting;
+        let error = notice.data["error"].clone();
+        if notice.kind == "contextCompacted" {
+            let message = notice.data["messageId"].clone();
+            notice.data = self.compacted(id, &notice.data)?;
+            notice.data["messageId"] = message;
+        }
+        let activity = matches!(
+            notice.kind,
+            "running"
+                | "textDelta"
+                | "textFinal"
+                | "textRole"
+                | "tool"
+                | "request"
+                | "requestResolved"
+                | "contextCompacted"
+        );
+        match prepared {
+            Some(data) => self.record_redacted(id, notice.kind, data)?,
+            None => self.record(id, notice.kind, notice.data)?,
+        }
+        if activity {
+            let sequence = self.last_sequence(id);
+            let message = self.turns.get(id).map(|t| t.message_id.clone());
+            let signals = self
+                .evidence
+                .detectors
+                .get_mut(id)
+                .map(|d| d.backend_activity(sequence, Instant::now()))
+                .unwrap_or_default();
+            if let Some(message) = message {
+                self.journal_signals(id, &message, signals)?;
             }
-            Ok(next)
+        }
+        if let Some(outcome) = ended {
+            self.end_turn(id, outcome, &error)?;
+        }
+        self.sync_control(id, notice.kind)?;
+        if ["terminal", "exited"].contains(&notice.kind) {
+            self.begin(id)
         } else {
             Ok(None)
         }
@@ -761,6 +1571,9 @@ struct Send {
     #[serde(default)]
     attachments: Vec<super::attachments::Attachment>,
     skill_id: Option<String>,
+    /// The user allowed recording this request (plan 6.4).
+    #[serde(default)]
+    record: bool,
 }
 
 #[derive(Deserialize)]
@@ -798,12 +1611,21 @@ struct Events {
     #[serde(default)]
     after: u64,
 }
+/// A reply is either a decision bound to a request revision (this build's
+/// panel) or a backend result echoed by an older panel.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Reply {
     conversation_id: String,
     request_id: Value,
-    result: Value,
+    #[serde(default)]
+    result: Option<Value>,
+    #[serde(default)]
+    generation: Option<u64>,
+    #[serde(default)]
+    request_revision: Option<u64>,
+    #[serde(default)]
+    decision: Option<Value>,
 }
 
 async fn dispatch(
@@ -823,6 +1645,15 @@ async fn dispatch(
         | "agentScheduleSave"
         | "agentScheduleDelete"
         | "agentScheduleRun" => schedule_dispatch(engine, operation, params).await,
+        operation if super::evidence_proto::OPERATIONS.contains(&operation) => {
+            evidence_ops::evidence_dispatch(engine, operation, params).await
+        }
+        "conversationArtifactRead" => evidence_ops::artifact_read(engine, params).await,
+        "conversationRecoveryReview"
+        | "conversationRecoveryTerminate"
+        | "conversationRecoveryFork" => {
+            evidence_ops::recovery_dispatch(engine, operation, params).await
+        }
 
         "agentInspect" => {
             let root = engine.lock().await.store.directory.clone();
@@ -1045,6 +1876,7 @@ async fn dispatch(
             let mut e = engine.lock().await;
             e.store.create(&chat)?;
             let result = chat.summary();
+            e.controls.insert(chat.id.clone(), chat.control());
             e.chats.insert(chat.id.clone(), chat);
             Ok(json!({"schemaVersion":1,"conversation":result}))
         }
@@ -1054,7 +1886,15 @@ async fn dispatch(
             })?;
             let mut e = engine.lock().await;
             let summary = e.chat(&p.conversation_id)?.summary();
-            let events = e.store.events(&p.conversation_id, p.after)?;
+            let mut events = e.store.events(&p.conversation_id, p.after)?;
+            // Events written before redaction existed are minimized for
+            // display; the journal file is not rewritten.
+            if let Some(rows) = events["events"].as_array_mut() {
+                for row in rows {
+                    let kind = row["kind"].as_str().unwrap_or("").to_string();
+                    redact::legacy(&kind, &mut row["data"]);
+                }
+            }
             let queued = e.chat(&p.conversation_id)?.queue_snapshot();
             Ok(
                 json!({"schemaVersion":1,"conversation":summary,"journal":events,"queuedMessages":queued}),
@@ -1084,6 +1924,9 @@ async fn dispatch(
                     page: None,
                     attachments: Vec::new(),
                     skill: None,
+                    continuation: None,
+                    record: false,
+                    preface: None,
                 },
             )?;
             e.record(
@@ -1134,6 +1977,15 @@ async fn dispatch(
                 .map_err(|_| "conversationSend requires conversationId, messageId and text")?;
             let mut e = engine.lock().await;
             let direct = operation == "conversationSendDirect";
+            // A turn still waiting for its process is ended here instead of
+            // interrupting the retiring process.
+            if direct
+                && e.turns
+                    .get(&p.conversation_id)
+                    .is_some_and(|t| !t.dispatched)
+            {
+                e.cancel_undispatched(&p.conversation_id)?;
+            }
             let interrupt = if direct && e.chat(&p.conversation_id)?.phase.busy() {
                 Some(
                     e.jobs
@@ -1169,22 +2021,57 @@ async fn dispatch(
                 id: p.message_id.clone(),
                 text: p.text.clone(),
                 page: p.page.clone(),
+                continuation: None,
+                record: p.record,
+                preface: None,
             };
-            let added = if direct {
+            if e.is_blocked(&p.conversation_id)?
+                && !e
+                    .chat(&p.conversation_id)?
+                    .accepted
+                    .contains_key(&message.id)
+            {
+                return Err(NOT_RESUMABLE.into());
+            }
+            // A client that only holds the stored projection may retry with
+            // it; that is a duplicate, never a resend.
+            let differs = e
+                .chat(&p.conversation_id)?
+                .accepted
+                .get(&message.id)
+                .is_some_and(|hash| message.fingerprint().ok().as_ref() != Some(hash));
+            let stored = if differs && message.is_projection() {
+                stored_message(&e.store, &p.conversation_id, &message.id, &workspace)?
+            } else {
+                None
+            };
+            let added = if e
+                .chat(&p.conversation_id)?
+                .projected_retry(&message, stored)?
+            {
+                false
+            } else if direct {
                 e.chat(&p.conversation_id)?.accept_direct(message)?
             } else {
                 e.chat(&p.conversation_id)?.accept(message)?
             };
             e.persist(&p.conversation_id)?;
             if added {
+                // The raw page goes to the event masker: it masks the URL's
+                // token parameters and learns them, so the same token in the
+                // title or elsewhere in this event is masked too. The stored
+                // message already holds the projection; identity used the
+                // raw input.
+                let page = p.page.clone();
                 e.record(
                     &p.conversation_id,
                     "user",
-                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":p.page,"attachments":p.attachments,"skillId":p.skill_id}),
+                    json!({"messageId":p.message_id,"text":p.text,"direct":direct,"page":page,"attachments":p.attachments,"skillId":p.skill_id,"record":p.record}),
                 )?;
             }
             if added {
                 if let Some(sender) = interrupt {
+                    e.mark_stopped_leases(&p.conversation_id);
                     e.chat(&p.conversation_id)?.phase = Phase::Stopping;
                     e.persist(&p.conversation_id)?;
                     if sender.try_send(BackendCommand::Interrupt).is_err() {
@@ -1197,25 +2084,14 @@ async fn dispatch(
                     }
                 }
             }
-            let next = e.chat(&p.conversation_id)?.begin_next();
+            e.sync_control(&p.conversation_id, "conversationSend")?;
+            let next = e.begin(&p.conversation_id)?;
             e.persist(&p.conversation_id)?;
             drop(e);
             if let Some(message) = next {
-                if let Err(error) = start(engine, &p.conversation_id, message).await {
-                    let mut e = engine.lock().await;
-                    let chat = e.chat(&p.conversation_id)?;
-                    chat.phase = if direct {
-                        Phase::RecoveryRequired
-                    } else {
-                        Phase::Failed
-                    };
-                    chat.queue_paused = true;
-                    if !direct {
-                        chat.active = None;
-                    }
-                    chat.last_error = Some(error);
-                    e.persist(&p.conversation_id)?;
-                }
+                // A failed start is recorded on the conversation; the send
+                // itself was accepted.
+                let _ = launch(engine, &p.conversation_id, message).await;
             }
             let summary = engine.lock().await.chat(&p.conversation_id)?.summary();
             Ok(
@@ -1266,18 +2142,9 @@ async fn dispatch(
                     .map_err(|_| "Agent shutdown was not dispatched; nothing was deleted")?;
                 drop(e);
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-                loop {
-                    let locked = engine.lock().await;
-                    if !locked.jobs.contains_key(&id) {
-                        e = locked;
-                        break;
-                    }
-                    drop(locked);
-                    if tokio::time::Instant::now() > deadline {
-                        return Err("The agent process has not exited yet; nothing was deleted. Try again shortly.".into());
-                    }
-                    tokio::time::sleep(Duration::from_millis(30)).await;
-                }
+                e = wait_for_job_exit(engine, &id, deadline).await.ok_or(
+                    "The agent process has not exited yet; nothing was deleted. Try again shortly.",
+                )?;
             }
             // Real deletion also removes the CLI's own session history and the
             // conversation's browser session. Both run without the engine lock.
@@ -1338,6 +2205,9 @@ async fn dispatch(
                 );
             }
             e.chats.remove(&id);
+            e.forget(&id);
+            #[cfg(windows)]
+            e.held_jobs.remove(&id);
             e.requests.retain(|(chat, _), _| chat != &id);
             e.store.delete(&id)?;
             Ok(
@@ -1349,6 +2219,9 @@ async fn dispatch(
                 .map_err(|_| "Conversation control requires only conversationId")?;
             let mut e = engine.lock().await;
             if operation == "conversationResumeQueue" {
+                if e.is_blocked(&p.conversation_id)? {
+                    return Err(NOT_RESUMABLE.into());
+                }
                 let chat = e.chat(&p.conversation_id)?;
                 if chat.phase == Phase::RecoveryRequired {
                     return Err(
@@ -1359,16 +2232,22 @@ async fn dispatch(
                 if !chat.phase.busy() && chat.direct_message_id.is_some() {
                     chat.direct_ready = true;
                 }
-                let next = e.chat(&p.conversation_id)?.begin_next();
+                let next = e.begin(&p.conversation_id)?;
                 e.persist(&p.conversation_id)?;
                 let summary = e.chat(&p.conversation_id)?.summary();
                 drop(e);
                 if let Some(message) = next {
-                    start(engine, &p.conversation_id, message).await?;
+                    launch(engine, &p.conversation_id, message).await?;
                 }
                 return Ok(json!({"schemaVersion":1,"conversation":summary}));
             }
+            if e.cancel_undispatched(&p.conversation_id)? {
+                return Ok(
+                    json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary()}),
+                );
+            }
             if e.chat(&p.conversation_id)?.phase.busy() {
+                e.mark_stopped_leases(&p.conversation_id);
                 let sender = e
                     .jobs
                     .get(&p.conversation_id)
@@ -1377,6 +2256,7 @@ async fn dispatch(
                     .clone();
                 e.chat(&p.conversation_id)?.phase = Phase::Stopping;
                 e.persist(&p.conversation_id)?;
+                e.sync_control(&p.conversation_id, "conversationStop")?;
                 sender.try_send(BackendCommand::Interrupt).map_err(|_| {
                     "Backend could not receive interruption; outcome is unconfirmed"
                 })?;
@@ -1385,21 +2265,55 @@ async fn dispatch(
         }
         "conversationRespond" => {
             let p: Reply = serde_json::from_value(params.clone()).map_err(|_| {
-                "Conversation response requires conversationId, requestId and result"
+                "Conversation response requires conversationId, requestId and a decision"
             })?;
             let mut e = engine.lock().await;
             let key = serde_json::to_string(&p.request_id).map_err(|_| "Invalid request id")?;
-            let (id, method, original, sent) = e
+            let stopping = e.chat(&p.conversation_id)?.phase == Phase::Stopping;
+            let pending = e
                 .requests
                 .get(&(p.conversation_id.clone(), key.clone()))
-                .ok_or("The backend request is stale or belongs to another conversation")?
-                .clone();
-            if sent {
+                .ok_or("The backend request is stale or belongs to another conversation")?;
+            if pending.sent {
                 return Err(
                     "A response was already dispatched; wait for backend confirmation".into(),
                 );
             }
-            validate_reply(&method, &original, &p.result)?;
+            // Errors below are fixed strings: request input never leaves the
+            // service through a refusal.
+            let result = match (p.result, p.generation, p.request_revision, p.decision) {
+                (None, Some(generation), Some(revision), Some(decision)) => {
+                    if generation != pending.generation || revision != pending.revision {
+                        return Err("The request was replaced or belongs to an earlier agent process; read the current state".into());
+                    }
+                    approval::reply_for_decision(&pending.method, &pending.original, &decision)?
+                }
+                (Some(result), None, None, None) => {
+                    if !pending.single_revision {
+                        return Err(
+                            "This request id was reused; update the panel to answer it".into()
+                        );
+                    }
+                    approval::reply_for_legacy(
+                        &pending.method,
+                        &pending.original,
+                        &pending.sent_projection,
+                        &result,
+                    )?
+                }
+                _ => {
+                    return Err(
+                        "Send either a decision with its request revision or a result".into(),
+                    )
+                }
+            };
+            validate_reply(&pending.method, &pending.original, &result)?;
+            if stopping && !approval::is_decline(&pending.method, &pending.original, &result) {
+                return Err(
+                    "The user stopped this response; only decline or cancel can be sent".into(),
+                );
+            }
+            let id = pending.request_id.clone();
             let sender = e
                 .jobs
                 .get(&p.conversation_id)
@@ -1407,21 +2321,57 @@ async fn dispatch(
                 .sender
                 .clone();
             sender
-                .try_send(BackendCommand::Reply {
-                    id,
-                    result: p.result,
-                })
+                .try_send(BackendCommand::Reply { id, result })
                 .map_err(|_| "Backend response could not be dispatched")?;
-            e.requests
-                .get_mut(&(p.conversation_id.clone(), key))
-                .unwrap()
-                .3 = true;
+            if let Some(pending) = e.requests.get_mut(&(p.conversation_id.clone(), key)) {
+                pending.sent = true;
+            }
             Ok(
                 json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary(),"response":{"dispatched":true,"confirmed":false}}),
             )
         }
         _ => Err("Unsupported conversation service operation".into()),
     }
+}
+
+/// The message an id was accepted for, rebuilt from its `user` event, for
+/// matching a retry that only carries the stored projection.
+fn stored_message(
+    store: &Store,
+    conversation: &str,
+    message_id: &str,
+    workspace: &Path,
+) -> Result<Option<Message>, String> {
+    let Some(data) = store.user_event(conversation, message_id)? else {
+        return Ok(None);
+    };
+    let page = match data.get("page").filter(|p| !p.is_null()) {
+        Some(page) => match serde_json::from_value(page.clone()) {
+            Ok(page) => Some(page),
+            Err(_) => return Ok(None),
+        },
+        None => None,
+    };
+    let Ok(attachments) = serde_json::from_value(data["attachments"].clone()) else {
+        return Ok(None);
+    };
+    let skill = match data["skillId"].as_str() {
+        Some(id) => match super::skill_library::load_snapshot(workspace, id) {
+            Ok(skill) => Some(skill),
+            Err(_) => return Ok(None),
+        },
+        None => None,
+    };
+    Ok(Some(Message {
+        id: message_id.into(),
+        text: data["text"].as_str().unwrap_or("").into(),
+        page,
+        attachments,
+        skill,
+        continuation: None,
+        record: false,
+        preface: None,
+    }))
 }
 
 /// The host a conversation is listed under: the page's host without `www.`.
@@ -1543,54 +2493,94 @@ fn validate_reply(method: &str, original: &Value, result: &Value) -> Result<(), 
     }
 }
 
+/// Start the active message, then record a failed start. A message whose
+/// start failed was never written to any backend (`delivered: false`). When
+/// the old process did not confirm its exit, the message stays active and the
+/// conversation needs recovery; otherwise the turn simply failed.
+async fn launch(engine: &Arc<Mutex<Engine>>, id: &str, message: Message) -> Result<(), String> {
+    let Err(failure) = start(engine, id, message).await else {
+        return Ok(());
+    };
+    let mut e = engine.lock().await;
+    e.turns.remove(id);
+    let reason = e.scrubbed(id, &failure.reason);
+    let chat = e.chat(id)?;
+    let message_id = chat.active.as_ref().map(|m| m.id.clone());
+    if failure.unconfirmed.is_some() {
+        chat.phase = Phase::RecoveryRequired;
+    } else {
+        chat.phase = Phase::Failed;
+        chat.active = None;
+        chat.active_direct = false;
+    }
+    chat.queue_paused = true;
+    chat.last_error = Some(reason.clone());
+    e.record(
+        id,
+        "turnStartFailed",
+        json!({"v":1,"messageId":message_id,"retiredGeneration":failure.unconfirmed,"reason":reason,"delivered":false}),
+    )?;
+    e.sync_control(id, "turnStartFailed")?;
+    e.persist(id)?;
+    Err(reason)
+}
+
 fn start<'a>(
     engine: &'a Arc<Mutex<Engine>>,
     id: &'a str,
     message: Message,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + std::marker::Send + 'a>>
-{
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), StartFailure>> + std::marker::Send + 'a>,
+> {
     Box::pin(async move {
         let mut e = engine.lock().await;
-        let wanted = e.chat(id)?.clone();
-        // A resumed CLI must have the requested conversation options. Wait for
-        // the old process to exit before starting its replacement.
-        if e.jobs.get(id).is_some_and(|job| {
-            job.full_access != wanted.full_access || job.options != wanted.options
-        }) {
-            let sender = e.jobs.get(id).ok_or("Backend disappeared")?.sender.clone();
-            sender
-                .try_send(BackendCommand::Shutdown)
-                .map_err(|_| "Backend shutdown was not dispatched")?;
-            e.jobs.get_mut(id).ok_or("Backend disappeared")?.retiring = true;
-            drop(e);
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            loop {
-                let locked = engine.lock().await;
-                if !locked.jobs.contains_key(id) {
-                    e = locked;
-                    if e.chat(id)?.phase == Phase::RecoveryRequired {
-                        return Err("Previous backend exit is unconfirmed".into());
-                    }
-                    break;
+        let planned = e.turns.get(id).map(|t| (t.generation, t.reuse));
+        // A retiring process never takes a new turn: wait for its exit, then
+        // start a new process that resumes the session.
+        if let Some(job) = e.jobs.get_mut(id) {
+            if !job.retiring && planned.is_some_and(|(g, reuse)| reuse && g == job.generation) {
+                let sender = job.sender.clone();
+                if let Some(turn) = e.turns.get_mut(id) {
+                    turn.dispatched = true;
                 }
-                drop(locked);
-                if tokio::time::Instant::now() > deadline {
-                    return Err(
-                        "Backend shutdown has not been confirmed; no replacement started".into(),
-                    );
-                }
-                tokio::time::sleep(Duration::from_millis(30)).await;
+                drop(e);
+                return sender
+                    .send(BackendCommand::Start(message))
+                    .await
+                    .map_err(|_| {
+                        "Backend process became unavailable before receiving the turn".into()
+                    });
             }
-        }
-        if let Some(job) = e.jobs.get(id) {
-            let sender = job.sender.clone();
+            let old = job.generation;
+            let wait = e.retire_wait;
+            let job = e.jobs.get_mut(id).ok_or("Backend disappeared")?;
+            if !job.retiring {
+                job.retiring = true;
+                job.sender
+                    .try_send(BackendCommand::Shutdown)
+                    .map_err(|_| "Backend shutdown was not dispatched")?;
+            }
             drop(e);
-            return sender
-                .send(BackendCommand::Start(message))
-                .await
-                .map_err(|_| {
-                    "Backend process became unavailable before receiving the turn".into()
+            let deadline = tokio::time::Instant::now() + wait;
+            let Some(mut locked) = wait_for_job_exit(engine, id, deadline).await else {
+                return Err(StartFailure {
+                    reason: "Backend shutdown has not been confirmed; no replacement started"
+                        .into(),
+                    unconfirmed: Some(old),
                 });
+            };
+            if locked.chat(id)?.phase == Phase::RecoveryRequired {
+                return Err(StartFailure {
+                    reason: "Previous backend exit is unconfirmed".into(),
+                    unconfirmed: Some(old),
+                });
+            }
+            e = locked;
+            // Stopped while waiting: the turn already ended as interrupted
+            // and nothing is started for it.
+            if e.turns.get(id).map(|t| &t.message_id) != Some(&message.id) {
+                return Ok(());
+            }
         }
         if e.jobs.len() >= 4 {
             let idle = e
@@ -1615,18 +2605,9 @@ fn start<'a>(
                     .map_err(|_| "Idle backend shutdown was not dispatched")?;
                 drop(e);
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-                loop {
-                    let locked = engine.lock().await;
-                    if !locked.jobs.contains_key(&idle) {
-                        e = locked;
-                        break;
-                    }
-                    drop(locked);
-                    if tokio::time::Instant::now() > deadline {
-                        return Err("Idle backend shutdown has not been confirmed".into());
-                    }
-                    tokio::time::sleep(Duration::from_millis(30)).await;
-                }
+                e = wait_for_job_exit(engine, &idle, deadline)
+                    .await
+                    .ok_or("Idle backend shutdown has not been confirmed")?;
             } else {
                 return Err(
                     "Four conversations are running; wait or stop one before starting another"
@@ -1648,14 +2629,34 @@ fn start<'a>(
         let workspace = e.store.directory.join(id).join("workspace");
         private_tree(&workspace)?;
         let profile = e.profile.clone();
-        let generation = {
-            let running = e.chat(id)?;
-            running.generation += 1;
-            running.generation
+        // The planned generation, unless a process already ran it (the
+        // planned process vanished): generations only grow.
+        let spawned = e.spawned.get(id).copied();
+        let generation = match planned {
+            Some((g, _)) if e.chat(id)?.generation == g && spawned.is_none_or(|s| s < g) => g,
+            _ => {
+                let running = e.chat(id)?;
+                running.generation += 1;
+                let g = running.generation;
+                let direct = running.active_direct;
+                let replanned = e.turns.get_mut(id).map(|turn| {
+                    turn.generation = g;
+                    turn.reuse = false;
+                    json!({"v":1,"messageId":turn.message_id,"generation":g,"direct":direct,"continuation":message.continuation,"replanned":true})
+                });
+                if let Some(data) = replanned {
+                    e.record(id, "turnStarted", data)?;
+                }
+                g
+            }
         };
+        e.spawned.insert(id.into(), generation);
+        if let Some(turn) = e.turns.get_mut(id) {
+            turn.dispatched = true;
+        }
         e.persist(id)?;
         let (commands, receive) = mpsc::channel(32);
-        let (events, mut notices) = mpsc::channel(256);
+        let (events, notices) = mpsc::channel(256);
         e.jobs.insert(
             id.into(),
             Job {
@@ -1679,6 +2680,7 @@ fn start<'a>(
             mcp_executable: std::env::current_exe()
                 .map_err(|_| "Cannot locate browser tools executable")?,
             full_access: chat.full_access,
+            generation,
         };
         drop(e);
         let owner = engine.clone();
@@ -1686,43 +2688,90 @@ fn start<'a>(
         tokio::spawn(async move {
             backend::run(setup, receive, events).await;
         });
-        tokio::spawn(async move {
-            while let Some(notice) = notices.recv().await {
-                let mut e = owner.lock().await;
-                let next = e.notice(&chat_id, generation, notice);
-                match next {
-                    Ok(Some(message)) => {
-                        drop(e);
-                        if let Err(error) = start(&owner, &chat_id, message).await {
-                            let mut e = owner.lock().await;
-                            if let Some(chat) = e.chats.get_mut(&chat_id) {
-                                chat.phase = Phase::RecoveryRequired;
-                                chat.queue_paused = true;
-                                chat.last_error = Some(error);
-                            }
-                            let _ = e.persist(&chat_id);
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        if let Some(chat) = e.chats.get_mut(&chat_id) {
-                            chat.phase = Phase::RecoveryRequired;
-                            chat.queue_paused = true;
-                            chat.last_error = Some(error);
-                        }
-                        let _ = e.persist(&chat_id);
-                        if let Some(job) = e.jobs.get(&chat_id) {
-                            let _ = job.sender.try_send(BackendCommand::Shutdown);
-                        }
-                    }
-                }
-            }
-        });
+        spawn_pump(owner, chat_id, generation, notices);
         commands
             .send(BackendCommand::Start(message))
             .await
             .map_err(|_| "Backend process closed before accepting the turn".into())
     })
+}
+
+/// The job's notice pump. It must keep draining: the next message's start
+/// may wait for this same job's `exited`, so it runs in its own task.
+fn spawn_pump(
+    owner: Arc<Mutex<Engine>>,
+    chat_id: String,
+    generation: u64,
+    mut notices: mpsc::Receiver<Notice>,
+) {
+    tokio::spawn(async move {
+        while let Some(notice) = notices.recv().await {
+            let mut e = owner.lock().await;
+            let next = e.notice(&chat_id, generation, notice);
+            let stops = !e.evidence.pending_stops.is_empty();
+            match next {
+                Ok(next) => {
+                    drop(e);
+                    if stops {
+                        evidence_ops::run_pending_stops(&owner).await;
+                    }
+                    if let Some(message) = next {
+                        // Only one begin can be pending per conversation
+                        // (the phase is busy until it ends), so this cannot
+                        // race another launch. A failed start is recorded
+                        // by `launch` and keeps or releases the message.
+                        let (owner, chat_id) = (owner.clone(), chat_id.clone());
+                        tokio::spawn(async move {
+                            let _ = launch(&owner, &chat_id, message).await;
+                        });
+                    }
+                }
+                Err(error) => {
+                    let error = e.scrubbed(&chat_id, &error);
+                    if let Some(chat) = e.chats.get_mut(&chat_id) {
+                        chat.phase = Phase::RecoveryRequired;
+                        chat.queue_paused = true;
+                        chat.last_error = Some(error);
+                    }
+                    let _ = e.persist(&chat_id);
+                    if let Some(job) = e.jobs.get(&chat_id) {
+                        let _ = job.sender.try_send(BackendCommand::Shutdown);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Wait until `id` has no job, woken by `job_exits` (with a slow poll as a
+/// fallback). Returns the lock, or `None` at the deadline.
+async fn wait_for_job_exit<'a>(
+    engine: &'a Arc<Mutex<Engine>>,
+    id: &str,
+    deadline: tokio::time::Instant,
+) -> Option<tokio::sync::MutexGuard<'a, Engine>> {
+    loop {
+        let locked = engine.lock().await;
+        if !locked.jobs.contains_key(id) {
+            return Some(locked);
+        }
+        let exits = locked.job_exits.clone();
+        let notified = exits.notified();
+        tokio::pin!(notified);
+        // Registered before the lock is released: a removal cannot slip
+        // between the check and the wait.
+        notified.as_mut().enable();
+        drop(locked);
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        let nap = (deadline - now).min(Duration::from_millis(500));
+        tokio::select! {
+            _ = &mut notified => {}
+            _ = tokio::time::sleep(nap) => {}
+        }
+    }
 }
 
 /// Bun-built agents extract native libraries to `$TMPDIR/.bun-<uid>-*` and
@@ -1765,15 +2814,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     release_bun_libraries();
     let store = Store::open(directory.join("conversations"))?;
-    let engine = Arc::new(Mutex::new(Engine {
+    let engine = Arc::new(Mutex::new(Engine::new(
         store,
-        chats: HashMap::new(),
-        jobs: HashMap::new(),
-        requests: HashMap::new(),
-        profile: profile.clone(),
-        stop: false,
-        schedules: super::schedules::load(&directory.join("conversations"))?,
-    }));
+        profile.clone(),
+        super::schedules::load(&directory.join("conversations"))?,
+    )));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -1790,6 +2835,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             loop {
                 if scheduler.lock().await.stop { break; }
                 if let Err(error)=schedule_tick(&scheduler).await { eprintln!("Schedule check failed: {error}"); }
+                if let Err(error)=evidence_ops::progress_tick(&scheduler).await { eprintln!("Progress check failed: {error}"); }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
         });
@@ -2162,7 +3208,7 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
     chat.options = schedule.options.clone();
     chat.full_access = schedule.full_access;
     e.store.create(&chat)?;
-    let prepared = (|| -> Result<(Message, Message), String> {
+    let prepared = (|| -> Result<Message, String> {
         let workspace = e.store.directory.join(&chat.id).join("workspace");
         private_tree(&workspace)?;
         let skill = schedule
@@ -2180,15 +3226,14 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
         let message = Message {
             id: uuid::Uuid::new_v4().to_string(),
             text: format!("[Scheduled task: {}. Work in your own background browser session; no user tab is attached.]\n\n{}", schedule.name, schedule.prompt),
-            page: None, attachments: Vec::new(), skill,
+            page: None, attachments: Vec::new(), skill, continuation: None, record: false, preface: None,
         };
         chat.accept(message.clone())?;
         chat.title = schedule.name.clone();
-        let next = chat.begin_next().ok_or("Scheduled turn was not prepared")?;
         e.store.save(&chat)?;
-        Ok((message, next))
+        Ok(message)
     })();
-    let (message, next) = match prepared {
+    let message = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             e.store.delete(&chat.id).map_err(|cleanup| {
@@ -2198,8 +3243,14 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
         }
     };
     let chat_id = chat.id.clone();
+    e.controls.insert(chat_id.clone(), chat.control());
     e.chats.insert(chat_id.clone(), chat);
+    // `user` before `turnStarted`, as for every other message.
     e.record(&chat_id,"user",json!({"messageId":message.id,"text":message.text,"scheduleId":id,"skillId":schedule.skill_id}))?;
+    let next = e
+        .begin(&chat_id)?
+        .ok_or("Scheduled turn was not prepared")?;
+    e.persist(&chat_id)?;
     let schedule = e.schedules.get_mut(id).ok_or("Schedule disappeared")?;
     schedule.active_chat = Some(chat_id.clone());
     schedule.last_chat = Some(chat_id.clone());
@@ -2208,16 +3259,10 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
     schedule.finished_at = None;
     super::schedules::persist(&e.store.directory, &e.schedules)?;
     drop(e);
-    if let Err(error) = start(engine, &chat_id, next).await {
+    if let Err(error) = launch(engine, &chat_id, next).await {
         let mut e = engine.lock().await;
-        let chat = e.chat(&chat_id)?;
-        chat.phase = Phase::Failed;
-        chat.last_error = Some(error.clone());
-        chat.active = None;
-        chat.queue_paused = true;
-        e.persist(&chat_id)?;
         let schedule = e.schedules.get_mut(id).ok_or("Schedule disappeared")?;
-        schedule.last_result = Some(format!("failed: {error}"));
+        schedule.last_result = Some(redact::text_for_compare(&format!("failed: {error}")));
         schedule.active_chat = None;
         schedule.finished_at = Some(super::conversation::now());
         super::schedules::persist(&e.store.directory, &e.schedules)?;
@@ -2295,7 +3340,7 @@ async fn schedule_tick(engine: &Arc<Mutex<Engine>>) -> Result<(), String> {
         if let Err(error) = run_schedule(engine, &id).await {
             let mut e = engine.lock().await;
             if let Some(schedule) = e.schedules.get_mut(&id) {
-                schedule.last_result = Some(format!("failed: {error}"));
+                schedule.last_result = Some(redact::text_for_compare(&format!("failed: {error}")));
                 schedule.finished_at = Some(now);
             }
             super::schedules::persist(&e.store.directory, &e.schedules)?;
@@ -2308,15 +3353,11 @@ async fn schedule_tick(engine: &Arc<Mutex<Engine>>) -> Result<(), String> {
 mod schedule_tests {
     use super::*;
     fn engine(root: &Path) -> Arc<Mutex<Engine>> {
-        Arc::new(Mutex::new(Engine {
-            store: Store::open(root.join("conversations")).unwrap(),
-            chats: HashMap::new(),
-            jobs: HashMap::new(),
-            requests: HashMap::new(),
-            profile: "fixture".into(),
-            stop: false,
-            schedules: std::collections::BTreeMap::new(),
-        }))
+        Arc::new(Mutex::new(Engine::new(
+            Store::open(root.join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )))
     }
     #[tokio::test]
     async fn scheduling_does_not_escalate_or_allow_recursive_mutation() {
@@ -2534,5 +3575,1552 @@ mod endpoint_permission_tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o400
         );
+    }
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::*;
+    use base64::Engine as _;
+
+    const SECRET: &str = "SYNTH_PASSWORD_7781";
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        engine: Arc<Mutex<Engine>>,
+        id: String,
+        replies: mpsc::Receiver<BackendCommand>,
+    }
+
+    async fn fixture(full_access: bool) -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(root.join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )));
+        let created = dispatch(
+            &engine,
+            "conversationCreate",
+            &json!({"agentId":"claude","fullAccess":full_access}),
+        )
+        .await
+        .unwrap();
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        let (sender, replies) = mpsc::channel(16);
+        {
+            let mut e = engine.lock().await;
+            e.jobs.insert(
+                id.clone(),
+                Job {
+                    generation: 0,
+                    full_access,
+                    options: ModelOptions::default(),
+                    retiring: false,
+                    sender,
+                },
+            );
+            e.chat(&id).unwrap().phase = Phase::Running;
+        }
+        Fixture {
+            _dir: dir,
+            root,
+            engine,
+            id,
+            replies,
+        }
+    }
+
+    impl Fixture {
+        async fn notice(&self, kind: &'static str, data: Value) {
+            let mut e = self.engine.lock().await;
+            e.notice(&self.id, 0, backend::notice(kind, data)).unwrap();
+        }
+        async fn fill_request(&self, request_id: &str) {
+            self.notice(
+                "request",
+                json!({"requestId":request_id,"method":"can_use_tool","params":{"subtype":"can_use_tool","tool_name":"mcp__chrome_use__chrome_use_fill","tool_use_id":"tool-1","input":{"selector":"#password","value":SECRET,"note":"SYNTH_NOTE_VALUE"}}}),
+            )
+            .await;
+        }
+        async fn respond(&self, reply: Value) -> Result<Value, String> {
+            let mut params = reply;
+            params["conversationId"] = self.id.clone().into();
+            dispatch(&self.engine, "conversationRespond", &params).await
+        }
+        fn sent(&mut self) -> Option<Value> {
+            match self.replies.try_recv() {
+                Ok(BackendCommand::Reply { result, .. }) => Some(result),
+                _ => None,
+            }
+        }
+        async fn journal(&self) -> Vec<Value> {
+            let read = dispatch(
+                &self.engine,
+                "conversationRead",
+                &json!({"conversationId":self.id}),
+            )
+            .await
+            .unwrap();
+            read["journal"]["events"].as_array().unwrap().clone()
+        }
+        async fn request_event(&self) -> Value {
+            self.journal()
+                .await
+                .into_iter()
+                .rev()
+                .find(|e| e["kind"] == "request")
+                .unwrap()["data"]
+                .clone()
+        }
+        /// Every file under the profile directory, as bytes.
+        fn disk(&self) -> Vec<u8> {
+            fn walk(path: &Path, out: &mut Vec<u8>) {
+                for entry in std::fs::read_dir(path).unwrap().flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        walk(&path, out);
+                    } else {
+                        out.extend(std::fs::read(&path).unwrap_or_default());
+                    }
+                }
+            }
+            let mut out = Vec::new();
+            walk(&self.root, &mut out);
+            out
+        }
+        fn on_disk(&self, needle: &str) -> bool {
+            let disk = self.disk();
+            disk.windows(needle.len()).any(|w| w == needle.as_bytes())
+        }
+    }
+
+    #[tokio::test]
+    async fn decision_replies_send_the_original_and_bind_to_the_revision() {
+        let mut f = fixture(false).await;
+        f.fill_request("r1").await;
+        let request = f.request_event().await;
+        assert_eq!(
+            request["params"]["input"]["value"],
+            "[redacted input, 19 chars]"
+        );
+        assert_eq!(request["generation"], 0);
+        let revision = request["requestRevision"].as_u64().unwrap();
+        assert!(!f.on_disk(SECRET));
+        // Stale generation, wrong revision, unknown fields, an echoed input
+        // on the new shape, and mixed shapes are refused.
+        for bad in [
+            json!({"requestId":"r1","generation":1,"requestRevision":revision,"decision":"allow"}),
+            json!({"requestId":"r1","generation":0,"requestRevision":revision + 1,"decision":"allow"}),
+            json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow","extra":true}),
+            json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":{"updatedInput":{"value":"SYNTH_FORGED"}}}),
+            json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow","result":{"behavior":"allow","updatedInput":{}}}),
+            json!({"requestId":"r1","requestRevision":revision,"decision":"allow"}),
+        ] {
+            assert!(f.respond(bad.clone()).await.is_err(), "{bad}");
+            assert!(f.sent().is_none());
+        }
+        let ok = f
+            .respond(json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow"}))
+            .await
+            .unwrap();
+        assert_eq!(ok["response"], json!({"dispatched":true,"confirmed":false}));
+        let sent = f.sent().unwrap();
+        assert_eq!(sent["updatedInput"]["value"], SECRET);
+        assert_eq!(sent["updatedInput"]["note"], "SYNTH_NOTE_VALUE");
+        // A second allow for the same revision is refused.
+        assert!(f
+            .respond(json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow"}))
+            .await
+            .is_err());
+        assert!(!f.on_disk(SECRET));
+        assert!(!f.on_disk("SYNTH_FORGED"));
+    }
+
+    #[tokio::test]
+    async fn a_reused_request_id_gets_a_new_revision_and_kills_the_old_one() {
+        let mut f = fixture(false).await;
+        f.fill_request("7").await;
+        let first = f.request_event().await["requestRevision"].as_u64().unwrap();
+        f.fill_request("7").await;
+        let second = f.request_event().await["requestRevision"].as_u64().unwrap();
+        assert!(second > first);
+        assert!(f
+            .respond(
+                json!({"requestId":"7","generation":0,"requestRevision":first,"decision":"allow"})
+            )
+            .await
+            .is_err());
+        // An older panel cannot tell the two apart, so its reply is refused.
+        let frozen = f.request_event().await["params"]["input"].clone();
+        assert!(f
+            .respond(json!({"requestId":"7","result":{"behavior":"allow","updatedInput":frozen}}))
+            .await
+            .is_err());
+        assert!(f.sent().is_none());
+        f.respond(
+            json!({"requestId":"7","generation":0,"requestRevision":second,"decision":"deny"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.sent().unwrap()["behavior"], "deny");
+    }
+
+    #[tokio::test]
+    async fn legacy_echoes_compare_with_the_frozen_projection() {
+        let mut f = fixture(false).await;
+        f.fill_request("r1").await;
+        let frozen = f.request_event().await["params"]["input"].clone();
+        // The note becomes a known secret after the request was shown, so a
+        // projection recomputed now would differ from the frozen one.
+        f.notice(
+            "tool",
+            json!({"completed":false,"item":{"type":"tool_use","id":"t2","name":"x","input":{"password":"SYNTH_NOTE_VALUE"}}}),
+        )
+        .await;
+        let mut recomputed = frozen.clone();
+        recomputed["note"] = "[redacted secret, 16 chars]".into();
+        let refused = f
+            .respond(
+                json!({"requestId":"r1","result":{"behavior":"allow","updatedInput":recomputed}}),
+            )
+            .await
+            .unwrap_err();
+        assert!(!refused.contains("SYNTH"));
+        let forged = f
+            .respond(json!({"requestId":"r1","result":{"behavior":"allow","updatedInput":{"selector":"#password","value":"SYNTH_REPLY_VALUE"}}}))
+            .await
+            .unwrap_err();
+        assert!(!forged.contains("SYNTH"));
+        assert!(f.sent().is_none());
+        f.respond(json!({"requestId":"r1","result":{"behavior":"allow","updatedInput":frozen}}))
+            .await
+            .unwrap();
+        let sent = f.sent().unwrap();
+        assert_eq!(sent["updatedInput"]["value"], SECRET);
+        assert!(!f.on_disk("SYNTH_REPLY_VALUE"));
+        assert!(!f.on_disk(SECRET));
+        // Codex and ACP shapes carry no input and are unchanged.
+        f.notice(
+            "request",
+            json!({"requestId":3,"method":"item/commandExecution/requestApproval","params":{"command":"ls"}}),
+        )
+        .await;
+        f.respond(json!({"requestId":3,"result":{"decision":"accept"}}))
+            .await
+            .unwrap();
+        assert_eq!(f.sent().unwrap(), json!({"decision":"accept"}));
+        f.notice(
+            "request",
+            json!({"requestId":"p","method":"session/request_permission","params":{"options":[{"optionId":"once","kind":"allow_once"}]}}),
+        )
+        .await;
+        f.respond(
+            json!({"requestId":"p","result":{"outcome":{"outcome":"selected","optionId":"once"}}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.sent().unwrap()["outcome"]["optionId"], "once");
+    }
+
+    #[tokio::test]
+    async fn stopping_accepts_only_declines_and_full_access_declines() {
+        let mut f = fixture(false).await;
+        f.fill_request("r1").await;
+        let revision = f.request_event().await["requestRevision"].as_u64().unwrap();
+        dispatch(
+            &f.engine,
+            "conversationStop",
+            &json!({"conversationId":f.id}),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            f.replies.try_recv(),
+            Ok(BackendCommand::Interrupt)
+        ));
+        assert!(f
+            .respond(json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"allow"}))
+            .await
+            .is_err());
+        let frozen = f.request_event().await["params"]["input"].clone();
+        assert!(f
+            .respond(json!({"requestId":"r1","result":{"behavior":"allow","updatedInput":frozen}}))
+            .await
+            .is_err());
+        assert!(f.sent().is_none());
+        f.respond(
+            json!({"requestId":"r1","generation":0,"requestRevision":revision,"decision":"deny"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(f.sent().unwrap()["behavior"], "deny");
+
+        // Full access: a request arriving during stop is declined.
+        let mut f = fixture(true).await;
+        f.engine.lock().await.chat(&f.id).unwrap().phase = Phase::Stopping;
+        f.fill_request("r2").await;
+        let sent = f.sent().unwrap();
+        assert_eq!(sent["behavior"], "deny");
+        // And while not stopping it is approved as before.
+        f.engine.lock().await.chat(&f.id).unwrap().phase = Phase::Running;
+        f.fill_request("r3").await;
+        assert_eq!(f.sent().unwrap()["behavior"], "allow");
+    }
+
+    #[tokio::test]
+    async fn a_request_too_large_to_review_is_redacted_whole_and_refused() {
+        let mut f = fixture(false).await;
+        f.notice(
+            "request",
+            json!({"requestId":"big","method":"can_use_tool","params":{"subtype":"can_use_tool",
+                "tool_name":"mcp__chrome_use__chrome_use_fill","tool_use_id":"tool-9",
+                "input":{"selector":"#otp","value":"483927","zz_note":"y".repeat(30_000)}}}),
+        )
+        .await;
+        let request = f.request_event().await;
+        assert_eq!(request["params"]["truncated"], true);
+        let preview = request["params"]["preview"].as_str().unwrap();
+        assert!(!preview.contains("483927"), "{preview}");
+        // The fill was recognised on the whole request before the preview.
+        assert!(preview.contains("[redacted input, 6 chars]"), "{preview}");
+        // The never-approvable original is not kept in memory, only its ids.
+        {
+            let e = f.engine.lock().await;
+            let pending = e.requests.values().find(|p| p.request_id == "big").unwrap();
+            assert!(pending.original.get("input").is_none());
+            assert_eq!(pending.original["tool_use_id"], "tool-9");
+            assert_eq!(pending.original["truncated"], true);
+        }
+        assert!(!f.on_disk("483927"));
+        let revision = request["requestRevision"].as_u64().unwrap();
+        assert!(f
+            .respond(json!({"requestId":"big","generation":0,"requestRevision":revision,"decision":"allow"}))
+            .await
+            .unwrap_err()
+            .contains("too large"));
+        assert!(f.sent().is_none());
+    }
+
+    #[tokio::test]
+    async fn legacy_journal_events_are_minimized_on_read_without_rewriting() {
+        let f = fixture(false).await;
+        {
+            let mut guard = f.engine.lock().await;
+            let e = &mut *guard;
+            let chat = e.chats.get_mut(&f.id).unwrap();
+            // A v1.5.214 event, written before redaction existed.
+            e.store
+                .event(
+                    chat,
+                    "tool",
+                    Redacted::raw_for_tests(
+                        json!({"messageId":"m","completed":false,"item":{"id":"t","name":"chrome_use_open","input":{"url":"https://x.example/cb?access_token=SYNTH_TOKEN_9"}}}),
+                    ),
+                )
+                .unwrap();
+        }
+        let journal = f
+            .root
+            .join("conversations")
+            .join(&f.id)
+            .join("events.jsonl");
+        let before = std::fs::read(&journal).unwrap();
+        let events = f.journal().await;
+        assert_eq!(
+            events[0]["data"]["item"]["input"]["url"],
+            "https://x.example/cb?access_token=[redacted]"
+        );
+        assert_eq!(events[0]["data"]["item"]["id"], "t");
+        assert_eq!(std::fs::read(&journal).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn held_stream_text_is_flushed_before_each_terminal_kind() {
+        for terminal in ["terminal", "exited", "processUnconfirmed"] {
+            let f = fixture(false).await;
+            let message_id = uuid::Uuid::new_v4().to_string();
+            {
+                let mut e = f.engine.lock().await;
+                let chat = e.chat(&f.id).unwrap();
+                chat.active = Some(Message {
+                    id: message_id.clone(),
+                    text: "hi".into(),
+                    page: None,
+                    attachments: Vec::new(),
+                    skill: None,
+                    continuation: None,
+                    record: false,
+                    preface: None,
+                });
+            }
+            // OpenCode only streams deltas; the tail must not be lost.
+            let text = "The order total is 42 and the last words matter";
+            for chunk in text.as_bytes().chunks(7) {
+                f.notice(
+                    "textDelta",
+                    json!({"itemId":"msg","text":std::str::from_utf8(chunk).unwrap(),"part":0,"last":true}),
+                )
+                .await;
+            }
+            let data = match terminal {
+                "terminal" => json!({"status":"completed"}),
+                _ => json!({"error":null,"processExitConfirmed":true,"processStarted":true}),
+            };
+            f.notice(terminal, data).await;
+            let events = f.journal().await;
+            let end = events.iter().position(|e| e["kind"] == terminal).unwrap();
+            let streamed: String = events[..end]
+                .iter()
+                .filter(|e| e["kind"] == "textDelta")
+                .map(|e| {
+                    assert_eq!(e["data"]["messageId"], message_id);
+                    e["data"]["text"].as_str().unwrap().to_string()
+                })
+                .collect();
+            assert_eq!(streamed, text, "{terminal}");
+            assert!(events[end + 1..].iter().all(|e| e["kind"] != "textDelta"));
+        }
+    }
+
+    fn png() -> String {
+        let mut bytes = Vec::new();
+        image::RgbImage::new(1, 1)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[tokio::test]
+    async fn sent_pages_are_stored_as_projections_and_retries_dedupe() {
+        let f = fixture(false).await;
+        let attachment = dispatch(
+            &f.engine,
+            "conversationAttachmentPut",
+            &json!({"conversationId":f.id,"data":png()}),
+        )
+        .await
+        .unwrap()["attachment"]
+            .clone();
+        let send = |id: &str, url: &str| json!({"conversationId":f.id,"messageId":id,"text":"Check my order","page":{"tabId":42,"url":url,"title":"Orders"},"attachments":[attachment.clone()]});
+        let token_a = "https://shop.example/o?access_token=SYNTH_TOKEN_A";
+        let token_b = "https://shop.example/o?access_token=SYNTH_TOKEN_B";
+        let projected = "https://shop.example/o?access_token=[redacted]";
+        let id = uuid::Uuid::new_v4().to_string();
+        let first = dispatch(&f.engine, "conversationSend", &send(&id, token_a))
+            .await
+            .unwrap();
+        assert_eq!(first["message"]["accepted"], true);
+        for retry in [token_a, projected] {
+            let again = dispatch(&f.engine, "conversationSend", &send(&id, retry))
+                .await
+                .unwrap();
+            assert_eq!(again["message"]["accepted"], false, "{retry}");
+        }
+        assert!(dispatch(&f.engine, "conversationSend", &send(&id, token_b))
+            .await
+            .is_err());
+        let user = f
+            .journal()
+            .await
+            .into_iter()
+            .find(|e| e["kind"] == "user")
+            .unwrap();
+        assert_eq!(user["data"]["page"]["url"], projected);
+        let queued = f.engine.lock().await.chat(&f.id).unwrap().queue[0].clone();
+        assert_eq!(queued.page.unwrap().url, projected);
+        assert!(!f.on_disk("SYNTH_TOKEN_A"));
+
+        // A message accepted by v1.5.214: raw hash in state, raw URL in its
+        // `user` event. Raw and projected retries are duplicates; another
+        // token is a different payload.
+        let old = uuid::Uuid::new_v4().to_string();
+        {
+            let mut guard = f.engine.lock().await;
+            let e = &mut *guard;
+            let raw: Value = send(&old, token_a);
+            let message = Message {
+                id: old.clone(),
+                text: "Check my order".into(),
+                page: serde_json::from_value(raw["page"].clone()).unwrap(),
+                attachments: serde_json::from_value(raw["attachments"].clone()).unwrap(),
+                skill: None,
+                continuation: None,
+                record: false,
+                preface: None,
+            };
+            let hash = message.fingerprint().unwrap();
+            let chat = e.chats.get_mut(&f.id).unwrap();
+            chat.accepted.insert(old.clone(), hash);
+            e.store
+                .event(
+                    chat,
+                    "user",
+                    Redacted::raw_for_tests(
+                        json!({"messageId":old,"text":"Check my order","direct":false,"page":raw["page"],"attachments":raw["attachments"],"skillId":null}),
+                    ),
+                )
+                .unwrap();
+        }
+        for retry in [token_a, projected] {
+            let again = dispatch(&f.engine, "conversationSend", &send(&old, retry))
+                .await
+                .unwrap();
+            assert_eq!(again["message"]["accepted"], false, "{retry}");
+        }
+        assert!(
+            dispatch(&f.engine, "conversationSend", &send(&old, token_b))
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+
+    struct Chat {
+        _dir: tempfile::TempDir,
+        engine: Arc<Mutex<Engine>>,
+        id: String,
+        commands: mpsc::Receiver<BackendCommand>,
+    }
+
+    /// A conversation with a live backend job of generation 0 that never
+    /// answers on its own.
+    async fn chat(agent: &str) -> Chat {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )));
+        let created = dispatch(&engine, "conversationCreate", &json!({"agentId":agent}))
+            .await
+            .unwrap();
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        let (sender, commands) = mpsc::channel(16);
+        engine.lock().await.jobs.insert(
+            id.clone(),
+            Job {
+                generation: 0,
+                full_access: false,
+                options: ModelOptions::default(),
+                retiring: false,
+                sender,
+            },
+        );
+        Chat {
+            _dir: dir,
+            engine,
+            id,
+            commands,
+        }
+    }
+
+    impl Chat {
+        async fn send(&self, text: &str) -> String {
+            let message = uuid::Uuid::new_v4().to_string();
+            dispatch(
+                &self.engine,
+                "conversationSend",
+                &json!({"conversationId":self.id,"messageId":message,"text":text}),
+            )
+            .await
+            .unwrap();
+            message
+        }
+        async fn notice(&self, kind: &'static str, data: Value) -> Option<Message> {
+            let generation = self.engine.lock().await.chat(&self.id).unwrap().generation;
+            self.notice_from(generation, kind, data).await
+        }
+        async fn notice_from(
+            &self,
+            generation: u64,
+            kind: &'static str,
+            data: Value,
+        ) -> Option<Message> {
+            let mut e = self.engine.lock().await;
+            e.notice(&self.id, generation, backend::notice(kind, data))
+                .unwrap()
+        }
+        async fn allow_reuse(&self, version: &str) {
+            let mut e = self.engine.lock().await;
+            e.reuse_allowlist = vec![("claude".into(), version.into())];
+            drop(e);
+            self.notice(
+                "ready",
+                json!({"sessionId":"s1","model":"m","backendVersion":version,"resumable":true,"mcpToolTimeoutSecs":120}),
+            )
+            .await;
+        }
+        fn started(&mut self) -> Option<Message> {
+            loop {
+                match self.commands.try_recv() {
+                    Ok(BackendCommand::Start(message)) => return Some(message),
+                    Ok(_) => continue,
+                    Err(_) => return None,
+                }
+            }
+        }
+        fn shutdown_sent(&mut self) -> bool {
+            let mut seen = false;
+            while let Ok(command) = self.commands.try_recv() {
+                seen |= matches!(command, BackendCommand::Shutdown);
+            }
+            seen
+        }
+        async fn events(&self) -> Vec<Value> {
+            let mut out = Vec::new();
+            let mut after = 0;
+            loop {
+                let read = dispatch(
+                    &self.engine,
+                    "conversationRead",
+                    &json!({"conversationId":self.id,"after":after}),
+                )
+                .await
+                .unwrap();
+                out.extend(read["journal"]["events"].as_array().unwrap().clone());
+                after = read["journal"]["cursor"].as_u64().unwrap();
+                if read["journal"]["more"] != true {
+                    return out;
+                }
+            }
+        }
+        async fn kinds(&self, kind: &str) -> Vec<Value> {
+            self.events()
+                .await
+                .into_iter()
+                .filter(|e| e["kind"] == kind)
+                .map(|e| e["data"].clone())
+                .collect()
+        }
+        /// This conversation's `conversationList` row.
+        async fn row(&self) -> Value {
+            let list = dispatch(&self.engine, "conversationList", &json!({}))
+                .await
+                .unwrap();
+            list["conversations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == self.id.as_str())
+                .unwrap()
+                .clone()
+        }
+        async fn control(&self) -> String {
+            let mut e = self.engine.lock().await;
+            e.chat(&self.id).unwrap().summary()["control"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turn_starts_once_and_ends_with_its_message_and_answer() {
+        let mut c = chat("claude").await;
+        let message = c.send("hello").await;
+        assert_eq!(c.started().unwrap().id, message);
+        let started = c.kinds("turnStarted").await;
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0]["messageId"], message);
+        assert_eq!(started[0]["generation"], 0);
+        assert_eq!(started[0]["continuation"], Value::Null);
+        assert_eq!(c.control().await, "agent");
+        c.notice(
+            "textFinal",
+            json!({"itemId":"m1","text":"Done.","part":0,"last":true,"role":"final"}),
+        )
+        .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        let ended = c.kinds("turnEnded").await;
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0]["messageId"], message);
+        assert_eq!(ended[0]["outcome"], "completed");
+        assert_eq!(ended[0]["emptyAnswer"], false);
+        assert_eq!(ended[0]["finalItemIds"], json!(["m1"]));
+        let range = ended[0]["sourceSequences"].as_array().unwrap();
+        assert!(range[0].as_u64().unwrap() < range[1].as_u64().unwrap());
+        // `turnEnded` follows the terminal event it describes.
+        let events = c.events().await;
+        let terminal = events.iter().position(|e| e["kind"] == "terminal").unwrap();
+        let end = events
+            .iter()
+            .position(|e| e["kind"] == "turnEnded")
+            .unwrap();
+        assert!(end > terminal);
+        assert_eq!(c.control().await, "stopped");
+        let controls: Vec<_> = c
+            .kinds("controlChanged")
+            .await
+            .into_iter()
+            .map(|d| (d["from"].clone(), d["to"].clone()))
+            .collect();
+        assert_eq!(
+            controls,
+            vec![
+                (json!("stopped"), json!("agent")),
+                (json!("agent"), json!("stopped"))
+            ]
+        );
+        // No version on the allowlist: the process retires after the turn.
+        let retired = c.kinds("generationRetired").await;
+        assert_eq!(retired[0]["reason"], "unlistedVersion");
+        assert_eq!(retired[0]["generation"], 0);
+        assert!(c.shutdown_sent());
+        assert!(c.engine.lock().await.jobs[&c.id].retiring);
+    }
+
+    #[tokio::test]
+    async fn the_list_names_each_ended_turn_and_each_unanswered_request() {
+        let mut c = chat("codex").await;
+        assert_eq!(c.row().await["lastTurn"], Value::Null);
+        let message = c.send("check the page").await;
+        assert!(c.started().is_some());
+        c.notice(
+            "request",
+            json!({"requestId":3,"method":"item/commandExecution/requestApproval","params":{"command":"ls"}}),
+        )
+        .await;
+        let waiting = c.row().await;
+        assert_eq!(waiting["phase"], "waitingInput");
+        let revision = waiting["waitingRequest"].as_u64().unwrap();
+        c.notice("requestResolved", json!({"requestId":3})).await;
+        assert_eq!(c.row().await["waitingRequest"], Value::Null);
+        c.notice(
+            "request",
+            json!({"requestId":4,"method":"item/commandExecution/requestApproval","params":{"command":"pwd"}}),
+        )
+        .await;
+        let next = c.row().await["waitingRequest"].as_u64().unwrap();
+        assert!(next > revision);
+        c.notice(
+            "textFinal",
+            json!({"itemId":"m1","text":"\n  All 3 checks passed.\nDetails follow.","part":0,"last":true,"role":"final"}),
+        )
+        .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        let ended = c.row().await;
+        assert_eq!(ended["waitingRequest"], Value::Null);
+        assert_eq!(ended["lastTurn"]["messageId"], message);
+        assert_eq!(ended["lastTurn"]["outcome"], "completed");
+        assert_eq!(ended["lastTurn"]["preview"], "All 3 checks passed.");
+        assert!(ended["lastTurn"]["ended"].as_u64().unwrap() > 0);
+        // The state keeps the v1.5.214 shape, which refuses unknown fields.
+        let saved = std::fs::read(
+            c._dir
+                .path()
+                .join(format!("conversations/{}/state.json", c.id)),
+        )
+        .unwrap();
+        let state: serde_json::Map<String, Value> = serde_json::from_slice(&saved).unwrap();
+        let v1_5_214 = [
+            "schemaVersion",
+            "id",
+            "agentId",
+            "title",
+            "created",
+            "updated",
+            "phase",
+            "generation",
+            "sessionId",
+            "model",
+            "requestedModel",
+            "options",
+            "active",
+            "queue",
+            "queuePaused",
+            "directMessageId",
+            "directReady",
+            "activeDirect",
+            "accepted",
+            "nextSequence",
+            "lastError",
+            "executable",
+            "fullAccess",
+            "site",
+            "scheduleId",
+        ];
+        for key in state.keys() {
+            assert!(v1_5_214.contains(&key.as_str()), "{key}");
+        }
+        // A restarted service rebuilds the last turn from the journal.
+        let restarted = Arc::new(Mutex::new(Engine::new(
+            Store::open(c._dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )));
+        let reloaded = restarted.lock().await.chat(&c.id).unwrap().summary();
+        for field in ["messageId", "outcome", "preview"] {
+            assert_eq!(
+                reloaded["lastTurn"][field], ended["lastTurn"][field],
+                "{field}"
+            );
+        }
+        // `ended` is the journaled event's time, within a moment of the live one.
+        let at = |row: &Value| row["lastTurn"]["ended"].as_u64().unwrap();
+        assert!(at(&reloaded).abs_diff(at(&ended)) < 5000);
+    }
+
+    #[tokio::test]
+    async fn turn_outcomes_follow_the_terminal_kind() {
+        for (kind, data, stopping, outcome) in [
+            (
+                "terminal",
+                json!({"status":"failed","error":"boom"}),
+                false,
+                "failed",
+            ),
+            (
+                "terminal",
+                json!({"status":"interrupted","error":null}),
+                true,
+                "interrupted",
+            ),
+            (
+                "exited",
+                json!({"error":null,"processExitConfirmed":true}),
+                true,
+                "interrupted",
+            ),
+            (
+                "exited",
+                json!({"error":"crash","processExitConfirmed":true}),
+                false,
+                "failed",
+            ),
+            (
+                "processUnconfirmed",
+                json!({"error":"lost","processExitConfirmed":false}),
+                false,
+                "unknown",
+            ),
+        ] {
+            let c = chat("claude").await;
+            let message = c.send("go").await;
+            if stopping {
+                dispatch(
+                    &c.engine,
+                    "conversationStop",
+                    &json!({"conversationId":c.id}),
+                )
+                .await
+                .unwrap();
+                assert_eq!(c.control().await, "stopRequested");
+            }
+            c.notice(kind, data).await;
+            let ended = c.kinds("turnEnded").await;
+            assert_eq!(ended.len(), 1, "{kind} {outcome}");
+            assert_eq!(ended[0]["messageId"], message, "{kind}");
+            assert_eq!(ended[0]["outcome"], outcome, "{kind}");
+            assert_eq!(ended[0]["emptyAnswer"], true, "{kind}");
+            let row = c.row().await;
+            assert_eq!(row["lastTurn"]["messageId"], message, "{kind}");
+            assert_eq!(row["lastTurn"]["outcome"], outcome, "{kind}");
+            assert_eq!(row["lastTurn"]["preview"], Value::Null, "{kind}");
+            let retired = c.kinds("generationRetired").await;
+            assert_eq!(retired[0]["reason"], "notCompleted", "{kind}");
+            let expected = if outcome == "unknown" {
+                "unknown"
+            } else {
+                "stopped"
+            };
+            assert_eq!(c.control().await, expected, "{kind}");
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_text_counts_as_an_answer() {
+        let c = chat("opencode").await;
+        c.send("go").await;
+        c.notice("textDelta", json!({"itemId":"a","text":"Here it is."}))
+            .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert_eq!(c.kinds("turnEnded").await[0]["emptyAnswer"], false);
+    }
+
+    #[tokio::test]
+    async fn open_tools_are_reported_and_retire_the_generation() {
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        let message = c.send("click it").await;
+        c.started();
+        let tool = |completed: bool, item: Value| json!({"completed":completed,"item":item});
+        c.notice("tool", tool(false, json!({"type":"tool_use","id":"t0","name":"mcp__chrome_use__chrome_use_read","input":{}})))
+            .await;
+        c.notice(
+            "tool",
+            tool(
+                true,
+                json!({"type":"tool_result","tool_use_id":"t0","content":"ok"}),
+            ),
+        )
+        .await;
+        c.notice("tool", tool(false, json!({"type":"tool_use","id":"t1","name":"mcp__chrome_use__chrome_use_click","input":{"selector":"#buy"}})))
+            .await;
+        // Reasoning is not a tool call.
+        c.notice("tool", tool(false, json!({"type":"reasoning","id":"r1"})))
+            .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        let batch = c.kinds("batchInterrupted").await;
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0]["messageId"], message);
+        assert_eq!(batch[0]["completed"], json!(["t0"]));
+        assert_eq!(
+            batch[0]["unresolved"],
+            json!([{"toolCallId":"t1","name":"mcp__chrome_use__chrome_use_click","actionId":null,"executed":"unknown"}])
+        );
+        // Even an allowlisted version retires with a browser call still open.
+        assert_eq!(c.kinds("generationRetired").await[0]["reason"], "openTool");
+        assert!(c.shutdown_sent());
+    }
+
+    #[tokio::test]
+    async fn an_allowlisted_version_keeps_its_process_after_a_clean_turn() {
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.send("one").await;
+        assert!(c.started().is_some());
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert!(c.kinds("generationRetired").await.is_empty());
+        assert!(!c.shutdown_sent());
+        let second = c.send("two").await;
+        assert_eq!(c.started().unwrap().id, second);
+        let started = c.kinds("turnStarted").await;
+        assert_eq!(started.len(), 2);
+        assert_eq!(started[1]["generation"], 0);
+        // A version the allowlist does not name retires.
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.notice(
+            "ready",
+            json!({"sessionId":"s1","backendVersion":"9.9.9","resumable":true,"mcpToolTimeoutSecs":120}),
+        )
+        .await;
+        c.send("one").await;
+        c.started();
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert_eq!(
+            c.kinds("generationRetired").await[0]["reason"],
+            "unlistedVersion"
+        );
+        // An allowlisted version whose client timeout could not be set
+        // retires too.
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.notice(
+            "ready",
+            json!({"sessionId":"s1","backendVersion":"2.1.300","resumable":true,"mcpToolTimeoutSecs":null}),
+        )
+        .await;
+        c.send("one").await;
+        c.started();
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert_eq!(
+            c.kinds("generationRetired").await[0]["reason"],
+            "unlistedVersion"
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_after_an_interrupted_turn_continue_after_stop() {
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.send("first").await;
+        c.started();
+        // Queued before the interrupt; the queue pauses after it.
+        let queued = c.send("second").await;
+        dispatch(
+            &c.engine,
+            "conversationStop",
+            &json!({"conversationId":c.id}),
+        )
+        .await
+        .unwrap();
+        assert!(c
+            .notice("terminal", json!({"status":"interrupted","error":null}))
+            .await
+            .is_none());
+        {
+            // The retired process exits; resuming the queue begins the
+            // queued message after the stop.
+            let generation = c.engine.lock().await.jobs[&c.id].generation;
+            c.notice_from(generation, "exited", json!({"error":null}))
+                .await;
+            let mut e = c.engine.lock().await;
+            e.chat(&c.id).unwrap().queue_paused = false;
+            let next = e.begin(&c.id).unwrap().unwrap();
+            assert_eq!(next.id, queued);
+            assert_eq!(next.continuation, Some(Continuation::AfterStop));
+            assert!(next
+                .prompt_text()
+                .starts_with("[The user stopped the previous request"));
+            assert_eq!(e.chat(&c.id).unwrap().control(), "resuming");
+            assert_eq!(
+                e.chat(&c.id).unwrap().active.as_ref().unwrap().continuation,
+                Some(Continuation::AfterStop)
+            );
+        }
+        let started = c.kinds("turnStarted").await;
+        assert_eq!(started[1]["continuation"], "afterStop");
+        assert_eq!(started[1]["generation"], 1);
+
+        // Stop & send: the direct message begins in the notice that ends the
+        // interrupted turn, and continues after the stop.
+        let mut c = chat("claude").await;
+        c.send("first").await;
+        c.started();
+        let direct = uuid::Uuid::new_v4().to_string();
+        dispatch(
+            &c.engine,
+            "conversationSendDirect",
+            &json!({"conversationId":c.id,"messageId":direct,"text":"instead"}),
+        )
+        .await
+        .unwrap();
+        let next = c
+            .notice("terminal", json!({"status":"interrupted","error":null}))
+            .await
+            .unwrap();
+        assert_eq!(next.id, direct);
+        assert_eq!(next.continuation, Some(Continuation::AfterStop));
+        let started = c.kinds("turnStarted").await;
+        assert_eq!(started.len(), 2);
+        assert_eq!(started[1]["direct"], true);
+
+        // Not after a completed turn.
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.send("first").await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        c.send("second").await;
+        c.started();
+        assert_eq!(c.started().unwrap().continuation, None);
+    }
+
+    #[tokio::test]
+    async fn a_retired_process_that_never_exits_keeps_the_next_message() {
+        let mut c = chat("claude").await;
+        c.engine.lock().await.retire_wait = Duration::from_millis(200);
+        c.send("first").await;
+        c.started();
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert!(c.shutdown_sent());
+        // The old process ignores Shutdown; the next message must not reach
+        // it, and no other process may start.
+        let second = c.send("second").await;
+        assert!(c.started().is_none());
+        let failed = c.kinds("turnStartFailed").await;
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0]["messageId"], second);
+        assert_eq!(failed[0]["delivered"], false);
+        assert_eq!(failed[0]["retiredGeneration"], 0);
+        let mut e = c.engine.lock().await;
+        let chat = e.chat(&c.id).unwrap();
+        assert_eq!(chat.phase, Phase::RecoveryRequired);
+        assert_eq!(chat.active.as_ref().unwrap().id, second);
+        assert_eq!(chat.control(), "unknown");
+        assert_eq!(chat.generation, 1);
+        assert!(e.jobs[&c.id].retiring);
+    }
+
+    /// A conversation whose backend job has a real notice pump, and whose
+    /// next process is a script that idles (so a start can really spawn).
+    /// The idle script is a shell script, so these tests are Unix-only; the
+    /// pump ordering they check does not depend on the platform.
+    #[cfg(unix)]
+    struct Pumped {
+        _dir: tempfile::TempDir,
+        engine: Arc<Mutex<Engine>>,
+        id: String,
+        commands: mpsc::Receiver<BackendCommand>,
+        events: mpsc::Sender<Notice>,
+    }
+
+    #[cfg(unix)]
+    async fn pumped() -> Pumped {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("agent");
+        std::fs::write(&script, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            Default::default(),
+        )));
+        let created = dispatch(
+            &engine,
+            "conversationCreate",
+            &json!({"agentId":"claude","executable":script}),
+        )
+        .await
+        .unwrap();
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        let (sender, commands) = mpsc::channel(16);
+        let (events, notices) = mpsc::channel(16);
+        engine.lock().await.jobs.insert(
+            id.clone(),
+            Job {
+                generation: 0,
+                full_access: false,
+                options: ModelOptions::default(),
+                retiring: false,
+                sender,
+            },
+        );
+        spawn_pump(engine.clone(), id.clone(), 0, notices);
+        Pumped {
+            _dir: dir,
+            engine,
+            id,
+            commands,
+            events,
+        }
+    }
+
+    #[cfg(unix)]
+    impl Pumped {
+        async fn send(&self, operation: &str, text: &str) -> String {
+            let message = uuid::Uuid::new_v4().to_string();
+            dispatch(
+                &self.engine,
+                operation,
+                &json!({"conversationId":self.id,"messageId":message,"text":text}),
+            )
+            .await
+            .unwrap();
+            message
+        }
+        async fn emit(&self, kind: &'static str, data: Value) {
+            self.events.send(backend::notice(kind, data)).await.unwrap();
+        }
+        async fn kinds(&self, kind: &str) -> Vec<Value> {
+            let e = self.engine.lock().await;
+            e.store
+                .all_events(&self.id)
+                .unwrap()
+                .into_iter()
+                .filter(|ev| ev.kind == kind)
+                .map(|ev| ev.data)
+                .collect()
+        }
+        /// The next message runs on a newly spawned generation 1.
+        async fn started_on_new_generation(&self, message: &str) {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let spawned = {
+                    let e = self.engine.lock().await;
+                    e.jobs.get(&self.id).map(|j| j.generation) == Some(1)
+                        && e.turns.get(&self.id).is_some_and(|t| t.dispatched)
+                };
+                if spawned {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    let mut e = self.engine.lock().await;
+                    let error = e.chat(&self.id).unwrap().last_error.clone();
+                    drop(e);
+                    panic!(
+                        "no new process: {error:?} {:?}",
+                        self.kinds("turnStartFailed").await
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(self.kinds("turnStartFailed").await.is_empty());
+            let started = self.kinds("turnStarted").await;
+            let last = started.last().unwrap();
+            assert_eq!(last["messageId"], message);
+            assert_eq!(last["generation"], 1);
+        }
+    }
+
+    // Starting a process reads the environment that other tests change.
+    #[allow(clippy::await_holding_lock)]
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_queued_message_starts_on_a_new_process_once_the_retired_one_exits() {
+        let _env = crate::test_utils::EnvGuard::new(&[]);
+        let mut p = pumped().await;
+        p.send("conversationSend", "first").await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Start(_))
+        ));
+        let queued = p.send("conversationSend", "second").await;
+        // The turn completes; with no allowlisted version its process retires
+        // and the queued message waits for that process to exit.
+        p.emit("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Shutdown)
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // The pump is free to deliver the old process's exit.
+        p.emit("exited", json!({"error":null,"processExitConfirmed":true}))
+            .await;
+        p.started_on_new_generation(&queued).await;
+    }
+
+    // Starting a process reads the environment that other tests change.
+    #[allow(clippy::await_holding_lock)]
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_and_send_starts_on_a_new_process_once_the_stopped_one_exits() {
+        let _env = crate::test_utils::EnvGuard::new(&[]);
+        let mut p = pumped().await;
+        p.send("conversationSend", "first").await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Start(_))
+        ));
+        let direct = p.send("conversationSendDirect", "instead").await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Interrupt)
+        ));
+        p.emit("terminal", json!({"status":"interrupted","error":null}))
+            .await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Shutdown)
+        ));
+        p.emit("exited", json!({"error":null,"processExitConfirmed":true}))
+            .await;
+        p.started_on_new_generation(&direct).await;
+        let started = p.kinds("turnStarted").await;
+        assert_eq!(started.last().unwrap()["continuation"], "afterStop");
+    }
+
+    #[tokio::test]
+    async fn backend_titles_and_errors_are_saved_redacted() {
+        let c = chat("claude").await;
+        c.send("go").await;
+        c.notice(
+            "title",
+            json!({"title":"Deploy with sk-ant-SYNTHTITLEKEY0123456789"}),
+        )
+        .await;
+        c.notice(
+            "terminal",
+            json!({"status":"failed","error":"fetch https://x.example/cb?access_token=SYNTH_TOKEN_ERR1 failed"}),
+        )
+        .await;
+        let (title, error, root) = {
+            let mut e = c.engine.lock().await;
+            let chat = e.chat(&c.id).unwrap();
+            (
+                chat.title.clone(),
+                chat.last_error.clone().unwrap(),
+                e.store.directory.clone(),
+            )
+        };
+        assert!(title.starts_with("Deploy with [redacted"), "{title}");
+        assert_eq!(
+            error,
+            "fetch https://x.example/cb?access_token=[redacted] failed"
+        );
+        // Nothing in the profile's conversation store holds either secret.
+        fn walk(path: &Path, out: &mut Vec<u8>) {
+            for entry in std::fs::read_dir(path).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    out.extend(std::fs::read(&path).unwrap_or_default());
+                }
+            }
+        }
+        let mut disk = Vec::new();
+        walk(&root, &mut disk);
+        for secret in ["SYNTH_TOKEN_ERR1", "SYNTHTITLEKEY0123456789"] {
+            assert!(
+                !disk.windows(secret.len()).any(|w| w == secret.as_bytes()),
+                "{secret} reached disk"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_non_resumable_agent_refuses_to_continue_after_an_interrupt() {
+        let mut c = chat("opencode").await;
+        c.notice(
+            "ready",
+            json!({"sessionId":"ses_1","backendVersion":"2.0.25","resumable":false}),
+        )
+        .await;
+        c.send("first").await;
+        c.started();
+        c.notice("terminal", json!({"status":"interrupted","error":null}))
+            .await;
+        let retired = c.kinds("generationRetired").await;
+        assert_eq!(retired[0]["resumable"], false);
+        let refused = dispatch(
+            &c.engine,
+            "conversationSend",
+            &json!({"conversationId":c.id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"again"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused, NOT_RESUMABLE);
+        assert!(dispatch(
+            &c.engine,
+            "conversationResumeQueue",
+            &json!({"conversationId":c.id})
+        )
+        .await
+        .is_err());
+        assert!(c.started().is_none());
+        assert_eq!(c.kinds("turnStarted").await.len(), 1);
+        // A restarted service reads the refusal from the journal.
+        let root = c.engine.lock().await.store.directory.clone();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(root).unwrap(),
+            "fixture".into(),
+            Default::default(),
+        )));
+        assert_eq!(
+            dispatch(
+                &engine,
+                "conversationSend",
+                &json!({"conversationId":c.id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"again"}),
+            )
+            .await
+            .unwrap_err(),
+            NOT_RESUMABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduled_runs_journal_user_before_turn_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            Default::default(),
+        )));
+        let saved = schedule_dispatch(
+            &engine,
+            "scheduleSave",
+            &json!({"name":"Daily","prompt":"Read the page","agentId":"codex","rule":{"kind":"interval","minutes":10},"options":{"toolAccess":"readFiles"}}),
+        )
+        .await
+        .unwrap();
+        let schedule = saved["schedule"]["id"].as_str().unwrap().to_string();
+        // Four busy conversations make the start fail before any process.
+        {
+            let mut e = engine.lock().await;
+            for _ in 0..4 {
+                let mut busy = Conversation::new("codex", None, None).unwrap();
+                busy.phase = Phase::Running;
+                e.store.create(&busy).unwrap();
+                let (sender, _) = mpsc::channel(1);
+                e.jobs.insert(
+                    busy.id.clone(),
+                    Job {
+                        generation: 1,
+                        full_access: false,
+                        options: ModelOptions::default(),
+                        retiring: false,
+                        sender,
+                    },
+                );
+                e.chats.insert(busy.id.clone(), busy);
+            }
+        }
+        assert!(run_schedule(&engine, &schedule).await.is_err());
+        let id = engine.lock().await.schedules[&schedule]
+            .last_chat
+            .clone()
+            .unwrap();
+        let read = dispatch(&engine, "conversationRead", &json!({"conversationId":id}))
+            .await
+            .unwrap();
+        let kinds: Vec<_> = read["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["kind"].as_str().unwrap().to_string())
+            .filter(|k| k != "controlChanged")
+            .collect();
+        assert_eq!(kinds, ["user", "turnStarted", "turnStartFailed"]);
+        let failed = &read["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == "turnStartFailed")
+            .unwrap()["data"];
+        assert_eq!(failed["delivered"], false);
+        assert_eq!(failed["retiredGeneration"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn admission_needs_the_live_unretired_generation_and_a_running_turn() {
+        let c = chat("claude").await;
+        {
+            let e = c.engine.lock().await;
+            assert!(e.admits(&c.id, 0).is_err(), "idle");
+        }
+        let message = c.send("go").await;
+        {
+            let e = c.engine.lock().await;
+            assert_eq!(e.admits(&c.id, 0).unwrap().id, message);
+            assert!(e.admits(&c.id, 1).is_err(), "other generation");
+        }
+        dispatch(
+            &c.engine,
+            "conversationStop",
+            &json!({"conversationId":c.id}),
+        )
+        .await
+        .unwrap();
+        assert!(c.engine.lock().await.admits(&c.id, 0).is_err(), "stopping");
+        c.notice("terminal", json!({"status":"interrupted","error":null}))
+            .await;
+        assert!(c.engine.lock().await.admits(&c.id, 0).is_err(), "retired");
+    }
+
+    #[test]
+    fn only_versions_whose_timeouts_are_recognised_are_allowlisted() {
+        assert_eq!(
+            GENERATION_REUSE,
+            &[("codex", "0.162.1"), ("claude", "2.1.300")]
+        );
+    }
+
+    fn fixture(name: &str) -> Vec<Value> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/agent_panel/fixtures")
+            .join(name);
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// The timed-out call's notices, as the adapters build them from the
+    /// committed fixtures.
+    fn timeout_notices(agent: &str) -> Vec<Notice> {
+        match agent {
+            "codex" => fixture("codex-mcp-timeout.jsonl")
+                .iter()
+                .filter(|v| v["params"]["item"]["tool"] == "chrome_use_wait")
+                .filter_map(|v| match v["method"].as_str() {
+                    Some("item/started") => {
+                        Some(backend::codex_tool_notice(false, &v["params"]["item"]))
+                    }
+                    Some("item/completed") => {
+                        Some(backend::codex_tool_notice(true, &v["params"]["item"]))
+                    }
+                    _ => None,
+                })
+                .collect(),
+            "claude" => {
+                let lines = fixture("claude-mcp-timeout.jsonl");
+                let mut tools = backend::ClaudeTools::default();
+                let mut out = Vec::new();
+                for line in &lines {
+                    if line["type"] == "assistant" {
+                        for block in line["message"]["content"].as_array().unwrap() {
+                            if block["name"] == "mcp__chrome_use__chrome_use_wait" {
+                                tools.remember(block);
+                                out.push(backend::tool_notice(
+                                    false,
+                                    block["id"].as_str(),
+                                    Vec::new(),
+                                    block,
+                                ));
+                            }
+                        }
+                    }
+                    if line["type"] == "user"
+                        && line.to_string().contains("timed out after")
+                        && !out.is_empty()
+                    {
+                        out.extend(backend::claude_tool_results(line, &tools));
+                    }
+                }
+                out
+            }
+            _ => fixture("pi-mcp-timeout.jsonl")
+                .iter()
+                .filter(|v| {
+                    v["type"] == "tool_execution_end"
+                        && v["toolName"] == "mcp__chrome_use__chrome_use_wait"
+                })
+                .map(backend::pi_tool_end)
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_call_closed_by_the_client_timeout_retires_even_an_allowlisted_version() {
+        for (agent, version) in [("codex", "0.162.1"), ("claude", "2.1.300"), ("pi", "x")] {
+            let c = chat(agent).await;
+            c.engine.lock().await.reuse_allowlist = vec![(agent.into(), version.into())];
+            c.notice(
+                "ready",
+                json!({"sessionId":"s","backendVersion":version,"resumable":true,"mcpToolTimeoutSecs":120}),
+            )
+            .await;
+            c.send("wait").await;
+            let notices = timeout_notices(agent);
+            assert!(
+                notices.iter().any(|n| n.data["completed"] == true),
+                "{agent}"
+            );
+            for notice in notices {
+                c.notice(notice.kind, notice.data).await;
+            }
+            c.notice("terminal", json!({"status":"completed","error":null}))
+                .await;
+            let retired = c.kinds("generationRetired").await;
+            assert_eq!(retired[0]["reason"], "clientTimeout", "{agent}");
+            assert!(c.kinds("batchInterrupted").await.is_empty(), "{agent}");
+        }
+        // The clean read of the same Codex fixture is not a timeout.
+        let read = fixture("codex-mcp-timeout.jsonl")
+            .into_iter()
+            .find(|v| {
+                v["method"] == "item/completed" && v["params"]["item"]["tool"] == "chrome_use_read"
+            })
+            .unwrap();
+        assert!(!client_timed_out(&read["params"]["item"]));
+    }
+
+    #[tokio::test]
+    async fn an_open_opencode_execute_wrapper_counts_as_a_browser_call() {
+        let c = chat("opencode").await;
+        c.send("go").await;
+        c.notice(
+            "tool",
+            json!({"completed":false,"toolCallId":"call_1","item":{"toolCallId":"call_1","name":"execute","title":"execute","kind":"other","status":"pending","rawInput":{}}}),
+        )
+        .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert_eq!(c.kinds("generationRetired").await[0]["reason"], "openTool");
     }
 }

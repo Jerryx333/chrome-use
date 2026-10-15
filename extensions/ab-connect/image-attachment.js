@@ -1,9 +1,42 @@
 // Normalize user-selected bitmaps before they cross native-message limits.
 // Image bytes live only in the draft until saved by the conversation service.
-export async function prepareImage(file) {
-  if (!['image/png','image/jpeg','image/webp'].includes(file.type)) throw new Error('Use PNG, JPEG or WebP images.');
+const BITMAP_TYPES = ['image/png','image/jpeg','image/webp'];
+const HEIF_TYPES = ['image/heic','image/heif','image/heic-sequence','image/heif-sequence'];
+
+// Windows and some pickers report an empty type for HEIC, so the extension counts too.
+export function isHeif(file) {
+  return HEIF_TYPES.includes(file.type) || /\.(heic|heif)$/i.test(file.name || '');
+}
+
+export function isSupportedImage(file) {
+  return BITMAP_TYPES.includes(file.type) || isHeif(file);
+}
+
+function toBase64(bytes) {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
+
+// Chrome has no HEIC decoder; the local CLI converts with the system codec
+// and answers with a JPEG small enough for the host-to-extension message limit.
+export function heifConverter(api) {
+  return async file => {
+    const result = await api('imageConvert', { data: toBase64(new Uint8Array(await file.arrayBuffer())) });
+    return new Blob([Uint8Array.from(atob(result.data), character => character.charCodeAt(0))], { type: 'image/jpeg' });
+  };
+}
+
+export async function prepareImage(file, { convertHeif = null } = {}) {
+  if (!isSupportedImage(file)) throw new Error('Use PNG, JPEG, WebP or HEIC images.');
   if (file.size > 20 * 1024 * 1024) throw new Error('The source image exceeds 20 MiB.');
-  const bitmap = await createImageBitmap(file);
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); }
+  catch (error) {
+    if (!isHeif(file)) throw error;
+    if (!convertHeif) throw new Error('Update the chrome-use CLI to attach HEIC photos, or export them as JPEG first.');
+    bitmap = await createImageBitmap(await convertHeif(file));
+  }
   try {
     const scale = Math.min(1, 2000 / Math.max(bitmap.width, bitmap.height));
     const canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)));
@@ -20,8 +53,6 @@ export async function prepareImage(file) {
       }
     }
     if (blob.size > 512 * 1024) throw new Error('This image is still too large; crop or resize it before attaching.');
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte);
-    return { data: btoa(binary), mediaType: blob.type, name: file.name || 'Image' };
+    return { data: toBase64(new Uint8Array(await blob.arrayBuffer())), mediaType: blob.type, name: file.name || 'Image' };
   } finally { bitmap.close(); }
 }

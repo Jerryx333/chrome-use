@@ -1,0 +1,228 @@
+{
+  "startedAt": "2026-10-15T04:36:20.163Z",
+  "hostBin": "/tmp/pa/1015133618/bin/chrome-use-1015133618",
+  "checks": [
+    {
+      "id": "R2",
+      "name": "Real backends: reuse after a clean turn, resume after Stop",
+      "evidence": {
+        "runs": [
+          {
+            "agent": "codex",
+            "attempt": 1,
+            "first": {
+              "outcome": "completed",
+              "generation": 1,
+              "error": null
+            },
+            "backendVersion": "0.162.1",
+            "reuseExpected": true,
+            "second": {
+              "outcome": "completed",
+              "generation": 1
+            },
+            "third": {
+              "outcome": "interrupted",
+              "generation": 1,
+              "retired": [
+                {
+                  "generation": 1,
+                  "privacyClass": "public",
+                  "reason": "notCompleted",
+                  "resumable": true,
+                  "v": 1
+                }
+              ]
+            },
+            "resumeQueue": {
+              "ok": true,
+              "result": {
+                "conversation": {
+                  "activeMessageId": "3964da39-996b-4d31-9183-9342368d6ce8",
+                  "agentId": "codex",
+                  "control": "resuming",
+                  "created": 1792038986705,
+                  "directMessageId": null,
+                  "fullAccess": true,
+                  "generation": 2,
+                  "id": "e164343d-e942-4479-97fe-551b53ff481a",
+                  "lastError": null,
+                  "lastSequence": 63,
+                  "lastTurn": {
+                    "ended": 1792039013893,
+                    "messageId": "4ce5fcae-ed3b-48e2-9b4d-8639da055a51",
+                    "outcome": "interrupted",
+                    "preview": "I’ll open the page, wait for it to finish loading, and read its heading."
+                  },
+                  "model": "gpt-6.1-sol",
+                  "options": {
+                    "effort": null,
+                    "serviceTier": null,
+                    "toolAccess": null
+                  },
+                  "phase": "starting",
+                  "queuePaused": false,
+                  "queued": 0,
+                  "requestedModel": null,
+                  "scheduleId": null,
+                  "site": null,
+                  "target": {
+                    "mode": "agentSession",
+                    "session": "panel-e164343d-e942-4479-97fe-551b53ff481a"
+                  },
+                  "title": "Open http://127.0.0.1:8910/a in your browser session and tell me its page title ",
+                  "updated": 1792039014262,
+                  "waitingRequest": null
+                },
+                "schemaVersion": 1
+              }
+            },
+            "fourth": {
+              "outcome": "completed",
+              "generation": 2,
+              "continuation": "afterStop",
+              "restartMs": 752,
+              "sessions": [
+                "01a13dd8-e59b-7ea1-bf9a-3886d0354a64"
+              ]
+            },
+            "answer4": "The pThe pages I opened earlier were titled “Page A” and “Page B.”",
+            "pass": true
+          },
+          {
+            "agent": "opencode",
+            "attempt": 1,
+            "first": {
+              "outcome": "failed",
+              "generation": 1,
+              "error": "OpenCode refused the prompt: Internal error: Model exo-free has been deprecated."
+            },
+            "error": "first turn failed: OpenCode refused the prompt: Internal error: Model exo-free has been deprecated.",
+            "pass": false,
+            "retried": true
+          },
+          {
+            "agent": "opencode",
+            "attempt": 2,
+            "first": {
+              "outcome": "completed",
+              "generation": 1,
+              "error": null
+            },
+            "backendVersion": "2.0.25",
+            "reuseExpected": false,
+            "second": {
+              "outcome": "completed",
+              "generation": 2
+            },
+            "third": {
+              "outcome": "interrupted",
+              "generation": 3,
+              "retired": [
+                {
+                  "generation": 1,
+                  "privacyClass": "public",
+                  "reason": "unlistedVersion",
+                  "resumable": true,
+                  "v": 1
+                },
+                {
+                  "generation": 2,
+                  "privacyClass": "public",
+                  "reason": "unlistedVersion",
+                  "resumable": true,
+                  "v": 1
+                },
+                {
+                  "generation": 3,
+                  "privacyClass": "public",
+                  "reason": "notCompleted",
+                  "resumable": true,
+                  "v": 1
+                }
+              ]
+            },
+            "resumeQueue": {
+              "ok": true,
+              "result": {
+                "conversation": {
+                  "activeMessageId": "10341d65-3158-4cfd-8a93-5971ece4bbb1",
+                  "agentId": "opencode",
+                  "control": "resuming",
+                  "created": 1792039020326,
+                  "directMessageId": null,
+                  "fullAccess": true,
+                  "generation": 4,
+                  "id": "d7efce80-0cd9-4deb-9fa7-610c21019147",
+                  "lastError": null,
+                  "lastSequence": 88,
+                  "lastTurn": {
+                    "ended": 1792039155249,
+                    "messageId": "9ce5f854-00d1-4ef1-9617-529c6dece3d5",
+                    "outcome": "interrupted"
+                  },
+                  "model": "google/gemini-4-argon",
+                  "options": {
+                    "effort": null,
+                    "serviceTier": null,
+                    "toolAccess": null
+                  },
+                  "phase": "starting",
+                  "queuePaused": false,
+                  "queued": 0,
+                  "requestedModel": null,
+                  "scheduleId": null,
+                  "site": null,
+                  "target": {
+                    "mode": "agentSession",
+                    "session": "panel-d7efce80-0cd9-4deb-9fa7-610c21019147"
+                  },
+                  "title": "Open http://127.0.0.1:8910/a in your browser session and tell me its page title ",
+                  "updated": 1792039155556,
+                  "waitingRequest": null
+                },
+                "schemaVersion": 1
+              }
+            },
+            "fourth": {
+              "outcome": "completed",
+              "generation": 4,
+              "continuation": "afterStop",
+              "restartMs": 862,
+              "sessions": [
+                "ses_ec2269692ffeEWtU9iTrp7Furn"
+              ]
+            },
+            "answer4": "The pages opened earlier in this conversation were titled \"Page A\" and \"Page B\".",
+            "pass": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 188.7
+    }
+  ],
+  "chrome": "Chrome/155.0.8059.39",
+  "hostSha256": "sha256:68dce731ed9b29406e01ca7da6a56b2914536e8cb2c265058506653ff57a92ec",
+  "buildCommit": "36605e69",
+  "extensionTree": "97be9e1a1a7c93d8b5a428a7cddff1dcd733e22c0f1ab22b3077159a56f85f65",
+  "v15214Sha256": "sha256:d77538717467a0fd84b71b4465376d52998b67fa6e641dc0ad1db53b76a7bb41",
+  "v15214ExtensionTree": "815c3c3b7e088d7580f574fe1ceca9124478f7866e13dd945e43519efe464ffc",
+  "profile": "5f58bdec-df97-49f3-998d-6b55a357a693",
+  "extensionVersion": "0.5.57",
+  "finishedAt": "2026-10-15T04:39:35.382Z",
+  "proxyTimings": {
+    "agentActionBegin": {
+      "n": 6,
+      "p50": 26,
+      "p95": 49,
+      "max": 49
+    },
+    "agentActionReport": {
+      "n": 5,
+      "p50": 9,
+      "p95": 28,
+      "max": 28
+    }
+  }
+}

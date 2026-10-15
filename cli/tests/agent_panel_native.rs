@@ -552,18 +552,23 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
             json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"approval"}),
         );
         let blocked = conversation_poll(&mut host, &rx, &id, "waitingInput");
-        let request = blocked["journal"]["events"]
+        let shown = blocked["journal"]["events"]
             .as_array()
             .unwrap()
             .iter()
             .rev()
             .find(|e| e["kind"] == "request")
-            .unwrap()["data"]["requestId"]
+            .unwrap()["data"]
             .clone();
+        let request = shown["requestId"].clone();
         let answer = if agent == "codex" {
             json!({"decision":"accept"})
         } else {
-            json!({"behavior":"allow","updatedInput":{"questions":[],"answers":{"Synthetic question":"One"}}})
+            // An older panel echoes the request it was shown plus its answers;
+            // anything else is refused (plan 7.3).
+            let mut input = shown["params"]["input"].clone();
+            input["answers"] = json!({"Synthetic question":"One"});
+            json!({"behavior":"allow","updatedInput":input})
         };
         let reply = panel_reply(
             &mut host,
@@ -729,17 +734,29 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
             json!({"conversationId":id}),
         );
         let resumed = conversation_poll(&mut host, &rx, &id, "idle");
-        let ready_pids: std::collections::HashSet<_> = resumed["journal"]["events"]
+        // The fixture's version is not on the generation-reuse allowlist, so
+        // every turn runs on a new process (plan D1a); each one resumes the
+        // same CLI session instead of starting a history-less one.
+        let ready: Vec<&Value> = resumed["journal"]["events"]
             .as_array()
             .unwrap()
             .iter()
             .filter(|e| e["kind"] == "ready")
-            .map(|e| e["data"]["pid"].as_u64().unwrap())
             .collect();
-        assert_eq!(
-            ready_pids.len(),
-            1,
-            "CLI process was restarted between turns"
+        let sessions: std::collections::HashSet<_> = ready
+            .iter()
+            .map(|e| e["data"]["sessionId"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(sessions.len(), 1, "a turn started a new CLI session");
+        let retired = resumed["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "generationRetired")
+            .count();
+        assert!(
+            retired >= ready.len() - 1,
+            "a process was replaced without retiring"
         );
     }
     for agent in ["codex", "claude"] {
@@ -816,27 +833,23 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
         &rx,
         "direct-invalid-send",
         "conversationSendDirect",
-        json!({"conversationId":invalid_id,"messageId":invalid_message,"text":"retain this unconfirmed direct message"}),
+        json!({"conversationId":invalid_id,"messageId":invalid_message,"text":"never reaches a process"}),
     );
-    assert_eq!(
-        not_started["result"]["conversation"]["phase"],
-        "recoveryRequired"
-    );
-    assert_eq!(
-        not_started["result"]["conversation"]["activeMessageId"],
-        invalid_message
-    );
-    let refuse_resume = panel_reply(
-        &mut host,
-        &rx,
-        "direct-invalid-resume",
-        "conversationResumeQueue",
-        json!({"conversationId":invalid_id}),
-    );
-    assert!(refuse_resume["error"]
-        .as_str()
+    // No process ever existed, so nothing can have run: the start simply
+    // failed and the message is not kept as an unconfirmed active turn.
+    let conversation = &not_started["result"]["conversation"];
+    assert_eq!(conversation["phase"], "failed");
+    assert!(conversation["activeMessageId"].is_null());
+    let refused = conversation_poll(&mut host, &rx, &invalid_id, "failed");
+    let start_failed = refused["journal"]["events"]
+        .as_array()
         .unwrap()
-        .contains("unconfirmed"));
+        .iter()
+        .find(|event| event["kind"] == "turnStartFailed")
+        .expect("turnStartFailed event");
+    assert_eq!(start_failed["data"]["messageId"], invalid_message);
+    assert_eq!(start_failed["data"]["delivered"], false);
+    assert!(start_failed["data"]["retiredGeneration"].is_null());
     let other_profile = "native-other-profile-fixture";
     let _other_cleanup = ServiceFixture {
         root: registry.path().into(),

@@ -1,0 +1,4928 @@
+{
+  "startedAt": "2026-10-15T04:02:13.870Z",
+  "hostBin": "/tmp/pa/1015130212/bin/chrome-use-1015130212",
+  "checks": [
+    {
+      "id": 1,
+      "name": "Tool failure then recovery",
+      "evidence": {
+        "actions": [
+          {
+            "actionId": "9aa10f1f-f890-4c34-8ee1-c30f2764ee30",
+            "tool": "chrome_use_open",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "confirmed",
+            "basis": "navigation",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "about:blank",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/form",
+              "chromeTabId": 834195254,
+              "provenance": "actionReply"
+            },
+            "requested": {
+              "tabHandle": null,
+              "url": "http://127.0.0.1:8910/form"
+            },
+            "detail": null
+          },
+          {
+            "actionId": "cd3320a3-4c05-46c7-89ff-e56a4a17f25f",
+            "tool": "chrome_use_fill",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "uncertain",
+            "basis": "none",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/form",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/form",
+              "chromeTabId": 834195254,
+              "provenance": "daemonState"
+            },
+            "requested": null,
+            "detail": null
+          },
+          {
+            "actionId": "26cf4e28-6117-4613-a040-47fbb7801351",
+            "tool": "chrome_use_click",
+            "outcome": "error",
+            "errorCode": "element_not_found",
+            "verdict": "failed",
+            "basis": "toolError",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/form",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/form",
+              "chromeTabId": 834195254,
+              "provenance": "daemonState"
+            },
+            "requested": null,
+            "detail": null
+          },
+          {
+            "actionId": "c8e2765e-7e2c-45d4-9987-7e072684f97f",
+            "tool": "chrome_use_click",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "uncertain",
+            "basis": "pageChanged",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/form",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/form",
+              "chromeTabId": 834195254,
+              "provenance": "daemonState"
+            },
+            "requested": null,
+            "detail": null
+          },
+          {
+            "actionId": "29d90003-54cf-4e54-bb71-f2fcee91558f",
+            "tool": "chrome_use_expect",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "confirmed",
+            "basis": "expect",
+            "possiblyExecuted": false,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/form",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/form",
+              "chromeTabId": 834195254,
+              "provenance": "daemonState"
+            },
+            "requested": null,
+            "detail": null
+          }
+        ],
+        "turnEnded": {
+          "emptyAnswer": false,
+          "error": null,
+          "finalItemIds": [
+            "msg-fixture-turn-71abf5b4-96bb-49c2-855b-357a86f223a9-2"
+          ],
+          "generation": 1,
+          "messageId": "5d83fe25-1ac0-4847-b0f3-f3329672e82f",
+          "openLeases": [],
+          "outcome": "completed",
+          "privacyClass": "public",
+          "sourceSequences": [
+            2,
+            36
+          ],
+          "v": 1
+        },
+        "assessment": {
+          "blocker": null,
+          "declaredStatus": "complete",
+          "downgradedBecause": [],
+          "messageId": "5d83fe25-1ac0-4847-b0f3-f3329672e82f",
+          "phase": "final",
+          "privacyClass": "public",
+          "reason": null,
+          "requirements": [
+            {
+              "because": "the browser recorded this check",
+              "check": {
+                "evidence": "29d90003-54cf-4e54-bb71-f2fcee91558f",
+                "kind": "expect",
+                "predicate": "text #status contains Draft saved"
+              },
+              "computed": "checked",
+              "declared": "met",
+              "id": 1,
+              "text": "Save the draft"
+            }
+          ],
+          "source": "agent",
+          "status": "checksPassed",
+          "v": 1
+        },
+        "toolSteps": [
+          {
+            "toolCallId": "codex-call-32547-1",
+            "actionIds": [
+              "9aa10f1f-f890-4c34-8ee1-c30f2764ee30"
+            ]
+          },
+          {
+            "toolCallId": "codex-call-32547-2",
+            "actionIds": [
+              "cd3320a3-4c05-46c7-89ff-e56a4a17f25f"
+            ]
+          },
+          {
+            "toolCallId": "codex-call-32547-3",
+            "actionIds": [
+              "26cf4e28-6117-4613-a040-47fbb7801351"
+            ]
+          },
+          {
+            "toolCallId": "codex-call-32547-4",
+            "actionIds": [
+              "c8e2765e-7e2c-45d4-9987-7e072684f97f"
+            ]
+          },
+          {
+            "toolCallId": "codex-call-32547-5",
+            "actionIds": [
+              "29d90003-54cf-4e54-bb71-f2fcee91558f"
+            ]
+          },
+          {
+            "toolCallId": "codex-call-32547-6",
+            "actionIds": []
+          }
+        ],
+        "panel": {
+          "file": "panel-check1.png",
+          "text": "Conversation\nrun scenario c1\nNew conversation\nrun scenario c1\nToo many native agent panel requests\nReady\nfixture-model\nrun scenario c1\nActed on: Order form · 127.0.0.1:8910\n6 steps · 1 failed: Browser · click\n\nOpening the form.\n\nSaved the draft after the first selector failed.\n\nAgent's browser checks passed\nCompleted\nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c1\nActed on: Order form · 127.0.0.1:8910\n6 steps · 1 failed: Browser · click\n\nOpening the form.\n\nSaved the draft after the first selector failed.\n\nAgent's browser checks passed\nCompleted",
+          "turnCards": 1,
+          "tooManyRequestsBanner": true
+        },
+        "panelChecks": [
+          {
+            "label": "the folded step group names the failed step",
+            "ok": true
+          },
+          {
+            "label": "badge and outcome line",
+            "ok": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 6.9
+    },
+    {
+      "id": 2,
+      "name": "Empty answer",
+      "evidence": {
+        "turnEnded": {
+          "emptyAnswer": true,
+          "error": null,
+          "finalItemIds": [],
+          "generation": 1,
+          "messageId": "28f18835-458c-4388-b2f8-070e8bc5bce7",
+          "openLeases": [],
+          "outcome": "completed",
+          "privacyClass": "public",
+          "sourceSequences": [
+            2,
+            16
+          ],
+          "v": 1
+        },
+        "assessment": {
+          "blocker": null,
+          "declaredStatus": null,
+          "downgradedBecause": [],
+          "messageId": "28f18835-458c-4388-b2f8-070e8bc5bce7",
+          "phase": "final",
+          "privacyClass": "public",
+          "reason": "notAssessed",
+          "requirements": [],
+          "source": "host",
+          "status": "notChecked",
+          "v": 1
+        },
+        "panel": {
+          "file": "panel-check2.png",
+          "text": "Conversation\nrun scenario c2\nNew conversation\nrun scenario c2\nrun scenario c1\nReady\nfixture-model\nrun scenario c2\nActed on: Page A · 127.0.0.1:8910\n2 steps\n\nThe agent returned no answer text.\n\nNot checked\nCompleted\nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c2\nActed on: Page A · 127.0.0.1:8910\n2 steps\n\nThe agent returned no answer text.\n\nNot checked\nCompleted",
+          "turnCards": 1,
+          "tooManyRequestsBanner": false
+        },
+        "panelChecks": [
+          {
+            "label": "panel shows /no answer text/i",
+            "ok": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 5.1
+    },
+    {
+      "id": 3,
+      "name": "Partial completion",
+      "evidence": {
+        "assessment": {
+          "blocker": null,
+          "declaredStatus": "complete",
+          "downgradedBecause": [
+            "requirement 2: no check was named",
+            "requirement 3: the recorded check is not the one named"
+          ],
+          "messageId": "9a66065d-ecf2-4e48-9d76-fd52fae801d4",
+          "phase": "final",
+          "privacyClass": "public",
+          "reason": "done",
+          "requirements": [
+            {
+              "because": "the browser recorded this check",
+              "check": {
+                "evidence": "691815d7-3f85-445d-ae4d-0ce88e0cbb62",
+                "kind": "expect",
+                "predicate": "text #title contains Page A"
+              },
+              "computed": "checked",
+              "declared": "met",
+              "id": 1,
+              "text": "Open page A"
+            },
+            {
+              "because": "no check was named",
+              "check": null,
+              "computed": "claimed",
+              "declared": "met",
+              "id": 2,
+              "text": "Place the order"
+            },
+            {
+              "because": "the recorded check is not the one named",
+              "check": {
+                "evidence": "5c18e38c-85c9-41dc-be6d-50c9aac4aa98",
+                "kind": "expect",
+                "predicate": "text #total contains 42"
+              },
+              "computed": "checkFailed",
+              "declared": "met",
+              "id": 3,
+              "text": "Totals equal 42"
+            }
+          ],
+          "source": "agent",
+          "status": "someChecksPassed",
+          "v": 1
+        },
+        "panel": {
+          "file": "panel-check3.png",
+          "text": "Conversation\nrun scenario c3\nNew conversation\nrun scenario c3\nrun scenario c2\nrun scenario c1\nReady\nfixture-model\nrun scenario c3\nActed on: Page A · 127.0.0.1:8910\n4 steps\n\nDone.\n\nSome checks passed\nCompleted\nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c3\nActed on: Page A · 127.0.0.1:8910\n4 steps\n\nDone.\n\nSome checks passed\nCompleted",
+          "turnCards": 1,
+          "tooManyRequestsBanner": false
+        },
+        "panelChecks": [
+          {
+            "label": "panel shows /Some checks passed/",
+            "ok": true
+          },
+          {
+            "label": "badge never says Verified",
+            "ok": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 5.3
+    },
+    {
+      "id": 4,
+      "name": "A, B, C pages",
+      "evidence": {
+        "tabs": {
+          "A": 834195257,
+          "C": 834195260
+        },
+        "actions": [
+          {
+            "actionId": "1029da6f-e6dd-466e-89d8-34f3ca0c6e10",
+            "tool": "chrome_use_open",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "confirmed",
+            "basis": "navigation",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "about:blank",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/b",
+              "chromeTabId": 834195261,
+              "provenance": "actionReply"
+            },
+            "requested": {
+              "tabHandle": null,
+              "url": "http://127.0.0.1:8910/b"
+            },
+            "detail": null
+          },
+          {
+            "actionId": "b552a4f0-53d9-4b98-8cc4-43160513ec98",
+            "tool": "chrome_use_click",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "uncertain",
+            "basis": "none",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/b",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/b",
+              "chromeTabId": 834195261,
+              "provenance": "daemonState"
+            },
+            "requested": null,
+            "detail": null
+          },
+          {
+            "actionId": "0534758d-880b-4ba0-83be-f1346d5d77a0",
+            "tool": "chrome_use_open",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "uncertain",
+            "basis": "navigation",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/b",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/b?landed=1",
+              "chromeTabId": 834195261,
+              "provenance": "actionReply"
+            },
+            "requested": {
+              "tabHandle": null,
+              "url": "http://127.0.0.1:8910/redirect"
+            },
+            "detail": "landed on another page of the same site"
+          },
+          {
+            "actionId": "f43ddce5-7023-4eec-8d47-9c281f9ced18",
+            "tool": "chrome_use_open",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "confirmed",
+            "basis": "navigation",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/b?landed=1",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/popup-page",
+              "chromeTabId": 834195261,
+              "provenance": "actionReply"
+            },
+            "requested": {
+              "tabHandle": null,
+              "url": "http://127.0.0.1:8910/popup-page"
+            },
+            "detail": null
+          },
+          {
+            "actionId": "fbf14b43-0cfa-4148-9ba3-aee6cef38e2d",
+            "tool": "chrome_use_click",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "uncertain",
+            "basis": "none",
+            "possiblyExecuted": true,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/popup-page",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/b?popup=1",
+              "chromeTabId": 834195262,
+              "provenance": "actionReply"
+            },
+            "requested": null,
+            "detail": null
+          },
+          {
+            "actionId": "b132e4b7-855e-434d-8b90-c1b396268160",
+            "tool": "chrome_use_read",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": null,
+            "basis": "none",
+            "possiblyExecuted": false,
+            "afterStop": false,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "http://127.0.0.1:8910/b?popup=1",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/b?popup=1",
+              "chromeTabId": 834195262,
+              "provenance": "daemonState"
+            },
+            "requested": null,
+            "detail": null
+          }
+        ],
+        "sentWith": {
+          "tabId": 834195257,
+          "title": "Page A",
+          "url": "http://127.0.0.1:8910/a"
+        },
+        "redirect": {
+          "actionId": "0534758d-880b-4ba0-83be-f1346d5d77a0",
+          "tool": "chrome_use_open",
+          "outcome": "ok",
+          "errorCode": null,
+          "verdict": "uncertain",
+          "basis": "navigation",
+          "possiblyExecuted": true,
+          "afterStop": false,
+          "afterTurnEnd": false,
+          "lateReported": false,
+          "before": {
+            "url": "http://127.0.0.1:8910/b",
+            "provenance": "daemonState"
+          },
+          "after": {
+            "url": "http://127.0.0.1:8910/b?landed=1",
+            "chromeTabId": 834195261,
+            "provenance": "actionReply"
+          },
+          "requested": {
+            "tabHandle": null,
+            "url": "http://127.0.0.1:8910/redirect"
+          },
+          "detail": "landed on another page of the same site"
+        },
+        "popup": {
+          "actionId": "fbf14b43-0cfa-4148-9ba3-aee6cef38e2d",
+          "tool": "chrome_use_click",
+          "outcome": "ok",
+          "errorCode": null,
+          "verdict": "uncertain",
+          "basis": "none",
+          "possiblyExecuted": true,
+          "afterStop": false,
+          "afterTurnEnd": false,
+          "lateReported": false,
+          "before": {
+            "url": "http://127.0.0.1:8910/popup-page",
+            "provenance": "daemonState"
+          },
+          "after": {
+            "url": "http://127.0.0.1:8910/b?popup=1",
+            "chromeTabId": 834195262,
+            "provenance": "actionReply"
+          },
+          "requested": null,
+          "detail": null
+        },
+        "panel": {
+          "file": "panel-check4.png",
+          "text": "Conversation\nrun scenario c4\nNew conversation\nrun scenario c4\nrun scenario c3\nrun scenario c2\nrun scenario c1\nReady\nfixture-model\nrun scenario c4\nSent with: Page A · 127.0.0.1:8910\nActed on: Page B · 127.0.0.1:8910, Page B · 127.0.0.1:8910\nAsked for http://127.0.0.1:8910/redirect, landed on http://127.0.0.1:8910/b?landed=1\n6 steps\n\nActed on B.\n\nNot checked\nCompleted\nPage C\n×\n \nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c4\nSent with: Page A · 127.0.0.1:8910\nActed on: Page B · 127.0.0.1:8910, Page B · 127.0.0.1:8910\nAsked for http://127.0.0.1:8910/redirect, landed on http://127.0.0.1:8910/b?landed=1\n6 steps\n\nActed on B.\n\nNot checked\nCompleted",
+          "turnCards": 1,
+          "tooManyRequestsBanner": false
+        },
+        "panelChecks": [
+          {
+            "label": "card says Sent with Page A",
+            "ok": true
+          },
+          {
+            "label": "card says Acted on B",
+            "ok": true
+          },
+          {
+            "label": "card shows the redirect landing",
+            "ok": true
+          },
+          {
+            "label": "C only in the composer chip, not in the card",
+            "ok": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 6.5
+    },
+    {
+      "id": 5,
+      "name": "Stop timeout with process alive",
+      "evidence": {
+        "stopToEndMs": 10317,
+        "exited": {
+          "error": "Backend did not confirm interruption; its owned process was terminated",
+          "messageId": "f31acc2b-d083-4a43-b8b9-86a9f67ce43f",
+          "privacyClass": "public",
+          "processExitConfirmed": true,
+          "processStarted": true
+        },
+        "processUnconfirmed": 0,
+        "childAlive": false,
+        "control": "stopped",
+        "phase": "interrupted",
+        "controlChanges": [
+          {
+            "sequence": 3,
+            "from": "stopped",
+            "to": "agent",
+            "reason": "turnStarted"
+          },
+          {
+            "sequence": 12,
+            "from": "agent",
+            "to": "stopRequested",
+            "reason": "conversationStop"
+          },
+          {
+            "sequence": 18,
+            "from": "stopRequested",
+            "to": "stopped",
+            "reason": "exited"
+          }
+        ]
+      },
+      "status": "pass",
+      "note": "no-switch half (release build). The switch half runs with the e2e-tests build: results-check5-e2e.json.",
+      "seconds": 11.3
+    },
+    {
+      "id": 6,
+      "name": "Approval/stop interleave",
+      "evidence": {
+        "allowDuringStop": {
+          "ok": false,
+          "error": "The user stopped this response; only decline or cancel can be sent"
+        },
+        "declineDuringStop": {
+          "ok": true,
+          "result": {
+            "conversation": {
+              "activeMessageId": "c3818670-8a3d-4e3c-a168-9e4bb829f669",
+              "agentId": "codex",
+              "control": "stopRequested",
+              "created": 1792036975065,
+              "directMessageId": null,
+              "fullAccess": false,
+              "generation": 1,
+              "id": "6854894b-63d6-467f-b7e8-82f743c2650c",
+              "lastError": null,
+              "lastSequence": 9,
+              "lastTurn": null,
+              "model": "fixture-model",
+              "options": {
+                "effort": null,
+                "serviceTier": null,
+                "toolAccess": null
+              },
+              "phase": "stopping",
+              "queuePaused": false,
+              "queued": 0,
+              "requestedModel": null,
+              "scheduleId": null,
+              "site": null,
+              "target": {
+                "mode": "agentSession",
+                "session": "panel-6854894b-63d6-467f-b7e8-82f743c2650c"
+              },
+              "title": "run scenario c6a",
+              "updated": 1792036976266,
+              "waitingRequest": 1
+            },
+            "response": {
+              "confirmed": false,
+              "dispatched": true
+            },
+            "schemaVersion": 1
+          }
+        },
+        "turnEnded": {
+          "emptyAnswer": true,
+          "error": null,
+          "finalItemIds": [],
+          "generation": 1,
+          "messageId": "c3818670-8a3d-4e3c-a168-9e4bb829f669",
+          "openLeases": [],
+          "outcome": "interrupted",
+          "privacyClass": "public",
+          "sourceSequences": [
+            2,
+            15
+          ],
+          "v": 1
+        },
+        "actions": [
+          {
+            "actionId": "8595270a-11ed-48f1-923c-c36689cdee01",
+            "tool": "chrome_use_open",
+            "outcome": "ok",
+            "errorCode": null,
+            "verdict": "confirmed",
+            "basis": "navigation",
+            "possiblyExecuted": true,
+            "afterStop": true,
+            "afterTurnEnd": false,
+            "lateReported": false,
+            "before": {
+              "url": "about:blank",
+              "provenance": "daemonState"
+            },
+            "after": {
+              "url": "http://127.0.0.1:8910/slow?ms=7000",
+              "chromeTabId": 834195264,
+              "provenance": "actionReply"
+            },
+            "requested": {
+              "tabHandle": null,
+              "url": "http://127.0.0.1:8910/slow?ms=7000"
+            },
+            "detail": null
+          }
+        ],
+        "stopSequence": 9,
+        "slowPossiblyExecuted": true,
+        "fullAccessReplyDuringStop": [
+          {
+            "allowed": false,
+            "raw": {
+              "action": "decline",
+              "content": null
+            }
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 14
+    },
+    {
+      "id": 7,
+      "name": "Same-name downloads",
+      "evidence": {
+        "created": [
+          {
+            "artifactId": "c1cfe890-b763-4fd1-bf92-ef4733be0306",
+            "dirIdentity": [
+              16777229,
+              184136777
+            ],
+            "effectiveCapturePath": "/tmp/pa/1015130212/home/.chrome-use/agent-panel/profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/3e294548-d271-4721-857e-3b7bb2c02c33/workspace/.chrome-use-out/4dbff4f9-b8bf-4f87-9ba4-2e85d81ffac0/report.pdf",
+            "kind": "download",
+            "name": "report.pdf",
+            "quotaReserved": 104857600,
+            "requestedDestination": "/private/tmp/pa/1015130212/home/.chrome-use/agent-panel/profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/3e294548-d271-4721-857e-3b7bb2c02c33/workspace/d1/report.pdf",
+            "messageId": "dd8b61db-8ce9-4b97-8d4f-a8279d16d1be",
+            "actionId": "4dbff4f9-b8bf-4f87-9ba4-2e85d81ffac0"
+          },
+          {
+            "artifactId": "ce735a25-a03c-4655-82f0-f1a4aa82d367",
+            "dirIdentity": [
+              16777229,
+              184136790
+            ],
+            "effectiveCapturePath": "/tmp/pa/1015130212/home/.chrome-use/agent-panel/profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/3e294548-d271-4721-857e-3b7bb2c02c33/workspace/.chrome-use-out/f4256dac-c998-4855-85b9-dad004d2989d/report.pdf",
+            "kind": "download",
+            "name": "report.pdf",
+            "quotaReserved": 104857600,
+            "requestedDestination": "/private/tmp/pa/1015130212/home/.chrome-use/agent-panel/profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/3e294548-d271-4721-857e-3b7bb2c02c33/workspace/d2/report.pdf",
+            "messageId": "dd8b61db-8ce9-4b97-8d4f-a8279d16d1be",
+            "actionId": "f4256dac-c998-4855-85b9-dad004d2989d"
+          }
+        ],
+        "artifactCreatedEvents": 0,
+        "ready": [
+          {
+            "artifactId": "c1cfe890-b763-4fd1-bf92-ef4733be0306",
+            "bytes": 2125,
+            "declaredExtension": "pdf",
+            "digest": "sha256:c83ea2720dcff6fb7b35f8b83f2eefc9d627bba45313d6114c67f07935aa428f",
+            "messageId": "dd8b61db-8ce9-4b97-8d4f-a8279d16d1be",
+            "mime": "application/pdf",
+            "privacyClass": "public",
+            "typeMatches": true,
+            "v": 1
+          },
+          {
+            "artifactId": "ce735a25-a03c-4655-82f0-f1a4aa82d367",
+            "bytes": 2162,
+            "declaredExtension": "pdf",
+            "digest": "sha256:b6956a38028e3a8479c062a39d27d8570daa3b6022a081df4c65e9950acc69e8",
+            "messageId": "dd8b61db-8ce9-4b97-8d4f-a8279d16d1be",
+            "mime": "application/pdf",
+            "privacyClass": "public",
+            "typeMatches": true,
+            "v": 1
+          }
+        ],
+        "delivered": [
+          {
+            "actionId": "4dbff4f9-b8bf-4f87-9ba4-2e85d81ffac0",
+            "artifactId": "c1cfe890-b763-4fd1-bf92-ef4733be0306",
+            "detail": "",
+            "digest": "sha256:c83ea2720dcff6fb7b35f8b83f2eefc9d627bba45313d6114c67f07935aa428f",
+            "messageId": "dd8b61db-8ce9-4b97-8d4f-a8279d16d1be",
+            "privacyClass": "public",
+            "requestedDestination": "/private/tmp/pa/1015130212/home/.chrome-use/agent-panel/profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/3e294548-d271-4721-857e-3b7bb2c02c33/workspace/d1/report.pdf",
+            "state": "delivered",
+            "v": 1
+          },
+          {
+            "actionId": "f4256dac-c998-4855-85b9-dad004d2989d",
+            "artifactId": "ce735a25-a03c-4655-82f0-f1a4aa82d367",
+            "detail": "",
+            "digest": "sha256:b6956a38028e3a8479c062a39d27d8570daa3b6022a081df4c65e9950acc69e8",
+            "messageId": "dd8b61db-8ce9-4b97-8d4f-a8279d16d1be",
+            "privacyClass": "public",
+            "requestedDestination": "/private/tmp/pa/1015130212/home/.chrome-use/agent-panel/profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/3e294548-d271-4721-857e-3b7bb2c02c33/workspace/d2/report.pdf",
+            "state": "delivered",
+            "v": 1
+          }
+        ],
+        "sourcesOverwritten": 2,
+        "reads": [
+          {
+            "artifactId": "c1cfe890-b763-4fd1-bf92-ef4733be0306",
+            "digest": "sha256:c83ea2720dcff6fb7b35f8b83f2eefc9d627bba45313d6114c67f07935aa428f",
+            "computed": "sha256:c83ea2720dcff6fb7b35f8b83f2eefc9d627bba45313d6114c67f07935aa428f",
+            "bytes": 2125
+          },
+          {
+            "artifactId": "ce735a25-a03c-4655-82f0-f1a4aa82d367",
+            "digest": "sha256:b6956a38028e3a8479c062a39d27d8570daa3b6022a081df4c65e9950acc69e8",
+            "computed": "sha256:b6956a38028e3a8479c062a39d27d8570daa3b6022a081df4c65e9950acc69e8",
+            "bytes": 2162
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 1.4
+    },
+    {
+      "id": 8,
+      "name": "Interrupted download",
+      "evidence": {
+        "artifact": [
+          {
+            "kind": "artifactUnavailable",
+            "sequence": 14,
+            "reason": "interrupted",
+            "bytes": null,
+            "digest": null,
+            "detectedBy": "report",
+            "messageId": "91b632c8-6e85-49a9-a0e3-90339d1c7f85"
+          }
+        ],
+        "action": {
+          "actionId": "8a64b6f6-cfe0-4561-b9fb-081b26bc16f9",
+          "tool": "chrome_use_download_url",
+          "outcome": "error",
+          "errorCode": "download_interrupted",
+          "verdict": "failed",
+          "basis": "download",
+          "possiblyExecuted": true,
+          "afterStop": false,
+          "afterTurnEnd": false,
+          "lateReported": false,
+          "before": {
+            "url": "http://127.0.0.1:8910/a",
+            "provenance": "daemonState"
+          },
+          "after": {
+            "url": "http://127.0.0.1:8910/a",
+            "chromeTabId": 834195267,
+            "provenance": "daemonState"
+          },
+          "requested": null,
+          "detail": "The browser reported the capture failed"
+        },
+        "panel": {
+          "file": "panel-check8.png",
+          "text": "Conversation\nrun scenario c8\nNew conversation\nrun scenario c8\nrun scenario c7\nrun scenario c6b\nrun scenario c6a\nrun scenario c5kill\nrun scenario c4\nrun scenario c3\nrun scenario c2\nrun scenario c1\nReady\nfixture-model\nrun scenario c8\nActed on: Page A · 127.0.0.1:8910\n2 steps · 1 failed: Browser · download url\n\nThe download did not finish.\n\nDownload · abort-report.pdf\nUnavailable: Capture was interrupted\nThe browser reported the capture failed\n\nNot checked\nCompleted\nPage C\n×\n \nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c8\nActed on: Page A · 127.0.0.1:8910\n2 steps · 1 failed: Browser · download url\n\nThe download did not finish.\n\nDownload · abort-report.pdf\nUnavailable: Capture was interrupted\nThe browser reported the capture failed\n\nNot checked\nCompleted",
+          "turnCards": 1,
+          "tooManyRequestsBanner": false
+        },
+        "panelChecks": [
+          {
+            "label": "result card says the download was interrupted",
+            "ok": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 14.4
+    },
+    {
+      "id": 9,
+      "name": "Deleted artifact file",
+      "evidence": {
+        "deleted": "c83ea2720dcff6fb7b35f8b83f2eefc9d627bba45313d6114c67f07935aa428f.pdf",
+        "reads": [
+          "artifact_unavailable",
+          "artifact_unavailable",
+          "artifact_unavailable",
+          "artifact_unavailable"
+        ],
+        "unavailable": [
+          {
+            "artifactId": "c1cfe890-b763-4fd1-bf92-ef4733be0306",
+            "bytes": 2125,
+            "detail": "artifact_unavailable: the stored file is missing",
+            "detectedBy": "read",
+            "digest": "sha256:c83ea2720dcff6fb7b35f8b83f2eefc9d627bba45313d6114c67f07935aa428f",
+            "messageId": "dd8b61db-8ce9-4b97-8d4f-a8279d16d1be",
+            "privacyClass": "public",
+            "reason": "missing",
+            "v": 1
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 0
+    },
+    {
+      "id": 10,
+      "name": "Cross-conversation artifact read",
+      "evidence": {
+        "cross": {
+          "ok": false,
+          "error": "Unknown artifact"
+        },
+        "unknown": {
+          "ok": false,
+          "error": "Unknown artifact"
+        },
+        "nonUuid": {
+          "ok": false,
+          "error": "Unknown artifact"
+        },
+        "nonUuid2": {
+          "ok": false,
+          "error": "Unknown artifact"
+        }
+      },
+      "status": "pass",
+      "seconds": 0
+    },
+    {
+      "id": 11,
+      "name": "Synthetic secrets in the journal and state",
+      "evidence": {
+        "requestShown": "{\"generation\":1,\"messageId\":\"9a3a011b-6330-4bcc-a83a-21393c52fb86\",\"method\":\"can_use_tool\",\"params\":{\"input\":{\"selector\":\"#password\",\"value\":\"[redacted input, 19 chars]\"},\"subtype\":\"can_use_tool\",\"tool_name\":\"mcp__chrome_use__chrome_use_fill\",\"tool_use_id\":\"toolu_perm_1\"},\"privacyClass\":\"masked\",\"redactions\":[{\"kind\":\"input\",\"length\":19,\"path\":\"/params/input/value\"}],\"requestId\":\"fixture-perm-1\",\"requestRevision\":3}",
+        "allow": {
+          "ok": true,
+          "result": {
+            "conversation": {
+              "activeMessageId": "9a3a011b-6330-4bcc-a83a-21393c52fb86",
+              "agentId": "claude",
+              "control": "agent",
+              "created": 1792037004900,
+              "directMessageId": null,
+              "fullAccess": false,
+              "generation": 1,
+              "id": "af76fe43-bda7-4c6a-aa13-211150a6585a",
+              "lastError": null,
+              "lastSequence": 11,
+              "lastTurn": null,
+              "model": "fixture-model",
+              "options": {
+                "effort": null,
+                "serviceTier": null,
+                "toolAccess": null
+              },
+              "phase": "waitingInput",
+              "queuePaused": false,
+              "queued": 0,
+              "requestedModel": null,
+              "scheduleId": null,
+              "site": null,
+              "target": {
+                "mode": "agentSession",
+                "session": "panel-af76fe43-bda7-4c6a-aa13-211150a6585a"
+              },
+              "title": "run scenario c11",
+              "updated": 1792037005948,
+              "waitingRequest": 3
+            },
+            "response": {
+              "confirmed": false,
+              "dispatched": true
+            },
+            "schemaVersion": 1
+          }
+        },
+        "outcome": "completed",
+        "backendGotOriginal": true,
+        "siteGotRealPassword": true,
+        "hits": {
+          "events.jsonl": [],
+          "state.json": [],
+          "index.json": [],
+          "conversationRead": []
+        },
+        "filesChecked": [
+          "profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/af76fe43-bda7-4c6a-aa13-211150a6585a/events.jsonl",
+          "profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/af76fe43-bda7-4c6a-aa13-211150a6585a/state.json",
+          "profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/index.json"
+        ],
+        "masks": [
+          {
+            "kind": "input",
+            "length": 19,
+            "path": "/params/input/value"
+          },
+          {
+            "kind": "input",
+            "length": 19,
+            "path": "/item/input/value"
+          },
+          {
+            "kind": "cookie",
+            "length": 24,
+            "path": "/item/content"
+          },
+          {
+            "kind": "cookie",
+            "length": 24,
+            "path": "/item/content"
+          },
+          {
+            "kind": "cookie",
+            "length": 8,
+            "path": "/item/content"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/input/url"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/requested/url"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/observed/after/url"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/requested/url"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/check/predicate"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/check/target/url"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/content"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/content"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/content"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/content"
+          },
+          {
+            "kind": "authorization",
+            "length": 31,
+            "path": "/item/input/setHeaders/Authorization"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/observed/after/url"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/observed/before/url"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/content"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/content"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/content"
+          },
+          {
+            "kind": "url access_token",
+            "length": 21,
+            "path": "/item/content"
+          },
+          {
+            "kind": "secret",
+            "length": 24,
+            "path": "/text"
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 2.6
+    },
+    {
+      "id": 12,
+      "name": "Stalled progress",
+      "evidence": {
+        "stalls": [
+          {
+            "sequence": 30,
+            "actionIds": [
+              "2761d4b5-0331-4e0f-95d3-b45adffd6515",
+              "ae81fc41-aa09-409f-9457-274008a167c0",
+              "63985cd1-5c91-4b18-a9f2-1a8a5291bfaf",
+              "787d854f-ec33-476d-93a4-fc3a6709389a"
+            ],
+            "count": 4,
+            "kind": "repeatedIdenticalResult",
+            "messageId": "cc5d87a9-fbe6-4d7b-ac5a-acc040d45263",
+            "privacyClass": "public",
+            "quietMs": null,
+            "sourceSequences": [
+              14,
+              29
+            ],
+            "v": 1
+          }
+        ],
+        "resumed": [
+          {
+            "messageId": "cc5d87a9-fbe6-4d7b-ac5a-acc040d45263",
+            "privacyClass": "public",
+            "sourceSequence": 35,
+            "v": 1
+          }
+        ],
+        "readDigests": [
+          "sha256:27e262ce9401d242e1801b6efa1d2d3c874609e0dd1fee73f861a2b49a8188cc",
+          "sha256:27e262ce9401d242e1801b6efa1d2d3c874609e0dd1fee73f861a2b49a8188cc",
+          "sha256:27e262ce9401d242e1801b6efa1d2d3c874609e0dd1fee73f861a2b49a8188cc",
+          "sha256:27e262ce9401d242e1801b6efa1d2d3c874609e0dd1fee73f861a2b49a8188cc",
+          "sha256:b013498fa19b17358055c7839b1b600e4a1b4d07fb4cc6fe7e1461a4c04a0dfb",
+          "sha256:96550792a8c9e21ed4c213bc2567dd389edb188e03cdf35a0e2fa1d622cbb667",
+          "sha256:6d08e7b7bc687684c750a07ce1d55eb273feaa804a6c3de5f1f56be631ddd43a",
+          "sha256:e7d6a6b4f0fbca0f6d65ec7a867076802c0aa4d2548691df5d642600f660ad93",
+          "sha256:13689dcd0fd21308b8f822962d176436ab6cb0fe3c4c7c380b230e31d380d9f6",
+          "sha256:d63ef8cb462bcc3ef6a70c1289e549c9e3499884010de8f0c04a69e3b5ee6f37"
+        ],
+        "summary": {
+          "actions": {
+            "admittedNotReported": 0,
+            "confirmed": 2,
+            "failed": 0,
+            "uncertain": 5,
+            "unlinked": 0
+          },
+          "artifacts": {
+            "ready": 0,
+            "unavailable": 0
+          },
+          "assessment": "notChecked",
+          "failedSteps": 0,
+          "messageId": "cc5d87a9-fbe6-4d7b-ac5a-acc040d45263",
+          "privacyClass": "public",
+          "sourceSequences": [
+            2,
+            96
+          ],
+          "stalls": 1,
+          "steps": 17,
+          "v": 1
+        },
+        "watchStalls": [],
+        "silentStalls": [
+          {
+            "actionIds": [],
+            "count": null,
+            "kind": "noActivity",
+            "messageId": "95086b2f-1aff-4d14-b061-a2c506225562",
+            "privacyClass": "public",
+            "quietMs": 180884,
+            "sourceSequences": [
+              6,
+              6
+            ],
+            "v": 1
+          }
+        ],
+        "silentResumed": [
+          {
+            "messageId": "95086b2f-1aff-4d14-b061-a2c506225562",
+            "privacyClass": "public",
+            "sourceSequence": 7,
+            "v": 1
+          }
+        ],
+        "failures": [],
+        "leaseLatencyMs": {
+          "n": 51,
+          "p50": 50,
+          "p95": 67,
+          "max": 125,
+          "note": "measured at the driver proxy (round trip through one extra loopback hop)"
+        }
+      },
+      "status": "pass",
+      "seconds": 200.6
+    },
+    {
+      "id": 13,
+      "name": "Refresh resume consistency",
+      "evidence": {
+        "polls": 11,
+        "events": 36,
+        "panel1": {
+          "sends": 1,
+          "text": "run scenario c13\nActed on: List page 1 · 127.0.0.1:8910\n4 steps\n\npage 1\n\npage 2\n\npage 3\n\npage 4\n\ndone\n\nNot checked\nCompleted"
+        },
+        "panel2": {
+          "sends": 1,
+          "text": "run scenario c13\nActed on: List page 1 · 127.0.0.1:8910\n4 steps\nBrowser · open\nhttp://127.0.0.1:8910/list?page=1\nConfirmed\nBrowser · open\nhttp://127.0.0.1:8910/list?page=2\nConfirmed\nBrowser · open\nhttp://127.0.0.1:8910/list?page=3\nConfirmed\nBrowser · open\nhttp://127.0.0.1:8910/list?page=4\nConfirmed\n"
+        },
+        "panelChecks": [
+          {
+            "label": "panel 1 (reopened mid-turn): one card for the message",
+            "ok": true
+          },
+          {
+            "label": "panel 2: one card for the message",
+            "ok": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 10.6
+    },
+    {
+      "id": 14,
+      "name": "Replay producing one turn",
+      "evidence": {
+        "firstReply": {
+          "ok": false,
+          "error": "service closed the connection without a reply"
+        },
+        "retry": {
+          "ok": true,
+          "result": {
+            "conversation": {
+              "activeMessageId": "4704ed82-a4d7-4e8b-b7d1-bdfabd5556aa",
+              "agentId": "codex",
+              "control": "agent",
+              "created": 1792037218720,
+              "directMessageId": null,
+              "fullAccess": true,
+              "generation": 1,
+              "id": "35d9ed51-e790-4017-8257-f7fc56d6cbb0",
+              "lastError": null,
+              "lastSequence": 3,
+              "lastTurn": null,
+              "model": null,
+              "options": {
+                "effort": null,
+                "serviceTier": null,
+                "toolAccess": null
+              },
+              "phase": "starting",
+              "queuePaused": false,
+              "queued": 0,
+              "requestedModel": null,
+              "scheduleId": null,
+              "site": null,
+              "target": {
+                "mode": "agentSession",
+                "session": "panel-35d9ed51-e790-4017-8257-f7fc56d6cbb0"
+              },
+              "title": "run scenario c14",
+              "updated": 1792037218792,
+              "waitingRequest": null
+            },
+            "message": {
+              "accepted": false,
+              "id": "4704ed82-a4d7-4e8b-b7d1-bdfabd5556aa",
+              "replayed": false
+            },
+            "schemaVersion": 1
+          }
+        },
+        "panel": {
+          "file": "panel-check14.png",
+          "text": "Conversation\nrun scenario c14\nNew conversation\nrun scenario c14\nrun scenario c13\nrun scenario c12silent\nrun scenario c12watch\nrun scenario c12\nrun scenario c11\nNew conversation\nrun scenario c8\nrun scenario c7\nrun scenario c6b\nrun scenario c6a\nrun scenario c5kill\nrun scenario c4\nrun scenario c3\nrun scenario c2\nrun scenario c1\nReady\nfixture-model\nrun scenario c14\nActed on: Page A · 127.0.0.1:8910\nBrowser · open\nhttp://127.0.0.1:8910/a\nConfirmed\n\nonce\n\nNot checked\nCompleted\nPage C\n×\n \nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c14\nActed on: Page A · 127.0.0.1:8910\nBrowser · open\nhttp://127.0.0.1:8910/a\nConfirmed\n\nonce\n\nNot checked\nCompleted",
+          "turnCards": 1,
+          "tooManyRequestsBanner": false
+        },
+        "panelChecks": [
+          {
+            "label": "one user message card",
+            "ok": true
+          }
+        ]
+      },
+      "status": "pass",
+      "note": "The reply was dropped by the driver proxy on the service socket after the service stored the message; the extension bridge itself was not fault-injected.",
+      "seconds": 5.2
+    },
+    {
+      "id": 16,
+      "name": "Stealth",
+      "evidence": {
+        "methodCounts": {
+          "Page.enable": 2,
+          "Target.setAutoAttach": 1,
+          "Runtime.runIfWaitingForDebugger": 1,
+          "Network.enable": 1,
+          "Emulation.setFocusEmulationEnabled": 1,
+          "Runtime.evaluate": 43,
+          "DOM.enable": 2,
+          "Accessibility.enable": 2,
+          "Accessibility.getFullAXTree": 2,
+          "DOM.getDocument": 2,
+          "DOM.querySelectorAll": 2,
+          "Page.getFrameTree": 5,
+          "Page.createIsolatedWorld": 2,
+          "Runtime.callFunctionOn": 5,
+          "Input.dispatchMouseEvent": 6,
+          "Runtime.releaseObject": 1
+        },
+        "panelEnables": [
+          "Accessibility.enable",
+          "DOM.enable",
+          "Emulation.setFocusEmulationEnabled",
+          "Network.enable",
+          "Page.enable",
+          "Target.setAutoAttach"
+        ],
+        "oldResults": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "oldObserve": "{\"success\":true,\"data\":{\"clicked\":\"#act\",\"dispatch\":\"pointer\",\"observed\":{\"changed\":false,\"noChange\":{\"coveredBy\":null,\"disabled\":false,\"inViewport\":true,\"note\":\"the target is present, enabled and unobstructed — this action legitimately changed nothing      visible, or its result has not arrived yet",
+        "v15214Enables": [
+          "Accessibility.enable",
+          "DOM.enable",
+          "Emulation.setFocusEmulationEnabled",
+          "Network.enable",
+          "Page.enable",
+          "Target.setAutoAttach"
+        ],
+        "beyondV15214": [],
+        "beyondPlanList": [
+          "Accessibility.enable",
+          "DOM.enable"
+        ],
+        "domReports": 8,
+        "mutations": [],
+        "rootAttrs": [],
+        "pingsServed": 1500,
+        "requestLogMatches": 1000
+      },
+      "status": "pass",
+      "seconds": 13
+    },
+    {
+      "id": 17,
+      "name": "Recording",
+      "evidence": {
+        "recorded": [
+          {
+            "kind": "artifactCreated",
+            "sequence": 12,
+            "state": "capturing",
+            "messageId": "c13af449-f2c7-4831-9f21-b9b332dffbb8"
+          },
+          {
+            "kind": "artifactState",
+            "sequence": 25,
+            "state": "finalizing",
+            "messageId": "c13af449-f2c7-4831-9f21-b9b332dffbb8"
+          },
+          {
+            "kind": "artifactReady",
+            "sequence": 26,
+            "mime": "video/webm",
+            "bytes": 15555,
+            "digest": "sha256:1ec7c1fbfe7eac6995ae5b8cb650b0be570b75eaaddd885ec147cb5bfc19fb10",
+            "typeMatches": true,
+            "messageId": "c13af449-f2c7-4831-9f21-b9b332dffbb8"
+          }
+        ],
+        "noFlagStart": {
+          "isError": true,
+          "result": "{\"content\":[{\"text\":\"The recording was not started: the user did not allow recording for this request\",\"type\":\"text\"}],\"isError\":true}"
+        },
+        "missing": [
+          {
+            "kind": "artifactCreated",
+            "sequence": 12,
+            "state": "capturing",
+            "messageId": "00cce00f-cacc-42e4-b91c-d4c833769f60"
+          },
+          {
+            "kind": "artifactState",
+            "sequence": 25,
+            "state": "finalizing",
+            "messageId": "00cce00f-cacc-42e4-b91c-d4c833769f60"
+          },
+          {
+            "kind": "artifactUnavailable",
+            "sequence": 26,
+            "reason": "encoderMissing",
+            "bytes": null,
+            "digest": null,
+            "detectedBy": "report",
+            "messageId": "00cce00f-cacc-42e4-b91c-d4c833769f60"
+          }
+        ],
+        "missingTools": [
+          {
+            "isError": false,
+            "result": "{\"content\":[{\"text\":\"{\\n  \\\"data\\\": {\\n    \\\"path\\\": \\\"/tmp/pa/1015130212/home/.chrome-use/agent-panel/profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/1429f6d7-99eb-4ad4-a075-43f01118721a/workspace/.chrome-use-out/88d48c53-c741-44d2-9dce-020e3ad81cf5/recording.webm\\\",\\n    \\\"started\\\": t"
+          },
+          {
+            "isError": false,
+            "result": "{\"content\":[{\"text\":\"{\\\"artifactId\\\":\\\"88d48c53-c741-44d2-9dce-020e3ad81cf5\\\",\\\"reason\\\":\\\"encoderMissing\\\",\\\"state\\\":\\\"unavailable\\\"}\",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"artifactId\":\"88d48c53-c741-44d2-9dce-020e3ad81cf5\",\"reason\":\"encoderMissing\",\"state\":\"unavailable\"}}"
+          }
+        ],
+        "nolibvpx": [
+          {
+            "kind": "artifactCreated",
+            "sequence": 12,
+            "state": "capturing",
+            "messageId": "533cdc39-61c3-4390-9d1e-f4514e6eb5fc"
+          },
+          {
+            "kind": "artifactState",
+            "sequence": 25,
+            "state": "finalizing",
+            "messageId": "533cdc39-61c3-4390-9d1e-f4514e6eb5fc"
+          },
+          {
+            "kind": "artifactUnavailable",
+            "sequence": 26,
+            "reason": "encoderFailed",
+            "bytes": null,
+            "digest": null,
+            "detectedBy": "report",
+            "messageId": "533cdc39-61c3-4390-9d1e-f4514e6eb5fc"
+          }
+        ],
+        "nolibvpxTools": [
+          {
+            "isError": false,
+            "result": "{\"content\":[{\"text\":\"{\\n  \\\"data\\\": {\\n    \\\"path\\\": \\\"/tmp/pa/1015130212/home/.chrome-use/agent-panel/profiles/b6ee7a22-89b0-4be7-b201-eeecbec0b6a4/conversations/f874ee8b-1210-46ec-837c-70a4aa9bed2f/workspace/.chrome-use-out/ded3f2ea-b77a-4df5-80d8-e9ca57e86c1c/recording.webm\\\",\\n    \\\"started\\\": t"
+          },
+          {
+            "isError": false,
+            "result": "{\"content\":[{\"text\":\"{\\\"artifactId\\\":\\\"ded3f2ea-b77a-4df5-80d8-e9ca57e86c1c\\\",\\\"reason\\\":\\\"encoderFailed\\\",\\\"state\\\":\\\"unavailable\\\"}\",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"artifactId\":\"ded3f2ea-b77a-4df5-80d8-e9ca57e86c1c\",\"reason\":\"encoderFailed\",\"state\":\"unavailable\"}}"
+          }
+        ],
+        "first": [
+          {
+            "kind": "artifactCreated",
+            "sequence": 12,
+            "state": "capturing",
+            "messageId": "d33b3d17-36f3-4f2f-af89-6c496ab6c347"
+          },
+          {
+            "kind": "artifactState",
+            "sequence": 31,
+            "state": "finalizing",
+            "messageId": "d33b3d17-36f3-4f2f-af89-6c496ab6c347"
+          },
+          {
+            "kind": "artifactReady",
+            "sequence": 35,
+            "mime": "video/webm",
+            "bytes": 15777,
+            "digest": "sha256:489397be7803e172e338ccabc68d1a40f4bce192c874b0c1662e97d00a231cb2",
+            "typeMatches": true,
+            "messageId": "d33b3d17-36f3-4f2f-af89-6c496ab6c347"
+          }
+        ],
+        "second": [
+          {
+            "kind": "artifactCreated",
+            "sequence": 44,
+            "state": "capturing",
+            "messageId": "fd7717c6-7eda-4a4f-96a6-814e5d9c5348"
+          },
+          {
+            "kind": "artifactState",
+            "sequence": 57,
+            "state": "finalizing",
+            "messageId": "fd7717c6-7eda-4a4f-96a6-814e5d9c5348"
+          },
+          {
+            "kind": "artifactReady",
+            "sequence": 58,
+            "mime": "video/webm",
+            "bytes": 15555,
+            "digest": "sha256:8216dda1a7a41eebe6b8179ef60e7025ce23254fc02b0a7d15b38aedcff7370b",
+            "typeMatches": true,
+            "messageId": "fd7717c6-7eda-4a4f-96a6-814e5d9c5348"
+          }
+        ],
+        "interleave": {
+          "firstFinalizing": 31,
+          "firstReady": 35,
+          "secondTurnStarted": 33,
+          "secondCreated": 44,
+          "startedWhileFinalizing": true
+        }
+      },
+      "status": "pass",
+      "seconds": 17.8
+    },
+    {
+      "id": 18,
+      "name": "Turn attribution under load",
+      "evidence": {
+        "aArtifact": "807239cf-1891-412d-b75a-aad9db41be3c",
+        "artifactEvents": [
+          {
+            "kind": "artifactReady",
+            "sequence": 16,
+            "mime": "application/pdf",
+            "bytes": 2347,
+            "digest": "sha256:18b6686ea75b34017342e63e54d65eb0398c4915fae18865bda85504f25eb0e3",
+            "typeMatches": true,
+            "messageId": "80c09276-bb80-4200-b6bb-b0dc47604590"
+          }
+        ],
+        "aOutcome": "interrupted",
+        "bFinal": {
+          "blocker": null,
+          "declaredStatus": "complete",
+          "downgradedBecause": [
+            "requirement 1: the cited file belongs to another request"
+          ],
+          "messageId": "cdcf169f-ddda-4eb4-9c11-c5d967fe8e2f",
+          "phase": "final",
+          "privacyClass": "public",
+          "reason": null,
+          "requirements": [
+            {
+              "because": "the cited file belongs to another request",
+              "check": {
+                "evidence": "807239cf-1891-412d-b75a-aad9db41be3c",
+                "kind": "downloadType",
+                "predicate": "application/pdf"
+              },
+              "computed": "claimed",
+              "declared": "met",
+              "id": 1,
+              "text": "Download the report"
+            }
+          ],
+          "source": "agent",
+          "status": "notChecked",
+          "v": 1
+        },
+        "slow": {
+          "actionId": "c6d0a740-85cf-4eeb-ad16-f1d95ff52536",
+          "tool": "chrome_use_download_url",
+          "outcome": "ok",
+          "errorCode": null,
+          "verdict": "confirmed",
+          "basis": "download",
+          "possiblyExecuted": true,
+          "afterStop": true,
+          "afterTurnEnd": false,
+          "lateReported": false,
+          "before": {
+            "url": "http://127.0.0.1:8910/a",
+            "provenance": "daemonState"
+          },
+          "after": {
+            "url": "http://127.0.0.1:8910/a",
+            "chromeTabId": 834195287,
+            "provenance": "daemonState"
+          },
+          "requested": null,
+          "detail": null
+        },
+        "panel": {
+          "file": "panel-check18.png",
+          "text": "Conversation\nrun scenario c18a\nNew conversation\nrun scenario c18a\nrun scenario c17first\nrun scenario c17nolibvpx\nrun scenario c17missing\nrun scenario c17noflag\nrun scenario c17\nrun scenario c16burst\nrun scenario c16\nrun scenario c14\nrun scenario c13\nrun scenario c12silent\nrun scenario c12watch\nrun scenario c12\nrun scenario c11\nNew conversation\nrun scenario c8\nrun scenario c7\nrun scenario c6b\nrun scenario c6a\nrun scenario c5kill\nrun scenario c4\nrun scenario c3\nrun scenario c2\nrun scenario c1\nReady\nfixture-model\nrun scenario c18a\nActed on: Page A · 127.0.0.1:8910\n2 steps\n\nThe agent returned no answer text.\n\nDownload · slow-report.pdf\nFile captured: yes\nType matches .pdf: yes\nNot empty: yes\napplication/pdf · 2.3 KB\nSave a copy\n\nNot checked\nInterrupted\nResponse interrupted. Queued messages are paused.\nrun scenario c18b\nBrowser · task\nassess\nNo browser record\n\nB done\n\nNot checked\nCompleted\nPage C\n×\n \nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c18a\nActed on: Page A · 127.0.0.1:8910\n2 steps\n\nThe agent returned no answer text.\n\nDownload · slow-report.pdf\nFile captured: yes\nType matches .pdf: yes\nNot empty: yes\napplication/pdf · 2.3 KB\nSave a copy\n\nNot checked\nInterrupted\nResponse interrupted. Queued messages are paused.\nrun scenario c18b\nBrowser · task\nassess\nNo browser record\n\nB done\n\nNot checked\nCompleted",
+          "turnCards": 2,
+          "tooManyRequestsBanner": false
+        }
+      },
+      "status": "pass",
+      "seconds": 13.5
+    },
+    {
+      "id": 19,
+      "name": "Assessment counterexamples live",
+      "evidence": {
+        "assessment": {
+          "blocker": null,
+          "declaredStatus": "complete",
+          "downgradedBecause": [
+            "requirement 1: the cited action recorded another kind of check",
+            "requirement 2: the cited file is not one of this conversation's",
+            "requirement 3: the cited file is not one of this conversation's"
+          ],
+          "messageId": "346592fe-4a89-4ccb-9d3f-91c49a815af1",
+          "phase": "final",
+          "privacyClass": "public",
+          "reason": "paid",
+          "requirements": [
+            {
+              "because": "the cited action recorded another kind of check",
+              "check": {
+                "evidence": "4685e4a8-79e2-44bd-8e4d-593501c0837a",
+                "kind": "expect",
+                "predicate": "text body contains Paid"
+              },
+              "computed": "claimed",
+              "declared": "met",
+              "id": 1,
+              "text": "Pay the invoice"
+            },
+            {
+              "because": "the cited file is not one of this conversation's",
+              "check": {
+                "evidence": "noartifact-z",
+                "kind": "downloadType",
+                "predicate": "application/pdf"
+              },
+              "computed": "claimed",
+              "declared": "met",
+              "id": 2,
+              "text": "Receipt saved"
+            },
+            {
+              "because": "the cited file is not one of this conversation's",
+              "check": {
+                "evidence": "noartifact-s",
+                "kind": "downloadType",
+                "predicate": "image/png"
+              },
+              "computed": "claimed",
+              "declared": "met",
+              "id": 3,
+              "text": "Confirmation shown"
+            }
+          ],
+          "source": "agent",
+          "status": "notChecked",
+          "v": 1
+        },
+        "panel": {
+          "file": "panel-check19.png",
+          "text": "Conversation\nrun scenario c19\nNew conversation\nrun scenario c19\nrun scenario c18a\nrun scenario c17first\nrun scenario c17nolibvpx\nrun scenario c17missing\nrun scenario c17noflag\nrun scenario c17\nrun scenario c16burst\nrun scenario c16\nrun scenario c14\nrun scenario c13\nrun scenario c12silent\nrun scenario c12watch\nrun scenario c12\nrun scenario c11\nNew conversation\nrun scenario c8\nrun scenario c7\nrun scenario c6b\nrun scenario c6a\nrun scenario c5kill\nrun scenario c4\nrun scenario c3\nrun scenario c2\nrun scenario c1\nReady\nfixture-model\nrun scenario c19\nActed on: Page A · 127.0.0.1:8910\n4 steps\n\nPaid.\n\nDownload · empty.pdf\nFile captured: yes\nType matches .pdf: not checked\nNot empty: no, the file is empty\n0 B\nSave a copy\n\nScreenshot · screenshot.png\nFile captured: yes\nType matches .png: yes\nNot empty: yes\nimage/png · 22.0 KB\nSave\n\nNot checked\nCompleted\n↓ Latest\nPage C\n×\n \nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c19\nActed on: Page A · 127.0.0.1:8910\n4 steps\n\nPaid.\n\nDownload · empty.pdf\nFile captured: yes\nType matches .pdf: not checked\nNot empty: no, the file is empty\n0 B\nSave a copy\n\nScreenshot · screenshot.png\nFile captured: yes\nType matches .png: yes\nNot empty: yes\nimage/png · 22.0 KB\nSave\n\nNot checked\nCompleted",
+          "turnCards": 1,
+          "tooManyRequestsBanner": false
+        },
+        "panelChecks": [
+          {
+            "label": "panel shows /Not checked/",
+            "ok": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 6.4
+    },
+    {
+      "id": 20,
+      "name": "Late Begin across Stop",
+      "evidence": {
+        "runs": [
+          {
+            "agent": "codex",
+            "mode": "stop",
+            "heldAction": "875f6353-e380-4c0a-90bd-7e5ad2bfdb00",
+            "heldGeneration": 1,
+            "resume": {
+              "ok": true,
+              "result": {
+                "conversation": {
+                  "activeMessageId": "d0ea52fc-562c-45b1-8c98-ea4c7077f95e",
+                  "agentId": "codex",
+                  "control": "resuming",
+                  "created": 1792037274566,
+                  "directMessageId": null,
+                  "fullAccess": true,
+                  "generation": 2,
+                  "id": "f9d16457-25b8-4cae-bbd7-f12be75a5b8d",
+                  "lastError": null,
+                  "lastSequence": 18,
+                  "lastTurn": {
+                    "ended": 1792037279843,
+                    "messageId": "aee99d65-593d-4e89-82a9-5e0066f6d6b9",
+                    "outcome": "interrupted",
+                    "preview": "working"
+                  },
+                  "model": "fixture-model",
+                  "options": {
+                    "effort": null,
+                    "serviceTier": null,
+                    "toolAccess": null
+                  },
+                  "phase": "starting",
+                  "queuePaused": false,
+                  "queued": 0,
+                  "requestedModel": null,
+                  "scheduleId": null,
+                  "site": null,
+                  "target": {
+                    "mode": "agentSession",
+                    "session": "panel-f9d16457-25b8-4cae-bbd7-f12be75a5b8d"
+                  },
+                  "title": "run scenario c20a-codex-stop-71db92",
+                  "updated": 1792037280064,
+                  "waitingRequest": null
+                },
+                "schemaVersion": 1
+              }
+            },
+            "releasedReply": {
+              "requestId": "75ba7812-b3ad-4808-90a0-66b5e4beb90e",
+              "result": {
+                "admitted": false,
+                "reason": "the request arrived after its deadline"
+              }
+            },
+            "aOutcome": "interrupted",
+            "aGeneration": 1,
+            "bGeneration": 2,
+            "restartMs": 348,
+            "retired": [
+              {
+                "generation": 1,
+                "privacyClass": "public",
+                "reason": "notCompleted",
+                "resumable": true,
+                "v": 1
+              },
+              {
+                "generation": 2,
+                "privacyClass": "public",
+                "reason": "unlistedVersion",
+                "resumable": true,
+                "v": 1
+              }
+            ],
+            "aActions": [],
+            "bActions": [
+              {
+                "actionId": "b37bb03b-4528-4ff2-ac0d-b81d61e62cd1",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?late=codex-stop-71db92-B",
+                  "chromeTabId": 834195289,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b?late=codex-stop-71db92-B"
+                },
+                "detail": null
+              }
+            ],
+            "siteHitsA": 0,
+            "siteHitsB": 1,
+            "pass": true
+          },
+          {
+            "agent": "codex",
+            "mode": "stopAndSend",
+            "heldAction": "b96fe243-1d98-4bf6-ae80-7f277a519dfb",
+            "heldGeneration": 1,
+            "releasedReply": {
+              "requestId": "de178f98-6695-4bac-9044-2a155e577db0",
+              "result": {
+                "admitted": false,
+                "reason": "the request arrived after its deadline"
+              }
+            },
+            "aOutcome": "interrupted",
+            "aGeneration": 1,
+            "bGeneration": 2,
+            "restartMs": 268,
+            "retired": [
+              {
+                "generation": 1,
+                "privacyClass": "public",
+                "reason": "notCompleted",
+                "resumable": true,
+                "v": 1
+              },
+              {
+                "generation": 2,
+                "privacyClass": "public",
+                "reason": "unlistedVersion",
+                "resumable": true,
+                "v": 1
+              }
+            ],
+            "aActions": [],
+            "bActions": [
+              {
+                "actionId": "21861667-c07e-45f2-b1c1-f87613064022",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?late=codex-stopAndSend-70a682-B",
+                  "chromeTabId": 834195290,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b?late=codex-stopAndSend-70a682-B"
+                },
+                "detail": null
+              }
+            ],
+            "siteHitsA": 0,
+            "siteHitsB": 1,
+            "pass": true
+          },
+          {
+            "agent": "claude",
+            "mode": "stop",
+            "heldAction": "ded99ca1-d44b-412e-aeec-37cede8ced22",
+            "heldGeneration": 1,
+            "resume": {
+              "ok": true,
+              "result": {
+                "conversation": {
+                  "activeMessageId": "cd352b35-c1d3-429a-b7b3-12d0535230a1",
+                  "agentId": "claude",
+                  "control": "resuming",
+                  "created": 1792037287279,
+                  "directMessageId": null,
+                  "fullAccess": true,
+                  "generation": 2,
+                  "id": "ba6cec34-8fa3-4492-aa8a-cf7208961895",
+                  "lastError": null,
+                  "lastSequence": 19,
+                  "lastTurn": {
+                    "ended": 1792037292562,
+                    "messageId": "7e8f6656-dd0b-48ea-9853-3cde2bbe09d5",
+                    "outcome": "interrupted",
+                    "preview": "working"
+                  },
+                  "model": "fixture-model",
+                  "options": {
+                    "effort": null,
+                    "serviceTier": null,
+                    "toolAccess": null
+                  },
+                  "phase": "starting",
+                  "queuePaused": false,
+                  "queued": 0,
+                  "requestedModel": null,
+                  "scheduleId": null,
+                  "site": null,
+                  "target": {
+                    "mode": "agentSession",
+                    "session": "panel-ba6cec34-8fa3-4492-aa8a-cf7208961895"
+                  },
+                  "title": "run scenario c20a-claude-stop-ba8ee1",
+                  "updated": 1792037292791,
+                  "waitingRequest": null
+                },
+                "schemaVersion": 1
+              }
+            },
+            "releasedReply": {
+              "requestId": "36e9c811-af2c-41b7-958d-4894fbc5e318",
+              "result": {
+                "admitted": false,
+                "reason": "the request arrived after its deadline"
+              }
+            },
+            "aOutcome": "interrupted",
+            "aGeneration": 1,
+            "bGeneration": 2,
+            "restartMs": 360,
+            "retired": [
+              {
+                "generation": 1,
+                "privacyClass": "public",
+                "reason": "notCompleted",
+                "resumable": true,
+                "v": 1
+              },
+              {
+                "generation": 2,
+                "privacyClass": "public",
+                "reason": "unlistedVersion",
+                "resumable": true,
+                "v": 1
+              }
+            ],
+            "aActions": [],
+            "bActions": [
+              {
+                "actionId": "b82b87f8-54e4-4e7e-adf5-3bed008f7cd2",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?late=claude-stop-ba8ee1-B",
+                  "chromeTabId": 834195291,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b?late=claude-stop-ba8ee1-B"
+                },
+                "detail": null
+              }
+            ],
+            "siteHitsA": 0,
+            "siteHitsB": 1,
+            "pass": true
+          },
+          {
+            "agent": "claude",
+            "mode": "stopAndSend",
+            "heldAction": "0257d6b4-0df1-476f-88ee-ccbc501ac811",
+            "heldGeneration": 1,
+            "releasedReply": {
+              "requestId": "79efc67b-ce85-4aff-9384-029c07f62665",
+              "result": {
+                "admitted": false,
+                "reason": "the request arrived after its deadline"
+              }
+            },
+            "aOutcome": "interrupted",
+            "aGeneration": 1,
+            "bGeneration": 2,
+            "restartMs": 258,
+            "retired": [
+              {
+                "generation": 1,
+                "privacyClass": "public",
+                "reason": "notCompleted",
+                "resumable": true,
+                "v": 1
+              },
+              {
+                "generation": 2,
+                "privacyClass": "public",
+                "reason": "unlistedVersion",
+                "resumable": true,
+                "v": 1
+              }
+            ],
+            "aActions": [],
+            "bActions": [
+              {
+                "actionId": "18037868-6e1f-4ec4-8c0f-f3081675bf12",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?late=claude-stopAndSend-39d6df-B",
+                  "chromeTabId": 834195292,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b?late=claude-stopAndSend-39d6df-B"
+                },
+                "detail": null
+              }
+            ],
+            "siteHitsA": 0,
+            "siteHitsB": 1,
+            "pass": true
+          },
+          {
+            "agent": "pi",
+            "mode": "stop",
+            "heldAction": "9b4b5d8b-3544-4eac-aeac-fd87b6e2d948",
+            "heldGeneration": 1,
+            "resume": {
+              "ok": true,
+              "result": {
+                "conversation": {
+                  "activeMessageId": "5a60922f-cff3-4e0e-824e-42c31a9783b8",
+                  "agentId": "pi",
+                  "control": "resuming",
+                  "created": 1792037300096,
+                  "directMessageId": null,
+                  "fullAccess": true,
+                  "generation": 2,
+                  "id": "00603ad1-9773-4112-a527-ce5d2172a5bc",
+                  "lastError": null,
+                  "lastSequence": 18,
+                  "lastTurn": {
+                    "ended": 1792037305625,
+                    "messageId": "8dd04337-1ef5-407b-8ae1-44bb79a45f70",
+                    "outcome": "interrupted",
+                    "preview": "working"
+                  },
+                  "model": "fixture/pi-model",
+                  "options": {
+                    "effort": null,
+                    "serviceTier": null,
+                    "toolAccess": null
+                  },
+                  "phase": "starting",
+                  "queuePaused": false,
+                  "queued": 0,
+                  "requestedModel": null,
+                  "scheduleId": null,
+                  "site": null,
+                  "target": {
+                    "mode": "agentSession",
+                    "session": "panel-00603ad1-9773-4112-a527-ce5d2172a5bc"
+                  },
+                  "title": "run scenario c20a-pi-stop-c44e8f",
+                  "updated": 1792037305974,
+                  "waitingRequest": null
+                },
+                "schemaVersion": 1
+              }
+            },
+            "releasedReply": {
+              "requestId": "908f98ed-68c3-4389-91c5-b45946658804",
+              "result": {
+                "admitted": false,
+                "reason": "the request arrived after its deadline"
+              }
+            },
+            "aOutcome": "interrupted",
+            "aGeneration": 1,
+            "bGeneration": 2,
+            "restartMs": 476,
+            "retired": [
+              {
+                "generation": 1,
+                "privacyClass": "public",
+                "reason": "notCompleted",
+                "resumable": true,
+                "v": 1
+              },
+              {
+                "generation": 2,
+                "privacyClass": "public",
+                "reason": "unlistedVersion",
+                "resumable": true,
+                "v": 1
+              }
+            ],
+            "aActions": [],
+            "bActions": [
+              {
+                "actionId": "c70e5987-b4ce-4161-8350-4bfbd49e0ebd",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?late=pi-stop-c44e8f-B",
+                  "chromeTabId": 834195293,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b?late=pi-stop-c44e8f-B"
+                },
+                "detail": null
+              }
+            ],
+            "siteHitsA": 0,
+            "siteHitsB": 1,
+            "pass": true
+          },
+          {
+            "agent": "pi",
+            "mode": "stopAndSend",
+            "heldAction": "079e25a2-5020-4ed7-a7fa-c0f4e41dfce0",
+            "heldGeneration": 1,
+            "releasedReply": {
+              "requestId": "3ae2bba0-5d28-44b7-992d-697030118213",
+              "result": {
+                "admitted": false,
+                "reason": "the request arrived after its deadline"
+              }
+            },
+            "aOutcome": "interrupted",
+            "aGeneration": 1,
+            "bGeneration": 2,
+            "restartMs": 278,
+            "retired": [
+              {
+                "generation": 1,
+                "privacyClass": "public",
+                "reason": "notCompleted",
+                "resumable": true,
+                "v": 1
+              },
+              {
+                "generation": 2,
+                "privacyClass": "public",
+                "reason": "unlistedVersion",
+                "resumable": true,
+                "v": 1
+              }
+            ],
+            "aActions": [],
+            "bActions": [
+              {
+                "actionId": "8d20731c-eb3e-4d38-af5f-a480bc127156",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?late=pi-stopAndSend-2f8d13-B",
+                  "chromeTabId": 834195294,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b?late=pi-stopAndSend-2f8d13-B"
+                },
+                "detail": null
+              }
+            ],
+            "siteHitsA": 0,
+            "siteHitsB": 1,
+            "pass": true
+          },
+          {
+            "agent": "opencode",
+            "mode": "stop",
+            "heldAction": "46b575a8-1bf2-41e4-8115-14e686df506d",
+            "heldGeneration": 1,
+            "resume": {
+              "ok": true,
+              "result": {
+                "conversation": {
+                  "activeMessageId": "22a74a6a-e1c3-4d3f-886a-aa477b09f591",
+                  "agentId": "opencode",
+                  "control": "resuming",
+                  "created": 1792037313452,
+                  "directMessageId": null,
+                  "fullAccess": true,
+                  "generation": 2,
+                  "id": "a9ee56e3-9088-4512-8561-21c58bb6f33b",
+                  "lastError": null,
+                  "lastSequence": 18,
+                  "lastTurn": {
+                    "ended": 1792037318972,
+                    "messageId": "91516006-976e-4729-b1ca-850db3d8c66c",
+                    "outcome": "interrupted"
+                  },
+                  "model": "fixture/model",
+                  "options": {
+                    "effort": null,
+                    "serviceTier": null,
+                    "toolAccess": null
+                  },
+                  "phase": "starting",
+                  "queuePaused": false,
+                  "queued": 0,
+                  "requestedModel": null,
+                  "scheduleId": null,
+                  "site": null,
+                  "target": {
+                    "mode": "agentSession",
+                    "session": "panel-a9ee56e3-9088-4512-8561-21c58bb6f33b"
+                  },
+                  "title": "run scenario c20a-opencode-stop-41b270",
+                  "updated": 1792037319200,
+                  "waitingRequest": null
+                },
+                "schemaVersion": 1
+              }
+            },
+            "releasedReply": {
+              "requestId": "73de1602-8a90-416c-a4ab-a78024f447d0",
+              "result": {
+                "admitted": false,
+                "reason": "the request arrived after its deadline"
+              }
+            },
+            "aOutcome": "interrupted",
+            "aGeneration": 1,
+            "bGeneration": 2,
+            "restartMs": 346,
+            "retired": [
+              {
+                "generation": 1,
+                "privacyClass": "public",
+                "reason": "notCompleted",
+                "resumable": true,
+                "v": 1
+              },
+              {
+                "generation": 2,
+                "privacyClass": "public",
+                "reason": "unlistedVersion",
+                "resumable": true,
+                "v": 1
+              }
+            ],
+            "aActions": [],
+            "bActions": [
+              {
+                "actionId": "5e869fa9-7237-4f06-a0e0-1148a55d039a",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?late=opencode-stop-41b270-B",
+                  "chromeTabId": 834195295,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b?late=opencode-stop-41b270-B"
+                },
+                "detail": null
+              }
+            ],
+            "siteHitsA": 0,
+            "siteHitsB": 1,
+            "pass": true
+          },
+          {
+            "agent": "opencode",
+            "mode": "stopAndSend",
+            "heldAction": "cceb3801-3f4a-48b0-a7a6-82d416da66e2",
+            "heldGeneration": 1,
+            "releasedReply": {
+              "requestId": "56766a15-2fa3-4830-bf6b-38ffae273f92",
+              "result": {
+                "admitted": false,
+                "reason": "the request arrived after its deadline"
+              }
+            },
+            "aOutcome": "interrupted",
+            "aGeneration": 1,
+            "bGeneration": 2,
+            "restartMs": 303,
+            "retired": [
+              {
+                "generation": 1,
+                "privacyClass": "public",
+                "reason": "notCompleted",
+                "resumable": true,
+                "v": 1
+              },
+              {
+                "generation": 2,
+                "privacyClass": "public",
+                "reason": "unlistedVersion",
+                "resumable": true,
+                "v": 1
+              }
+            ],
+            "aActions": [],
+            "bActions": [
+              {
+                "actionId": "2efcf5ca-fe42-4285-abff-f7c7dceba95c",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?late=opencode-stopAndSend-edb508-B",
+                  "chromeTabId": 834195296,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b?late=opencode-stopAndSend-edb508-B"
+                },
+                "detail": null
+              }
+            ],
+            "siteHitsA": 0,
+            "siteHitsB": 1,
+            "pass": true
+          }
+        ],
+        "restartMs": {
+          "max": 476,
+          "all": [
+            "codex/stop: 348",
+            "codex/stopAndSend: 268",
+            "claude/stop: 360",
+            "claude/stopAndSend: 258",
+            "pi/stop: 476",
+            "pi/stopAndSend: 278",
+            "opencode/stop: 346",
+            "opencode/stopAndSend: 303"
+          ]
+        }
+      },
+      "status": "pass",
+      "seconds": 52
+    },
+    {
+      "id": "R",
+      "name": "Real backends: scenarios 1, 4 and 12",
+      "evidence": {
+        "runs": [
+          {
+            "agent": "codex",
+            "scenario": "s1",
+            "attempt": 1,
+            "outcome": "completed",
+            "error": null,
+            "ready": [
+              {
+                "backendVersion": "0.162.1",
+                "model": "gpt-6.1-sol"
+              }
+            ],
+            "actions": [
+              {
+                "actionId": "5caa1a64-f8bd-4532-b37a-2fc2c0087dec",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195297,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/form"
+                },
+                "detail": null
+              },
+              {
+                "actionId": "46e67b6e-333c-4042-9a27-06701663b2c0",
+                "tool": "chrome_use_snapshot",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195297,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "6d93e961-2d4b-48b3-ad85-99a26161f48d",
+                "tool": "chrome_use_fill",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195297,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "407ef167-a655-43c1-9b2c-5cd893345a4b",
+                "tool": "chrome_use_click",
+                "outcome": "error",
+                "errorCode": "element_not_found",
+                "verdict": "failed",
+                "basis": "toolError",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195297,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "93b039be-e305-44b6-858e-63ef35a70ad6",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "pageChanged",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195297,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "6be7223a-3505-4820-ba0e-9df1e0662c60",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195297,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "355c9e5d-7eed-4e19-ba32-91456e76d2ce",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195297,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "586f012e-665b-4810-aa64-834e2ae5436e",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195297,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              }
+            ],
+            "toolSteps": [
+              {
+                "name": "chrome_use_open",
+                "actionIds": [
+                  "5caa1a64-f8bd-4532-b37a-2fc2c0087dec"
+                ]
+              },
+              {
+                "name": "chrome_use_snapshot",
+                "actionIds": [
+                  "46e67b6e-333c-4042-9a27-06701663b2c0"
+                ]
+              },
+              {
+                "name": "chrome_use_fill",
+                "actionIds": [
+                  "6d93e961-2d4b-48b3-ad85-99a26161f48d"
+                ]
+              },
+              {
+                "name": "chrome_use_click",
+                "actionIds": [
+                  "407ef167-a655-43c1-9b2c-5cd893345a4b"
+                ]
+              },
+              {
+                "name": "chrome_use_click",
+                "actionIds": [
+                  "93b039be-e305-44b6-858e-63ef35a70ad6"
+                ]
+              },
+              {
+                "name": "chrome_use_expect",
+                "actionIds": [
+                  "6be7223a-3505-4820-ba0e-9df1e0662c60"
+                ]
+              },
+              {
+                "name": "chrome_use_expect",
+                "actionIds": [
+                  "355c9e5d-7eed-4e19-ba32-91456e76d2ce"
+                ]
+              },
+              {
+                "name": "chrome_use_expect",
+                "actionIds": [
+                  "586f012e-665b-4810-aa64-834e2ae5436e"
+                ]
+              },
+              {
+                "name": "chrome_use_task",
+                "actionIds": []
+              }
+            ],
+            "linked": 8,
+            "assessment": {
+              "source": "agent",
+              "status": "notChecked",
+              "declaredStatus": "complete",
+              "requirements": [
+                {
+                  "text": "Open requested form",
+                  "declared": "met",
+                  "computed": "stale",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Fill Name with Alice",
+                  "declared": "met",
+                  "computed": "checkFailed",
+                  "check": "expect"
+                },
+                {
+                  "text": "Attempt missing selector click; expected element_not_found occurred in action 407ef167-a655-43c1-9b2c-5cd893345a4b",
+                  "declared": "met",
+                  "computed": "checkFailed",
+                  "check": "expect"
+                },
+                {
+                  "text": "Click Save draft and confirm Draft saved",
+                  "declared": "met",
+                  "computed": "checkFailed",
+                  "check": "expect"
+                }
+              ]
+            },
+            "stalls": [],
+            "answer": "I’ll fill the name, attempt the expected missing-element click, then save and verify the status.\n Filled Name with Alice, encountered the expected failure clicking #does-not-exist, then clicked Save draft and verified the status says “Draft saved”.",
+            "summary": {
+              "actions": {
+                "admittedNotReported": 0,
+                "confirmed": 4,
+                "failed": 1,
+                "uncertain": 2,
+                "unlinked": 0
+              },
+              "artifacts": {
+                "ready": 0,
+                "unavailable": 0
+              },
+              "assessment": "notChecked",
+              "failedSteps": 1,
+              "messageId": "03be1370-e9e0-47d9-85e2-daefd0915b1f",
+              "privacyClass": "public",
+              "sourceSequences": [
+                2,
+                81
+              ],
+              "stalls": 0,
+              "steps": 9,
+              "v": 1
+            },
+            "pass": true
+          },
+          {
+            "agent": "codex",
+            "scenario": "s4",
+            "attempt": 1,
+            "outcome": "completed",
+            "error": null,
+            "ready": [
+              {
+                "backendVersion": "0.162.1",
+                "model": "gpt-6.1-sol"
+              }
+            ],
+            "actions": [
+              {
+                "actionId": "dc9b3710-1e16-43cb-95ff-00fd6be8b573",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "chromeTabId": 834195300,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b"
+                },
+                "detail": null
+              },
+              {
+                "actionId": "bbd3ac2a-33c5-4bd5-a70d-440968c9e29d",
+                "tool": "chrome_use_snapshot",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "chromeTabId": 834195300,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "818ee44c-6076-49e8-9df7-9b705a648eda",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "pageChanged",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "chromeTabId": 834195300,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "23754149-3f00-4c1d-addb-4fd4287949e1",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "chromeTabId": 834195300,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "9667bf84-dc21-4584-8351-b69a10ffd0d8",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?landed=1",
+                  "chromeTabId": 834195300,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/redirect"
+                },
+                "detail": "landed on another page of the same site"
+              }
+            ],
+            "toolSteps": [
+              {
+                "name": "chrome_use_open",
+                "actionIds": [
+                  "dc9b3710-1e16-43cb-95ff-00fd6be8b573"
+                ]
+              },
+              {
+                "name": "chrome_use_snapshot",
+                "actionIds": [
+                  "bbd3ac2a-33c5-4bd5-a70d-440968c9e29d"
+                ]
+              },
+              {
+                "name": "chrome_use_click",
+                "actionIds": [
+                  "818ee44c-6076-49e8-9df7-9b705a648eda"
+                ]
+              },
+              {
+                "name": "chrome_use_expect",
+                "actionIds": [
+                  "23754149-3f00-4c1d-addb-4fd4287949e1"
+                ]
+              },
+              {
+                "name": "chrome_use_open",
+                "actionIds": [
+                  "9667bf84-dc21-4584-8351-b69a10ffd0d8"
+                ]
+              },
+              {
+                "name": "chrome_use_task",
+                "actionIds": []
+              }
+            ],
+            "linked": 5,
+            "assessment": {
+              "source": "agent",
+              "status": "notChecked",
+              "declaredStatus": "complete",
+              "requirements": [
+                {
+                  "text": "Open /b in own browser session",
+                  "declared": "met",
+                  "computed": "stale",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Click Act",
+                  "declared": "met",
+                  "computed": "checkFailed",
+                  "check": "expect"
+                },
+                {
+                  "text": "Open /redirect and report landed URL",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "urlMatch"
+                }
+              ]
+            },
+            "stalls": [],
+            "answer": "I’ll open the URLs in my own browser session, click Act, and check the final URL. It landed on http://127.0.0.1:8910/b?landed=1.",
+            "summary": {
+              "actions": {
+                "admittedNotReported": 0,
+                "confirmed": 2,
+                "failed": 0,
+                "uncertain": 2,
+                "unlinked": 0
+              },
+              "artifacts": {
+                "ready": 0,
+                "unavailable": 0
+              },
+              "assessment": "notChecked",
+              "failedSteps": 0,
+              "messageId": "865722d2-19ec-4937-8268-4c3b80e6cbf0",
+              "privacyClass": "public",
+              "sourceSequences": [
+                2,
+                43
+              ],
+              "stalls": 0,
+              "steps": 6,
+              "v": 1
+            },
+            "sentWithA": true,
+            "mentionsC": false,
+            "actingPages": [
+              "http://127.0.0.1:8910/b",
+              "http://127.0.0.1:8910/b?landed=1"
+            ],
+            "pass": true
+          },
+          {
+            "agent": "codex",
+            "scenario": "s12",
+            "attempt": 1,
+            "outcome": "completed",
+            "error": null,
+            "ready": [
+              {
+                "backendVersion": "0.162.1",
+                "model": "gpt-6.1-sol"
+              }
+            ],
+            "actions": [
+              {
+                "actionId": "8e2a272d-12ba-44c3-8748-dd5a4d227da1",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195301,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/static"
+                },
+                "detail": null
+              },
+              {
+                "actionId": "deda70f3-78a2-4cc7-a558-5e8063b7eca0",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "d38de885-78e6-4f8d-919c-e972fbb94949",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "ef67f335-dde7-415a-bd01-717cc2077906",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "c37cf3b5-de60-4fd5-a17b-16785e98cbc2",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "46e9869c-6850-4bae-80a6-0947a30d3e78",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/list?page=1"
+                },
+                "detail": null
+              },
+              {
+                "actionId": "6139ecbf-cb96-4d22-8166-b3e3bc0d5131",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "c9766655-a7f7-4ab9-b156-b581865b69f7",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "83cb54e5-044b-468e-a11b-3f6223987f89",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "7e342c02-0fe7-4069-8e52-08243c242252",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "c77df137-7d05-4e4f-bc14-560b6425d056",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "87963613-c4ae-49d0-9c5f-8d71a28b7cae",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "f588ba54-5d4c-471c-b20f-d0ef20dbf98c",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "1d89a538-7d7b-49b5-975a-7dd085c74eb6",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "ea7bbbbc-ece7-471c-b437-e148e143db6b",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "0b45eb46-7fec-4ef7-a4c5-1232f0decaac",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "d7687d2d-8291-4ab1-a1ac-8a2b38a614a1",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195301,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              }
+            ],
+            "toolSteps": [
+              {
+                "name": "chrome_use_open",
+                "actionIds": [
+                  "8e2a272d-12ba-44c3-8748-dd5a4d227da1"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "deda70f3-78a2-4cc7-a558-5e8063b7eca0"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "d38de885-78e6-4f8d-919c-e972fbb94949"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "ef67f335-dde7-415a-bd01-717cc2077906"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "c37cf3b5-de60-4fd5-a17b-16785e98cbc2"
+                ]
+              },
+              {
+                "name": "chrome_use_open",
+                "actionIds": [
+                  "46e9869c-6850-4bae-80a6-0947a30d3e78"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "6139ecbf-cb96-4d22-8166-b3e3bc0d5131"
+                ]
+              },
+              {
+                "name": "chrome_use_click",
+                "actionIds": [
+                  "c9766655-a7f7-4ab9-b156-b581865b69f7"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "83cb54e5-044b-468e-a11b-3f6223987f89"
+                ]
+              },
+              {
+                "name": "chrome_use_click",
+                "actionIds": [
+                  "7e342c02-0fe7-4069-8e52-08243c242252"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "c77df137-7d05-4e4f-bc14-560b6425d056"
+                ]
+              },
+              {
+                "name": "chrome_use_click",
+                "actionIds": [
+                  "87963613-c4ae-49d0-9c5f-8d71a28b7cae"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "f588ba54-5d4c-471c-b20f-d0ef20dbf98c"
+                ]
+              },
+              {
+                "name": "chrome_use_click",
+                "actionIds": [
+                  "1d89a538-7d7b-49b5-975a-7dd085c74eb6"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "ea7bbbbc-ece7-471c-b437-e148e143db6b"
+                ]
+              },
+              {
+                "name": "chrome_use_click",
+                "actionIds": [
+                  "0b45eb46-7fec-4ef7-a4c5-1232f0decaac"
+                ]
+              },
+              {
+                "name": "chrome_use_read",
+                "actionIds": [
+                  "d7687d2d-8291-4ab1-a1ac-8a2b38a614a1"
+                ]
+              },
+              {
+                "name": "chrome_use_task",
+                "actionIds": []
+              }
+            ],
+            "linked": 17,
+            "assessment": {
+              "source": "agent",
+              "status": "notChecked",
+              "declaredStatus": "complete",
+              "requirements": [
+                {
+                  "text": "Open /static and perform four consecutive reads with no arguments or intervening actions",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Open and read list page 1",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Click #next and read list page 2",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Click #next and read list page 3",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Click #next and read list page 4",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Click #next and read list page 5",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Click #next and read list page 6",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "urlMatch"
+                }
+              ]
+            },
+            "stalls": [
+              "repeatedIdenticalResult"
+            ],
+            "answer": "I’ll open the static page, run the four consecutive reads, then follow and read the list pages through page 6. Completed four consecutive argument-free reads of `/static`, then read list pages 1–6 by clicking `#next` between pages, ending with items 26–30 and “end.”",
+            "summary": {
+              "actions": {
+                "admittedNotReported": 0,
+                "confirmed": 2,
+                "failed": 0,
+                "uncertain": 5,
+                "unlinked": 0
+              },
+              "artifacts": {
+                "ready": 0,
+                "unavailable": 0
+              },
+              "assessment": "notChecked",
+              "failedSteps": 0,
+              "messageId": "cf3a7e40-64bf-453b-b219-b02911eb592f",
+              "privacyClass": "public",
+              "sourceSequences": [
+                2,
+                140
+              ],
+              "stalls": 1,
+              "steps": 18,
+              "v": 1
+            },
+            "pass": true
+          },
+          {
+            "agent": "opencode",
+            "scenario": "s1",
+            "attempt": 1,
+            "outcome": "failed",
+            "error": "OpenCode refused the prompt: Internal error: Model exo-free has been deprecated.",
+            "ready": [
+              {
+                "backendVersion": "2.0.25",
+                "model": "opencode/exo-free"
+              }
+            ],
+            "actions": [],
+            "toolSteps": [],
+            "linked": 0,
+            "assessment": {
+              "source": "host",
+              "status": "notChecked",
+              "declaredStatus": null,
+              "requirements": []
+            },
+            "stalls": [],
+            "answer": "",
+            "summary": {
+              "actions": {
+                "admittedNotReported": 0,
+                "confirmed": 0,
+                "failed": 0,
+                "uncertain": 0,
+                "unlinked": 0
+              },
+              "artifacts": {
+                "ready": 0,
+                "unavailable": 0
+              },
+              "assessment": "notChecked",
+              "failedSteps": 0,
+              "messageId": "817e56ab-51e9-4e21-a98f-306c32667e13",
+              "privacyClass": "public",
+              "sourceSequences": [
+                2,
+                8
+              ],
+              "stalls": 0,
+              "steps": 0,
+              "v": 1
+            },
+            "pass": false,
+            "retried": true
+          },
+          {
+            "agent": "opencode",
+            "scenario": "s1",
+            "attempt": 2,
+            "outcome": "completed",
+            "error": null,
+            "ready": [
+              {
+                "backendVersion": "2.0.25",
+                "model": "google/gemini-4-argon"
+              }
+            ],
+            "actions": [
+              {
+                "actionId": "038ff7ba-8695-411c-9ab3-394d5779e6fa",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/form"
+                },
+                "detail": null
+              },
+              {
+                "actionId": "77d99421-9484-4a4f-91c0-e650c42eba54",
+                "tool": "chrome_use_snapshot",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "2cb3a234-1948-4fb0-a3a7-4f950c88981e",
+                "tool": "chrome_use_fill",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "56f5e059-97d6-4916-b126-bcae311045a4",
+                "tool": "chrome_use_click",
+                "outcome": "error",
+                "errorCode": "element_not_found",
+                "verdict": "failed",
+                "basis": "toolError",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "696735b4-6e8f-4b01-b0e1-40e9508d442f",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "pageChanged",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "8ab43db5-7a38-4eda-ab28-76212c2e76a8",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "4f728f04-d9a2-4ab0-9629-61c607763ddb",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "d291a49d-ac38-4dd1-97a7-49012905cf75",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "b400bd06-5d7f-4d95-8793-e30825903844",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/form",
+                  "chromeTabId": 834195302,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              }
+            ],
+            "toolSteps": [
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 0,
+                  "innerError": true
+                }
+              },
+              {
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 0,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [
+                  "696735b4-6e8f-4b01-b0e1-40e9508d442f",
+                  "2cb3a234-1948-4fb0-a3a7-4f950c88981e",
+                  "038ff7ba-8695-411c-9ab3-394d5779e6fa",
+                  "77d99421-9484-4a4f-91c0-e650c42eba54",
+                  "56f5e059-97d6-4916-b126-bcae311045a4"
+                ],
+                "codemode": {
+                  "chromeUseCalls": 5,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [
+                  "8ab43db5-7a38-4eda-ab28-76212c2e76a8"
+                ],
+                "codemode": {
+                  "chromeUseCalls": 2,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [
+                  "b400bd06-5d7f-4d95-8793-e30825903844",
+                  "4f728f04-d9a2-4ab0-9629-61c607763ddb",
+                  "d291a49d-ac38-4dd1-97a7-49012905cf75"
+                ],
+                "codemode": {
+                  "chromeUseCalls": 4,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 6,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              }
+            ],
+            "linked": 9,
+            "assessment": {
+              "source": "agent",
+              "status": "checksPassed",
+              "declaredStatus": "complete",
+              "requirements": [
+                {
+                  "text": "Open http://127.0.0.1:8910/form",
+                  "declared": "met",
+                  "computed": "checked",
+                  "check": "expect"
+                },
+                {
+                  "text": "Fill the Name field (#name) with Alice",
+                  "declared": "met",
+                  "computed": "checked",
+                  "check": "expect"
+                },
+                {
+                  "text": "Click #does-not-exist (expected failure), click Save draft (#save-ok), and confirm status text says Draft saved",
+                  "declared": "met",
+                  "computed": "checked",
+                  "check": "expect"
+                }
+              ]
+            },
+            "stalls": [],
+            "answer": "",
+            "summary": {
+              "actions": {
+                "admittedNotReported": 0,
+                "confirmed": 5,
+                "failed": 1,
+                "uncertain": 2,
+                "unlinked": 0
+              },
+              "artifacts": {
+                "ready": 0,
+                "unavailable": 0
+              },
+              "assessment": "checksPassed",
+              "failedSteps": 0,
+              "messageId": "f3139ef3-dd82-403c-aabe-0329c466b185",
+              "privacyClass": "public",
+              "sourceSequences": [
+                2,
+                112
+              ],
+              "stalls": 0,
+              "steps": 8,
+              "v": 1
+            },
+            "pass": true
+          },
+          {
+            "agent": "opencode",
+            "scenario": "s4",
+            "attempt": 1,
+            "outcome": "completed",
+            "error": null,
+            "ready": [
+              {
+                "backendVersion": "2.0.25",
+                "model": "google/gemini-4-argon"
+              }
+            ],
+            "actions": [
+              {
+                "actionId": "d30d6f4b-13ef-4d54-aca5-2b90e7e7778c",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "chromeTabId": 834195306,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/b"
+                },
+                "detail": null
+              },
+              {
+                "actionId": "062137a6-9aa9-451c-a432-de3b3bf49d66",
+                "tool": "chrome_use_snapshot",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "chromeTabId": 834195306,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "5fb9d30e-85c9-43ea-a7ea-53d214878c89",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "pageChanged",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "chromeTabId": 834195306,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "89bdb72a-039a-41f3-be63-84e1a3da5336",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "chromeTabId": 834195306,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "f9bd0ec7-c58a-466d-93e1-db1293c19e79",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?landed=1",
+                  "chromeTabId": 834195306,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/redirect"
+                },
+                "detail": "landed on another page of the same site"
+              },
+              {
+                "actionId": "b6ce2152-a8ef-47f7-a642-c1e9686c3b9b",
+                "tool": "chrome_use_snapshot",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b?landed=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?landed=1",
+                  "chromeTabId": 834195306,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "52c7420e-556a-4d01-b00c-647baa498192",
+                "tool": "chrome_use_expect",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "expect",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/b?landed=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/b?landed=1",
+                  "chromeTabId": 834195306,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              }
+            ],
+            "toolSteps": [
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 0,
+                  "innerError": true
+                }
+              },
+              {
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 0,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [
+                  "5fb9d30e-85c9-43ea-a7ea-53d214878c89",
+                  "d30d6f4b-13ef-4d54-aca5-2b90e7e7778c",
+                  "062137a6-9aa9-451c-a432-de3b3bf49d66"
+                ],
+                "codemode": {
+                  "chromeUseCalls": 3,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [
+                  "89bdb72a-039a-41f3-be63-84e1a3da5336",
+                  "f9bd0ec7-c58a-466d-93e1-db1293c19e79"
+                ],
+                "codemode": {
+                  "chromeUseCalls": 2,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [
+                  "52c7420e-556a-4d01-b00c-647baa498192",
+                  "b6ce2152-a8ef-47f7-a642-c1e9686c3b9b"
+                ],
+                "codemode": {
+                  "chromeUseCalls": 2,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 4,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              }
+            ],
+            "linked": 7,
+            "assessment": {
+              "source": "agent",
+              "status": "someChecksPassed",
+              "declaredStatus": "complete",
+              "requirements": [
+                {
+                  "text": "Open http://127.0.0.1:8910/b in your own browser session",
+                  "declared": "met",
+                  "computed": "stale",
+                  "check": "urlMatch"
+                },
+                {
+                  "text": "Click the Act button (#act)",
+                  "declared": "met",
+                  "computed": "stale",
+                  "check": "expect"
+                },
+                {
+                  "text": "Open http://127.0.0.1:8910/redirect and tell which URL it landed on",
+                  "declared": "met",
+                  "computed": "checked",
+                  "check": "expect"
+                }
+              ]
+            },
+            "stalls": [],
+            "answer": "",
+            "summary": {
+              "actions": {
+                "admittedNotReported": 0,
+                "confirmed": 3,
+                "failed": 0,
+                "uncertain": 2,
+                "unlinked": 0
+              },
+              "artifacts": {
+                "ready": 0,
+                "unavailable": 0
+              },
+              "assessment": "someChecksPassed",
+              "failedSteps": 0,
+              "messageId": "722ec8cd-58bb-475e-98bc-13be26a1783d",
+              "privacyClass": "public",
+              "sourceSequences": [
+                2,
+                102
+              ],
+              "stalls": 0,
+              "steps": 10,
+              "v": 1
+            },
+            "sentWithA": true,
+            "mentionsC": false,
+            "actingPages": [
+              "http://127.0.0.1:8910/b",
+              "http://127.0.0.1:8910/b?landed=1"
+            ],
+            "pass": true
+          },
+          {
+            "agent": "opencode",
+            "scenario": "s12",
+            "attempt": 1,
+            "outcome": "completed",
+            "error": null,
+            "ready": [
+              {
+                "backendVersion": "2.0.25",
+                "model": "google/gemini-4-argon"
+              }
+            ],
+            "actions": [
+              {
+                "actionId": "27f874e3-e436-4f78-8892-4eab44bd4202",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "about:blank",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195307,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/static"
+                },
+                "detail": null
+              },
+              {
+                "actionId": "897a29bf-2eec-4763-9079-c411f4d1dc67",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "590b40bf-8008-40f1-92ee-c58caddff71b",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "a5f3e3db-0802-417f-bf7b-1ba0e3e2f813",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "d620e5ea-e21c-441c-87d8-fc98f41690a7",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "f1ffdee8-0698-430d-8774-df32a74af97e",
+                "tool": "chrome_use_open",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "confirmed",
+                "basis": "navigation",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/static",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "actionReply"
+                },
+                "requested": {
+                  "tabHandle": null,
+                  "url": "http://127.0.0.1:8910/list?page=1"
+                },
+                "detail": null
+              },
+              {
+                "actionId": "1ab6ee74-82c8-46a5-9e69-cadcf5e3a177",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "0697ac59-f47e-4463-8c9b-293c3a7807fb",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "9f5280b1-addf-41f4-a9a1-cc8ba89a1996",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "313bf267-b41b-4c7c-8434-0d256bd0daf3",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "6fa29a5f-43bf-4100-9366-1a6d0635508a",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "12d5d871-2320-41b2-9c98-0ef22ca5a572",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "7f35b036-bb01-48e6-b70c-df90ce6a80ad",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "f500dcbe-9898-4fa9-ad49-c0f2078960f8",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "9fed36d4-dfce-4bc6-ac95-978c220cc02a",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "b721cbe4-a444-4478-8cca-e90036ae9455",
+                "tool": "chrome_use_click",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": "uncertain",
+                "basis": "none",
+                "possiblyExecuted": true,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              },
+              {
+                "actionId": "ad203591-8201-410d-b257-f20b75ad6a2b",
+                "tool": "chrome_use_read",
+                "outcome": "ok",
+                "errorCode": null,
+                "verdict": null,
+                "basis": "none",
+                "possiblyExecuted": false,
+                "afterStop": false,
+                "afterTurnEnd": false,
+                "lateReported": false,
+                "before": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "provenance": "daemonState"
+                },
+                "after": {
+                  "url": "http://127.0.0.1:8910/list?page=1",
+                  "chromeTabId": 834195307,
+                  "provenance": "daemonState"
+                },
+                "requested": null,
+                "detail": null
+              }
+            ],
+            "toolSteps": [
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 0,
+                  "innerError": true
+                }
+              },
+              {
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 0,
+                  "innerError": false
+                }
+              },
+              {
+                "actionIds": [
+                  "0697ac59-f47e-4463-8c9b-293c3a7807fb",
+                  "313bf267-b41b-4c7c-8434-0d256bd0daf3",
+                  "12d5d871-2320-41b2-9c98-0ef22ca5a572",
+                  "f500dcbe-9898-4fa9-ad49-c0f2078960f8",
+                  "b721cbe4-a444-4478-8cca-e90036ae9455",
+                  "f1ffdee8-0698-430d-8774-df32a74af97e",
+                  "27f874e3-e436-4f78-8892-4eab44bd4202",
+                  "1ab6ee74-82c8-46a5-9e69-cadcf5e3a177",
+                  "9f5280b1-addf-41f4-a9a1-cc8ba89a1996",
+                  "6fa29a5f-43bf-4100-9366-1a6d0635508a",
+                  "7f35b036-bb01-48e6-b70c-df90ce6a80ad",
+                  "9fed36d4-dfce-4bc6-ac95-978c220cc02a",
+                  "ad203591-8201-410d-b257-f20b75ad6a2b",
+                  "897a29bf-2eec-4763-9079-c411f4d1dc67",
+                  "590b40bf-8008-40f1-92ee-c58caddff71b",
+                  "a5f3e3db-0802-417f-bf7b-1ba0e3e2f813"
+                ],
+                "codemode": {
+                  "chromeUseCalls": 17,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 0,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              },
+              {
+                "name": "execute",
+                "actionIds": [],
+                "codemode": {
+                  "chromeUseCalls": 1,
+                  "innerError": false
+                }
+              }
+            ],
+            "linked": 16,
+            "assessment": {
+              "source": "agent",
+              "status": "notChecked",
+              "declaredStatus": "complete",
+              "requirements": [
+                {
+                  "text": "Open http://127.0.0.1:8910/static and call chrome_use_read four times in a row with no arguments and nothing in between",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "readBack"
+                },
+                {
+                  "text": "Open http://127.0.0.1:8910/list?page=1 and read each page through page 6 by clicking #next and reading after each click",
+                  "declared": "met",
+                  "computed": "claimed",
+                  "check": "readBack"
+                }
+              ]
+            },
+            "stalls": [
+              "repeatedIdenticalResult"
+            ],
+            "answer": "",
+            "summary": {
+              "actions": {
+                "admittedNotReported": 0,
+                "confirmed": 2,
+                "failed": 0,
+                "uncertain": 5,
+                "unlinked": 1
+              },
+              "artifacts": {
+                "ready": 0,
+                "unavailable": 0
+              },
+              "assessment": "notChecked",
+              "failedSteps": 0,
+              "messageId": "0ef5a673-708d-470f-ae7e-593425715ca8",
+              "privacyClass": "public",
+              "sourceSequences": [
+                2,
+                138
+              ],
+              "stalls": 1,
+              "steps": 8,
+              "v": 1
+            },
+            "pass": true
+          }
+        ]
+      },
+      "status": "pass",
+      "seconds": 487.3
+    },
+    {
+      "id": 15,
+      "name": "Old journal and upgrade retry",
+      "evidence": {
+        "oldKinds": [
+          "user",
+          "ready",
+          "running",
+          "textDelta",
+          "textFinal",
+          "terminal",
+          "exited"
+        ],
+        "readKinds": [
+          "user",
+          "ready",
+          "running",
+          "textDelta",
+          "textFinal",
+          "terminal",
+          "exited"
+        ],
+        "projectedPage": {
+          "tabId": 7,
+          "title": "Page B",
+          "url": "http://127.0.0.1:8910/b?access_token=[redacted]&x=1"
+        },
+        "rawRetry": "ok",
+        "projectedRetry": "ok",
+        "oldLinesIdentical": true,
+        "newTurn": {
+          "outcome": "completed"
+        },
+        "panel": {
+          "file": "panel-check15-upgraded.png",
+          "text": "Conversation\nrun scenario c15old\nNew conversation\nrun scenario c15old\nIn your browser session open http://127.0.0.1:8910/form, fill the Name field (#n\nThis is my tab. Open http://127.0.0.1:8910/b in your own browser session, click\nUse chrome_use_read on http://127.0.0.1:8910/static: open it, then call chrome_u\nUse chrome_use_read on http://127.0.0.1:8910/static: open it, then call chrome_u\nThis is my tab. Open http://127.0.0.1:8910/b in your own browser session, click\nIn your browser session open http://127.0.0.1:8910/form, fill the Name field (#n\nIn your browser session open http://127.0.0.1:8910/form, fill the Name field (#n\nrun scenario c20a-opencode-stopAndSend-edb508\nrun scenario c20a-opencode-stop-41b270\nrun scenario c20a-pi-stopAndSend-2f8d13\nrun scenario c20a-pi-stop-c44e8f\nrun scenario c20a-claude-stopAndSend-39d6df\nrun scenario c20a-claude-stop-ba8ee1\nrun scenario c20a-codex-stopAndSend-70a682\nrun scenario c20a-codex-stop-71db92\nrun scenario c19\nrun scenario c18a\nrun scenario c17first\nrun scenario c17nolibvpx\nrun scenario c17missing\nrun scenario c17noflag\nrun scenario c17\nrun scenario c16burst\nrun scenario c16\nrun scenario c14\nrun scenario c13\nrun scenario c12silent\nrun scenario c12watch\nrun scenario c12\nrun scenario c11\nNew conversation\nrun scenario c8\nrun scenario c7\nrun scenario c6b\nrun scenario c6a\nrun scenario c5kill\nrun scenario c4\nrun scenario c3\nrun scenario c2\nrun scenario c1\nReady\nfixture-model\nrun scenario c15old\nSent with: Page B · 127.0.0.1:8910\n\nOld build reply.\n\nChecks not recorded\nCompleted\nrun scenario c15new\nActed on: Page A · 127.0.0.1:8910\nBrowser · open\nhttp://127.0.0.1:8910/a\nConfirmed\n\nNew build reply.\n\nNot checked\nCompleted\nPage C\n×\n \nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c15old\nSent with: Page B · 127.0.0.1:8910\n\nOld build reply.\n\nChecks not recorded\nCompleted\nrun scenario c15new\nActed on: Page A · 127.0.0.1:8910\nBrowser · open\nhttp://127.0.0.1:8910/a\nConfirmed\n\nNew build reply.\n\nNot checked\nCompleted",
+          "turnCards": 2,
+          "tooManyRequestsBanner": false
+        },
+        "panelChecks": [
+          {
+            "label": "old turn shows \"not recorded\" labels",
+            "ok": true
+          }
+        ],
+        "oldExtensionVersion": "0.5.57",
+        "oldExtensionProfile": "b6ee7a22-89b0-4be7-b201-eeecbec0b6a4"
+      },
+      "status": "fail",
+      "error": "Error: TypeError: Cannot read properties of null (reading 'append')\n    at <anonymous>:1:248\n    at <anonymous>:1:274\n    at Object.evaluate (file:///Users/leo/panel-accept/repo/scripts/inspect-acceptance/lib.mjs:45:35)\n    at async openOld (file:///Users/leo/panel-accept/repo/scripts/panel-acceptance/checks.mjs:971:11)\n    at async Object.run (file:///Users/leo/panel-accept/repo/scripts/panel-acceptance/checks.mjs:976:20)\n    at async file:///Users/leo/panel-accept/repo/scripts/panel-acceptance/accept.mjs:152:21",
+      "seconds": 18.7
+    }
+  ],
+  "chrome": "Chrome/155.0.8059.39",
+  "hostSha256": "sha256:68dce731ed9b29406e01ca7da6a56b2914536e8cb2c265058506653ff57a92ec",
+  "buildCommit": "36605e69",
+  "extensionTree": "97be9e1a1a7c93d8b5a428a7cddff1dcd733e22c0f1ab22b3077159a56f85f65",
+  "v15214Sha256": "sha256:d77538717467a0fd84b71b4465376d52998b67fa6e641dc0ad1db53b76a7bb41",
+  "v15214ExtensionTree": "815c3c3b7e088d7580f574fe1ceca9124478f7866e13dd945e43519efe464ffc",
+  "profile": "b6ee7a22-89b0-4be7-b201-eeecbec0b6a4",
+  "extensionVersion": "0.5.57",
+  "finishedAt": "2026-10-15T04:17:12.552Z",
+  "proxyTimings": {
+    "agentActionBegin": {
+      "n": 1,
+      "p50": 37,
+      "p95": 37,
+      "max": 37
+    },
+    "agentActionReport": {
+      "n": 1,
+      "p50": 10,
+      "p95": 10,
+      "max": 10
+    }
+  }
+}

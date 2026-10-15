@@ -1,0 +1,84 @@
+{
+  "startedAt": "2026-10-15T04:41:46.238Z",
+  "hostBin": "/tmp/pa/1015134145/bin/chrome-use-1015134145",
+  "checks": [
+    {
+      "id": 5,
+      "name": "Stop timeout with process alive",
+      "evidence": {
+        "leaderAlive": {
+          "unconfirmed": {
+            "error": "Backend did not confirm interruption; it was left running (e2e fault switch)",
+            "messageId": "c46b7d58-7901-43a4-b05d-f25b5a910fd2",
+            "privacyClass": "public",
+            "processExitConfirmed": false,
+            "processStarted": true
+          },
+          "control": "unknown",
+          "phase": "recoveryRequired",
+          "review": {
+            "process": {
+              "canFork": false,
+              "canTerminate": true,
+              "pid": 52924,
+              "processStartTime": 1792039312399332,
+              "reason": "3 processes of the agent's group are still running in the service session",
+              "state": "alive"
+            },
+            "actions": 1,
+            "unresolved": []
+          },
+          "forkWhileAlive": {
+            "ok": false,
+            "error": "The old agent process is not proven to have exited"
+          },
+          "reviewAfterRestart": {
+            "canFork": false,
+            "canTerminate": true,
+            "pid": 52924,
+            "processStartTime": 1792039312399332,
+            "reason": "1 process of the agent's group are still running in the service session",
+            "state": "alive"
+          },
+          "terminate": {
+            "ok": true,
+            "result": {
+              "confirmed": true,
+              "detail": "The whole process group exited",
+              "schemaVersion": 1
+            }
+          },
+          "reviewAfter": {
+            "canFork": true,
+            "canTerminate": false,
+            "pid": 52924,
+            "processStartTime": 1792039312399332,
+            "reason": "The whole process group is gone",
+            "state": "exited"
+          },
+          "fork": {
+            "forkedFrom": "db0b03f4-0792-48ca-a6f5-04a783a39ad7",
+            "id": "754e1635-f508-4de5-861a-d66f6bd57613",
+            "queued": 0
+          },
+          "forkKinds": [
+            "recoveryContext"
+          ]
+        }
+      },
+      "status": "pass",
+      "note": "e2e-tests build with CHROME_USE_E2E_SKIP_STOP_KILL=1 (leader left running).",
+      "seconds": 15
+    }
+  ],
+  "chrome": "Chrome/155.0.8059.39",
+  "hostSha256": "sha256:1c2bef74d337b3f5e8c3cf22953e3bc84e9a865bd2dd3c8b514e0d648dba91e2",
+  "buildCommit": "311d34db-e2e",
+  "extensionTree": "97be9e1a1a7c93d8b5a428a7cddff1dcd733e22c0f1ab22b3077159a56f85f65",
+  "v15214Sha256": "sha256:d77538717467a0fd84b71b4465376d52998b67fa6e641dc0ad1db53b76a7bb41",
+  "v15214ExtensionTree": "815c3c3b7e088d7580f574fe1ceca9124478f7866e13dd945e43519efe464ffc",
+  "profile": "3f384b01-8293-415e-be07-8a66c614db48",
+  "extensionVersion": "0.5.57",
+  "finishedAt": "2026-10-15T04:42:07.272Z",
+  "proxyTimings": {}
+}

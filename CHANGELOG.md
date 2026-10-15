@@ -1,8 +1,47 @@
 # Changelog
 
-## 1.5.214
+## 1.5.215
 
 <!-- release:start -->
+Requires extension ab-connect 0.5.58 for the turn view, task notifications and HEIC attachments (older extensions keep the previous view). Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Side panel shows each request as one turn.** Every message gets a card with the page it was sent from, the pages the agent actually acted on ("asked for X, landed on Y" when they differ), its steps with a verdict per browser action, the answer, and an outcome line. Journals written by older versions show "not recorded" instead of guessing.
+- **Browser evidence the agent cannot invent.** Each chrome_use browser call takes a lease from the panel service before it runs and reports what happened afterwards; the result is linked to the step by action id, never by timing. Calls admitted after Stop are refused.
+- **Checks, not claims.** Before answering, the agent lists what you asked for and cites its browser checks (expect, read-back, URL match, download type). The badge says "Agent's browser checks passed", "Some checks passed", "Not checked" or "Blocked" — never "Verified".
+- **Result files.** Screenshots, downloads and (with your per-message consent) recordings are kept per conversation, checked by SHA-256 and type, and shown as cards; the panel reads them by id, never by path. Saving to the path the agent asked for is reported separately.
+- **Recovering an unknown outcome.** When an agent process cannot be confirmed stopped, the turn offers Review, End the old agent process (only when the process group is proven to be ours) and Continue in a new conversation, which carries the possibly-executed actions as context and sends nothing by itself.
+- **Long tasks.** Repeated identical results, repeated failures and silence raise a stall banner (advisory only); turn summaries and context-compaction markers keep the history readable.
+- **Agent Chat documentation.** A standalone chapter on the site covers the side panel end to end.
+- **Task notifications.** A Chrome notification and a toolbar count when a panel task finishes, fails, stops or waits for your approval; clicking opens that conversation. Settings → Notifications to turn it off.
+- **HEIC photos.** iPhone HEIC/HEIF images can be attached; the local CLI converts them to an upright JPEG without EXIF/GPS (macOS sips; Windows needs Microsoft's HEIF and HEVC extensions; Linux needs heif-convert or ImageMagick).
+
+### Safety and privacy
+
+- **Redaction before the journal.** Passwords, tokens, cookies, auth headers and secret-shaped strings are masked before anything is written to disk; values masked once are also scrubbed from later display text. Old journals are masked when read and never rewritten.
+- **Approvals.** The panel answers with a decision bound to the request revision it showed; the service builds the agent's reply from the original input. During Stop only decline/cancel is accepted, and full access no longer auto-approves.
+- **Nothing left on the page.** Element lookups, picks, sign-in fills and refocus no longer write marker attributes into the page DOM, and click watches, sign-in receipts and upload buffers no longer leave globals, `Symbol.for` keys or element properties a page could read; chrome-use holds them by CDP handle instead. Opt-in features (`react` diagnostics, `jev`, site adapters, `--allowed-domains`) are unchanged.
+- **Redaction covers every entry point.** Tool results, approval requests, streamed and final answers and the attached page are masked on the whole structure before anything is shortened; a value a rule masks is also masked wherever the same event repeats it, as text or number. Oversized events become a short "too large to record" stub instead of failing.
+- **Process isolation per turn.** A turn that ended badly, timed out a browser call or left a call open gets a fresh agent process that resumes the session; Codex 0.162.1 and Claude Code 2.1.300 keep their process after a clean turn.
+
+### Bug Fixes
+
+- **Inspect & Ask setup** asks code-inspector-plugin for `hotKeys: false`, so its own Option/Alt+Shift picker no longer reacts to Alt+Shift+C (test builds also `server: 'close'`).
+- **Codex full access with browser-only or read-files tool access** refused every chrome_use call ("requires approval, but approval policy is never"); chrome_use tools are now approved for those threads without widening shell or file access.
+- **Selectors that match several elements** are refused (`selector_ambiguous`, with match count, text and position) instead of acting on the first one.
+- **Snapshot refs** on nodes whose accessible name the page re-renders now resolve when the element is the same, and still refuse a different element.
+- **Rich-text fill/type verification** ignores zero-width spaces, NBSP and mention formatting instead of reporting a false failure.
+- **Observed clicks report toasts and dialogs** that appear during the action; `--follow` says when it could not take the tab a click opened.
+- **Request log** is capped at 1000 entries (64 KiB post data per request); `request_detail` on a dropped entry returns `request_evicted`.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.214
+
 Requires extension ab-connect 0.5.57 for page-to-session matching (0.5.56 was never published; 0.5.57 includes it). Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -21,7 +60,6 @@ Requires extension ab-connect 0.5.57 for page-to-session matching (0.5.56 was ne
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.213
 

@@ -39,6 +39,15 @@ def complete(text, status="completed"):
 
 
 
+def own_text(text):
+    """The user's text without a continuation preface the host adds after a
+    stopped or recovered turn."""
+    for preface in ("[The user stopped the previous request", "[This conversation continues one"):
+        if text.startswith(preface) and "]\n\n" in text:
+            return text.split("]\n\n", 1)[1]
+    return text
+
+
 def capture(message):
     if os.environ.get("PANEL_FIXTURE_CAPTURE"):
         with open(os.environ["PANEL_FIXTURE_CAPTURE"], "a") as proof:
@@ -82,7 +91,7 @@ if "--mode" in sys.argv and arg("--mode") == "rpc":
                 extra[:0] = [{"provider": "openrouter", "id": "~anthropic/claude-opus-latest", "name": "Alias"}, {"provider": "odd", "id": "has space", "name": "Unsupported"}]
             emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"models": [{"provider": "synthetic", "id": "pi-model", "name": "Synthetic Pi", "reasoning": True}] + extra}})
         elif kind == "prompt":
-            text = command["message"]
+            text = own_text(command["message"])
             emit({"id": rid, "type": "response", "command": kind, "success": True, "data": {"disposition": "started"}})
             emit({"type": "agent_start"})
             if text in ("wait", "wait-exit"):
@@ -197,13 +206,16 @@ for line in sys.stdin:
             assert mcp["chrome_use"]["env"]["AGENT_BROWSER_SESSION"].startswith("panel-")
             assert mcp["chrome_use"]["env"]["CHROME_USE_RELAY_DIR"] == os.environ["CHROME_USE_RELAY_DIR"]
             if method == "thread/resume":
+                # A new process resumes the thread it is given, as Codex does.
+                if os.environ.get("PANEL_FIXTURE_UUID_SESSION"):
+                    session = params["threadId"]
                 assert params["threadId"] == session
             policy = f'{params.get("approvalPolicy")}/{params.get("sandbox")}'
             emit({"id": message["id"], "result": {"thread": {"id": session}, "model": "synthetic-codex-model"}})
         elif method == "turn/start":
             assert not inspection, "Metadata inspection sent a prompt"
             turn = "turn-" + message["params"]["clientUserMessageId"]
-            text = message["params"]["input"][0]["text"]
+            text = own_text(message["params"]["input"][0]["text"])
             emit({"id": message["id"], "result": {"turn": {"id": turn}}})
             emit({"method": "turn/started", "params": {"threadId": session, "turn": {"id": turn}}})
             if text in ("wait", "wait-exit"):
@@ -250,7 +262,7 @@ for line in sys.stdin:
         elif message.get("type") == "user":
             assert not inspection, "Metadata inspection sent a prompt"
             content = message["message"]["content"]
-            text = content if isinstance(content, str) else "".join(block.get("text", "") for block in content if block.get("type") == "text")
+            text = own_text(content if isinstance(content, str) else "".join(block.get("text", "") for block in content if block.get("type") == "text"))
             turn = message["uuid"]
             emit({"type": "system", "subtype": "init", "session_id": session, "model": "synthetic-claude-model"})
             if text in ("wait", "wait-exit"):

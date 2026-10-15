@@ -1,0 +1,4 @@
+{"id":"panel-state","type":"get_state"}
+{"type":"extension_ui_response","id":"28776b81-2e54-4e02-966a-a06282e546c3","cancelled":true}
+{"id":"panel-turn-fixture","type":"prompt","message":"First write one short sentence saying what you are about to do. Then call the chrome_use_read tool, then call the chrome_use_shot tool. Finally answer with one short line that starts with the word done.","images":[]}
+{"id":"panel-compact","type":"compact"}

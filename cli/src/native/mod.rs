@@ -32,6 +32,7 @@ pub mod login_wall;
 #[allow(dead_code)]
 pub mod network;
 mod observation;
+pub(crate) mod panel_action;
 #[allow(dead_code)]
 pub mod policy;
 pub mod popup_guard;
@@ -72,6 +73,7 @@ pub mod stream;
 pub mod timing;
 #[allow(dead_code)]
 pub mod tracing;
+pub mod tracked_requests;
 pub mod upload;
 #[allow(dead_code)]
 pub mod webdriver;

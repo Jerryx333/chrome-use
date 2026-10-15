@@ -32,7 +32,7 @@
       <p class="hint">Removes its panel history, the agent CLI's own session files and its browser tabs from this computer. This cannot be undone.</p>
       <div class="actions"><button id="confirmDelete" class="danger" type="button">Delete</button><button id="cancelDelete" class="quiet" type="button">Keep</button></div>
     </section>
-    <div id="status" class="conversation-status"><span id="phase">Ready</span><span id="effectiveModel"></span></div>
+    <div id="status" class="conversation-status"><span id="phase">Ready</span><span id="control" class="control" hidden></span><span id="effectiveModel"></span></div>
     <div id="transcript" class="transcript" tabindex="0" aria-label="Conversation transcript">
       <div id="empty" class="empty">
         <img src="icons/icon48.png" width="40" height="40" alt="">
@@ -59,7 +59,7 @@
         <div id="pageChip" class="page-chip" hidden><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg><span id="pageTitle"></span><button id="pageDetach" type="button" title="Don't send this page" aria-label="Don't send this page">×</button></div>
         <div id="skillPicker" class="skill-picker" role="listbox" aria-label="Skills" hidden></div>
         <div id="attachmentDrafts" class="attachment-images" hidden></div>
-        <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+        <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" multiple hidden>
         <label class="sr-only" for="message">Message</label>
         <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line"></textarea>
         <div class="composer-controls">
@@ -88,6 +88,7 @@
               <button id="saveTurnOptions" class="quiet" type="button">Save conversation options</button>
             </div>
           </details>
+          <label id="recordTaskLabel" class="chip record" title="Record the agent's browser tab for this message only. The recording stays on this computer." hidden><input id="recordTask" type="checkbox">Record this task</label>
           <span id="queue" class="hint"></span>
           <label id="modelChip" class="chip model"><span class="sr-only">Model</span><select id="model"><option value="">Default model</option></select></label>
           <span class="composer-send">

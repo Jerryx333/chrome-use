@@ -142,8 +142,30 @@ test('chat adapters are validated and capability-only changes are observable', (
 test('new panel features survive the real native handshake and are cleared on disconnect', () => {
   const state = new HostConnectionState(), port = {};
   state.begin(port);
-  const agentPanel = {schemaVersion:1,mode:'full',modelInspection:true,conversationOptions:true,imageAttachments:true,skillLibrary:true,schedules:true};
+  const agentPanel = {schemaVersion:1,mode:'full',modelInspection:true,conversationOptions:true,imageAttachments:true,heicConvert:true,skillLibrary:true,schedules:true};
   assert.equal(state.receive(port,{method:'pong',params:{agentPanel}}),true);
-  for(const key of ['conversationOptions','imageAttachments','skillLibrary','schedules']) assert.equal(state.snapshot().agentPanel[key],true);
+  for(const key of ['conversationOptions','imageAttachments','heicConvert','skillLibrary','schedules']) assert.equal(state.snapshot().agentPanel[key],true);
   state.end(port,'disconnected');assert.equal(state.snapshot().agentPanel,null);
+});
+
+test('every flag the real host capabilities() reports reaches the panel', async () => {
+  // Read the payload from the Rust source so the two sides cannot drift apart.
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../../cli/src/agent_panel.rs', import.meta.url), 'utf8');
+  const literal = source.match(/pub fn capabilities\(\) -> Value \{\s*json!\((\{.*?\})\)\s*\}/s)[1].replace('CHAT_AGENTS', '["codex"]');
+  const agentPanel = JSON.parse(literal);
+  const state = new HostConnectionState(), port = {};
+  state.begin(port);
+  assert.equal(state.receive(port, { method: 'pong', params: { agentPanel } }), true);
+  const seen = state.snapshot().agentPanel;
+  for (const [key, value] of Object.entries(agentPanel)) if (key !== 'chatAgents') assert.equal(seen[key], value, key);
+  for (const key of ['turnEvidence', 'artifacts', 'recovery', 'recording', 'requestRevision']) assert.ok(seen[key] >= 1, key);
+  // A later version change is a change the panel must re-read.
+  assert.equal(state.receive(port, { method: 'pong', params: { agentPanel: { ...agentPanel, turnEvidence: 2 } } }), true);
+  assert.equal(state.snapshot().agentPanel.turnEvidence, 2);
+  assert.equal(state.receive(port, { method: 'pong', params: { agentPanel: { ...agentPanel, turnEvidence: 2 } } }), false);
+  // Non-integer or non-positive versions are ignored.
+  state.receive(port, { method: 'pong', params: { agentPanel: { ...agentPanel, turnEvidence: '1', recording: 0 } } });
+  assert.equal(state.snapshot().agentPanel.turnEvidence, undefined);
+  assert.equal(state.snapshot().agentPanel.recording, undefined);
 });

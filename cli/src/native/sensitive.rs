@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use super::cdp::client::CdpClient;
 
 /// `autocomplete` tokens for values that must stay out of the transcript.
-const SENSITIVE_AUTOCOMPLETE: &[&str] = &[
+pub(crate) const SENSITIVE_AUTOCOMPLETE: &[&str] = &[
     "cc-number",
     "cc-csc",
     "cc-exp",
@@ -25,7 +25,7 @@ const SENSITIVE_AUTOCOMPLETE: &[&str] = &[
 ];
 
 /// Lowercased substrings of a `name` / `id` attribute that mark a sensitive field.
-const SENSITIVE_IDENTIFIERS: &[&str] = &[
+pub(crate) const SENSITIVE_IDENTIFIERS: &[&str] = &[
     "cardnumber",
     "card-number",
     "card_number",
@@ -50,7 +50,7 @@ const SENSITIVE_IDENTIFIERS: &[&str] = &[
 ];
 
 /// Lowercased substrings of an accessible name that mark a sensitive field.
-const SENSITIVE_NAMES: &[&str] = &[
+pub(crate) const SENSITIVE_NAMES: &[&str] = &[
     "card number",
     "credit card",
     "debit card",
@@ -99,6 +99,17 @@ pub fn sensitive_by_name(name: &str) -> bool {
     }
     let n = name.to_lowercase();
     SENSITIVE_NAMES.iter().any(|s| n.contains(s)) || has_word(&n, "pin")
+}
+
+/// Whether a selector, locator, label or field name written by an agent
+/// names a sensitive field. The agent panel uses this to mask what a `fill`
+/// or `type` tool call entered, with the same lists the DOM checks use.
+pub(crate) fn sensitive_reference(text: &str) -> bool {
+    let t = text.to_lowercase();
+    SENSITIVE_IDENTIFIERS.iter().any(|s| t.contains(s))
+        || SENSITIVE_NAMES.iter().any(|s| t.contains(s))
+        || SENSITIVE_AUTOCOMPLETE.iter().any(|s| t.contains(s))
+        || has_word(&t, "pin")
 }
 
 fn has_word(haystack: &str, word: &str) -> bool {

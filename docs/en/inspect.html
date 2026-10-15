@@ -138,7 +138,7 @@ import { codeInspectorPlugin } from 'code-inspector-plugin';
 
 export default defineConfig({
   plugins: [
-    codeInspectorPlugin({ bundler: 'vite', pathType: 'relative' }),
+    codeInspectorPlugin({ bundler: 'vite', pathType: 'relative', hotKeys: false }),
     // ...your other plugins
   ],
 });</code></pre>
@@ -152,9 +152,13 @@ export default defineConfig({
 const { codeInspectorPlugin } = require('code-inspector-plugin');
 
 module.exports = {
-  plugins: [codeInspectorPlugin({ bundler: 'webpack', pathType: 'relative' })],
+  plugins: [codeInspectorPlugin({ bundler: 'webpack', pathType: 'relative', hotKeys: false })],
 };</code></pre>
       </div>
+      <p>
+        <code>hotKeys: false</code> turns off the plugin's own Option/Alt+Shift element picker, which would otherwise react when you press Alt+Shift+C.
+        chrome-use only reads the <code>data-insp-path</code> marks; keep the plugin's picker if you use it, at the cost of both reacting to that shortcut.
+      </p>
       <p>
         Without the plugin it still works: React 18 and earlier dev builds expose a component's source location, and Vue dev
         builds expose the component file. When neither is there, the message says "no source location" and carries the selector
@@ -183,6 +187,7 @@ const isTestBuild = process.env.DEPLOY_ENV === 'test';
 codeInspectorPlugin({
   bundler: 'vite',
   pathType: 'relative',
+  hotKeys: false,
   dev: () => process.env.NODE_ENV === 'development' || isTestBuild,
   server: isTestBuild ? 'close' : 'open',
 });

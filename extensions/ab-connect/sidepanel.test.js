@@ -30,8 +30,13 @@ async function fixture(overrides = {}, saved = {}) {
   const nodes = new Map(), calls = [], writes = [];
   let hostState;
   const chats = [chat('a', 'running'), chat('b')];
+  const presence = { posted: [], listeners: {} };
   const runtime = {
     onMessage: { addListener(listener) { hostState = listener; } },
+    ...(overrides.presence ? { connect({ name }) {
+      presence.name = name;
+      return { postMessage(message) { presence.posted.push(message); }, onMessage: { addListener(listener) { presence.listeners.message = listener; } }, onDisconnect: { addListener(listener) { presence.listeners.disconnect = listener; } }, disconnect() {} };
+    } } : {}),
     async sendMessage(request) {
       if (request.type === 'ab-status') return overrides.status ? {agentPanel:fullSupport,...overrides.status()} : { connected: true,agentPanel:fullSupport };
       calls.push(request);
@@ -49,9 +54,10 @@ async function fixture(overrides = {}, saved = {}) {
   };
   const document = { createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); } };
   for (const id of overrides.hiddenNodes || []) document.getElementById(id).hidden = true;
-  const panel = createPanel({ document, runtime, encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
+  const windows = overrides.presence ? { async getCurrent() { return { id: 7 }; } } : undefined;
+  const panel = createPanel({ document, runtime, windows, encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
-  return { panel, nodes, calls, chats, writes, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
+  return { panel, nodes, calls, chats, writes, presence, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
 
 test('a late stop acknowledgement cannot replace the selected conversation', async () => {
@@ -557,6 +563,21 @@ test('image uploads complete before delivery and explicit retry preserves the sa
   assert.equal(f.calls.filter(c=>c.operation==='conversationAttachmentPut').length,1);f.panel.close();
 });
 
+test('HEIC files reach the host converter only when the CLI advertises it', async () => {
+  for (const heicConvert of [true, false]) {
+    const seen=[];
+    const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,imageAttachments:true,...(heicConvert?{heicConvert}:{})}}),encodeImage:async(file,{convertHeif})=>{seen.push(convertHeif);if(!convertHeif)throw new Error('Update the chrome-use CLI to attach HEIC photos, or export them as JPEG first.');await convertHeif(file);return {name:file.name,mediaType:'image/jpeg',data:'converted'};},imageConvert:async()=>({success:true,result:{schemaVersion:1,mediaType:'image/jpeg',data:btoa('JPEG')}})});
+    f.panel.select('b');await settle();
+    const file={name:'IMG_0001.HEIC',type:'',size:4,async arrayBuffer(){return new Uint8Array([1,2,3,4]).buffer;}};
+    f.nodes.get('message').fire('paste',{clipboardData:{files:[file]}});await settle();await settle();
+    assert.equal(seen.length,1,'an untyped .heic paste is not dropped');
+    assert.equal(typeof seen[0]==='function',heicConvert);
+    assert.equal(f.calls.filter(c=>c.operation==='imageConvert').length,heicConvert?1:0);
+    if(!heicConvert)assert.match(f.nodes.get('notice').textContent,/Update the chrome-use CLI/);
+    f.panel.close();
+  }
+});
+
 test('a failed image upload never sends the text alone or creates an uncertain message', async () => {
   const f=await fixture({status:()=>({connected:true,agentPanel:{...fullSupport,imageAttachments:true}}),encodeImage:async()=>({name:'fixture.png',mediaType:'image/png',data:'synthetic'}),conversationAttachmentPut:async()=>{throw new Error('image save failed');}});
   f.panel.select('b');await settle();f.nodes.get('imageFiles').files=[{type:'image/png'}];f.nodes.get('imageFiles').fire('change');await settle();
@@ -599,4 +620,86 @@ test('composer keeps stop and send together in one right-aligned group', async (
   const css = readFileSync(new URL('./sidepanel.css', import.meta.url), 'utf8');
   assert.match(css, /\.composer-send \{[^}]*margin-left:auto/);
   assert.match(css, /\.composer-send \{[^}]*flex:none/);
+});
+
+test('hosts with request revisions get a decision bound to the card the user saw', async () => {
+  const support = {...fullSupport, requestRevision: 1};
+  const params = {tool_name:'mcp__chrome_use__chrome_use_fill', input:{selector:'#password', value:'[redacted input, 8 chars]'}};
+  const reads = [
+    [{sequence:1,kind:'request',data:{requestId:'r',method:'can_use_tool',params,generation:3,requestRevision:7}}],
+    [{sequence:2,kind:'request',data:{requestId:'r',method:'can_use_tool',params:{...params,input:{selector:'#other',value:'x'}},generation:3,requestRevision:8}}],
+  ];
+  const f = await fixture({
+    status: () => ({connected:true, agentPanel:support}),
+    conversationRead: async ({after}) => { const events = reads[after] || []; return {success:true,result:{conversation:chat('a','waitingInput'),journal:{events,cursor:after+events.length,more:false}}}; },
+    conversationRespond: async () => ({success:true,result:{response:{dispatched:true,confirmed:false}}}),
+  });
+  f.hostUpdate({connected:true, agentPanel:support}); await settle();
+  f.panel.select('a'); await settle();
+  const first = f.nodes.get('requests').querySelectorAll('button').find(b => b.textContent === 'Allow once');
+  await f.panel.refresh(); await settle();
+  // The re-sent request replaced the card; the old card is gone.
+  const cards = f.nodes.get('requests').querySelectorAll('pre');
+  assert.equal(cards.length, 1); assert.match(cards[0].textContent, /#other/);
+  assert.equal(f.nodes.get('requests').querySelectorAll('button').includes(first), false);
+  f.nodes.get('requests').querySelectorAll('button').find(b => b.textContent === 'Allow once').fire('click'); await settle();
+  const sent = f.calls.find(call => call.operation === 'conversationRespond').params;
+  assert.deepEqual(sent, {conversationId:'a', requestId:'r', generation:3, requestRevision:8, decision:'allow'});
+  assert.equal(JSON.stringify(sent).includes('redacted'), false);
+  f.panel.close();
+});
+
+test('question answers are sent as validated decisions, never as echoed input', async () => {
+  const support = {...fullSupport, requestRevision: 1};
+  const input = {questions:[{question:'Which size?',multiSelect:false,options:[{label:'Small'},{label:'Large'}]},{question:'Extras?',multiSelect:true,options:[{label:'Bag'},{label:'Card'}]}], note:'[redacted secret, 9 chars]'};
+  const codex = {questions:[{id:'q1',question:'Pick',isOther:false,options:[{label:'A'}]},{id:'q2',question:'Name',isOther:false,options:null}]};
+  const f = await fixture({
+    status: () => ({connected:true, agentPanel:support}),
+    conversationRead: async () => ({success:true,result:{conversation:chat('a','waitingInput'),journal:{events:[
+      {sequence:1,kind:'request',data:{requestId:'q',method:'can_use_tool',params:{tool_name:'AskUserQuestion',input},generation:1,requestRevision:2}},
+      {sequence:2,kind:'request',data:{requestId:9,method:'item/tool/requestUserInput',params:codex,generation:1,requestRevision:3}},
+    ],cursor:2,more:false}}}),
+    conversationRespond: async () => ({success:true,result:{response:{dispatched:true,confirmed:false}}}),
+  });
+  f.hostUpdate({connected:true, agentPanel:support}); await settle();
+  f.panel.select('a'); await settle();
+  const [claude, codexCard] = f.nodes.get('requests').children;
+  const inputs = claude.querySelectorAll('input');
+  inputs.find(i => i.value === 'Large').checked = true;
+  inputs.find(i => i.value === 'Bag').checked = true; inputs.find(i => i.value === 'Card').checked = true;
+  claude.querySelectorAll('button').find(b => b.textContent === 'Send answers').fire('click'); await settle();
+  const answered = f.calls.filter(call => call.operation === 'conversationRespond').map(call => call.params);
+  assert.deepEqual(answered[0], {conversationId:'a', requestId:'q', generation:1, requestRevision:2, decision:{answersByPosition:[{option:1}, {options:[0,1]}]}});
+  // Codex: free text only where the question allows it (q2 has no options).
+  const codexInputs = codexCard.querySelectorAll('input');
+  assert.equal(codexInputs.filter(i => i.placeholder === 'Your answer').length, 1);
+  codexInputs.find(i => i.value === 'A').checked = true;
+  codexInputs.find(i => i.placeholder === 'Your answer').value = 'Ada';
+  codexCard.querySelectorAll('button').find(b => b.textContent === 'Send answers').fire('click'); await settle();
+  assert.deepEqual(f.calls.filter(call => call.operation === 'conversationRespond')[1].params.decision, {answersByPosition:[{option:0}, {custom:'Ada'}]});
+  f.panel.close();
+});
+
+test('an older host without request revisions still gets the legacy result shape', async () => {
+  const params = {tool_name:'Bash', input:{command:'ls'}};
+  const f = await fixture({
+    conversationRead: async () => ({success:true,result:{conversation:chat('a','waitingInput'),journal:{events:[{sequence:1,kind:'request',data:{requestId:'r',method:'can_use_tool',params}}],cursor:1,more:false}}}),
+    conversationRespond: async () => ({success:true,result:{}}),
+  });
+  f.panel.select('a'); await settle();
+  f.nodes.get('requests').querySelectorAll('button').find(b => b.textContent === 'Allow once').fire('click'); await settle();
+  assert.deepEqual(f.calls.find(call => call.operation === 'conversationRespond').params, {conversationId:'a', requestId:'r', result:{behavior:'allow', updatedInput:{command:'ls'}}});
+  f.panel.close();
+});
+
+test('the panel reports the conversation it shows and switches when a notification is clicked', async () => {
+  const f = await fixture({ presence: true }, { ab_panel_conversation: 'a' });
+  assert.equal(f.presence.name, 'ab-panel-presence');
+  assert.deepEqual(f.presence.posted.at(-1), { type: 'presence', windowId: 7, conversationId: 'a', visible: true });
+  f.presence.listeners.message({ type: 'select', conversationId: 'b' }); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b');
+  assert.deepEqual(f.presence.posted.at(-1), { type: 'presence', windowId: 7, conversationId: 'b', visible: true });
+  f.nodes.get('agentsTab').fire('click'); await settle();
+  assert.equal(f.presence.posted.at(-1).visible, false);
+  f.panel.close();
 });

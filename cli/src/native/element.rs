@@ -14,10 +14,88 @@ pub struct SemanticPin {
     pub session: String,
     pub scope: i64,
     pub target: i64,
+    /// Refuse a target that is hidden. `nth` names its node by index and acts
+    /// on it like a CSS selector would, visible or not.
+    pub require_visible: bool,
 }
 tokio::task_local! { pub static SEMANTIC_PIN: SemanticPin; }
+/// The selector that names the pinned node while a [`SEMANTIC_PIN`] is in
+/// scope. Never queried in the page: the node is resolved by its id.
+pub const PINNED_SELECTOR: &str = "[data-chrome-use-located='true']";
 pub fn semantic_pin_active(selector: &str) -> bool {
-    selector == "[data-chrome-use-located='true']" && SEMANTIC_PIN.try_with(|_| ()).is_ok()
+    selector == PINNED_SELECTOR && SEMANTIC_PIN.try_with(|_| ()).is_ok()
+}
+
+/// Object group of the handles [`resolve_semantic_pin`] hands out.
+pub const SEMANTIC_PIN_GROUP: &str = "chrome-use-semantic-locator";
+
+/// Releases a CDP object group on every exit of the work it guards: an
+/// explicit [`GroupRelease::release`] after the work, or, when the work's
+/// future is dropped part-way (a cancelled command), a release spawned from
+/// `Drop`. Holding a handle is invisible to the page, but it pins the object
+/// (and whatever it references) until released or the document goes.
+pub struct GroupRelease {
+    client: std::sync::Arc<CdpClient>,
+    session: String,
+    group: &'static str,
+    armed: bool,
+}
+
+impl GroupRelease {
+    pub fn new(client: std::sync::Arc<CdpClient>, session: &str, group: &'static str) -> Self {
+        Self {
+            client,
+            session: session.to_string(),
+            group,
+            armed: true,
+        }
+    }
+
+    pub async fn release(mut self) {
+        self.armed = false;
+        release_object_group(&self.client, &self.session, self.group).await;
+    }
+}
+
+impl Drop for GroupRelease {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let (client, session, group) = (self.client.clone(), self.session.clone(), self.group);
+            rt.spawn(async move { release_object_group(&client, &session, group).await });
+        }
+    }
+}
+
+/// Run `work`, then release object `group` in `session`, whatever `work`
+/// returned (and if it is cancelled, see [`GroupRelease`]).
+pub async fn release_after<T>(
+    client: std::sync::Arc<CdpClient>,
+    session: &str,
+    group: &'static str,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    let guard = GroupRelease::new(client, session, group);
+    let out = work.await;
+    guard.release().await;
+    out
+}
+
+pub async fn release_object_group(client: &CdpClient, session: &str, group: &str) {
+    let _ = client
+        .send_command(
+            "Runtime.releaseObjectGroup",
+            Some(json!({ "objectGroup": group })),
+            Some(session),
+        )
+        .await;
+}
+
+/// Release the handles pinned commands resolved in `session`.
+pub async fn release_semantic_pin_handles(client: &CdpClient, session: &str) {
+    release_object_group(client, session, SEMANTIC_PIN_GROUP).await;
 }
 
 pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<String, String> {
@@ -47,8 +125,8 @@ pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<S
         .as_str()
         .ok_or("semantic target unavailable")?;
     let checked = client.send_command("Runtime.callFunctionOn",Some(json!({
-        "objectId":scope_id,"functionDeclaration":"function(target){if(!this.isConnected || !target.isConnected || !this.contains(target))throw new Error('semantic target left scope');const r=target.getBoundingClientRect();if(!(r.width>0 && r.height>0) || (target.checkVisibility && !target.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})))throw new Error('semantic target hidden');return target;}",
-        "arguments":[{"objectId":target_id}],"returnByValue":false,"objectGroup":"chrome-use-semantic-locator"
+        "objectId":scope_id,"functionDeclaration":"function(target,requireVisible){if(!this.isConnected || !target.isConnected || !this.contains(target))throw new Error('semantic target left scope');const r=target.getBoundingClientRect();if(requireVisible && (!(r.width>0 && r.height>0) || (target.checkVisibility && !target.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))))throw new Error('semantic target hidden');return target;}",
+        "arguments":[{"objectId":target_id},{"value":pin.require_visible}],"returnByValue":false,"objectGroup":"chrome-use-semantic-locator"
     })),Some(session)).await?;
     if checked.get("exceptionDetails").is_some() {
         return Err("semantic target changed or left its scope; refusing dispatch".into());
@@ -57,6 +135,73 @@ pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<S
         .as_str()
         .map(String::from)
         .ok_or("semantic target unavailable; refusing dispatch".into())
+}
+
+/// The `backendNodeId` of the element a remote object handle points at.
+pub(crate) async fn object_backend_node_id(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+) -> Result<i64, String> {
+    let described = client
+        .send_command(
+            "DOM.describeNode",
+            Some(json!({ "objectId": object_id })),
+            Some(session_id),
+        )
+        .await?;
+    described["node"]["backendNodeId"]
+        .as_i64()
+        .ok_or_else(|| "DOM.describeNode returned no backendNodeId".to_string())
+}
+
+/// The element handles of a remote JS array, by index. Reading a handle
+/// leaves the page untouched, unlike marking the elements with an attribute
+/// and querying it back (a MutationObserver sees both the write and the
+/// cleanup).
+pub(crate) async fn array_element_objects(
+    client: &CdpClient,
+    session_id: &str,
+    array_object_id: &str,
+) -> Result<HashMap<usize, String>, String> {
+    let props = client
+        .send_command(
+            "Runtime.getProperties",
+            Some(json!({ "objectId": array_object_id, "ownProperties": true })),
+            Some(session_id),
+        )
+        .await?;
+    let mut out = HashMap::new();
+    for row in props["result"].as_array().into_iter().flatten() {
+        let Some(idx) = row["name"].as_str().and_then(|n| n.parse::<usize>().ok()) else {
+            continue;
+        };
+        if let Some(id) = row["value"]["objectId"].as_str() {
+            out.insert(idx, id.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// The `backendNodeId` of every element in a remote JS array, by index.
+/// Best-effort: an element that cannot be described is left out.
+pub(crate) async fn array_backend_node_ids(
+    client: &CdpClient,
+    session_id: &str,
+    array_object_id: &str,
+) -> HashMap<usize, i64> {
+    let Ok(objects) = array_element_objects(client, session_id, array_object_id).await else {
+        return HashMap::new();
+    };
+    let described =
+        futures_util::future::join_all(objects.into_iter().map(|(idx, object)| async move {
+            object_backend_node_id(client, session_id, &object)
+                .await
+                .ok()
+                .map(|id| (idx, id))
+        }))
+        .await;
+    described.into_iter().flatten().collect()
 }
 
 /// Discover Monaco editor APIs exposed through the global object or AMD loader.
@@ -172,6 +317,75 @@ pub struct RefEntry {
     /// than the accessibility tree, which on that page had nothing to compare.
     #[serde(default)]
     pub dom_sourced: bool,
+    /// What the accessibility tree itself reported for this node, when the
+    /// role or name the snapshot published was derived from something else
+    /// (a cursor-interactive element's visible text, a nearby label, a hidden
+    /// radio the label wraps). Chrome gives a clickable `<div>投稿</div>` the
+    /// role `generic` and NO name, so checking the published name against the
+    /// live tree refused every such ref straight after the snapshot that
+    /// minted it. `None`: the published role + name are the AX ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ax_identity: Option<AxIdentity>,
+}
+
+/// The live-tree identity of a ref whose published role or name was derived.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AxIdentity {
+    pub role: String,
+    pub name: String,
+    pub source: DerivedName,
+}
+
+/// Where a ref's published name came from when the AX tree had none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DerivedName {
+    /// The element's own text (aria-label, title, direct or full text). The
+    /// text IS the identity — `投稿` and `充钻石` are both `generic ""` — so it
+    /// is re-read from the node before acting.
+    OwnText,
+    /// Context around the element (a form label, aggregated child text). The
+    /// node's own AX identity is what is checked, as for any nameless control.
+    Context,
+}
+
+impl RefEntry {
+    /// The role + name the live accessibility tree reports for this node.
+    pub fn ax_role_name(&self) -> (&str, &str) {
+        match &self.ax_identity {
+            Some(ax) => (ax.role.as_str(), ax.name.as_str()),
+            None => (self.role.as_str(), self.name.as_str()),
+        }
+    }
+
+    /// Whether the published name is the node's own text, read from the DOM
+    /// rather than the AX tree.
+    fn name_is_own_text(&self) -> bool {
+        self.ax_identity
+            .as_ref()
+            .is_some_and(|ax| ax.source == DerivedName::OwnText)
+    }
+}
+
+/// Characters a page inserts that render as nothing: rich editors pad lines and
+/// mention nodes with U+200B, and some frameworks wrap text in U+FEFF.
+pub(crate) const INVISIBLE_CHARS: &[char] = &[
+    '\u{FEFF}', // BOM / Zero Width No-Break Space
+    '\u{200B}', // Zero Width Space
+    '\u{200C}', // Zero Width Non-Joiner
+    '\u{200D}', // Zero Width Joiner
+    '\u{2060}', // Word Joiner
+];
+
+/// Text as a reader sees it: invisible characters dropped, NBSP and every other
+/// whitespace run folded to one space, ends trimmed. Used wherever page text is
+/// compared with text we recorded or wrote, so a page that re-wraps the same
+/// words (Douyin's editor) is not mistaken for a change.
+pub(crate) fn visible_text(s: &str) -> String {
+    s.replace(INVISIBLE_CHARS, "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `Clone` exists for `--observe`: the baseline snapshot must be numbered the
@@ -542,6 +756,7 @@ impl RefMap {
                 frame_id: frame_id.map(|s| s.to_string()),
                 fingerprint: None,
                 dom_sourced: false,
+                ax_identity: None,
             },
         );
     }
@@ -550,6 +765,14 @@ impl RefMap {
     pub fn mark_dom_sourced(&mut self, ref_id: &str) {
         if let Some(entry) = self.map.get_mut(ref_id) {
             entry.dom_sourced = true;
+        }
+    }
+
+    /// Record the live AX identity of a ref whose published role or name was
+    /// derived (see [`RefEntry::ax_identity`]). No-op if the ref is unknown.
+    pub fn set_ax_identity(&mut self, ref_id: &str, ax: AxIdentity) {
+        if let Some(entry) = self.map.get_mut(ref_id) {
+            entry.ax_identity = Some(ax);
         }
     }
 
@@ -580,6 +803,7 @@ impl RefMap {
                 frame_id: None,
                 fingerprint: None,
                 dom_sourced: false,
+                ax_identity: None,
             },
         );
     }
@@ -649,6 +873,7 @@ impl RefMap {
                 frame_id: m.frame_id,
                 fingerprint: m.fingerprint,
                 dom_sourced: false,
+                ax_identity: None,
             },
         );
     }
@@ -1052,11 +1277,12 @@ async fn reanchor_ref(
         .await
         .ok()?;
 
+    let (ax_role, ax_name) = entry.ax_role_name();
     let role_nodes: Vec<_> = tree
         .nodes
         .iter()
         .filter(|n| !n.ignored.unwrap_or(false))
-        .filter(|n| extract_ax_string(&n.role) == entry.role)
+        .filter(|n| extract_ax_string(&n.role) == ax_role)
         .collect();
     let same_role: Vec<(i64, String)> = role_nodes
         .iter()
@@ -1067,7 +1293,7 @@ async fn reanchor_ref(
         .collect();
     let live: Vec<(i64, String)> = role_nodes
         .iter()
-        .filter(|n| extract_ax_string(&n.name) == entry.name)
+        .filter(|n| extract_ax_string(&n.name) == ax_name)
         .filter_map(|n| {
             n.backend_d_o_m_node_id
                 .map(|id| (id, extract_ax_string(&n.value)))
@@ -1075,7 +1301,33 @@ async fn reanchor_ref(
         .collect();
 
     let matches: Vec<i64> = live.iter().map(|(id, _)| *id).collect();
-    if let Some(id) = pick_reanchor_target(&matches, cached, entry.nth) {
+    if entry.name_is_own_text() {
+        // Every clickable `<div>` shares the AX identity `generic ""`, so a
+        // match by it says nothing; only the cached node, its text re-read,
+        // can be confirmed (the probe may merely have run out of time).
+        let target = if matches.contains(&cached) {
+            match verify_own_text(client, effective_session_id, cached, "", entry).await {
+                RefCheck::Confirmed => Some(cached),
+                RefCheck::Suspect(_) => None,
+            }
+        } else {
+            None
+        };
+        return Some(Reanchor {
+            target,
+            candidates: usize::from(target.is_some()),
+            same_role,
+            live: live_identities(&tree.nodes),
+        });
+    }
+    // The snapshot numbered duplicates by the name it published; for a
+    // derived name that ordinal means nothing among AX-identity matches.
+    let nth = if entry.ax_identity.is_some() {
+        None
+    } else {
+        entry.nth
+    };
+    if let Some(id) = pick_reanchor_target(&matches, cached, nth) {
         return Some(Reanchor {
             target: Some(id),
             candidates: matches.len(),
@@ -1188,15 +1440,8 @@ async fn confirmed_backend_node_id(
         .await;
     }
 
-    let RefCheck::Suspect(err) = verify_ref_identity(
-        client,
-        effective_session_id,
-        backend_node_id,
-        ref_id,
-        &entry.role,
-        &entry.name,
-    )
-    .await
+    let RefCheck::Suspect(err) =
+        verify_ref_identity(client, effective_session_id, backend_node_id, ref_id, entry).await
     else {
         return Ok(backend_node_id);
     };
@@ -1978,16 +2223,7 @@ async fn confirm_kept_node(
             "the ref has no node id to check",
         ));
     };
-    match verify_ref_identity(
-        client,
-        effective_session_id,
-        backend_node_id,
-        ref_id,
-        &entry.role,
-        &entry.name,
-    )
-    .await
-    {
+    match verify_ref_identity(client, effective_session_id, backend_node_id, ref_id, entry).await {
         RefCheck::Confirmed => Ok(backend_node_id),
         RefCheck::Suspect(_) => Err(kept_ref_refusal(
             ref_map,
@@ -2039,16 +2275,7 @@ pub async fn verify_kept_ref(
         return Err(refuse("the ref has no node id to check"));
     };
     let effective = resolve_frame_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
-    match verify_ref_identity(
-        client,
-        effective,
-        backend_node_id,
-        ref_id,
-        &entry.role,
-        &entry.name,
-    )
-    .await
-    {
+    match verify_ref_identity(client, effective, backend_node_id, ref_id, entry).await {
         RefCheck::Confirmed => Ok(()),
         RefCheck::Suspect(_) => Err(refuse(
             "its node is gone or no longer has that role and name",
@@ -2524,9 +2751,12 @@ async fn verify_ref_identity(
     session_id: &str,
     backend_node_id: i64,
     ref_id: &str,
-    expected_role: &str,
-    expected_name: &str,
+    entry: &RefEntry,
 ) -> RefCheck {
+    // What the agent was shown, for messages; what the AX tree reports, for
+    // the check itself (they differ for a ref whose name was derived).
+    let (expected_role, expected_name) = (entry.role.as_str(), entry.name.as_str());
+    let (ax_role, ax_name) = entry.ax_role_name();
     let params = serde_json::json!({
         "backendNodeId": backend_node_id,
         "fetchRelatives": false,
@@ -2579,13 +2809,126 @@ async fn verify_ref_identity(
     };
     let actual_role = extract_ax_string(&node.role);
     let actual_name = extract_ax_string(&node.name);
-    if actual_role == expected_role && actual_name == expected_name {
-        return RefCheck::Confirmed;
+    if actual_role == ax_role && actual_name == ax_name {
+        if !entry.name_is_own_text() {
+            return RefCheck::Confirmed;
+        }
+        // The AX identity of a clickable `<div>` is `generic ""` whatever it
+        // says, so on its own it would confirm a node a re-render handed to
+        // different content. Its text is the identity: re-read it.
+        return verify_own_text(client, session_id, backend_node_id, ref_id, entry).await;
+    }
+    if entry.ax_identity.is_some() {
+        // Show the agent the AX side of both, not "was 投稿, now empty" —
+        // the empty name is what the tree always said about this node.
+        return RefCheck::Suspect(format!(
+            "Ref {} no longer matches its snapshot. Was [{} \"{}\"] (accessibility tree: [{} \"{}\"]), \
+             now [{} \"{}\"].\n\
+             {}",
+            ref_id,
+            expected_role,
+            expected_name,
+            ax_role,
+            ax_name,
+            actual_role,
+            actual_name,
+            REF_RECOVERY_HINT,
+        ));
     }
     RefCheck::Suspect(format!(
         "Ref {} no longer matches its snapshot. Was [{} \"{}\"], now [{} \"{}\"].\n\
          {}",
         ref_id, expected_role, expected_name, actual_role, actual_name, REF_RECOVERY_HINT,
+    ))
+}
+
+/// Reads the text a cursor-interactive element was named from, the same way
+/// the snapshot did (`aria-label`, `title`, its direct text, its full text) and,
+/// for a label promoted to the radio it wraps, its full text. An editable
+/// region is confirmed without it: what an editor holds is its state, and the
+/// agent's own `type` changes it between snapshot and the next action.
+const OWN_TEXT_JS: &str = r#"function() {
+    const el = this;
+    if (!el.isConnected) return { connected: false };
+    if (el.isContentEditable) return { connected: true, editable: true };
+    const text = (el.textContent || '').trim().slice(0, 100);
+    const direct = Array.from(el.childNodes || [])
+        .filter(n => n.nodeType === Node.TEXT_NODE)
+        .map(n => n.textContent || '')
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 100);
+    const own = (el.getAttribute('aria-label') || el.getAttribute('title') || direct || text || '')
+        .trim()
+        .slice(0, 100);
+    return { connected: true, editable: false, own: own, text: text };
+}"#;
+
+/// Whether a node's re-read text still names it as the snapshot did.
+fn own_text_matches(recorded: &str, own: &str, text: &str) -> bool {
+    let want = visible_text(recorded);
+    !want.is_empty() && (visible_text(own) == want || visible_text(text) == want)
+}
+
+/// Confirm a ref whose name is its own visible text (see [`OWN_TEXT_JS`]).
+async fn verify_own_text(
+    client: &CdpClient,
+    session_id: &str,
+    backend_node_id: i64,
+    ref_id: &str,
+    entry: &RefEntry,
+) -> RefCheck {
+    let unconfirmed =
+        |why: &str| RefCheck::Suspect(unconfirmed_ref_error(ref_id, &entry.role, &entry.name, why));
+    let read = tokio::time::timeout(identity_probe_budget(), async {
+        let object_id = backend_object_id(client, session_id, backend_node_id).await?;
+        let reply = client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(serde_json::json!({
+                    "objectId": object_id,
+                    "functionDeclaration": OWN_TEXT_JS,
+                    "returnByValue": true,
+                })),
+                Some(session_id),
+            )
+            .await
+            .ok();
+        let _ = client
+            .send_command(
+                "Runtime.releaseObjectGroup",
+                Some(serde_json::json!({ "objectGroup": "chrome-use-ref-heal" })),
+                Some(session_id),
+            )
+            .await;
+        reply?.pointer("/result/value").cloned()
+    })
+    .await;
+    let Ok(Some(v)) = read else {
+        return unconfirmed("its text could not be read to confirm it is the same element");
+    };
+    if v.get("connected").and_then(Value::as_bool) != Some(true) {
+        return unconfirmed("the node is no longer in the document");
+    }
+    if v.get("editable").and_then(Value::as_bool) == Some(true) {
+        return RefCheck::Confirmed;
+    }
+    let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let (own, text) = (s("own"), s("text"));
+    if own_text_matches(&entry.name, &own, &text) {
+        return RefCheck::Confirmed;
+    }
+    let now = if own.is_empty() { text } else { own };
+    RefCheck::Suspect(format!(
+        "Ref {} no longer matches its snapshot. Was [{} \"{}\"], the same node now reads \"{}\" — \
+         the page re-used it for different content.\n\
+         {}",
+        ref_id,
+        entry.role,
+        entry.name,
+        visible_text(&now),
+        REF_RECOVERY_HINT,
     ))
 }
 
@@ -2924,6 +3267,150 @@ fn build_find_element_js(selector: &str) -> String {
     )
 }
 
+/// Prefix of the refusal for a selector that matches several elements; the
+/// error envelope maps it to the `selector_ambiguous` code.
+pub const SELECTOR_AMBIGUOUS_PREFIX: &str = "selector_ambiguous:";
+
+/// How many of an ambiguous selector's matches the refusal describes.
+const AMBIGUOUS_SHOWN: usize = 5;
+
+/// Count what a CSS selector or XPath matches and describe the first few
+/// matches. `null` when it matches at most one element or does not parse (the
+/// action reports that itself).
+fn build_ambiguity_probe_js(selector: &str) -> String {
+    let list = match xpath_of(selector) {
+        Some(xpath) => format!(
+            "(() => {{ const r = document.evaluate({}, document, null, \
+             XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); const a = []; \
+             for (let i = 0; i < r.snapshotLength; i++) a.push(r.snapshotItem(i)); return a; }})()",
+            serde_json::to_string(xpath).unwrap_or_default()
+        ),
+        None => format!(
+            "Array.from(document.querySelectorAll({}))",
+            serde_json::to_string(selector).unwrap_or_default()
+        ),
+    };
+    format!(
+        r#"(() => {{
+  let els;
+  try {{ els = {list}; }} catch (_e) {{ return null; }}
+  els = els.filter(e => e && e.nodeType === 1);
+  if (els.length < 2) return null;
+  const norm = s => (s == null ? '' : String(s)).replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+  const matches = els.slice(0, {shown}).map(e => {{
+    const r = e.getBoundingClientRect();
+    const st = getComputedStyle(e);
+    const text = norm(e.innerText || e.textContent) || norm(e.getAttribute('aria-label')) || norm(e.value);
+    return {{
+      tag: e.tagName.toLowerCase(),
+      text: text.length > 40 ? text.slice(0, 40) + '…' : text,
+      x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+      w: Math.round(r.width), h: Math.round(r.height),
+      visible: r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none',
+    }};
+  }});
+  return {{ count: els.length, matches }};
+}})()"#,
+        list = list,
+        shown = AMBIGUOUS_SHOWN,
+    )
+}
+
+/// Whether an action's selector is subject to the one-match rule: a CSS
+/// selector or XPath. A `@ref`, a semantic pin and `text=` name one element by
+/// construction or have their own matching, and `AGENT_BROWSER_STRICT_SELECTORS=0`
+/// restores first-match for scripts written against it.
+pub fn selector_needs_unique_match(selector: &str) -> bool {
+    if std::env::var("AGENT_BROWSER_STRICT_SELECTORS").as_deref() == Ok("0") {
+        return false;
+    }
+    !(selector.trim().is_empty()
+        || parse_ref(selector).is_some()
+        || semantic_pin_active(selector)
+        || selector.starts_with("text="))
+}
+
+/// The refusal text for a selector the probe found several matches for.
+pub(crate) fn ambiguous_selector_message(selector: &str, probe: &Value) -> Option<String> {
+    let count = probe.get("count").and_then(Value::as_u64)?;
+    if count < 2 {
+        return None;
+    }
+    let mut lines = String::new();
+    for (i, m) in probe
+        .get("matches")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let s = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
+        let n = |k: &str| m.get(k).and_then(Value::as_i64).unwrap_or(0);
+        let hidden = if m.get("visible").and_then(Value::as_bool) == Some(false) {
+            ", hidden"
+        } else {
+            ""
+        };
+        lines.push_str(&format!(
+            "  [{i}] <{}> {:?} at ({},{}) {}x{}{hidden}\n",
+            s("tag"),
+            s("text"),
+            n("x"),
+            n("y"),
+            n("w"),
+            n("h"),
+        ));
+    }
+    let more = (count as usize)
+        .checked_sub(AMBIGUOUS_SHOWN)
+        .filter(|n| *n > 0)
+        .map(|n| format!("  … and {n} more\n"))
+        .unwrap_or_default();
+    let quoted = serde_json::to_string(selector).unwrap_or_default();
+    Some(format!(
+        "{SELECTOR_AMBIGUOUS_PREFIX} `{selector}` matches {count} elements, so nothing was done \
+         — acting on the first one is how a click lands on the wrong control.\n\
+         {lines}{more}\
+         Narrow the selector until it matches one element, act on a @ref from `snapshot -i`, or \
+         pick one by its index above: `find nth <index> {quoted} <action>` \
+         (`find first` / `find last` for the ends).\n\
+         (Scripts written for first-match: AGENT_BROWSER_STRICT_SELECTORS=0.)"
+    ))
+}
+
+/// Refuse a selector that matches more than one element. `Ok` when it matches
+/// one, none (the action reports the miss) or cannot be probed.
+pub async fn refuse_ambiguous_selector(
+    client: &CdpClient,
+    session_id: &str,
+    selector: &str,
+) -> Result<(), String> {
+    if !selector_needs_unique_match(selector) {
+        return Ok(());
+    }
+    let Ok(result) = client
+        .send_command_typed::<_, EvaluateResult>(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: build_ambiguity_probe_js(selector),
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+    else {
+        return Ok(());
+    };
+    match result.result.value {
+        Some(probe) => match ambiguous_selector_message(selector, &probe) {
+            Some(msg) => Err(msg),
+            None => Ok(()),
+        },
+        None => Ok(()),
+    }
+}
+
 /// Build a JS expression that counts matching DOM elements by CSS selector or XPath.
 fn build_count_elements_js(selector: &str) -> String {
     if let Some(xpath) = xpath_of(selector) {
@@ -3014,7 +3501,7 @@ pub async fn probe_viewport(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<ViewportProbe, String> {
-    if parse_ref(selector_or_ref).is_some() {
+    if parse_ref(selector_or_ref).is_some() || semantic_pin_active(selector_or_ref) {
         let (object_id, effective_session_id) = resolve_element_object_id(
             client,
             session_id,
@@ -4141,6 +4628,86 @@ pub async fn get_element_styles(
 
 #[cfg(test)]
 mod tests {
+    /// A fake CDP endpoint that answers every command and records the
+    /// object groups it was asked to release.
+    async fn release_recorder() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use futures_util::{SinkExt, StreamExt};
+        let released = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let seen = released.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let seen = seen.clone();
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        let tokio_tungstenite::tungstenite::Message::Text(text) = msg else {
+                            continue;
+                        };
+                        let req: Value = serde_json::from_str(&text).unwrap();
+                        if req["method"] == "Runtime.releaseObjectGroup" {
+                            seen.lock().unwrap().push(
+                                req["params"]["objectGroup"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                            );
+                        }
+                        let mut out = json!({ "id": req["id"], "result": {} });
+                        if let Some(sid) = req.get("sessionId") {
+                            out["sessionId"] = sid.clone();
+                        }
+                        let reply =
+                            tokio_tungstenite::tungstenite::Message::Text(out.to_string().into());
+                        if ws.send(reply).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (url, released)
+    }
+
+    #[tokio::test]
+    async fn object_groups_are_released_on_error_and_on_cancel() {
+        let (url, released) = release_recorder().await;
+        let client = std::sync::Arc::new(CdpClient::connect(&url).await.unwrap());
+
+        // The work fails: the group is released all the same.
+        let out: Result<(), String> = release_after(client.clone(), "S1", "group-error", async {
+            Err("menu still open".into())
+        })
+        .await;
+        assert!(out.is_err());
+        assert_eq!(*released.lock().unwrap(), vec!["group-error".to_string()]);
+
+        // The work is cancelled (its future dropped mid-way): released from Drop.
+        let pending = release_after(
+            client.clone(),
+            "S1",
+            "group-cancel",
+            std::future::pending::<()>(),
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), pending)
+                .await
+                .is_err()
+        );
+        for _ in 0..50 {
+            if released.lock().unwrap().len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            *released.lock().unwrap(),
+            vec!["group-error".to_string(), "group-cancel".to_string()]
+        );
+    }
 
     /// Each state has to say something different and actionable. Four ways of
     /// saying "unknown" would move the guessing back to the caller, which is
@@ -4430,6 +4997,7 @@ mod tests {
             frame_id: None,
             fingerprint: None,
             dom_sourced: false,
+            ax_identity: None,
         };
         let s = ref_hints::rank_suggestions("button", "Save", [("e14", "button", "Save changes")]);
         let e = stale_ref_error(
@@ -4833,6 +5401,7 @@ mod tests {
                 ..Default::default()
             }),
             dom_sourced: false,
+            ax_identity: None,
         };
         let err = indistinguishable_ref_error("e7", &entry, 3);
         assert!(err.contains("e7"), "{err}");
@@ -4992,6 +5561,7 @@ mod tests {
             frame_id: None,
             fingerprint: None,
             dom_sourced: false,
+            ax_identity: None,
         };
         let g = Guess {
             backend_node_id: 77,
@@ -5211,5 +5781,154 @@ mod tests {
         let session = resolve_frame_session(None, "parent-session", &iframe_sessions);
 
         assert_eq!(session, "parent-session");
+    }
+}
+
+#[cfg(test)]
+mod derived_identity_tests {
+    use super::*;
+
+    fn entry(role: &str, name: &str, ax: Option<AxIdentity>) -> RefEntry {
+        RefEntry {
+            backend_node_id: Some(7),
+            role: role.to_string(),
+            name: name.to_string(),
+            nth: None,
+            selector: None,
+            frame_id: None,
+            fingerprint: None,
+            dom_sourced: false,
+            ax_identity: ax,
+        }
+    }
+
+    #[test]
+    fn visible_text_drops_padding_editors_add() {
+        assert_eq!(visible_text("变迁。\u{200B}\n#少帅\u{a0}"), "变迁。 #少帅");
+        assert_eq!(visible_text("\u{200B}"), "");
+        assert_eq!(visible_text("  a \t b  "), "a b");
+    }
+
+    /// Douyin's "投稿" is `generic ""` in the AX tree. The identity check has
+    /// to compare against that, while messages keep the name the agent saw.
+    #[test]
+    fn a_derived_name_is_checked_against_the_ax_identity() {
+        let e = entry(
+            "generic",
+            "投稿",
+            Some(AxIdentity {
+                role: "generic".into(),
+                name: String::new(),
+                source: DerivedName::OwnText,
+            }),
+        );
+        assert_eq!(e.ax_role_name(), ("generic", ""));
+        assert!(e.name_is_own_text());
+        let plain = entry("button", "Save", None);
+        assert_eq!(plain.ax_role_name(), ("button", "Save"));
+        assert!(!plain.name_is_own_text());
+        let label = entry(
+            "radio",
+            "Express",
+            Some(AxIdentity {
+                role: "LabelText".into(),
+                name: String::new(),
+                source: DerivedName::Context,
+            }),
+        );
+        assert_eq!(label.ax_role_name(), ("LabelText", ""));
+        assert!(!label.name_is_own_text());
+    }
+
+    /// Refs persisted before the field existed still load, and an entry with
+    /// no derived identity serializes exactly as before.
+    #[test]
+    fn ax_identity_is_optional_on_disk() {
+        let old = r#"{"backend_node_id":1,"role":"button","name":"Go","nth":null,"selector":null,"frame_id":null,"fingerprint":null}"#;
+        let e: RefEntry = serde_json::from_str(old).unwrap();
+        assert!(e.ax_identity.is_none());
+        let json = serde_json::to_string(&entry("button", "Go", None)).unwrap();
+        assert!(!json.contains("ax_identity"), "{json}");
+        let derived = entry(
+            "generic",
+            "投稿",
+            Some(AxIdentity {
+                role: "generic".into(),
+                name: String::new(),
+                source: DerivedName::OwnText,
+            }),
+        );
+        let back: RefEntry =
+            serde_json::from_str(&serde_json::to_string(&derived).unwrap()).unwrap();
+        assert_eq!(back, derived);
+    }
+
+    /// The re-read text confirms the same content however the page wraps it,
+    /// and refuses a node now showing something else — the wrong-target guard.
+    #[test]
+    fn own_text_must_still_say_what_the_snapshot_said() {
+        assert!(own_text_matches("#少帅302.6亿", "#少帅302.6亿", ""));
+        assert!(own_text_matches(
+            "#少帅302.6亿",
+            "",
+            "\n  #少帅302.6亿\u{200B}\u{a0}"
+        ));
+        assert!(own_text_matches("投稿", "投稿", "投稿"));
+        assert!(!own_text_matches("投稿", "充钻石", "充钻石"));
+        assert!(!own_text_matches("投稿", "", ""));
+        // Nothing recorded to compare with: never a confirmation.
+        assert!(!own_text_matches("\u{200B}", "\u{200B}", ""));
+    }
+
+    #[test]
+    fn only_css_and_xpath_need_a_unique_match() {
+        assert!(selector_needs_unique_match(".iLNqted2.DiddnkXT"));
+        assert!(selector_needs_unique_match("//div[@role='button']"));
+        assert!(!selector_needs_unique_match("@e12"));
+        assert!(!selector_needs_unique_match("text=投稿"));
+        assert!(!selector_needs_unique_match(""));
+    }
+
+    #[test]
+    fn the_ambiguity_refusal_lists_matches_and_the_way_out() {
+        let probe = json!({
+            "count": 7,
+            "matches": [
+                { "tag": "div", "text": "投稿", "x": 960, "y": 28, "w": 48, "h": 32, "visible": true },
+                { "tag": "div", "text": "充钻石", "x": 1040, "y": 28, "w": 60, "h": 32, "visible": true },
+                { "tag": "div", "text": "", "x": 0, "y": 0, "w": 0, "h": 0, "visible": false },
+            ],
+        });
+        let msg = ambiguous_selector_message(".iLNqted2.DiddnkXT", &probe).unwrap();
+        assert!(msg.starts_with(SELECTOR_AMBIGUOUS_PREFIX), "{msg}");
+        assert!(msg.contains("matches 7 elements"), "{msg}");
+        assert!(
+            msg.contains("[0] <div> \"投稿\" at (960,28) 48x32\n"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("[1] <div> \"充钻石\" at (1040,28) 60x32\n"),
+            "{msg}"
+        );
+        assert!(msg.contains("[2] <div> \"\" at (0,0) 0x0, hidden"), "{msg}");
+        assert!(msg.contains("and 2 more"), "{msg}");
+        assert!(
+            msg.contains("find nth <index> \".iLNqted2.DiddnkXT\" <action>"),
+            "{msg}"
+        );
+        assert!(ambiguous_selector_message(".x", &json!({ "count": 1 })).is_none());
+        assert!(ambiguous_selector_message(".x", &Value::Null).is_none());
+    }
+
+    #[test]
+    fn the_ambiguity_probe_reads_css_and_xpath() {
+        let css = build_ambiguity_probe_js(".a > b");
+        assert!(
+            css.contains(r#"document.querySelectorAll(".a > b")"#),
+            "{css}"
+        );
+        let xp = build_ambiguity_probe_js("//li");
+        assert!(xp.contains("ORDERED_NODE_SNAPSHOT_TYPE"), "{xp}");
+        assert!(xp.contains(r#""//li""#), "{xp}");
     }
 }

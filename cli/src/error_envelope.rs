@@ -22,6 +22,15 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // Before every generic rule: the refusal lists each match's text, which
+    // may read as anything ("hidden", "timeout"). Nothing was done, and the
+    // same command fails the same way until the selector is narrowed.
+    if lower.contains(crate::native::element::SELECTOR_AMBIGUOUS_PREFIX) {
+        return ErrorMetadata {
+            code: "selector_ambiguous",
+            retryable: false,
+        };
+    }
     // An `open` whose wait ended without a usable page (#502). Its message
     // quotes the wait error ("Timeout waiting for Page.loadEventFired",
     // "Event stream closed") and the URL, either of which can read as a
@@ -75,9 +84,47 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // `request_detail` for a request the bounded request log already
+    // dropped: asking again cannot bring it back.
+    if lower.contains(crate::native::tracked_requests::REQUEST_EVICTED) {
+        return ErrorMetadata {
+            code: "request_evicted",
+            retryable: false,
+        };
+    }
     if lower.contains("action_outcome_unknown:") {
         return ErrorMetadata {
             code: "action_outcome_unknown",
+            retryable: false,
+        };
+    }
+    // A download that did not finish. Before `timeout`: a download that
+    // timed out may still be running, and a retry would start a second one.
+    // The relay path (`download-manager.js`) throws `downloadUrl: interrupted
+    // (<Chrome reason>)` or `downloadUrl: timed out after …`; the launched
+    // browser's CDP loop reports `canceled` or gives up waiting. `wait
+    // --download` ("Timeout waiting for download") started nothing and keeps
+    // the generic retryable timeout.
+    if lower.contains("downloadurl: interrupted (user_canceled)")
+        || lower.contains("download was canceled")
+    {
+        return ErrorMetadata {
+            code: "download_canceled",
+            retryable: false,
+        };
+    }
+    if lower.contains("downloadurl: interrupted") {
+        return ErrorMetadata {
+            code: "download_interrupted",
+            retryable: true,
+        };
+    }
+    if lower.contains("downloadurl: timed out")
+        || lower.contains("timeout waiting for download to complete")
+        || (lower.contains("timed out") && lower.contains("abext.downloadurl"))
+    {
+        return ErrorMetadata {
+            code: "download_timeout",
             retryable: false,
         };
     }
@@ -211,6 +258,16 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn an_evicted_request_has_its_own_code() {
+        let m = classify_error(
+            "request_evicted: request 12.3 was dropped from the request log, which keeps the \
+             newest 1000 requests; its details are gone.",
+        );
+        assert_eq!(m.code, "request_evicted");
+        assert!(!m.retryable);
+    }
 
     #[test]
     fn first_tab_failures_have_their_own_codes() {
@@ -427,6 +484,62 @@ mod tests {
         );
     }
 
+    /// Download failures carry their own codes, from the relay's
+    /// `download-manager.js` errors as the CDP client wraps them and from the
+    /// launched browser's own download loop.
+    #[test]
+    fn download_failures_have_their_own_codes() {
+        for (message, code, retryable) in [
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: interrupted (USER_CANCELED)",
+                "download_canceled",
+                false,
+            ),
+            ("Download was canceled", "download_canceled", false),
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: interrupted (NETWORK_FAILED)",
+                "download_interrupted",
+                true,
+            ),
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: interrupted (USER_SHUTDOWN)",
+                "download_interrupted",
+                true,
+            ),
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: interrupted",
+                "download_interrupted",
+                true,
+            ),
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: timed out after 30000ms",
+                "download_timeout",
+                false,
+            ),
+            (
+                "CDP command timed out after 35s: ABExt.downloadUrl",
+                "download_timeout",
+                false,
+            ),
+            (
+                "Timeout waiting for download to complete",
+                "download_timeout",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                classify_error(message),
+                ErrorMetadata { code, retryable },
+                "{message}"
+            );
+        }
+        // Other timeouts keep the generic code.
+        assert_eq!(
+            classify_error("CDP command timed out after 30s: Runtime.evaluate").code,
+            "timeout"
+        );
+    }
+
     #[test]
     fn enriches_without_overwriting_explicit_codes() {
         let mut value = json!({
@@ -437,5 +550,21 @@ mod tests {
         enrich_error_value(&mut value);
         assert_eq!(value["code"], "missing_url");
         assert_eq!(value["retryable"], false);
+    }
+}
+
+#[cfg(test)]
+mod selector_ambiguous_tests {
+    use super::*;
+
+    #[test]
+    fn an_ambiguous_selector_has_its_own_code() {
+        let msg = format!(
+            "{} `.btn` matches 3 elements, so nothing was done\n  [0] <div> \"timeout\" at (1,2) 3x4, hidden",
+            crate::native::element::SELECTOR_AMBIGUOUS_PREFIX
+        );
+        let m = classify_error(&msg);
+        assert_eq!(m.code, "selector_ambiguous");
+        assert!(!m.retryable);
     }
 }

@@ -4,6 +4,7 @@
 use super::attachments::Attachment;
 use super::config_transaction::{atomic_write, private_tree};
 use super::options::ModelOptions;
+use super::redact::Redacted;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -16,6 +17,17 @@ use std::sync::Mutex;
 const MAX_STATE: u64 = 8 * 1024 * 1024;
 const MAX_HISTORY: u64 = 128 * 1024 * 1024;
 const MAX_EVENT: usize = 64 * 1024;
+/// A message's text as JSON in its `user` event, leaving room for the page,
+/// attachments and envelope within MAX_EVENT.
+const MAX_ENCODED_TEXT: usize = 40 * 1024;
+const TOO_LONG_ENCODED: &str =
+    "This message is too long to keep in the history once encoded; shorten it or remove control characters";
+
+/// Whether a message text, JSON-encoded, fits its history event. Control
+/// characters take six bytes each when encoded.
+fn fits_history(text: &str) -> bool {
+    serde_json::to_string(text).is_ok_and(|encoded| encoded.len() <= MAX_ENCODED_TEXT)
+}
 
 pub(super) fn now() -> u64 {
     std::time::SystemTime::now()
@@ -57,32 +69,89 @@ pub(super) struct Message {
     pub attachments: Vec<Attachment>,
     #[serde(default)]
     pub skill: Option<super::skill_library::SelectedSkill>,
+    /// Set by the host when the message starts after a stopped or recovered
+    /// turn, never at accept, and never part of the message's identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<Continuation>,
+    /// The user allowed recording this request. Part of the identity only
+    /// when set, so earlier ids keep their fingerprints.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub record: bool,
+    /// The fork preface of an `afterRecovery` message, set by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preface: Option<String>,
 }
+
+/// How a turn relates to the one before it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum Continuation {
+    AfterStop,
+    AfterRecovery,
+}
+
+const AFTER_STOP: &str = "[The user stopped the previous request and may have changed the pages. Observe the current page before acting. Do not repeat actions from the stopped request unless this message asks for them.]";
 
 impl Message {
     /// Preserve legacy text-only IDs, while binding rich messages to all inputs.
     pub fn prompt_text(&self) -> String {
+        let continuation = match self.continuation {
+            Some(Continuation::AfterStop) => format!("{AFTER_STOP}\n\n"),
+            Some(Continuation::AfterRecovery) => self
+                .preface
+                .as_ref()
+                .map(|p| format!("{p}\n\n"))
+                .unwrap_or_default(),
+            None => String::new(),
+        };
         let skill = self.skill.as_ref().map(|s| s.preface()).unwrap_or_default();
         let page = self
             .page
             .as_ref()
             .map(|p| format!("{}\n\n", p.preface()))
             .unwrap_or_default();
-        format!("{skill}{page}{}", self.text)
+        format!("{continuation}{skill}{page}{}", self.text)
     }
-    fn fingerprint(&self) -> Result<String, String> {
-        if self.attachments.is_empty() && self.skill.is_none() {
+    /// Request identity. The rule is the one v1.5.214 used and runs on the
+    /// raw input, before any redaction, so retries across the upgrade match.
+    pub(super) fn fingerprint(&self) -> Result<String, String> {
+        if self.attachments.is_empty() && self.skill.is_none() && !self.record {
             return Ok(hex::encode(Sha256::digest(self.text.as_bytes())));
         }
-        Ok(hex::encode(Sha256::digest(
+        let bytes = if self.record {
+            serde_json::to_vec(&(
+                self.text.as_str(),
+                &self.attachments,
+                &self.page,
+                &self.skill,
+                true,
+            ))
+        } else {
             serde_json::to_vec(&(
                 self.text.as_str(),
                 &self.attachments,
                 &self.page,
                 &self.skill,
             ))
-            .map_err(|_| "Cannot fingerprint message")?,
+        };
+        Ok(hex::encode(Sha256::digest(
+            bytes.map_err(|_| "Cannot fingerprint message")?,
         )))
+    }
+    /// The form that is queued, saved and journaled: the page URL without
+    /// credentials or token parameters. Identity is taken before this.
+    pub(super) fn projected(mut self) -> Self {
+        if let Some(page) = &mut self.page {
+            page.url = super::redact::url(&page.url);
+        }
+        self
+    }
+    /// Whether this message already is its own stored projection, as a
+    /// client that only holds the redacted form would send it.
+    pub(super) fn is_projection(&self) -> bool {
+        self.page
+            .as_ref()
+            .is_none_or(|page| super::redact::url(&page.url) == page.url)
     }
 }
 
@@ -126,6 +195,34 @@ pub(super) struct Event {
     pub data: Value,
 }
 
+/// The most recent turn that ended, for notifications: what a client keys a
+/// finished turn on without reading the journal. Rebuilt from the journal on
+/// load, never persisted in the state.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct LastTurn {
+    pub message_id: String,
+    pub outcome: String,
+    pub ended: u64,
+    /// First line of the turn's last redacted answer, at most 120 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+}
+
+/// The preview line of a journaled answer event. A message split into parts
+/// is previewed from its first part.
+pub(super) fn answer_preview(kind: &str, data: &Value) -> Option<String> {
+    if !matches!(kind, "textFinal" | "textRole") || data["part"].as_u64().unwrap_or(0) != 0 {
+        return None;
+    }
+    let line = data["text"]
+        .as_str()?
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    Some(line.chars().take(120).collect())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Conversation {
@@ -164,6 +261,12 @@ pub(super) struct Conversation {
     pub site: Option<String>,
     #[serde(default)]
     pub schedule_id: Option<String>,
+    /// Older builds refuse unknown state fields, so this lives in the journal.
+    #[serde(skip)]
+    pub last_turn: Option<LastTurn>,
+    /// Revision of the newest unanswered approval request; live only.
+    #[serde(skip)]
+    pub waiting_request: Option<u64>,
 }
 
 impl Conversation {
@@ -208,10 +311,30 @@ impl Conversation {
             full_access: false,
             site: None,
             schedule_id: None,
+            last_turn: None,
+            waiting_request: None,
         })
     }
+    /// Who drives this conversation's agent process, derived from its phase.
+    /// It says nothing about other conversations or automation in Chrome.
+    pub(super) fn control(&self) -> &'static str {
+        match self.phase {
+            Phase::Starting
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|m| m.continuation.is_some()) =>
+            {
+                "resuming"
+            }
+            Phase::Starting | Phase::Running | Phase::WaitingInput => "agent",
+            Phase::Stopping => "stopRequested",
+            Phase::Idle | Phase::Interrupted | Phase::Failed => "stopped",
+            Phase::RecoveryRequired => "unknown",
+        }
+    }
     pub(super) fn summary(&self) -> Value {
-        json!({"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
+        json!({"control":self.control(),"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"lastTurn":self.last_turn,"waitingRequest":self.waiting_request,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
     }
     pub(super) fn queue_snapshot(&self) -> Value {
         Value::Array(
@@ -226,6 +349,9 @@ impl Conversation {
     }
     pub(super) fn accept(&mut self, message: Message) -> Result<bool, String> {
         uuid::Uuid::parse_str(&message.id).map_err(|_| "A message needs a stable UUID")?;
+        if !fits_history(&message.text) {
+            return Err(TOO_LONG_ENCODED.into());
+        }
         if message.text.trim().is_empty() || message.text.len() > 32 * 1024 {
             return Err("A message must contain between one and 32768 bytes of text".into());
         }
@@ -256,9 +382,32 @@ impl Conversation {
                 .collect();
         }
         self.accepted.insert(message.id.clone(), hash);
-        self.queue.push_back(message);
+        self.queue.push_back(message.projected());
         self.updated = now();
         Ok(true)
+    }
+    /// Whether `message` reuses an accepted id as a retry from a client that
+    /// only holds the stored projection: its raw hash differs, it is its own
+    /// projection, and that projection equals the projection of `stored`, the
+    /// message the id was accepted for (rebuilt from its `user` event). A
+    /// message still carrying a raw sensitive value never matches here, so
+    /// two different raw tokens with one projection stay different payloads.
+    pub(super) fn projected_retry(
+        &self,
+        message: &Message,
+        stored: Option<Message>,
+    ) -> Result<bool, String> {
+        let Some(existing) = self.accepted.get(&message.id) else {
+            return Ok(false);
+        };
+        let hash = message.fingerprint()?;
+        if existing == &hash || !message.is_projection() {
+            return Ok(false);
+        }
+        let Some(stored) = stored.filter(|m| m.id == message.id) else {
+            return Ok(false);
+        };
+        Ok(stored.projected().fingerprint()? == hash)
     }
     pub(super) fn begin_next(&mut self) -> Option<Message> {
         if self.phase.busy() || self.phase == Phase::RecoveryRequired {
@@ -323,6 +472,9 @@ impl Conversation {
         // put the superseded text back in the queue.
         uuid::Uuid::parse_str(&replacement.id)
             .map_err(|_| "Replacement message needs a stable UUID")?;
+        if !fits_history(&replacement.text) {
+            return Err(TOO_LONG_ENCODED.into());
+        }
         if replacement.text.trim().is_empty() || replacement.text.len() > 32768 {
             return Err("Replacement text must contain between one and 32768 bytes".into());
         }
@@ -332,6 +484,7 @@ impl Conversation {
         replacement.attachments = self.queue[index].attachments.clone();
         replacement.page = self.queue[index].page.clone();
         replacement.skill = self.queue[index].skill.clone();
+        replacement.record = self.queue[index].record;
         self.accepted
             .insert(replacement.id.clone(), replacement.fingerprint()?);
         if self.direct_message_id.as_deref() == Some(id) {
@@ -386,6 +539,7 @@ impl Conversation {
         self.active_direct = false;
         self.last_error = error;
         self.active = None;
+        self.waiting_request = None;
         self.updated = now();
         Ok(true)
     }
@@ -486,7 +640,26 @@ impl Store {
         if chat.schema_version != 1 || chat.id != id {
             return Err("Conversation identity does not match its state".into());
         }
-        let cursor = self.last_sequence(id)?;
+        // One pass finds the journal's end and its last ended turn.
+        let mut preview: Option<(String, String)> = None;
+        let mut last_turn = None;
+        let cursor = self.scan(id, |event| {
+            let message = event.data["messageId"].as_str().unwrap_or("");
+            if let Some(line) = answer_preview(&event.kind, &event.data) {
+                preview = Some((message.into(), line));
+            } else if event.kind == "turnEnded" {
+                last_turn = Some(LastTurn {
+                    message_id: message.into(),
+                    outcome: event.data["outcome"].as_str().unwrap_or("unknown").into(),
+                    ended: event.at,
+                    preview: preview
+                        .take()
+                        .filter(|(id, _)| id == message)
+                        .map(|(_, line)| line),
+                });
+            }
+        })?;
+        chat.last_turn = last_turn;
         if chat.next_sequence > cursor + 1 {
             return Err(
                 "Conversation state is ahead of its journal; history cannot be assumed complete"
@@ -515,17 +688,19 @@ impl Store {
             None,
         )
     }
+    /// Append one event. Only [`Redacted`] data is accepted, so every write
+    /// has passed the privacy rules in `redact.rs`.
     pub(super) fn event(
         &mut self,
         chat: &mut Conversation,
         kind: &str,
-        data: Value,
+        data: Redacted,
     ) -> Result<Event, String> {
         let event = Event {
             sequence: chat.next_sequence,
             at: now(),
             kind: kind.into(),
-            data,
+            data: data.into_value(),
         };
         let mut raw = serde_json::to_vec(&event).map_err(|_| "Cannot encode conversation event")?;
         if raw.len() > MAX_EVENT {
@@ -689,7 +864,64 @@ impl Store {
         Ok(json!({"events":rows,"cursor":cursor,"more":more}))
     }
 
-    fn last_sequence(&self, id: &str) -> Result<u64, String> {
+    /// The `user` event that accepted `message_id`, if the journal has one.
+    pub(super) fn user_event(&self, id: &str, message_id: &str) -> Result<Option<Value>, String> {
+        let mut found = None;
+        self.scan(id, |event| {
+            if event.kind == "user" && event.data["messageId"] == message_id {
+                found = Some(event.data);
+            }
+        })?;
+        Ok(found)
+    }
+
+    /// How often each backend request id was journaled, keyed by its JSON
+    /// spelling.
+    pub(super) fn request_ids(&self, id: &str) -> Result<HashMap<String, u32>, String> {
+        let mut counts = HashMap::new();
+        self.scan(id, |event| {
+            if event.kind == "request" {
+                if let Ok(key) = serde_json::to_string(&event.data["requestId"]) {
+                    *counts.entry(key).or_insert(0) += 1;
+                }
+            }
+        })?;
+        Ok(counts)
+    }
+
+    /// Every event of one conversation, in order.
+    pub(super) fn all_events(&self, id: &str) -> Result<Vec<Event>, String> {
+        let mut events = Vec::new();
+        self.scan(id, |event| events.push(event))?;
+        Ok(events)
+    }
+
+    /// Events from `from` (a sequence) on.
+    pub(super) fn events_from(&self, id: &str, from: u64) -> Result<Vec<Event>, String> {
+        let mut events = Vec::new();
+        self.scan(id, |event| {
+            if event.sequence >= from {
+                events.push(event);
+            }
+        })?;
+        Ok(events)
+    }
+
+    /// Whether a generation of this conversation was retired without a way
+    /// to resume its agent session; the conversation cannot continue.
+    pub(super) fn cannot_resume(&self, id: &str) -> Result<bool, String> {
+        let mut blocked = false;
+        self.scan(id, |event| {
+            if event.kind == "generationRetired" && event.data["resumable"] == false {
+                blocked = true;
+            }
+        })?;
+        Ok(blocked)
+    }
+
+    /// Visit every event in order; refuses a gap, a torn line or corruption
+    /// like `events` does. Returns the last sequence.
+    fn scan(&self, id: &str, mut visit: impl FnMut(Event)) -> Result<u64, String> {
         let path = self.folder(id)?.join("events.jsonl");
         if !path.exists() {
             return Ok(0);
@@ -723,6 +955,7 @@ impl Store {
                 return Err("Conversation event sequence has a gap or duplicate".into());
             }
             previous = event.sequence;
+            visit(event);
         }
         Ok(previous)
     }
@@ -806,8 +1039,146 @@ mod tests {
             page: None,
             attachments: Vec::new(),
             skill: None,
+            continuation: None,
+            record: false,
+            preface: None,
         }
     }
+    fn rich(id: &str, url: &str) -> Message {
+        Message {
+            id: id.into(),
+            text: "Check my order".into(),
+            page: Some(PageContext {
+                tab_id: 42,
+                url: url.into(),
+                title: "Orders".into(),
+            }),
+            attachments: vec![Attachment {
+                id: "a".repeat(64),
+                media_type: "image/png".into(),
+                bytes: 1234,
+            }],
+            skill: None,
+            continuation: None,
+            record: false,
+            preface: None,
+        }
+    }
+    const TOKEN_A: &str = "https://shop.example/orders?access_token=SYNTH_TOKEN_A&x=1";
+    const TOKEN_B: &str = "https://shop.example/orders?access_token=SYNTH_TOKEN_B&x=1";
+    const PROJECTED: &str = "https://shop.example/orders?access_token=[redacted]&x=1";
+
+    #[test]
+    fn text_that_would_not_fit_its_history_line_is_refused() {
+        let mut c = Conversation::new("claude", None, None).unwrap();
+        // 12,000 control characters pass the 32 KiB byte check but encode
+        // to over 70 KiB.
+        let control = "\u{1}".repeat(12_000);
+        assert_eq!(
+            c.accept(message(&format!("x{control}"))).unwrap_err(),
+            TOO_LONG_ENCODED
+        );
+        let queued = message("queued");
+        c.accept(queued.clone()).unwrap();
+        assert_eq!(
+            c.edit_queued(&queued.id, "queued", message(&format!("x{control}")))
+                .unwrap_err(),
+            TOO_LONG_ENCODED
+        );
+        assert!(c.accept(message(&"a".repeat(32 * 1024))).unwrap());
+    }
+
+    #[test]
+    fn fingerprints_without_new_fields_match_v1_5_214() {
+        // Hashes of the v1.5.214 rule: text only, and text with an
+        // attachment and a page (serde_json of the tuple).
+        let mut text = message("Summarize this page");
+        text.page = rich("x", TOKEN_A).page;
+        assert_eq!(
+            text.fingerprint().unwrap(),
+            "d598de4e6b338ec44e8abb56be9eedb3994e828291fc2a521d10951c6f29180f"
+        );
+        assert_eq!(
+            rich("x", TOKEN_A).fingerprint().unwrap(),
+            "477c7aca284db26bc2126aa5e0e0d55fc4ae9a01e640dd500230717d53566440"
+        );
+        assert_eq!(
+            rich("x", PROJECTED).fingerprint().unwrap(),
+            "933c1eb45b7469ede1ae5cdafec91f1ad28124bb15404a5a4d51da7406fbcbd5"
+        );
+        let mut no_page = rich("x", TOKEN_A);
+        no_page.page = None;
+        assert_eq!(
+            no_page.fingerprint().unwrap(),
+            "25763951449927044ac6aeed712ec0316c727a0059445ff752e8aab5d48cac15"
+        );
+    }
+
+    #[test]
+    fn accepted_messages_are_queued_as_their_projection_under_the_raw_hash() {
+        let mut c = Conversation::new("claude", None, None).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        assert!(c.accept(rich(&id, TOKEN_A)).unwrap());
+        assert_eq!(c.queue[0].page.as_ref().unwrap().url, PROJECTED);
+        assert_eq!(
+            c.accepted[&id],
+            "477c7aca284db26bc2126aa5e0e0d55fc4ae9a01e640dd500230717d53566440"
+        );
+        let saved = serde_json::to_string(&c).unwrap();
+        assert!(!saved.contains("SYNTH_TOKEN_A"));
+        // The queued projection is what the agent's prompt carries.
+        assert!(c.queue[0].prompt_text().contains(PROJECTED));
+    }
+
+    #[test]
+    fn retries_dedupe_by_raw_hash_or_canonical_projection_only() {
+        let id = uuid::Uuid::new_v4().to_string();
+        // The stored `user` event of the original, as the journal holds it:
+        // raw for v1.5.214, projected for this build. Both project equally.
+        let stored = || Some(rich(&id, TOKEN_A));
+        // (1) Accepted before the upgrade (legacy hash in state), reply lost,
+        // raw retry: duplicate through the raw hash.
+        let mut old = Conversation::new("claude", None, None).unwrap();
+        old.accepted.insert(
+            id.clone(),
+            "477c7aca284db26bc2126aa5e0e0d55fc4ae9a01e640dd500230717d53566440".into(),
+        );
+        assert!(!old.accept(rich(&id, TOKEN_A)).unwrap());
+        // (2) Accepted by this build, identical raw retry.
+        let mut c = Conversation::new("claude", None, None).unwrap();
+        assert!(c.accept(rich(&id, TOKEN_A)).unwrap());
+        assert!(!c.accept(rich(&id, TOKEN_A)).unwrap());
+        assert_eq!(c.queue.len(), 1);
+        // (3) A client holding only the projection retries with it.
+        let projected = rich(&id, PROJECTED);
+        assert!(c.accept(projected.clone()).is_err());
+        assert!(c.projected_retry(&projected, stored()).unwrap());
+        assert!(old.projected_retry(&projected, stored()).unwrap());
+        // (4) A different raw token with the same projection is a different
+        // payload.
+        let other = rich(&id, TOKEN_B);
+        assert!(c.accept(other.clone()).is_err());
+        assert!(!c.projected_retry(&other, stored()).unwrap());
+        assert!(!old.projected_retry(&other, stored()).unwrap());
+        // Changed text is refused either way, sensitive or not.
+        let mut changed = rich(&id, PROJECTED);
+        changed.text = "Cancel my order".into();
+        assert!(!c.projected_retry(&changed, stored()).unwrap());
+        let plain_id = uuid::Uuid::new_v4().to_string();
+        let mut plain = rich(&plain_id, "https://shop.example/orders");
+        assert!(c.accept(plain.clone()).unwrap());
+        plain.text = "Cancel my order".into();
+        assert!(c.accept(plain.clone()).is_err());
+        assert!(!c
+            .projected_retry(&plain, Some(rich(&plain_id, "https://shop.example/orders")))
+            .unwrap());
+        // No stored event or another id: no projection match.
+        assert!(!c.projected_retry(&projected, None).unwrap());
+        assert!(!c
+            .projected_retry(&projected, Some(rich(&plain_id, TOKEN_A)))
+            .unwrap());
+    }
+
     #[test]
     fn journal_pages_seek_forward_after_our_appends_and_reject_external_corruption() {
         let root = tempfile::tempdir().unwrap();
@@ -816,7 +1187,11 @@ mod tests {
         store.create(&chat).unwrap();
         for _ in 0..300 {
             store
-                .event(&mut chat, "textDelta", json!({"text":"chunk"}))
+                .event(
+                    &mut chat,
+                    "textDelta",
+                    Redacted::raw_for_tests(json!({"text":"chunk"})),
+                )
                 .unwrap();
         }
         store.save(&chat).unwrap();
@@ -825,7 +1200,11 @@ mod tests {
         let offset = store.cursors.lock().unwrap()[&chat.id].offset;
         assert!(offset > 0);
         store
-            .event(&mut chat, "textDelta", json!({"text":"tail"}))
+            .event(
+                &mut chat,
+                "textDelta",
+                Redacted::raw_for_tests(json!({"text":"tail"})),
+            )
             .unwrap();
         assert_eq!(store.cursors.lock().unwrap()[&chat.id].offset, offset);
         assert_eq!(
@@ -893,13 +1272,15 @@ mod tests {
     #[test]
     fn large_queues_have_bounded_previews_without_truncating_stored_messages() {
         let mut c = Conversation::new("codex", None, None).unwrap();
+        // Multibyte text near the 32 KiB limit (control characters that
+        // large are refused: they would not fit a history line).
         for _ in 0..64 {
-            c.accept(message(&"\u{0001}".repeat(32768))).unwrap();
+            c.accept(message(&"€".repeat(10_922))).unwrap();
         }
         let snapshot = c.queue_snapshot();
         assert!(serde_json::to_vec(&snapshot).unwrap().len() < 450000);
         assert_eq!(snapshot[0]["truncated"], true);
-        assert_eq!(c.queue[0].text.len(), 32768);
+        assert_eq!(c.queue[0].text.len(), 10_922 * 3);
     }
     #[test]
     fn direct_message_waits_for_confirmation_and_leaves_ordinary_queue_paused() {
@@ -1016,7 +1397,12 @@ mod tests {
         s.create(&c).unwrap();
         c.accept(message("one")).unwrap();
         c.begin_next();
-        s.event(&mut c, "user", json!({"text":"one"})).unwrap();
+        s.event(
+            &mut c,
+            "user",
+            Redacted::raw_for_tests(json!({"text":"one"})),
+        )
+        .unwrap();
         s.save(&c).unwrap();
         let mut reopened = Store::open(t.path().join("chats")).unwrap();
         let recovered = reopened.load(&c.id).unwrap();
@@ -1036,8 +1422,18 @@ mod tests {
         let mut s = Store::open(t.path().join("chats")).unwrap();
         let mut c = Conversation::new("codex", None, None).unwrap();
         s.create(&c).unwrap();
-        s.event(&mut c, "user", json!({"text":"one"})).unwrap();
-        s.event(&mut c, "text", json!({"text":"two"})).unwrap();
+        s.event(
+            &mut c,
+            "user",
+            Redacted::raw_for_tests(json!({"text":"one"})),
+        )
+        .unwrap();
+        s.event(
+            &mut c,
+            "text",
+            Redacted::raw_for_tests(json!({"text":"two"})),
+        )
+        .unwrap();
         s.save(&c).unwrap();
         assert_eq!(
             s.events(&c.id, 1).unwrap()["events"]

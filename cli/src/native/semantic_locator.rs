@@ -137,7 +137,7 @@ async fn locate_inner(
     cmd: &Value,
     state: &DaemonState,
     sid: &str,
-    mark_target: bool,
+    check_target: bool,
 ) -> Result<Located, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let client = &mgr.client;
@@ -380,6 +380,7 @@ async fn locate_inner(
         target: described["node"]["backendNodeId"]
             .as_i64()
             .ok_or("target identity unavailable")?,
+        require_visible: true,
     };
     let mut description = selected_description.ok_or("visible target description unavailable")?;
     if let Some((role, name)) = ax_descriptions.get(&pin.target) {
@@ -396,10 +397,14 @@ async fn locate_inner(
         .as_object_mut()
         .unwrap()
         .remove("_explicitNameSafe");
-    if mark_target {
+    // The target stays identified by the pin (backendNodeIds), never by an
+    // attribute written into the page: a MutationObserver sees a marker's write
+    // and its removal alike. This only re-checks that the target, and for a
+    // click its clickable ancestor, are still inside the scope.
+    if check_target {
         let click = cmd["subaction"] == "click";
-        let mark = call(client, sid, &visible[0], r#"function(scope,click){if(!this.isConnected || !scope.isConnected || !scope.contains(this))return false; let target=this;if(click){const ancestor=this.closest('a[href],button,summary,label,select,input,textarea,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]');if(ancestor){if(!scope.contains(ancestor))return false;target=ancestor;}}document.querySelectorAll('[data-chrome-use-located]').forEach(e=>e.removeAttribute('data-chrome-use-located'));target.setAttribute('data-chrome-use-located','true');return true;}"#, json!([{"objectId": scope},{"value":click}])).await?;
-        if mark != true {
+        let in_scope = call(client, sid, &visible[0], r#"function(scope,click){if(!this.isConnected || !scope.isConnected || !scope.contains(this))return false; if(click){const ancestor=this.closest('a[href],button,summary,label,select,input,textarea,[role=button],[role=link],[role=menuitem],[role=tab],[role=option],[onclick]');if(ancestor){if(!scope.contains(ancestor))return false;}}return true;}"#, json!([{"objectId": scope},{"value":click}])).await?;
+        if in_scope != true {
             return Err("semantic target changed before dispatch; read the screen and retry discovery; nothing was dispatched".into());
         }
     }
@@ -409,7 +414,7 @@ async fn locate_inner(
     })
 }
 
-/// Reconfirm uniqueness after marker observers have run, without marking again.
+/// Reconfirm uniqueness just before dispatch, without the scope re-check.
 /// A replacement is not a continuation of the original target's identity.
 pub async fn revalidate(
     cmd: &Value,

@@ -174,9 +174,10 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 侧栏还支持以下功能：
 
 - **技能：**输入 `/` 选择内置技能、用户技能或当前 Chrome profile 的技能库条目。在 **Agents & models → Skill library** 编辑、启停库内技能，或从本机绝对路径目录、ZIP/.skill 压缩包、HTTPS Git 仓库导入。用户和 CLI 原有技能目录在这里只读。发送前会保存所选技能及文件的副本，排队和明确重试使用同一份内容。面板中的 agent 可通过 `chrome_use_skills` 列出、读取技能或当前所选技能的相对路径文本文件，并在用户要求时保存库内说明。
-- **图片：**用 **Attach images** 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP。传输前缩到最长边 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入，不支持时会报错，不会丢掉图片只发送文字。附件会交给所选模型服务。
+- **图片：**用 **Attach images** 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP/HEIC。Chrome 无法解码 HEIC，由本地 CLI 用系统编解码器转成 JPEG（macOS 用 `sips`；Windows 需要从 Microsoft Store 安装 HEIF 图像扩展和 HEVC 视频扩展；Linux 需要 `heif-convert` 或带 HEIF 支持的 ImageMagick），按照片方向转正，并去掉包括 GPS 在内的 EXIF 信息。传输前缩到最长边 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入，不支持时会报错，不会丢掉图片只发送文字。附件会交给所选模型服务。
 - **会话参数：**选择允许的工具，Codex/Claude 可另设推理强度，Codex 可设服务等级。空闲时保存，下一次回复生效，不改 CLI 全局配置。Codex 能限制写入，但无法移除可以读文件的 shell；OpenCode ACP 无法保证限制内置工具，仍遵循它自己的权限规则。审批开关只决定是否自动处理当前工具范围内的请求，Pi 没有逐次审批。
 - **定时提示：**在 **Agents & models → Scheduled prompts** 设置间隔、每天或工作日的本地时间、五字段 cron，并保存 agent、模型、会话参数、技能和明确的工具范围。**Run now** 不改变下一次到期时间。任务使用独立后台浏览器 session，结果保留在历史，完成通知可打开对应会话。主机上的本地服务需要运行，关闭侧栏不会停掉服务。重启或唤醒后，错过的周期只补跑一次；上次仍在执行或结果未确认时，不会重叠执行或重放。确认未知结果前先看历史。聊天不能创建比自己工具范围更大或审批权限更高的任务；定时聊天不能修改或触发定时任务，也不能重写供未来任务使用的技能库。消息已接收、agent 已结束和网页目标已达成仍需分别确认。
+- **完成通知：**侧栏任务完成、失败、被停止、需要恢复或等待你批准时，Chrome 会弹出通知（结果加上脱敏后回答的第一行），工具栏图标显示未看的数量。点通知会在侧栏打开对应会话。侧栏已在当前窗口显示的会话不会通知。可在 **Settings → Notify when a task finishes** 关闭。定时任务仍用它自己的完成通知。
 
 ### 点选改代码（Inspect & Ask）
 
@@ -255,11 +256,11 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 交互快照只给角色和名称重复、且父级命名行无法区分的控件添加 `context`。上下文去掉控件自身名称和纯标点，最多约 100 个字符（无名称控件约 60 个），且不同控件的上下文必须不同。名称唯一的控件不带上下文；缺少商品价格等信息时，读取对应区域或完整快照。
 
-用 `snapshot -i -c` 精简控件视图，已知区域用 scoped read；只有上一次观察还留下问题时才用 `--diff`。已知动作序列用 `batch`（每一步可以带自己的 `--observe`：`batch "fill @e1 Ada" "click @e2 --observe"`；`pick`、`hover` 和 `click` 一样可以观察），有条件分支的 observe/decide/act/verify 流程用 `script`，多个字段用 `form fill --map`，最后核验任务要求的结果：`observed.status: complete` 只表示这次捕获完整，不表示任务完成，要等页面自己的最终信号（`wait --text`）。小页面（树不超过 4 KB 且不超过 60 行）的观察直接带整棵当前树 `observed.snapshot` 和只含 `+`/`-` 行的 `observed.changes`；更大的页面照旧给 `delta`。`observed.text` 列出任意帧里变化的可见文字行（回执、日志、页码），不含输入框、文本域、下拉框和可编辑区域的内容，任一密码框带值时一行都不返回（`textStatus: redacted`）；读不到的帧列在 `textFrames` 里，观察随之变成 `partial`。每个 JSON 回复都带 `observed.target`，写明标签页和 target。元素截图写成 `screenshot <selector> <path>` 或 `screenshot <path> --selector <selector>`。只有树无法回答视觉问题时才加 `--with-screenshot <path>`。
+用 `snapshot -i -c` 精简控件视图，已知区域用 scoped read；只有上一次观察还留下问题时才用 `--diff`。已知动作序列用 `batch`（每一步可以带自己的 `--observe`：`batch "fill @e1 Ada" "click @e2 --observe"`；`pick`、`hover` 和 `click` 一样可以观察），有条件分支的 observe/decide/act/verify 流程用 `script`，多个字段用 `form fill --map`，最后核验任务要求的结果：`observed.status: complete` 只表示这次捕获完整，不表示任务完成，要等页面自己的最终信号（`wait --text`）。小页面（树不超过 4 KB 且不超过 60 行）的观察直接带整棵当前树 `observed.snapshot` 和只含 `+`/`-` 行的 `observed.changes`；更大的页面照旧给 `delta`。`observed.text` 列出任意帧里变化的可见文字行（回执、日志、页码），不含输入框、文本域、下拉框和可编辑区域的内容，任一密码框带值时一行都不返回（`textStatus: redacted`）；读不到的帧列在 `textFrames` 里，观察随之变成 `partial`。每个 JSON 回复都带 `observed.target`，写明标签页和 target。`observed.announced` 收录动作执行和页面稳定期间出现的 toast 以及 alert/status/aria-live 区域的文字，回复前已经消失的也在（例如“视频审核中，修改未保存”）。元素截图写成 `screenshot <selector> <path>` 或 `screenshot <path> --selector <selector>`。只有树无法回答视觉问题时才加 `--with-screenshot <path>`。
 
 只有动作后的捕获失败时，`observed.refs` 说明 ref 怎么处理：`kept-unverified` 保留上一次快照的 ref，但之后的命令使用前会实时确认标签页、frame、文档和元素都没变，确认不了就拒绝，绝不按角色或名称重新定位（DOM 遍历得到的 ref 这时一律拒绝）；`dropped` 表示文档可能已经变了。两种情况都用 `snapshot -i` 取当前 ref，不要重放动作。
 
-语义 `find role/text/label/placeholder/alt/title/testid` 要求恰好一个可见匹配，只定位不操作时也一样。多个匹配会返回最多八个候选及可见状态、选择器和上下文提示，不派发动作，也不输出输入框的值。用 `--name`/`--exact` 消歧，或用 `--within <CSS|@ref>` 限定到唯一容器。范围必须属于当前标签页的主文档，跨 iframe 的 ref 和已选中的 iframe 上下文会被拒绝；可用 iframe 内的直接 ref 动作，或先 `frame main`。`find first/last/nth` 保留显式按序选择；普通 CSS 动作行为不变。role 和 label 名称来自 Chrome 无障碍数据，包含 `aria-labelledby`；每次语义调用重新定位。派发前目标已脱离时安全失败，结果不确定的动作不会重放。
+语义 `find role/text/label/placeholder/alt/title/testid` 要求恰好一个可见匹配，只定位不操作时也一样。多个匹配会返回最多八个候选及可见状态、选择器和上下文提示，不派发动作，也不输出输入框的值。用 `--name`/`--exact` 消歧，或用 `--within <CSS|@ref>` 限定到唯一容器。范围必须属于当前标签页的主文档，跨 iframe 的 ref 和已选中的 iframe 上下文会被拒绝；可用 iframe 内的直接 ref 动作，或先 `frame main`。`find first/last/nth` 保留显式按序选择；传给动作（`click`、`fill`、`type`、`hover`、`check`、`select`、`drag` 等）的普通 CSS 选择器或 XPath 也必须恰好匹配一个元素：匹配多个时以 `selector_ambiguous` 拒绝，列出前五个匹配的文字和位置，什么都不做。收窄选择器、改用 `@ref`，或用 `find nth <序号> <选择器> <动作>` 按序号指定；旧脚本需要首个匹配时设 `AGENT_BROWSER_STRICT_SELECTORS=0`。role 和 label 名称来自 Chrome 无障碍数据，包含 `aria-labelledby`；每次语义调用重新定位。派发前目标已脱离时安全失败，结果不确定的动作不会重放。
 
 现有 `mcp --tools all` 的 `chrome_use_find` 工具接受 `within`，使用相同的唯一范围规则，工具数量不变。fill/type 的 `text` 按文字原样传入，`--name --observe` 不会被当作 CLI 参数。
 
@@ -299,7 +300,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use solve-slider 1` · `skills get core/captcha` | 尝试易盾拼图（未通过时非零退出）；加载点选与结果核验流程 |
 | `chrome-use find "edit web service settings button"` | 按自然语言描述返回排序后的候选，不自动执行 |
 | `chrome-use actions @e15` · `do @e15 expand` | 这个元素此刻支持什么，并只做其中之一 |
-| `chrome-use click @e2 --follow` | 点击打开的新标签（`target=_blank`、`window.open`）以 `openedTab` 报告并归入会话；`--follow` 切过去。在你自己的 Chrome 里只接管由本会话标签打开的标签，并按标签 id 附加（需要 ab-connect 0.5.30+）；否则由 `openedTabWarning` / `openedTabStatus`（`unadopted`、`unknown`）说明原因。网页打开的标签会让 Chrome 跑到你的应用前面，`openedTabWarning` 会说明；在 macOS 上 chrome-use 会把你原来的应用切回前台（`focusRestored`；`AGENT_BROWSER_RESTORE_FOCUS=0` 关闭）。需主动开启的 `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`（会话的 daemon 启动时读取）会把跨站的 `target=_blank` 链接改在后台标签打开（`openedTabMode: background`）；代价：重定向回当前站点的链接收不到 `SameSite=Strict` cookie |
+| `chrome-use click @e2 --follow` | 点击打开的新标签（`target=_blank`、`window.open`）以 `openedTab` 报告并归入会话；`--follow` 切过去。在你自己的 Chrome 里只接管由本会话标签打开的标签，并按标签 id 附加（需要 ab-connect 0.5.30+）；否则由 `openedTabWarning` / `openedTabStatus`（`unadopted`、`unknown`）说明原因。从不属于本会话的标签（`tab adopt`、`--tab … --force`、侧边栏操作你的标签）打开的新标签仍归你：只报告，`followed: false`，用 `tab adopt <url>` 接管。网页打开的标签会让 Chrome 跑到你的应用前面，`openedTabWarning` 会说明；在 macOS 上 chrome-use 会把你原来的应用切回前台（`focusRestored`；`AGENT_BROWSER_RESTORE_FOCUS=0` 关闭）。需主动开启的 `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`（会话的 daemon 启动时读取）会把跨站的 `target=_blank` 链接改在后台标签打开（`openedTabMode: background`）；代价：重定向回当前站点的链接收不到 `SameSite=Strict` cookie |
 | `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | 列出标签；选择已创建或已接管的标签；通过扩展或直接 CDP 连接，不导航地接管已打开的标签 |
 | `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | 在初始化或存活探针之前激活目标；`--front` 是别名 |
 | `chrome-use tab list --all [--limit <n>]` | 列出当前 Chrome profile 所有窗口里的全部标签，包括用户自己的和其他会话的：handle、窗口、是否当前标签、标题、URL、归属（本会话 / `session <名字>` / 用户）。首次查询也只读，不启动 daemon、不开窗口或标签、不 attach 页面。首次 open 被拒绝后，仍可通过会话绑定的 profile 或已配置的 CDP 地址只读查询，不建立页面驱动连接、不绕过混合窗口保护。URL 按 Chrome 原样给出，可能带 token |

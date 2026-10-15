@@ -378,7 +378,9 @@ mod browser {
         assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "frame");
         // A re-render after selection must fail before dispatch, not click a
         // newly inserted button at the old coordinates or replay the action.
-        session.ok(&["eval", "document.querySelector('#receipt').textContent='untouched'; window.oldSet=Element.prototype.setAttribute; Element.prototype.setAttribute=function(n,v){if(n==='data-chrome-use-located' && this.closest('#account-b')){this.outerHTML=this.outerHTML;} return window.oldSet.call(this,n,v);}"]);
+        // chrome-use writes nothing into the page, so the re-render hooks a
+        // read it makes while selecting instead (once).
+        session.ok(&["eval", "document.querySelector('#receipt').textContent='untouched'; window.oldClosest=Element.prototype.closest; Element.prototype.closest=function(s){if(!window.rerendered && this.tagName==='BUTTON' && window.oldClosest.call(this,'#account-b')){window.rerendered=true;this.outerHTML=this.outerHTML;} return window.oldClosest.call(this,s);}"]);
         let out = session.run(&[
             "find", "role", "button", "click", "--name", "Save", "--exact", "--within", &scope,
         ]);
@@ -390,7 +392,7 @@ mod browser {
             session.ok(&["get", "text", "#receipt"])["text"],
             "untouched"
         );
-        session.ok(&["eval", "Element.prototype.setAttribute=window.oldSet"]);
+        session.ok(&["eval", "Element.prototype.closest=window.oldClosest"]);
         session.ok(&["eval", r##"document.querySelector('#account-b').innerHTML=`<h2>Beta account</h2><button onclick="document.querySelector('#receipt').textContent='nested'"><span>Commit</span><span>Commit</span></button><div role="button" onclick="document.querySelector('#receipt').textContent='custom'"><span id="inner-leaf">Custom Save</span></div>`"##]);
         session.ok(&[
             "find", "text", "Commit", "click", "--exact", "--within", &scope,
@@ -460,36 +462,18 @@ mod browser {
             "Editable container"
         );
         assert!(!safe_mcp.to_string().contains("PRIVATE-NESTED"));
-        // Marker observers run between discovery and dispatch. They may move or
-        // replace the selected node, but cannot redirect its pinned identity.
-        for mutation in [
-            "document.body.appendChild(target)",
-            "target.replaceWith(target.cloneNode(true))",
-            "target.parentElement.appendChild(target.cloneNode(true))",
-        ] {
-            session.ok(&["open", &format!("file://{}", page.display())]);
-            let script=format!("window.observer=new MutationObserver(ms=>{{const target=document.querySelector('#account-b [data-chrome-use-located]');if(target){{window.observer.disconnect();{mutation};}}}});window.observer.observe(document.querySelector('#account-b'),{{attributes:true,subtree:true}})");
-            session.ok(&["eval", &script]);
-            let out = session.run(&[
-                "find", "role", "button", "click", "--name", "Save", "--exact", "--within", &scope,
-            ]);
-            assert!(
-                !out.status.success(),
-                "moved or cloned target dispatched: {}",
-                String::from_utf8_lossy(&out.stdout)
-            );
-            assert_eq!(
-                session.ok(&["get", "text", "#receipt"])["text"],
-                "untouched"
-            );
-        }
-        // An outside clone is unrelated. The original target remains pinned.
+        // Stealth: discovery and dispatch write nothing into the page, so an
+        // observer on the document sees only the page's own receipt change.
         session.ok(&["open", &format!("file://{}", page.display())]);
-        session.ok(&["eval", "window.observer=new MutationObserver(()=>{const target=document.querySelector('#account-b [data-chrome-use-located]');if(target){window.observer.disconnect();document.body.prepend(target.cloneNode(true));}});window.observer.observe(document.querySelector('#account-b'),{attributes:true,subtree:true})"]);
+        session.ok(&["eval", "window.seen=[];new MutationObserver(ms=>{for(const m of ms){const t=m.target.nodeType===1?m.target:m.target.parentElement;if(!(t&&t.closest('#receipt')))window.seen.push(m.type+':'+(m.attributeName||''));}}).observe(document.documentElement,{attributes:true,subtree:true,childList:true,characterData:true})"]);
         session.ok(&[
             "find", "role", "button", "click", "--name", "Save", "--exact", "--within", &scope,
         ]);
         assert_eq!(session.ok(&["get", "text", "#receipt"])["text"], "beta");
+        assert_eq!(
+            session.ok(&["eval", "JSON.stringify(window.seen)"])["result"],
+            "[]"
+        );
         // Restore fixture for explicit first/nth compatibility checks.
         session.ok(&["open", &format!("file://{}", page.display())]);
 
