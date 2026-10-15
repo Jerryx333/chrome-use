@@ -43,6 +43,29 @@ pub(super) struct Notice {
     pub job: Option<std::sync::Arc<super::windows::ProcessJob>>,
 }
 
+/// A backend that did not confirm a stop within 10 s.
+pub(super) const STOP_TIMEOUT: &str =
+    "Backend did not confirm interruption; its owned process was terminated";
+pub(super) const ACP_STOP_TIMEOUT: &str =
+    "ACP did not confirm interruption; its owned process was terminated";
+
+/// E2E fault switch (`--features e2e-tests` only, never in release builds):
+/// with `CHROME_USE_E2E_SKIP_STOP_KILL=1` in the agent service's environment,
+/// a backend that missed the stop deadline is left running instead of being
+/// killed, so its exit stays unconfirmed (`processUnconfirmed`, control
+/// `unknown`) while the tree is alive. The acceptance run uses it to drive
+/// recovery review, terminate and fork against a live process.
+#[cfg(all(feature = "e2e-tests", unix))]
+pub(super) const E2E_SKIP_STOP_KILL: &str = "CHROME_USE_E2E_SKIP_STOP_KILL";
+
+#[cfg(all(feature = "e2e-tests", unix))]
+fn leave_running_after(result: &Result<(), String>) -> bool {
+    std::env::var(E2E_SKIP_STOP_KILL).is_ok_and(|v| v == "1")
+        && result
+            .as_ref()
+            .is_err_and(|error| error == STOP_TIMEOUT || error == ACP_STOP_TIMEOUT)
+}
+
 /// The job `drive` hands back when it cannot confirm the tree exited.
 #[cfg(windows)]
 type HeldJob = super::windows::ProcessJob;
@@ -331,6 +354,16 @@ async fn drive(
         }
         _ => Err("This agent has no conversational adapter yet".into()),
     };
+    #[cfg(all(feature = "e2e-tests", unix))]
+    if leave_running_after(&result) {
+        // Keep the tree and its pipes alive; the exit stays unconfirmed.
+        std::mem::forget(child);
+        std::mem::forget(stdin);
+        std::mem::forget(reader);
+        return Err(
+            "Backend did not confirm interruption; it was left running (e2e fault switch)".into(),
+        );
+    }
     // A tree whose end cannot be confirmed keeps its job with the service.
     #[cfg(windows)]
     if let Err(error) = owned_job.terminate() {
@@ -555,7 +588,7 @@ async fn protocol(
             }
             _=tokio::time::sleep(std::time::Duration::from_millis(200))=>{
                 if !ready && started.elapsed()>std::time::Duration::from_secs(60){return Err("Backend protocol initialization timed out".into());}
-                if stopping_at.is_some_and(|at|at.elapsed()>std::time::Duration::from_secs(10)){return Err("Backend did not confirm interruption; its owned process was terminated".into());}
+                if stopping_at.is_some_and(|at|at.elapsed()>std::time::Duration::from_secs(10)){return Err(STOP_TIMEOUT.into());}
             }
         }
     }
@@ -781,7 +814,7 @@ async fn pi_protocol(
             }
             _ = tokio::time::sleep(Duration::from_millis(200)) => {
                 if !ready && started.elapsed() > Duration::from_secs(60) { return Err("Backend protocol initialization timed out".into()); }
-                if stopping_at.is_some_and(|at: tokio::time::Instant| at.elapsed() > Duration::from_secs(10)) { return Err("Backend did not confirm interruption; its owned process was terminated".into()); }
+                if stopping_at.is_some_and(|at: tokio::time::Instant| at.elapsed() > Duration::from_secs(10)) { return Err(STOP_TIMEOUT.into()); }
             }
         }
     }
@@ -1856,5 +1889,20 @@ mod tests {
         }
         let lines = fixture("opencode-mcp-timeout.jsonl");
         assert_eq!(lines[0]["result"]["agentInfo"]["version"], "2.0.25");
+    }
+
+    #[cfg(all(feature = "e2e-tests", unix))]
+    #[test]
+    fn the_e2e_switch_leaves_only_a_stop_timeout_running() {
+        let guard = crate::test_utils::EnvGuard::new(&[E2E_SKIP_STOP_KILL]);
+        guard.remove(E2E_SKIP_STOP_KILL);
+        assert!(!leave_running_after(&Err(STOP_TIMEOUT.into())));
+        guard.set(E2E_SKIP_STOP_KILL, "1");
+        assert!(leave_running_after(&Err(STOP_TIMEOUT.into())));
+        assert!(leave_running_after(&Err(ACP_STOP_TIMEOUT.into())));
+        assert!(!leave_running_after(&Err(
+            "Backend protocol initialization timed out".into()
+        )));
+        assert!(!leave_running_after(&Ok(())));
     }
 }

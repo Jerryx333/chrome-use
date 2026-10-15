@@ -221,7 +221,7 @@ pub(super) async fn protocol(
             }
             _ = tokio::time::sleep(Duration::from_millis(200)) => {
                 if !ready && started.elapsed() > Duration::from_secs(60) { return Err("ACP initialization timed out".into()); }
-                if stopping_at.is_some_and(|at: tokio::time::Instant| at.elapsed() > Duration::from_secs(10)) { return Err("ACP did not confirm interruption; its owned process was terminated".into()); }
+                if stopping_at.is_some_and(|at: tokio::time::Instant| at.elapsed() > Duration::from_secs(10)) { return Err(super::backend::ACP_STOP_TIMEOUT.into()); }
             }
         }
         if ready && active.is_none() {
