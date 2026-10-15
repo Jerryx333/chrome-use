@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.218
+## 1.5.219
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.58 (no extension change).
+
+### Improvements
+
+- **Outdated extensions are called out per profile.** The `connect` profile list marks each profile whose extension is behind the newest build (the Web Store's when known), with how many days ago the profile was last opened, and says how to update: Chrome only updates a profile's extensions while that profile is open, so rarely used profiles keep old builds.
+
+### Bug Fixes
+
+- **No leftover launchd jobs.** The panel service unloads the launchd job that started it once it owns its profile, so each profile directory no longer leaves an idle `com.chrome-use.panel-service.*` job behind (test runs left hundreds).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.218
+
 Patch release. Works with extension ab-connect 0.5.58 (no extension change).
 
 ### Bug Fixes
@@ -13,7 +30,6 @@ Patch release. Works with extension ab-connect 0.5.58 (no extension change).
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.217
 
