@@ -118,6 +118,8 @@ async function pickOn(url, selector, existing) {
   lastCtx = { page, frame, tabId };
   return lastCtx;
 }
+// The panel shows the home folder as ~ (shortPath in inspect-frame-logic.js).
+const tilde = p => p.replace(/^\/(?:Users|home)\/[^/]+/, '~');
 const text = frame => A.evaluate(frame.sid, 'document.getElementById("app").innerText');
 async function send(ctx, words) {
   const before = dms().length;
@@ -138,8 +140,8 @@ async function tryEnterWithoutTarget(ctx) {
 }
 const click = async (ctx, label) => {
   await A.clickInFrame(ctx.page.sid, ctx.frame.sid, byText(label));
-  if (label === 'Hand over') await waitText(ctx, /→ /, 'bound after Hand over');
-  if (label === 'Only this tab') await waitText(ctx, /this tab only/, 'tab target set');
+  if (label === 'Use for this site') await waitText(ctx, /→/, 'bound after Use for this site');
+  if (label === 'This tab only') await waitText(ctx, /this tab only/, 'tab target set');
 };
 async function waitText(ctx, re, label) { await waitFor(async () => re.test(await text(ctx.frame)), { label }); return text(ctx.frame); }
 
@@ -170,11 +172,11 @@ await scenario('m01-local-dev-unique-session', async () => {
   const ctx = await pickOn('http://localhost:5173/?m1', '.save-button');
   const t = await waitText(ctx, /Send requests from localhost:5173 to react-main/, 'preselected card');
   assert.match(t, /dev server/);
-  await click(ctx, 'Hand over');
-  await waitText(ctx, /→ react-main/, 'bound target');
+  await click(ctx, 'Use for this site');
+  await waitText(ctx, /→\s*react-main/, 'bound target');
   const second = await pickOn('http://localhost:5173/?m1b', '.save-button');
   const t2 = await text(second.frame);
-  assert.doesNotMatch(t2, /Hand over/, 'second visit needs no confirmation');
+  assert.doesNotMatch(t2, /Use for this site/, 'second visit needs no confirmation');
   assert.equal((await send(second, 'm1 change')).target, 'claude-aaaa1111');
   return { ok: true };
 });
@@ -211,8 +213,8 @@ await scenario('m03-test-domain-config-one-click', async () => {
   const ctx = await pickOn('http://test.inspect.example/', '.save-button');
   const t = await waitText(ctx, /Send requests from test.inspect.example to react-main/, 'preselected by config');
   assert.match(t, /project config/);
-  await click(ctx, 'Hand over');
-  await waitText(ctx, /→ react-main/, 'bound');
+  await click(ctx, 'Use for this site');
+  await waitText(ctx, /→\s*react-main/, 'bound');
   // Page data cannot move a bound target: forged marks and revision.
   await A.evaluate(ctx.page.sid, `(() => { const m = document.createElement('meta'); m.name = 'chrome-use-revision'; m.content = 'deadbeef'; document.head.append(m); document.querySelector('.save-button').setAttribute('data-insp-path', ${JSON.stringify(wt2 + '/src/OrderForm.jsx:1:1:button')}); return 1; })()`);
   const again = await pickOn('http://test.inspect.example/?forged', '.save-button');
@@ -225,16 +227,16 @@ await scenario('m04-same-origin-two-apps', async () => {
   setRoster([S('claude-adm1', 'admin', path.join(mono, 'apps/admin')), S('claude-shp1', 'shop', path.join(mono, 'apps/shop'))]);
   const admin = await pickOn('http://apps.inspect.example/admin/', '.admin-save');
   await waitText(admin, /apps.inspect.example\/admin to admin/, 'admin preselected');
-  await click(admin, 'Hand over');
+  await click(admin, 'Use for this site');
   const shop = await pickOn('http://apps.inspect.example/shop/', '.shop-buy');
   await waitText(shop, /apps.inspect.example\/shop to shop/, 'shop preselected');
-  await click(shop, 'Hand over');
+  await click(shop, 'Use for this site');
   assert.equal((await send(shop, 'shop change')).target, 'claude-shp1');
   const admin2 = await pickOn('http://apps.inspect.example/admin/orders', '.admin-save');
   assert.equal((await send(admin2, 'admin change')).target, 'claude-adm1');
   const other = await pickOn('http://apps.inspect.example/administrator', '.admin-save');
   const t = await text(other.frame);
-  assert.doesNotMatch(t, /→ admin/, '/administrator is not inside /admin');
+  assert.doesNotMatch(t, /→\s*admin\b/, '/administrator is not inside /admin');
   assert.match(t, /Choose where requests from this page go/, 'no preselection');
   return { ok: true };
 });
@@ -244,7 +246,7 @@ await scenario('m05-worktrees-ranked-by-revision', async () => {
   setRoster([S('claude-main1', 'main', react), S('claude-wt2', 'wt2', wt2)]);
   const ctx = await pickOn('http://rev.inspect.example/', '.rev-save');
   const t = await waitText(ctx, /Choose where requests from this page go/, 'no preselection across worktrees');
-  const first = t.indexOf(wt2), second = t.indexOf(react + '\n');
+  const first = t.indexOf(tilde(wt2)), second = t.indexOf(tilde(react) + '\n');
   assert.ok(first >= 0 && (second < 0 || first < second), 'worktree containing the deployed commit ranks first');
   assert.match(t, /deployed build is your local HEAD/);
   assert.match(t, /behind the deployed build/);
@@ -257,7 +259,7 @@ await scenario('m06-two-sessions-one-worktree', async () => {
   const ctx = await pickOn('http://localhost:5173/?m6', '.save-button');
   await waitText(ctx, /Choose where requests from this page go/, 'no preselection with two sessions');
   await A.clickInFrame(ctx.page.sid, ctx.frame.sid, `[...document.querySelectorAll('label')].find(l => /react-second/.test(l.textContent)).querySelector('input')`);
-  await click(ctx, 'Hand over');
+  await click(ctx, 'Use for this site');
   const next = await pickOn('http://localhost:5173/?m6b', '.save-button');
   assert.equal((await send(next, 'm6')).target, 'claude-bbbb2222');
   return { ok: true };
@@ -275,7 +277,7 @@ await scenario('m08-session-moved', async () => {
   resetBindings();
   setRoster([S('claude-aaaa1111', 'react-main', react)]);
   let ctx = await pickOn('http://localhost:5173/?m8', '.save-button');
-  await click(ctx, 'Hand over');
+  await click(ctx, 'Use for this site');
   setRoster([S('claude-aaaa1111', 'react-main', vue)]);
   ctx = await pickOn('http://localhost:5173/?m8b', '.save-button');
   await waitText(ctx, /now works in another folder/, 'sessionMoved');
@@ -289,7 +291,7 @@ await scenario('m09-link-from-session-zero-clicks', async () => {
   const r = cli(['link', 'http://test.inspect.example/'], 'claude-aaaa1111');
   assert.equal(r.code, 0, r.stdout + r.stderr);
   const ctx = await pickOn('http://test.inspect.example/?m9', '.save-button');
-  assert.doesNotMatch(await text(ctx.frame), /Hand over/);
+  assert.doesNotMatch(await text(ctx.frame), /Use for this site/);
   assert.equal((await send(ctx, 'm9')).target, 'claude-aaaa1111');
   return { link: r.json };
 });
@@ -314,10 +316,10 @@ await scenario('m11-tab-only-target', async () => {
   setRoster([S('claude-aaaa1111', 'react-main', react), S('claude-bbbb2222', 'react-second', react)]);
   assert.equal(cli(['link', 'http://test.inspect.example/'], 'claude-aaaa1111').code, 0);
   const tabA = await pickOn('http://test.inspect.example/?tabA', '.save-button');
-  await A.clickInFrame(tabA.page.sid, tabA.frame.sid, `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'change')`);
+  await A.clickInFrame(tabA.page.sid, tabA.frame.sid, `[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Change')`);
   await waitText(tabA, /react-second/, 'pairs listed');
   await A.clickInFrame(tabA.page.sid, tabA.frame.sid, `[...document.querySelectorAll('label')].find(l => /react-second/.test(l.textContent)).querySelector('input')`);
-  await click(tabA, 'Only this tab');
+  await click(tabA, 'This tab only');
   assert.equal((await send(tabA, 'tab A')).target, 'claude-bbbb2222');
   const tabB = await pickOn('http://test.inspect.example/?tabB', '.save-button');
   assert.equal((await send(tabB, 'tab B')).target, 'claude-aaaa1111', 'other tabs keep the site default');
@@ -336,8 +338,8 @@ await scenario('m12-monorepo-app-root-and-forged-marks', async () => {
     await waitFor(async () => (await fetch('http://localhost:5175/index.html')).ok, { timeout: 15000, label: 'admin dev server' });
     const ctx = await pickOn('http://localhost:5175/index.html', '.admin-save');
     const t = await waitText(ctx, /Send requests from localhost:5175 to mono-root/, 'preselected via port');
-    assert.match(t, new RegExp('Project: ' + path.join(mono, 'apps/admin').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    await click(ctx, 'Hand over');
+    assert.match(t, new RegExp(tilde(path.join(mono, 'apps/admin')).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    await click(ctx, 'Use for this site');
     await click(ctx, '+ Add element');
     await A.click(ctx.page.sid, ...Object.values(await A.center(ctx.page.sid, '.forged-shop')), 8);
     await A.click(ctx.page.sid, ...Object.values(await A.center(ctx.page.sid, '.forged-shared')), 8);
@@ -356,7 +358,7 @@ await scenario('m18-wildcard-config', async () => {
   setRoster([S('claude-wild', 'wild', wild)]);
   const a = await pickOn('http://a.wild.inspect.example/', '.wild-go');
   await waitText(a, /Send requests from a.wild.inspect.example to wild/, 'wildcard preselect');
-  await click(a, 'Hand over');
+  await click(a, 'Use for this site');
   const list = JSON.parse(fs.readFileSync(BINDINGS, 'utf8'));
   assert.ok((list.bindings || []).some(x => x.origin === 'http://a.wild.inspect.example'), 'binding stores the exact origin');
   const bsub = await pickOn('http://b.wild.inspect.example/', '.wild-go');
@@ -370,13 +372,13 @@ await scenario('m19-spa-route-change', async () => {
   resetBindings();
   setRoster([S('claude-adm1', 'admin', path.join(mono, 'apps/admin')), S('claude-shp1', 'shop', path.join(mono, 'apps/shop'))]);
   const shop = await pickOn('http://apps.inspect.example/shop/', '.shop-buy');
-  await click(shop, 'Hand over');
+  await click(shop, 'Use for this site');
   const admin = await pickOn('http://apps.inspect.example/admin/', '.admin-save');
-  await click(admin, 'Hand over');
+  await click(admin, 'Use for this site');
   // Same document, new path: the panel re-resolves and says so.
   await A.evaluate(admin.page.sid, "history.pushState({}, '', '/shop/cart'); 1");
   await waitText(admin, /The page moved to another path/, 'route change notice');
-  await waitText(admin, /→ shop/, 'target follows the new path');
+  await waitText(admin, /→\s*shop/, 'target follows the new path');
   assert.equal((await send(admin, 'after route change')).target, 'claude-shp1');
   return { ok: true };
 });
@@ -386,7 +388,7 @@ await scenario('m20-target-changed-after-panel-showed-it', async () => {
   setRoster([S('claude-aaaa1111', 'react-main', react), S('claude-bbbb2222', 'react-second', react)]);
   assert.equal(cli(['link', 'http://test.inspect.example/'], 'claude-aaaa1111').code, 0);
   const ctx = await pickOn('http://test.inspect.example/?m20', '.save-button');
-  await waitText(ctx, /→ react-main/, 'panel shows A');
+  await waitText(ctx, /→\s*react-main/, 'panel shows A');
   // Elsewhere: A unlinks, B links (no claim needed now) while the panel still shows A.
   assert.equal(cli(['unlink', 'http://test.inspect.example/'], 'claude-aaaa1111').code, 0);
   assert.equal(cli(['link', 'http://test.inspect.example/'], 'claude-bbbb2222').code, 0);
@@ -396,7 +398,7 @@ await scenario('m20-target-changed-after-panel-showed-it', async () => {
   await A.clickInFrame(ctx.page.sid, ctx.frame.sid, 'document.getElementById("send")');
   await waitText(ctx, /target changed since the panel showed it/, 'refused');
   assert.equal(dms().length, before, 'nothing sent to B without the user seeing B');
-  await waitText(ctx, /→ react-second/, 'panel now shows B');
+  await waitText(ctx, /→\s*react-second/, 'panel now shows B');
   return { ok: true };
 });
 

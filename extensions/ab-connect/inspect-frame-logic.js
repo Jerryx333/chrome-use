@@ -128,3 +128,20 @@ export function shellQuote(value, platform) {
 export function linkCommand(url, platform) {
   return `chrome-use inspect link ${shellQuote(url, platform)}`;
 }
+
+// Display only: the home folder as ~ so paths fit the panel. The full path
+// stays in the element's title.
+export function shortPath(path) {
+  return String(path ?? '').replace(/^(?:\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)(?=$|[\\/])/, '~');
+}
+
+// Long source locations keep their end (file name and line), which is the
+// part that tells elements apart; leading folders give way to "…/".
+export function tailPath(text, max = 42) {
+  const value = String(text ?? '');
+  if (value.length <= max) return value;
+  const parts = value.split('/');
+  while (parts.length > 1 && ('…/' + parts.join('/')).length > max) parts.shift();
+  const tail = '…/' + parts.join('/');
+  return tail.length <= max ? tail : '…' + value.slice(-(max - 1));
+}

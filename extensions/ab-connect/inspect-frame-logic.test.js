@@ -64,3 +64,22 @@ test('link commands quote page URLs as one literal argument', async () => {
   assert.equal(shellQuote('a’b', 'windows'), "'a’’b'");
   assert.equal(linkCommand('https://x.example/p', 'linux'), "chrome-use inspect link 'https://x.example/p'");
 });
+
+test('paths show the home folder as ~', async () => {
+  const { shortPath } = await import('./inspect-frame-logic.js');
+  assert.equal(shortPath('/Users/leo/tk.com/piggo'), '~/tk.com/piggo');
+  assert.equal(shortPath('/home/dev/app'), '~/app');
+  assert.equal(shortPath('C:\\Users\\me\\work\\app'), '~\\work\\app');
+  assert.equal(shortPath('/Users/leo'), '~');
+  assert.equal(shortPath('/Users/leonard-other'), '~');
+  assert.equal(shortPath('/opt/app/Users/x'), '/opt/app/Users/x');
+  assert.equal(shortPath(undefined), '');
+});
+
+test('long source locations keep the file and line', async () => {
+  const { tailPath } = await import('./inspect-frame-logic.js');
+  assert.equal(tailPath('src/a.tsx:1:2'), 'src/a.tsx:1:2');
+  assert.equal(tailPath('src/pages/rate/components/RateTable.tsx:42:7', 31), '…/components/RateTable.tsx:42:7');
+  assert.equal(tailPath('averyveryveryverylongfilenamewithoutslashes.tsx:9', 20), '…ithoutslashes.tsx:9');
+  assert.equal(tailPath('a/' + 'x'.repeat(50) + '.tsx:3', 20).length, 20);
+});
