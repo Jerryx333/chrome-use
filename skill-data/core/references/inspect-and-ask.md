@@ -41,7 +41,9 @@ deployment; delivery status in the browser only says the message reached you.
 
 A message may instead ask you to set up `code-inspector-plugin` (dev builds) or
 to enable it for test builds. The user agreed to this in the browser panel.
-Follow the listed steps, register the plugin with `pathType: 'relative'`, never
+Follow the listed steps, register the plugin with `pathType: 'relative'` and
+`hotKeys: false` (its own Option/Alt+Shift picker would react to Alt+Shift+C;
+test builds also `server: 'close'`), never
 enable it for production builds, do not commit or push, and report the diff.
 For test builds, add `<meta name="chrome-use-revision" content="<git sha>">`
 and verify a production build contains no `data-insp-path`.

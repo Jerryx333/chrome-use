@@ -436,7 +436,7 @@ async function launch(agent) {
 function consentCard(kind) {
   const plugin = kind === 'plugin';
   const changes = plugin
-    ? ['Add code-inspector-plugin as a devDependency', 'Register it in the dev build only (pathType: relative)', 'No production change, no commit, no push; the agent reports the diff']
+    ? ['Add code-inspector-plugin as a devDependency', 'Register it in the dev build only (pathType: relative, hotKeys: false)', 'No production change, no commit, no push; the agent reports the diff']
     : ['Add an explicit flag so test builds (never production) enable code-inspector-plugin with relative paths', 'Add <meta name="chrome-use-revision"> with the git commit to test builds', 'Verify a production build has no data-insp-path; no commit or push'];
   return h('div', { class: 'notice warn stack small' },
     h('strong', { text: plugin ? 'No source marks on this page' : 'This test build has no source marks' }),

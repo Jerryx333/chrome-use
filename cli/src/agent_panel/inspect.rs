@@ -1552,12 +1552,12 @@ fn fence(text: &str) -> String {
 const SETUP_PLUGIN: &str = "Setup request (the user consented to this in chrome-use): add code-inspector-plugin to the project at {root}.
 1. Detect the build tool this project uses (Vite, webpack, Rspack, Next.js, Nuxt, Umi or another).
 2. Add code-inspector-plugin as a devDependency with the project's package manager.
-3. Register it for development only, with pathType: 'relative'. Do not enable it in production builds.
+3. Register it for development only, with pathType: 'relative' and hotKeys: false (chrome-use has its own picker; the plugin's Option/Alt+Shift picker would react to Alt+Shift+C). Do not enable it in production builds.
 4. Do not commit or push.
 5. Report the exact diff.";
 
 const SETUP_TEST_ENV: &str = "Setup request (the user consented to this in chrome-use): let test builds of the project at {root} carry source locations.
-1. Add an explicit environment flag so that test builds, and never production builds, enable code-inspector-plugin with pathType: 'relative'.
+1. Add an explicit environment flag so that test builds, and never production builds, enable code-inspector-plugin with pathType: 'relative', hotKeys: false and server: 'close' (test builds only need the marks, not the plugin's editor server).
 2. Make test builds emit <meta name=\"chrome-use-revision\" content=\"<git sha>\"> with the commit they were built from.
 3. Run a production build and verify it contains no data-insp-path attribute.
 4. Do not commit or push.
