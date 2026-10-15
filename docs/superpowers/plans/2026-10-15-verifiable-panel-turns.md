@@ -148,6 +148,20 @@ on the same process. Four rules close that:
    semantics retire the generation after every turn. This is the one place the code looks at a
    version, and unknown always takes the conservative path. A single happy-path run does not
    add a version to the allowlist.
+
+   Client-timeout closes (fixtures `*-mcp-timeout.jsonl`, `fixtures/README.md` "MCP client
+   timeout"): Codex 0.162.1, Claude 2.1.300 and Pi 1.1.0 honour the client timeout but close the
+   timed-out call as a failed tool and then complete the turn while the MCP server still runs it,
+   so the open-tool guard of rule 2 sees nothing open. Rule 2 therefore also retires a generation
+   whose turn closed any chrome_use call with a client-timeout error (`generationRetired.reason:
+   "clientTimeout"`), recognised from the structured error flag plus each backend's message:
+   Codex `mcpToolCall` `status: "failed"` with `error.message` "timed out awaiting tools/call";
+   Claude `tool_result` `is_error` with "timed out after"; Pi `tool_execution_end` `isError` with
+   "MCP request timed out" (`client_timed_out` in `service.rs`, tested against those fixtures).
+   With that, a turn that keeps its generation had every chrome_use call return before it
+   completed, so Codex 0.162.1 and Claude 2.1.300 are on the allowlist. Pi reports no version
+   and stays off; OpenCode 2.0.25 takes no client timeout (`mcpToolTimeoutSecs: null`) and
+   retires every turn, and its open `execute` wrappers count as open chrome_use calls.
 4. Begin carries `{bootId, notAfter}`. `notAfter` is the MCP's send time plus its 5 s client
    budget, read from a machine-wide monotonic clock (`CLOCK_MONOTONIC` on Unix,
    `QueryUnbiasedInterruptTime` on Windows) so a wall-clock change cannot move it. Monotonic

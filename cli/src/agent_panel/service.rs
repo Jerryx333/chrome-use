@@ -560,6 +560,8 @@ struct Turn {
     completed: Vec<String>,
     answered: bool,
     final_items: std::collections::BTreeSet<String>,
+    /// A chrome_use call of this turn was closed by its client's timeout.
+    client_timeout: bool,
 }
 
 struct OpenTool {
@@ -594,11 +596,41 @@ impl From<&str> for StartFailure {
 /// and what happens when the MCP client times out a chrome_use call (plan
 /// D1a rule 3). Only these keep their process after a cleanly completed
 /// turn; every other version, or a missing version, retires its generation
-/// after every turn. The `*-mcp-timeout` fixtures show that none qualifies:
-/// Codex 0.162.1, Claude 2.1.300 and Pi 1.1.0 close a timed-out call as a
-/// failed tool and complete the turn while the MCP server still runs it, so
-/// the open-tool guard cannot see it (`fixtures/README.md`).
-const GENERATION_REUSE: &[(&str, &str)] = &[];
+/// after every turn. The `*-mcp-timeout` fixtures show Codex 0.162.1, Claude
+/// 2.1.300 and Pi 1.1.0 closing a timed-out call as a failed tool and
+/// completing the turn while the MCP server still runs it
+/// (`fixtures/README.md`). That close is recognisable ([`client_timed_out`])
+/// and retires the generation, so a turn that keeps its generation had every
+/// chrome_use call return first. Pi reports no version and stays off.
+const GENERATION_REUSE: &[(&str, &str)] = &[("codex", "0.162.1"), ("claude", "2.1.300")];
+
+/// A chrome_use call the backend's MCP client gave up on, from the closing
+/// tool notice. Matched on the structured error flag plus the text each
+/// backend uses in the `*-mcp-timeout` fixtures: Codex `mcpToolCall`
+/// `status: "failed"` with `error.message` "timed out awaiting tools/call";
+/// Claude `tool_result` `is_error` with "timed out after"; Pi
+/// `tool_execution_end` `isError` with "MCP request timed out".
+fn client_timed_out(item: &Value) -> bool {
+    fn texts(value: &Value) -> Vec<&str> {
+        match value {
+            Value::String(text) => vec![text.as_str()],
+            Value::Array(parts) => parts.iter().flat_map(texts).collect(),
+            Value::Object(map) => map.get("text").map(texts).unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+    let says = |value: &Value, pattern: &str| texts(value).iter().any(|t| t.contains(pattern));
+    if item["type"] == "mcpToolCall" {
+        return item["status"] == "failed"
+            && says(&item["error"]["message"], "timed out awaiting tools/call");
+    }
+    if item["type"] == "tool_result" {
+        return item["is_error"] == true && says(&item["content"], "timed out after");
+    }
+    item["is_error"] == true
+        && (says(&item["result"]["content"], "MCP request timed out")
+            || says(&item["result"], "MCP request timed out"))
+}
 
 const NOT_RESUMABLE: &str =
     "This agent cannot continue after an interrupted request. Start a new conversation.";
@@ -912,6 +944,7 @@ impl Engine {
                 completed: Vec::new(),
                 answered: false,
                 final_items: Default::default(),
+                client_timeout: false,
             },
         );
         let started = self.last_sequence(id);
@@ -999,16 +1032,19 @@ impl Engine {
         if turn.names.len() < 1024 {
             turn.names.insert(call.clone(), name.clone());
         }
+        let browser = BROWSER_TOOL.is_match(&name)
+            || item["server"] == "chrome_use"
+            || (agent == "opencode" && name == "execute");
         if data["completed"] == true {
+            if browser && client_timed_out(item) {
+                turn.client_timeout = true;
+            }
             turn.open_tools.remove(&call);
             if turn.completed.len() < 256 {
                 turn.completed.push(call);
             }
             return;
         }
-        let browser = BROWSER_TOOL.is_match(&name)
-            || item["server"] == "chrome_use"
-            || (agent == "opencode" && name == "execute");
         let action_ids = data["actionIds"]
             .as_array()
             .map(|ids| {
@@ -1079,6 +1115,8 @@ impl Engine {
             Some("notCompleted")
         } else if turn.open_tools.values().any(|tool| tool.browser) {
             Some("openTool")
+        } else if turn.client_timeout {
+            Some("clientTimeout")
         } else if !open_leases.is_empty() {
             Some("openLease")
         } else if !info.version.as_ref().is_some_and(|version| {
@@ -4506,9 +4544,125 @@ mod turn_tests {
     }
 
     #[test]
-    fn versions_seen_completing_with_a_call_in_flight_are_not_allowlisted() {
-        for entry in [("codex", "0.162.1"), ("claude", "2.1.300")] {
-            assert!(!GENERATION_REUSE.contains(&entry), "{entry:?}");
+    fn only_versions_whose_timeouts_are_recognised_are_allowlisted() {
+        assert_eq!(
+            GENERATION_REUSE,
+            &[("codex", "0.162.1"), ("claude", "2.1.300")]
+        );
+    }
+
+    fn fixture(name: &str) -> Vec<Value> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/agent_panel/fixtures")
+            .join(name);
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// The timed-out call's notices, as the adapters build them from the
+    /// committed fixtures.
+    fn timeout_notices(agent: &str) -> Vec<Notice> {
+        match agent {
+            "codex" => fixture("codex-mcp-timeout.jsonl")
+                .iter()
+                .filter(|v| v["params"]["item"]["tool"] == "chrome_use_wait")
+                .filter_map(|v| match v["method"].as_str() {
+                    Some("item/started") => {
+                        Some(backend::codex_tool_notice(false, &v["params"]["item"]))
+                    }
+                    Some("item/completed") => {
+                        Some(backend::codex_tool_notice(true, &v["params"]["item"]))
+                    }
+                    _ => None,
+                })
+                .collect(),
+            "claude" => {
+                let lines = fixture("claude-mcp-timeout.jsonl");
+                let mut tools = backend::ClaudeTools::default();
+                let mut out = Vec::new();
+                for line in &lines {
+                    if line["type"] == "assistant" {
+                        for block in line["message"]["content"].as_array().unwrap() {
+                            if block["name"] == "mcp__chrome_use__chrome_use_wait" {
+                                tools.remember(block);
+                                out.push(backend::tool_notice(
+                                    false,
+                                    block["id"].as_str(),
+                                    Vec::new(),
+                                    block,
+                                ));
+                            }
+                        }
+                    }
+                    if line["type"] == "user"
+                        && line.to_string().contains("timed out after")
+                        && !out.is_empty()
+                    {
+                        out.extend(backend::claude_tool_results(line, &tools));
+                    }
+                }
+                out
+            }
+            _ => fixture("pi-mcp-timeout.jsonl")
+                .iter()
+                .filter(|v| {
+                    v["type"] == "tool_execution_end"
+                        && v["toolName"] == "mcp__chrome_use__chrome_use_wait"
+                })
+                .map(backend::pi_tool_end)
+                .collect(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_call_closed_by_the_client_timeout_retires_even_an_allowlisted_version() {
+        for (agent, version) in [("codex", "0.162.1"), ("claude", "2.1.300"), ("pi", "x")] {
+            let c = chat(agent).await;
+            c.engine.lock().await.reuse_allowlist = vec![(agent.into(), version.into())];
+            c.notice(
+                "ready",
+                json!({"sessionId":"s","backendVersion":version,"resumable":true,"mcpToolTimeoutSecs":120}),
+            )
+            .await;
+            c.send("wait").await;
+            let notices = timeout_notices(agent);
+            assert!(
+                notices.iter().any(|n| n.data["completed"] == true),
+                "{agent}"
+            );
+            for notice in notices {
+                c.notice(notice.kind, notice.data).await;
+            }
+            c.notice("terminal", json!({"status":"completed","error":null}))
+                .await;
+            let retired = c.kinds("generationRetired").await;
+            assert_eq!(retired[0]["reason"], "clientTimeout", "{agent}");
+            assert!(c.kinds("batchInterrupted").await.is_empty(), "{agent}");
+        }
+        // The clean read of the same Codex fixture is not a timeout.
+        let read = fixture("codex-mcp-timeout.jsonl")
+            .into_iter()
+            .find(|v| {
+                v["method"] == "item/completed" && v["params"]["item"]["tool"] == "chrome_use_read"
+            })
+            .unwrap();
+        assert!(!client_timed_out(&read["params"]["item"]));
+    }
+
+    #[tokio::test]
+    async fn an_open_opencode_execute_wrapper_counts_as_a_browser_call() {
+        let c = chat("opencode").await;
+        c.send("go").await;
+        c.notice(
+            "tool",
+            json!({"completed":false,"toolCallId":"call_1","item":{"toolCallId":"call_1","name":"execute","title":"execute","kind":"other","status":"pending","rawInput":{}}}),
+        )
+        .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert_eq!(c.kinds("generationRetired").await[0]["reason"], "openTool");
     }
 }
