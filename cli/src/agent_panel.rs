@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 mod acp;
 mod approval;
+pub(crate) mod artifacts;
 mod attachments;
 mod backend;
 mod config_edit;
@@ -22,6 +23,8 @@ mod conversation;
 mod inspect;
 mod inspection;
 mod options;
+mod progress;
+mod recovery;
 mod redact;
 mod schedules;
 mod service;

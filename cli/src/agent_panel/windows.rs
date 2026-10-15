@@ -135,26 +135,29 @@ impl ProcessJob {
         }
         Ok(())
     }
+    /// Processes still in the job, read through the held handle.
+    pub fn active_processes(&self) -> Result<u32, String> {
+        let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            QueryInformationJobObject(
+                self.0 .0,
+                JobObjectBasicAccountingInformation,
+                &mut accounting as *mut _ as _,
+                std::mem::size_of_val(&accounting) as u32,
+                ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(failure(
+                "Cannot confirm the owned agent process tree exited",
+            ));
+        }
+        Ok(accounting.ActiveProcesses)
+    }
     pub async fn confirm_empty(&self) -> Result<(), String> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
-            let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
-                unsafe { std::mem::zeroed() };
-            let ok = unsafe {
-                QueryInformationJobObject(
-                    self.0 .0,
-                    JobObjectBasicAccountingInformation,
-                    &mut accounting as *mut _ as _,
-                    std::mem::size_of_val(&accounting) as u32,
-                    ptr::null_mut(),
-                )
-            };
-            if ok == 0 {
-                return Err(failure(
-                    "Cannot confirm the owned agent process tree exited",
-                ));
-            }
-            if accounting.ActiveProcesses == 0 {
+            if self.active_processes()? == 0 {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
@@ -210,6 +213,34 @@ pub(super) fn identity(file: &File) -> Result<(u64, u64), String> {
         i.dwVolumeSerialNumber as u64,
         ((i.nFileIndexHigh as u64) << 32) | i.nFileIndexLow as u64,
     ))
+}
+/// Whether the open file's owner is the current user (or the token's default
+/// owner), as `protect` requires before taking a file over.
+pub(super) fn owned_by_current_user(file: &File) -> Result<bool, String> {
+    info(file)?;
+    let user = token_sid(TokenUser)?;
+    let default_owner = token_sid(TokenOwner)?;
+    unsafe {
+        let mut owner = ptr::null_mut();
+        let mut descriptor = ptr::null_mut();
+        let result = GetSecurityInfo(
+            file.as_raw_handle() as _,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        );
+        if result != 0 {
+            return Err(format!("Cannot read the Windows file owner ({result})"));
+        }
+        let _descriptor = Local(descriptor);
+        Ok(!owner.is_null()
+            && (EqualSid(owner, user.as_ptr() as _) != 0
+                || EqualSid(owner, default_owner.as_ptr() as _) != 0))
+    }
 }
 pub(super) fn regular(file: &File) -> Result<(), String> {
     let i = info(file)?;
