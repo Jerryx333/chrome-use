@@ -3,38 +3,27 @@
 // computer; choosing one asks the host to bind a new panel conversation to it.
 // Nothing is sent to the agent until the user writes the next message.
 
-// Every user-visible string of this feature, in one place for localization.
-export const RESUME_TEXT = {
+import { t, messageMap } from './i18n.js';
+
+// The feature's text: plain labels are looked up when read (chrome.i18n may
+// not exist yet at import time), the rest take their values.
+export const RESUME_TEXT = Object.defineProperties({
+  // The command word itself is not translated.
   command: 'resume',
-  commandHint: 'Continue a session started in a terminal',
-  menuItem: 'Resume a session…',
-  title: 'Resume a session',
-  close: 'Close',
-  agent: 'Agent',
-  search: 'Search sessions',
-  loading: 'Looking for sessions…',
-  empty: 'No sessions found.',
-  emptyQuery: query => `No sessions match “${query}”.`,
-  unsupported: agent => `${agent} sessions can't be continued here.`,
-  untitled: 'Untitled session',
-  running: 'Active elsewhere',
-  open: 'Open in panel',
-  resuming: 'Opening…',
-  updateCli: 'Update the chrome-use CLI to resume sessions.',
-  unsafe: 'This session is still active in another terminal; continuing here can corrupt its history.',
-  unsafeHint: 'Close it there first, or continue anyway.',
-  confirm: 'Continue here anyway',
-  cancel: 'Cancel',
-  ownership: "After you continue a session here, don't keep using it in the terminal at the same time.",
-  deleteKeeps: "Removes its panel history and its browser tabs from this computer. The CLI session it continued stays, and can still be used in the terminal.",
-  earlier: count => `Earlier in this session · ${count} message${count === 1 ? '' : 's'}`,
-  notRecorded: 'Earlier history not recorded.',
-  omitted: count => `${count} earlier message${count === 1 ? ' was' : 's were'} not imported.`,
-  continued: (agent, cwd) => cwd ? `Continued from a ${agent} session in ${cwd}.` : `Continued from a ${agent} session.`,
-  you: 'You',
-  assistant: 'Assistant',
-  tools: 'Tools',
-};
+  emptyQuery: query => t('panel_resume_empty_query', query),
+  unsupported: agent => t('panel_resume_unsupported', agent),
+  earlier: count => count === 1 ? t('panel_resume_earlier_one') : t('panel_resume_earlier', count),
+  omitted: count => count === 1 ? t('panel_resume_omitted_one') : t('panel_resume_omitted', count),
+  continued: (agent, cwd) => cwd ? t('panel_resume_continued_in', agent, cwd) : t('panel_resume_continued', agent),
+}, Object.getOwnPropertyDescriptors(messageMap({
+  commandHint: 'panel_resume_command_hint', menuItem: 'panel_resume_menu_item', title: 'panel_resume_title',
+  close: 'panel_resume_close', agent: 'panel_resume_agent', search: 'panel_resume_search', loading: 'panel_resume_loading',
+  empty: 'panel_resume_empty', untitled: 'panel_resume_untitled', running: 'panel_resume_running', open: 'panel_resume_open',
+  resuming: 'panel_resume_resuming', updateCli: 'panel_resume_update_cli', unsafe: 'panel_resume_unsafe',
+  unsafeHint: 'panel_resume_unsafe_hint', confirm: 'panel_resume_confirm', cancel: 'panel_resume_cancel',
+  ownership: 'panel_resume_ownership', deleteKeeps: 'panel_resume_delete_keeps', notRecorded: 'panel_resume_not_recorded',
+  you: 'panel_speaker_you', assistant: 'panel_speaker_assistant', tools: 'panel_resume_tools',
+})));
 
 /** `/resume [query]` typed in the composer, or null for any other text. */
 export function parseResumeCommand(text) {

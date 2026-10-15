@@ -1,3 +1,4 @@
+import './test-i18n.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseResumeCommand, projectName, importedView, createResumePicker, RESUME_TEXT } from './resume-picker.js';

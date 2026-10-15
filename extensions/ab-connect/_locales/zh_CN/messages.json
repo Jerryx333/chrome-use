@@ -1959,6 +1959,126 @@
   "panel_respond_unconfirmed": {
     "message": "回应未确认。请先读取当前状态再重试。"
   },
+  "panel_resume_agent": {
+    "message": "Agent"
+  },
+  "panel_resume_cancel": {
+    "message": "取消"
+  },
+  "panel_resume_close": {
+    "message": "关闭"
+  },
+  "panel_resume_command_hint": {
+    "message": "继续在终端里开始的会话"
+  },
+  "panel_resume_confirm": {
+    "message": "仍在这里继续"
+  },
+  "panel_resume_continued": {
+    "message": "继续自 $AGENT$ 会话。",
+    "placeholders": {
+      "agent": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_continued_in": {
+    "message": "继续自 $DIR$ 中的 $AGENT$ 会话。",
+    "placeholders": {
+      "agent": {
+        "content": "$1"
+      },
+      "dir": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_resume_delete_keeps": {
+    "message": "从这台电脑上删除它在面板里的记录和浏览器标签页。它所继续的 CLI 会话会保留，仍可在终端里使用。"
+  },
+  "panel_resume_earlier": {
+    "message": "此前的会话内容 · $COUNT$ 条消息",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_earlier_one": {
+    "message": "此前的会话内容 · 1 条消息"
+  },
+  "panel_resume_empty": {
+    "message": "没有找到会话。"
+  },
+  "panel_resume_empty_query": {
+    "message": "没有与“$QUERY$”匹配的会话。",
+    "placeholders": {
+      "query": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_loading": {
+    "message": "正在查找会话…"
+  },
+  "panel_resume_menu_item": {
+    "message": "继续已有会话…"
+  },
+  "panel_resume_not_recorded": {
+    "message": "更早的历史没有记录。"
+  },
+  "panel_resume_omitted": {
+    "message": "有 $COUNT$ 条更早的消息没有导入。",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_omitted_one": {
+    "message": "有 1 条更早的消息没有导入。"
+  },
+  "panel_resume_open": {
+    "message": "已在面板中"
+  },
+  "panel_resume_ownership": {
+    "message": "在这里继续会话后，请不要同时在终端里继续使用它。"
+  },
+  "panel_resume_resuming": {
+    "message": "正在打开…"
+  },
+  "panel_resume_running": {
+    "message": "在别处运行中"
+  },
+  "panel_resume_search": {
+    "message": "搜索会话"
+  },
+  "panel_resume_title": {
+    "message": "继续已有会话"
+  },
+  "panel_resume_tools": {
+    "message": "工具"
+  },
+  "panel_resume_unsafe": {
+    "message": "这个会话仍在另一个终端里运行；在这里继续可能会损坏它的历史记录。"
+  },
+  "panel_resume_unsafe_hint": {
+    "message": "请先在那边关闭它，或者仍然继续。"
+  },
+  "panel_resume_unsupported": {
+    "message": "这里无法继续 $AGENT$ 的会话。",
+    "placeholders": {
+      "agent": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_untitled": {
+    "message": "未命名会话"
+  },
+  "panel_resume_update_cli": {
+    "message": "请更新 chrome-use CLI 后再继续已有会话。"
+  },
   "panel_retry_default_model": {
     "message": "用默认模型重试"
   },

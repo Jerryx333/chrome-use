@@ -1379,10 +1379,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     } finally { controls(); }
   })().catch(error));
   nodes.access.addEventListener('click' , () => void setAccess(!(selected ? conversation?.fullAccess === true : newFullAccess)).catch(error));
-  const deleteHint = nodes.deleteConfirm.querySelector?.('.hint'), deleteHintText = deleteHint?.textContent;
+  const deleteHint = nodes.deleteConfirm.querySelector?.('.hint');
   nodes.deleteChat.addEventListener('click', () => {
     // A continued CLI session is never deleted with the conversation.
-    if (deleteHint) deleteHint.textContent = conversation?.resumed ? RESUME_TEXT.deleteKeeps : deleteHintText;
+    if (deleteHint) deleteHint.textContent = conversation?.resumed ? RESUME_TEXT.deleteKeeps : t('sidepanel_delete_confirm_detail');
     nodes.deleteConfirm.hidden = false;
   });
   nodes.cancelDelete.addEventListener('click', () => { nodes.deleteConfirm.hidden = true; });

@@ -1959,6 +1959,126 @@
   "panel_respond_unconfirmed": {
     "message": "Response unconfirmed. Read the current state before retrying."
   },
+  "panel_resume_agent": {
+    "message": "Agent"
+  },
+  "panel_resume_cancel": {
+    "message": "Cancel"
+  },
+  "panel_resume_close": {
+    "message": "Close"
+  },
+  "panel_resume_command_hint": {
+    "message": "Continue a session started in a terminal"
+  },
+  "panel_resume_confirm": {
+    "message": "Continue here anyway"
+  },
+  "panel_resume_continued": {
+    "message": "Continued from a $AGENT$ session.",
+    "placeholders": {
+      "agent": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_continued_in": {
+    "message": "Continued from a $AGENT$ session in $DIR$.",
+    "placeholders": {
+      "agent": {
+        "content": "$1"
+      },
+      "dir": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_resume_delete_keeps": {
+    "message": "Removes its panel history and its browser tabs from this computer. The CLI session it continued stays, and can still be used in the terminal."
+  },
+  "panel_resume_earlier": {
+    "message": "Earlier in this session · $COUNT$ messages",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_earlier_one": {
+    "message": "Earlier in this session · 1 message"
+  },
+  "panel_resume_empty": {
+    "message": "No sessions found."
+  },
+  "panel_resume_empty_query": {
+    "message": "No sessions match “$QUERY$”.",
+    "placeholders": {
+      "query": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_loading": {
+    "message": "Looking for sessions…"
+  },
+  "panel_resume_menu_item": {
+    "message": "Resume a session…"
+  },
+  "panel_resume_not_recorded": {
+    "message": "Earlier history not recorded."
+  },
+  "panel_resume_omitted": {
+    "message": "$COUNT$ earlier messages were not imported.",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_omitted_one": {
+    "message": "1 earlier message was not imported."
+  },
+  "panel_resume_open": {
+    "message": "Open in panel"
+  },
+  "panel_resume_ownership": {
+    "message": "After you continue a session here, don't keep using it in the terminal at the same time."
+  },
+  "panel_resume_resuming": {
+    "message": "Opening…"
+  },
+  "panel_resume_running": {
+    "message": "Active elsewhere"
+  },
+  "panel_resume_search": {
+    "message": "Search sessions"
+  },
+  "panel_resume_title": {
+    "message": "Resume a session"
+  },
+  "panel_resume_tools": {
+    "message": "Tools"
+  },
+  "panel_resume_unsafe": {
+    "message": "This session is still active in another terminal; continuing here can corrupt its history."
+  },
+  "panel_resume_unsafe_hint": {
+    "message": "Close it there first, or continue anyway."
+  },
+  "panel_resume_unsupported": {
+    "message": "$AGENT$ sessions can't be continued here.",
+    "placeholders": {
+      "agent": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_untitled": {
+    "message": "Untitled session"
+  },
+  "panel_resume_update_cli": {
+    "message": "Update the chrome-use CLI to resume sessions."
+  },
   "panel_retry_default_model": {
     "message": "Retry with default model"
   },
