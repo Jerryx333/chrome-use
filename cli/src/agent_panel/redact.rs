@@ -211,6 +211,13 @@ pub(super) fn url(text: &str) -> String {
     apply(text, &masks).0
 }
 
+/// Text kept outside the journal (conversation title, last error, schedule
+/// results) as the rules and this conversation's known secrets redact it.
+pub(super) fn display(text: &str, secrets: &Secrets) -> String {
+    let known = secrets.known();
+    apply(text, &find_masks(text, &known, false)).0
+}
+
 /// Free text as the rules alone redact it, without known secrets: the form a
 /// predicate is compared in.
 pub(super) fn text_for_compare(text: &str) -> String {

@@ -774,6 +774,11 @@ impl Engine {
             }
         }
     }
+    /// Backend or page text for a field saved in `state.json` or the index,
+    /// redacted like the journal (rules and known secrets).
+    fn scrubbed(&mut self, id: &str, text: &str) -> String {
+        redact::display(text, self.secrets.entry(id.into()).or_default())
+    }
     /// Drop a conversation's job and wake everyone waiting for it to go.
     fn remove_job(&mut self, id: &str) {
         self.jobs.remove(id);
@@ -1224,15 +1229,16 @@ impl Engine {
                     // act; nothing starts until the user recovers.
                     self.remove_job(id);
                     self.requests.retain(|(chat, _), _| chat != id);
+                    let error = self.scrubbed(
+                        id,
+                        notice.data["error"]
+                            .as_str()
+                            .unwrap_or("The retired agent process did not confirm its exit"),
+                    );
                     let chat = self.chat(id)?;
                     chat.phase = Phase::RecoveryRequired;
                     chat.queue_paused = true;
-                    chat.last_error = Some(
-                        notice.data["error"]
-                            .as_str()
-                            .unwrap_or("The retired agent process did not confirm its exit")
-                            .into(),
-                    );
+                    chat.last_error = Some(error);
                     notice.data["generation"] = generation.into();
                     self.record(id, notice.kind, notice.data)?;
                     self.sync_control(id, "processUnconfirmed")?;
@@ -1392,6 +1398,7 @@ impl Engine {
             }
             "title" => {
                 if let Some(title) = notice.data["title"].as_str() {
+                    let title = self.scrubbed(id, title);
                     self.chat(id)?.title = title.chars().take(80).collect();
                 }
             }
@@ -1399,11 +1406,8 @@ impl Engine {
                 let status = notice.data["status"]
                     .as_str()
                     .ok_or("Missing backend terminal status")?;
-                if self.chat(id)?.terminal(
-                    generation,
-                    status,
-                    notice.data["error"].as_str().map(String::from),
-                )? {
+                let error = notice.data["error"].as_str().map(|e| self.scrubbed(id, e));
+                if self.chat(id)?.terminal(generation, status, error)? {
                     ended = Some(match status {
                         "completed" => "completed",
                         "interrupted" => "interrupted",
@@ -1415,6 +1419,12 @@ impl Engine {
             "exited" => {
                 self.remove_job(id);
                 self.requests.retain(|(chat, _), _| chat != id);
+                let error = self.scrubbed(
+                    id,
+                    notice.data["error"]
+                        .as_str()
+                        .unwrap_or("Backend process ended before the turn completed"),
+                );
                 let chat = self.chat(id)?;
                 if chat.active.is_some() {
                     let status = if chat.phase == Phase::Stopping {
@@ -1423,33 +1433,25 @@ impl Engine {
                         "failed"
                     };
                     ended = Some(status);
-                    chat.terminal(
-                        generation,
-                        status,
-                        Some(
-                            notice.data["error"]
-                                .as_str()
-                                .unwrap_or("Backend process ended before the turn completed")
-                                .into(),
-                        ),
-                    )?;
+                    chat.terminal(generation, status, Some(error))?;
                 }
             }
             "processUnconfirmed" => {
                 self.remove_job(id);
                 self.requests.retain(|(chat, _), _| chat != id);
+                let error = self.scrubbed(
+                    id,
+                    notice.data["error"]
+                        .as_str()
+                        .unwrap_or("Backend process state is unconfirmed"),
+                );
                 let chat = self.chat(id)?;
                 if chat.active.is_some() {
                     ended = Some("unknown");
                 }
                 chat.phase = Phase::RecoveryRequired;
                 chat.queue_paused = true;
-                chat.last_error = Some(
-                    notice.data["error"]
-                        .as_str()
-                        .unwrap_or("Backend process state is unconfirmed")
-                        .into(),
-                );
+                chat.last_error = Some(error);
             }
             _ => {}
         }
@@ -2476,6 +2478,7 @@ async fn launch(engine: &Arc<Mutex<Engine>>, id: &str, message: Message) -> Resu
     };
     let mut e = engine.lock().await;
     e.turns.remove(id);
+    let reason = e.scrubbed(id, &failure.reason);
     let chat = e.chat(id)?;
     let message_id = chat.active.as_ref().map(|m| m.id.clone());
     if failure.unconfirmed.is_some() {
@@ -2486,15 +2489,15 @@ async fn launch(engine: &Arc<Mutex<Engine>>, id: &str, message: Message) -> Resu
         chat.active_direct = false;
     }
     chat.queue_paused = true;
-    chat.last_error = Some(failure.reason.clone());
+    chat.last_error = Some(reason.clone());
     e.record(
         id,
         "turnStartFailed",
-        json!({"v":1,"messageId":message_id,"retiredGeneration":failure.unconfirmed,"reason":failure.reason,"delivered":false}),
+        json!({"v":1,"messageId":message_id,"retiredGeneration":failure.unconfirmed,"reason":reason,"delivered":false}),
     )?;
     e.sync_control(id, "turnStartFailed")?;
     e.persist(id)?;
-    Err(failure.reason)
+    Err(reason)
 }
 
 fn start<'a>(
@@ -2699,6 +2702,7 @@ fn spawn_pump(
                     }
                 }
                 Err(error) => {
+                    let error = e.scrubbed(&chat_id, &error);
                     if let Some(chat) = e.chats.get_mut(&chat_id) {
                         chat.phase = Phase::RecoveryRequired;
                         chat.queue_paused = true;
@@ -3233,7 +3237,7 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
     if let Err(error) = launch(engine, &chat_id, next).await {
         let mut e = engine.lock().await;
         let schedule = e.schedules.get_mut(id).ok_or("Schedule disappeared")?;
-        schedule.last_result = Some(format!("failed: {error}"));
+        schedule.last_result = Some(redact::text_for_compare(&format!("failed: {error}")));
         schedule.active_chat = None;
         schedule.finished_at = Some(super::conversation::now());
         super::schedules::persist(&e.store.directory, &e.schedules)?;
@@ -3311,7 +3315,7 @@ async fn schedule_tick(engine: &Arc<Mutex<Engine>>) -> Result<(), String> {
         if let Err(error) = run_schedule(engine, &id).await {
             let mut e = engine.lock().await;
             if let Some(schedule) = e.schedules.get_mut(&id) {
-                schedule.last_result = Some(format!("failed: {error}"));
+                schedule.last_result = Some(redact::text_for_compare(&format!("failed: {error}")));
                 schedule.finished_at = Some(now);
             }
             super::schedules::persist(&e.store.directory, &e.schedules)?;
@@ -4742,6 +4746,55 @@ mod turn_tests {
         p.started_on_new_generation(&direct).await;
         let started = p.kinds("turnStarted").await;
         assert_eq!(started.last().unwrap()["continuation"], "afterStop");
+    }
+
+    #[tokio::test]
+    async fn backend_titles_and_errors_are_saved_redacted() {
+        let c = chat("claude").await;
+        c.send("go").await;
+        c.notice(
+            "title",
+            json!({"title":"Deploy with sk-ant-SYNTHTITLEKEY0123456789"}),
+        )
+        .await;
+        c.notice(
+            "terminal",
+            json!({"status":"failed","error":"fetch https://x.example/cb?access_token=SYNTH_TOKEN_ERR1 failed"}),
+        )
+        .await;
+        let (title, error, root) = {
+            let mut e = c.engine.lock().await;
+            let chat = e.chat(&c.id).unwrap();
+            (
+                chat.title.clone(),
+                chat.last_error.clone().unwrap(),
+                e.store.directory.clone(),
+            )
+        };
+        assert!(title.starts_with("Deploy with [redacted"), "{title}");
+        assert_eq!(
+            error,
+            "fetch https://x.example/cb?access_token=[redacted] failed"
+        );
+        // Nothing in the profile's conversation store holds either secret.
+        fn walk(path: &Path, out: &mut Vec<u8>) {
+            for entry in std::fs::read_dir(path).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    out.extend(std::fs::read(&path).unwrap_or_default());
+                }
+            }
+        }
+        let mut disk = Vec::new();
+        walk(&root, &mut disk);
+        for secret in ["SYNTH_TOKEN_ERR1", "SYNTHTITLEKEY0123456789"] {
+            assert!(
+                !disk.windows(secret.len()).any(|w| w == secret.as_bytes()),
+                "{secret} reached disk"
+            );
+        }
     }
 
     #[tokio::test]
