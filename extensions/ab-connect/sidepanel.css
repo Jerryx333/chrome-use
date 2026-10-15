@@ -336,3 +336,4 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 .project-host > div[hidden] { display:none; }
 .project-host .project-manual input { flex:1; min-width:160px; }
 .project-host .project-manual .hint { flex-basis:100%; margin:0; }
+.project-host .project-remember > span { flex-basis:100%; }
