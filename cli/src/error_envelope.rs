@@ -81,6 +81,36 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // A download that did not finish. Before `timeout`: a download that
+    // timed out may still be running, and a retry would start a second one.
+    // The relay path (`download-manager.js`) throws `downloadUrl: interrupted
+    // (<Chrome reason>)` or `downloadUrl: timed out after …`; the launched
+    // browser's CDP loop reports `canceled` or gives up waiting. `wait
+    // --download` ("Timeout waiting for download") started nothing and keeps
+    // the generic retryable timeout.
+    if lower.contains("downloadurl: interrupted (user_canceled)")
+        || lower.contains("download was canceled")
+    {
+        return ErrorMetadata {
+            code: "download_canceled",
+            retryable: false,
+        };
+    }
+    if lower.contains("downloadurl: interrupted") {
+        return ErrorMetadata {
+            code: "download_interrupted",
+            retryable: true,
+        };
+    }
+    if lower.contains("downloadurl: timed out")
+        || lower.contains("timeout waiting for download to complete")
+        || (lower.contains("timed out") && lower.contains("abext.downloadurl"))
+    {
+        return ErrorMetadata {
+            code: "download_timeout",
+            retryable: false,
+        };
+    }
     if lower.contains("debugger_access_denied:")
         || (lower.contains("cannot access a chrome-extension://")
             && lower.contains("different extension"))
@@ -424,6 +454,62 @@ mod tests {
                 code: "element_not_found",
                 retryable: false
             }
+        );
+    }
+
+    /// Download failures carry their own codes, from the relay's
+    /// `download-manager.js` errors as the CDP client wraps them and from the
+    /// launched browser's own download loop.
+    #[test]
+    fn download_failures_have_their_own_codes() {
+        for (message, code, retryable) in [
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: interrupted (USER_CANCELED)",
+                "download_canceled",
+                false,
+            ),
+            ("Download was canceled", "download_canceled", false),
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: interrupted (NETWORK_FAILED)",
+                "download_interrupted",
+                true,
+            ),
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: interrupted (USER_SHUTDOWN)",
+                "download_interrupted",
+                true,
+            ),
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: interrupted",
+                "download_interrupted",
+                true,
+            ),
+            (
+                "CDP error (ABExt.downloadUrl): downloadUrl: timed out after 30000ms",
+                "download_timeout",
+                false,
+            ),
+            (
+                "CDP command timed out after 35s: ABExt.downloadUrl",
+                "download_timeout",
+                false,
+            ),
+            (
+                "Timeout waiting for download to complete",
+                "download_timeout",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                classify_error(message),
+                ErrorMetadata { code, retryable },
+                "{message}"
+            );
+        }
+        // Other timeouts keep the generic code.
+        assert_eq!(
+            classify_error("CDP command timed out after 30s: Runtime.evaluate").code,
+            "timeout"
         );
     }
 
