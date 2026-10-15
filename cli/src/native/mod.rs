@@ -73,6 +73,7 @@ pub mod stream;
 pub mod timing;
 #[allow(dead_code)]
 pub mod tracing;
+pub mod tracked_requests;
 pub mod upload;
 #[allow(dead_code)]
 pub mod webdriver;

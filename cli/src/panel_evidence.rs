@@ -325,8 +325,17 @@ pub(crate) fn derive(tool: &str, arguments: &Value, result: &Value) -> Derived {
         Outcome::Ok
     };
     let result_digest = (class == ToolClass::Observe).then(|| {
+        // The digest names what the page returned, so it leaves out the parts
+        // that differ on every call: timings and the per-call actionContext
+        // (the target it names is compared separately by the stall detector).
         let body = response
-            .map(without_timing)
+            .map(|value| {
+                let mut value = without_timing(value);
+                if let Value::Object(map) = &mut value {
+                    map.remove("actionContext");
+                }
+                value
+            })
             .unwrap_or_else(|| json!(structured["stdout"].as_str().unwrap_or("")));
         sha256_hex(body.to_string().as_bytes())
     });
@@ -1278,6 +1287,26 @@ mod tests {
             )
         };
         let (a, b) = (read(3), read(90));
+        // Real replies carry a per-call actionContext; it must not change the digest.
+        let stamped = |id: &str| {
+            derive(
+                "chrome_use_read",
+                &json!({}),
+                &cli(
+                    json!({"success": true, "data": {"text": "hi"}, "timing": {"ms": 5},
+                        "actionContext": {"actionId": id, "before": null, "after": {"targetId": "T", "url": "https://x.test/"}}}),
+                    Some(0),
+                ),
+            )
+        };
+        assert_eq!(
+            stamped("11111111-1111-4111-8111-111111111111").result_digest,
+            a.result_digest
+        );
+        assert_eq!(
+            stamped("22222222-2222-4222-8222-222222222222").result_digest,
+            a.result_digest
+        );
         assert!(a.verdict.is_none());
         assert!(a.result_digest.as_deref().unwrap().starts_with("sha256:"));
         assert_eq!(a.result_digest, b.result_digest);
