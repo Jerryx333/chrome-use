@@ -125,4 +125,7 @@ export function cleanup(rig) {
   try { rig.browser?.close(); } catch {}
   // Daemons the conversations' MCP servers started under this HOME.
   spawnSync(rig.hostBin, ['close', '--all', '--force'], { env: { ...process.env, HOME: rig.home }, stdio: 'ignore', timeout: 30000 });
+  // The panel services this run started (and any the extension's native host
+  // started for its profile) run binaries copied into this run's directory.
+  spawnSync('pkill', ['-f', `^${rig.work}/`], { stdio: 'ignore' });
 }
