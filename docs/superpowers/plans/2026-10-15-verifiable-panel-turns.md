@@ -217,7 +217,7 @@ is sent. When tracking was already on (a user's `requests --clear`, the stream s
 (`actions.rs:1478`) and is untouched. Plain CLI `--observe` keeps today's behaviour.
 
 *Correction (acceptance).* The premise above was wrong: the daemon always starts its stream
-server (`daemon.rs:240`) and `DaemonState::new_with_stream` (`actions.rs:835-847`) turns
+server (`daemon.rs:240`) and `DaemonState::new_with_stream` (`actions.rs:835-846`) turns
 `request_tracking` on whenever it did, so tracking is on from daemon start and the scoped
 save/restore never ran. The panel `observe` now leaves tracking alone (`panel_action.rs`), and
 the memory bound lives in the request log itself: `tracked_requests.rs` keeps the newest 1000
