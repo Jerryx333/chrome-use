@@ -26,6 +26,20 @@ pub fn semantic_pin_active(selector: &str) -> bool {
     selector == PINNED_SELECTOR && SEMANTIC_PIN.try_with(|_| ()).is_ok()
 }
 
+/// Object group of the handles [`resolve_semantic_pin`] hands out.
+pub const SEMANTIC_PIN_GROUP: &str = "chrome-use-semantic-locator";
+
+/// Release the handles pinned commands resolved in `session`.
+pub async fn release_semantic_pin_handles(client: &CdpClient, session: &str) {
+    let _ = client
+        .send_command(
+            "Runtime.releaseObjectGroup",
+            Some(json!({ "objectGroup": SEMANTIC_PIN_GROUP })),
+            Some(session),
+        )
+        .await;
+}
+
 pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<String, String> {
     let pin = SEMANTIC_PIN
         .try_with(Clone::clone)
@@ -3429,7 +3443,7 @@ pub async fn probe_viewport(
     selector_or_ref: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<ViewportProbe, String> {
-    if parse_ref(selector_or_ref).is_some() {
+    if parse_ref(selector_or_ref).is_some() || semantic_pin_active(selector_or_ref) {
         let (object_id, effective_session_id) = resolve_element_object_id(
             client,
             session_id,

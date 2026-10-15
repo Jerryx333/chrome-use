@@ -9555,6 +9555,7 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
                 Some(&sid),
             )
             .await;
+        super::element::release_semantic_pin_handles(&mgr.client, &sid).await;
     }
     result
 }
@@ -18258,12 +18259,16 @@ async fn handle_nth(cmd: &Value, state: &mut DaemonState) -> Result<Value, Strin
     };
 
     // The caller named this node with its own CSS selector: act on exactly it.
-    super::element::SEMANTIC_PIN
+    let result = super::element::SEMANTIC_PIN
         .scope(
             pin,
             finish_located(cmd, state, super::element::PINNED_SELECTOR, extra),
         )
-        .await
+        .await;
+    if let Some(mgr) = state.browser.as_ref() {
+        super::element::release_semantic_pin_handles(&mgr.client, &session_id).await;
+    }
+    result
 }
 
 const NTH_GROUP: &str = "chrome-use-nth";
@@ -20998,6 +21003,9 @@ async fn scope_eval_once(
             if ctx != 0 {
                 params["contextId"] = json!(ctx);
             }
+            if !by_value {
+                params["objectGroup"] = json!(AUTH_GROUP);
+            }
             client
                 .send_command_typed::<_, super::cdp::types::EvaluateResult>(
                     "Runtime.evaluate",
@@ -21147,6 +21155,7 @@ async fn release_auth_handles(
                 Some(session),
             )
             .await;
+        super::element::release_semantic_pin_handles(client, session).await;
     }
 }
 

@@ -6610,7 +6610,8 @@ async fn e2e_commands_leave_no_dom_mutations() {
 </style></head><body>
 <div id="card" style="cursor:pointer" onclick="window.__card = 1">Clickable card</div>
 <span class="error-message">Name is required</span>
-<form><label>Name <input id="name"></label></form>
+<form><label>Name <input id="name"></label>
+  <label><input type="checkbox" id="agree"> Agree</label></form>
 <div class="el-form-item"><label class="el-form-item__label">Region</label>
   <div role="combobox" tabindex="0" aria-controls="lb" id="combo">Choose</div></div>
 <ul role="listbox" id="lb">
@@ -6694,6 +6695,60 @@ new MutationObserver((rs) => {
         json!("Ada"),
     )
     .await;
+    // Every subaction runs on the pinned node: nothing in the page names it.
+    let text = run(
+        &mut state,
+        json!({ "id": "f6", "action": "getbyrole", "role": "button", "name": "Press me", "subaction": "text" }),
+    )
+    .await;
+    assert_eq!(get_data(&text)["text"], "Press me", "{text}");
+    run(
+        &mut state,
+        json!({ "id": "f7", "action": "getbylabel", "label": "Name", "subaction": "focus" }),
+    )
+    .await;
+    assert_evaluate(&mut state, "f8", "document.activeElement.id", json!("name")).await;
+    run(
+        &mut state,
+        json!({ "id": "f9", "action": "getbylabel", "label": "Name", "subaction": "type", "value": " Lovelace" }),
+    )
+    .await;
+    assert_evaluate(
+        &mut state,
+        "f10",
+        "document.getElementById('name').value",
+        json!("Ada Lovelace"),
+    )
+    .await;
+    run(
+        &mut state,
+        json!({ "id": "f11", "action": "getbyrole", "role": "checkbox", "name": "Agree", "subaction": "check" }),
+    )
+    .await;
+    assert_evaluate(
+        &mut state,
+        "f12",
+        "document.getElementById('agree').checked",
+        json!(true),
+    )
+    .await;
+    run(
+        &mut state,
+        json!({ "id": "f13", "action": "getbyrole", "role": "checkbox", "name": "Agree", "subaction": "uncheck" }),
+    )
+    .await;
+    assert_evaluate(
+        &mut state,
+        "f14",
+        "document.getElementById('agree').checked",
+        json!(false),
+    )
+    .await;
+    run(
+        &mut state,
+        json!({ "id": "f15", "action": "getbyrole", "role": "button", "name": "Press me", "subaction": "hover" }),
+    )
+    .await;
     assert_eq!(mutations(&mut state).await, json!("[]"), "find");
 
     // nth: describe, then click the second row button.
@@ -6710,6 +6765,24 @@ new MutationObserver((rs) => {
     )
     .await;
     assert_evaluate(&mut state, "n3", "window.__row", json!(2)).await;
+    let text = run(
+        &mut state,
+        json!({ "id": "n4", "action": "nth", "selector": "button.row", "index": 0, "subaction": "text" }),
+    )
+    .await;
+    assert_eq!(get_data(&text)["text"], "One", "{text}");
+    run(
+        &mut state,
+        json!({ "id": "n5", "action": "nth", "selector": "#name", "index": 0, "subaction": "fill", "value": "Grace" }),
+    )
+    .await;
+    assert_evaluate(
+        &mut state,
+        "n6",
+        "document.getElementById('name').value",
+        json!("Grace"),
+    )
+    .await;
     assert_eq!(mutations(&mut state).await, json!("[]"), "nth");
 
     // pick on a custom listbox (open, DOM click on the option handle).
