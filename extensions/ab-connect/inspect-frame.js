@@ -487,7 +487,7 @@ function cardsView() {
           : h('div', { class: 'src' }, h('span', { class: 'mono ellipsis', title: a.source, text: tailPath(a.source, 30) }),
             link ? h('a', { href: link, class: 'small', onclick: event => { event.preventDefault(); openExternal(link); } }, 'Open') : null),
         h('input', { type: 'text', 'data-annotation': a.id, disabled: state.busy || locked(), placeholder: 'Note for this element (optional)', value: a.note || '', oninput: event => { a.note = event.target.value; refreshSend(); syncNote(a); } }),
-        image ? h('label', { class: 'small muted toggle' }, h('input', { type: 'checkbox', checked: attach, onchange: event => { state.attach.set(i, event.target.checked); render(); } }), 'Attach screenshot') : null));
+        image ? h('label', { class: 'small muted toggle' }, h('input', { type: 'checkbox', checked: attach, onchange: event => { state.attach.set(i, event.target.checked); event.target.closest('.card')?.querySelector('img.thumb')?.classList.toggle('detached', !event.target.checked); } }), 'Attach screenshot') : null));
   }));
   const wrap = h('div', { class: 'stack' }, cards);
   if (state.imageReason) wrap.append(h('div', { class: 'small muted' }, state.imageReason, ' ', h('button', { class: 'link', onclick: () => guarded(async () => { state.imageReason = null; await request('recapture'); }) }, 'Retake screenshots')));
