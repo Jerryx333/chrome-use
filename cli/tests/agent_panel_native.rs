@@ -754,7 +754,10 @@ fn both_cli_protocols_keep_conversations_alive_across_native_host_disconnects() 
             .iter()
             .filter(|e| e["kind"] == "generationRetired")
             .count();
-        assert!(retired >= ready.len() - 1, "a process was replaced without retiring");
+        assert!(
+            retired >= ready.len() - 1,
+            "a process was replaced without retiring"
+        );
     }
     for agent in ["codex", "claude"] {
         let created = panel_reply(
