@@ -16,6 +16,12 @@ export function mainDomain(host) {
   const labels = clean.split('.');
   return labels.slice(secondLevel.has(labels.slice(-2).join('.')) ? -3 : -2).join('.');
 }
+// The host names a conversation "New conversation" until its first message;
+// that default is shown in the panel's language, a real title as it is.
+const HOST_DEFAULT_TITLE = 'New conversation';
+export function titleOf(chat, fallbackKey) {
+  return chat?.title && chat.title !== HOST_DEFAULT_TITLE ? chat.title : t(fallbackKey);
+}
 function relativeTime(at) {
   const seconds = Math.max(0, (Date.now() - Number(at || 0)) / 1000);
   if (!at || !Number.isFinite(seconds)) return '';
@@ -230,7 +236,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   function conversationChoices() {
     nodes.conversation.replaceChildren(element('option', t('panel_new_conversation')));
     nodes.conversation.firstElementChild.value = '';
-    for (const chat of conversations) { const option = element('option', chat.title || t('panel_conversation_untitled')); option.value = chat.id; nodes.conversation.append(option); }
+    for (const chat of conversations) { const option = element('option', titleOf(chat, 'panel_conversation_untitled')); option.value = chat.id; nodes.conversation.append(option); }
     nodes.conversation.value = selected;
     renderConversationMenu();
   }
@@ -241,7 +247,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
   }
   function renderConversationMenu() {
     const chat = conversations.find(c => c.id === selected);
-    nodes.conversationTitle.textContent = chat?.title || t('panel_new_conversation');
+    nodes.conversationTitle.textContent = titleOf(chat, 'panel_new_conversation');
     const domain = currentDomain(), siteScope = scope === 'site' && Boolean(domain);
     nodes.scopeSite.textContent = domain ? t('panel_scope_site_domain', domain) : t('panel_scope_site');
     nodes.scopeSite.disabled = !domain;
@@ -260,7 +266,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     for (const c of shown) {
       const item = element('button', undefined, `conversation-item${c.id === selected ? ' selected' : ''}`); item.type = 'button';
       item.setAttribute('role', 'option'); item.setAttribute('aria-selected', String(c.id === selected));
-      item.append(element('span', c.title || t('panel_conversation_untitled'), 'title'), element('span', [agentNames[c.agentId] || c.agentId, !siteScope && c.site, relativeTime(c.updated)].filter(Boolean).join(' · '), 'meta'));
+      item.append(element('span', titleOf(c, 'panel_conversation_untitled'), 'title'), element('span', [agentNames[c.agentId] || c.agentId, !siteScope && c.site, relativeTime(c.updated)].filter(Boolean).join(' · '), 'meta'));
       item.addEventListener('click', () => { closeConversationMenu(); select(c.id); });
       items.push(item);
     }

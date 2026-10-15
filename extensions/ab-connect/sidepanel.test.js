@@ -827,3 +827,14 @@ test('an older CLI without project folders is never sent one', async () => {
   assert.equal(created[0].project, undefined);
   f.panel.close();
 });
+
+test('the host\'s default conversation title is shown in the panel\'s language', async () => {
+  const { titleOf } = await import('./sidepanel.js');
+  const { installI18n } = await import('./test-i18n.js');
+  installI18n('zh_CN');
+  try {
+    assert.equal(titleOf({ title: 'New conversation' }, 'panel_new_conversation'), '新会话');
+    assert.equal(titleOf({ title: '' }, 'panel_new_conversation'), '新会话');
+    assert.equal(titleOf({ title: 'Fix the build' }, 'panel_new_conversation'), 'Fix the build');
+  } finally { installI18n('en'); }
+});
