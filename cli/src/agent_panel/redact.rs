@@ -135,26 +135,53 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
         return stream(kind, data, secrets);
     }
     let cookie = kind == "tool" && cookie_context(&data, secrets);
-    // Pass 1 finds what this event's own rules mask (a password typed into
-    // a field, a header, a cookie); pass 2 masks those values wherever else
-    // the event repeats them ("typed blue river pass"), with the older
-    // known secrets. Short values count here too, down to IN_EVENT_MIN;
-    // only values of MIN_SECRET or more are kept for later events.
-    let mut known = secrets.known();
-    let mut probe = data.clone();
-    let mut first = Walker::new(&known, kind);
-    first.cookie = cookie;
-    first.top(&mut probe, kind);
-    drop(probe);
-    for secret in first.learned {
-        if secret.len() >= IN_EVENT_MIN && !is_marker(&secret) && !known.contains(&secret) {
-            known.push(secret);
-        }
-    }
-    known.sort_by_key(|k| std::cmp::Reverse(k.len()));
+    // Pass 1: every rule, with the secrets known from earlier events. It
+    // reports the values its own rules masked (a password typed into a
+    // field, a header, a cookie). Pass 2 masks those values wherever else
+    // this event repeats them ("typed blue river pass"); short values count
+    // here too, down to IN_EVENT_MIN; only values of MIN_SECRET or more are
+    // kept for later events.
+    let known = secrets.known();
     let mut walker = Walker::new(&known, kind);
     walker.cookie = cookie;
     walker.top(&mut data, kind);
+    let mut seen: std::collections::HashSet<&str> = known.iter().map(String::as_str).collect();
+    let mut found: Vec<String> = Vec::new();
+    let mut blanket = false;
+    for secret in &walker.learned {
+        if secret.len() < IN_EVENT_MIN || is_marker(secret) || !seen.insert(secret.as_str()) {
+            continue;
+        }
+        if found.len() == MAX_EVENT_SECRETS {
+            blanket = true;
+            break;
+        }
+        found.push(secret.clone());
+    }
+    if blanket || !found.is_empty() {
+        found.sort_by_key(|k| std::cmp::Reverse(k.len()));
+        let exempt: &[&str] = match kind {
+            "user" | "queueEdited" => &["text"],
+            _ => &[],
+        };
+        let mut echo = Echoes {
+            secrets: &found,
+            numbers: found
+                .iter()
+                .filter(|k| k.parse::<f64>().is_ok())
+                .map(String::as_str)
+                .collect(),
+            blanket,
+            redactions: &mut walker.redactions,
+        };
+        if let Some(object) = data.as_object_mut() {
+            for (key, value) in object.iter_mut() {
+                if !exempt.contains(&key.as_str()) && !ID_KEYS.contains(&key.as_str()) {
+                    echo.walk(value, format!("/{}", pointer(key)));
+                }
+            }
+        }
+    }
     // Redacted whole above; only now bounded for the journal.
     if kind == "tool" && !data["item"].is_null() {
         data["item"] = bounded(&data["item"]);
@@ -164,13 +191,139 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
     }
     let redactions = std::mem::take(&mut walker.redactions);
     stamp(&mut data, &redactions, walker.class);
-    // The whole event must fit a journal line.
+    fit(kind, &mut data);
+    Some(Redacted(data))
+}
+
+/// Make the event fit one journal line, whatever it held: the item is cut
+/// further, then reduced to a stub naming the call; the redaction records
+/// go to a count. A write can then never fail for size.
+fn fit(kind: &str, data: &mut Value) {
+    let size = |data: &Value| data.to_string().len();
     let mut budget = ITEM_BUDGET;
-    while kind == "tool" && data.to_string().len() > EVENT_BUDGET && budget > 1024 {
+    while kind == "tool" && size(data) > EVENT_BUDGET && budget > 1024 {
         budget /= 2;
         data["item"] = bounded_to(&data["item"], budget);
     }
-    Some(Redacted(data))
+    if size(data) <= EVENT_BUDGET {
+        return;
+    }
+    if let Some(object) = data.as_object_mut() {
+        if let Some(Value::Array(list)) = object.remove("redactions") {
+            let omitted = object
+                .get("redactionsOmitted")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            object.insert(
+                "redactionsOmitted".into(),
+                (omitted + list.len() as u64).into(),
+            );
+        }
+    }
+    if size(data) <= EVENT_BUDGET {
+        return;
+    }
+    let stub = |value: &Value| {
+        let mut stub = serde_json::Map::new();
+        for key in [
+            "type",
+            "name",
+            "tool",
+            "toolName",
+            "tool_name",
+            "id",
+            "tool_use_id",
+            "toolCallId",
+        ] {
+            if let Some(field) = value.get(key).filter(|f| f.to_string().len() <= 1024) {
+                stub.insert(key.into(), field.clone());
+            }
+        }
+        stub.insert("note".into(), "too large to record".into());
+        Value::Object(stub)
+    };
+    match kind {
+        "tool" => data["item"] = stub(&data["item"]),
+        "request" => data["params"] = stub(&data["params"]),
+        _ => {}
+    }
+}
+
+/// Pass 2 of [`event`]: mask the values pass 1 found wherever else the
+/// event repeats them, or withhold every free-text string when the event
+/// revealed more secrets than are scanned for one by one.
+struct Echoes<'a> {
+    secrets: &'a [String],
+    numbers: std::collections::HashSet<&'a str>,
+    blanket: bool,
+    redactions: &'a mut Vec<Redaction>,
+}
+
+impl Echoes<'_> {
+    fn walk(&mut self, value: &mut Value, path: String) {
+        match value {
+            Value::String(text) if !is_marker(text) && !text.is_empty() => {
+                if self.blanket {
+                    let length = text.chars().count();
+                    *text = marker("withheld", length);
+                    self.record(path, "withheld", length);
+                    return;
+                }
+                let masks = known_masks(text, self.secrets);
+                if masks.is_empty() {
+                    return;
+                }
+                let mut masks = masks;
+                masks.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+                let mut kept: Vec<Mask> = Vec::new();
+                for mask in masks {
+                    if kept.last().is_none_or(|last| mask.start >= last.end) {
+                        kept.push(mask);
+                    }
+                }
+                let (out, applied) = apply(text, &kept);
+                for mask in &applied {
+                    self.record(path.clone(), "secret", mask.length);
+                }
+                *text = out;
+            }
+            Value::Number(n) if self.numbers.contains(n.to_string().as_str()) => {
+                let length = n.to_string().len();
+                *value = marker("secret", length).into();
+                self.record(path, "secret", length);
+            }
+            Value::Array(items) => {
+                for (i, item) in items.iter_mut().enumerate() {
+                    self.walk(item, child_path(&path, &i.to_string()));
+                }
+            }
+            Value::Object(object) => {
+                for (key, child) in object.iter_mut() {
+                    if !ID_KEYS.contains(&key.as_str()) {
+                        self.walk(child, child_path(&path, key));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn record(&mut self, path: String, kind: &str, length: usize) {
+        self.redactions.push(Redaction {
+            path,
+            kind: kind.into(),
+            length,
+        });
+    }
+}
+
+/// A child's JSON pointer, kept short: past MAX_PATH the parent's path is
+/// reused, so a deep or long-keyed tree costs no more per node.
+fn child_path(path: &str, key: &str) -> String {
+    if path.len() >= MAX_PATH {
+        return path.to_string();
+    }
+    let key: String = pointer(key).chars().take(64).collect();
+    format!("{path}/{key}")
 }
 
 /// Shortest value of this event's own masked secrets that is also masked
@@ -178,6 +331,11 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
 const IN_EVENT_MIN: usize = 4;
 /// Most redaction records kept on one event; the rest are counted.
 const MAX_REDACTIONS: usize = 64;
+/// A redaction record's path is cut to this many characters.
+const MAX_PATH: usize = 200;
+/// Distinct new secrets one event may reveal and still be scanned for one
+/// by one; past this the event's free text is withheld.
+const MAX_EVENT_SECRETS: usize = 256;
 /// Under the journal's 64 KiB line limit, with room for the envelope.
 const EVENT_BUDGET: usize = 60 * 1024;
 
@@ -384,7 +542,20 @@ fn stamp(data: &mut Value, redactions: &[Redaction], class: PrivacyClass) {
     };
     object.insert("privacyClass".into(), json!(class));
     if !redactions.is_empty() {
-        let kept = &redactions[..redactions.len().min(MAX_REDACTIONS)];
+        let kept: Vec<Redaction> = redactions[..redactions.len().min(MAX_REDACTIONS)]
+            .iter()
+            .map(|r| Redaction {
+                path: if r.path.chars().count() > MAX_PATH {
+                    let mut p: String = r.path.chars().take(MAX_PATH).collect();
+                    p.push('…');
+                    p
+                } else {
+                    r.path.clone()
+                },
+                kind: r.kind.chars().take(64).collect(),
+                length: r.length,
+            })
+            .collect();
         object.insert("redactions".into(), json!(kept));
         if redactions.len() > kept.len() {
             object.insert(
@@ -819,13 +990,25 @@ fn url_masks(url: &str, offset: usize) -> Vec<Mask> {
 fn find_masks(text: &str, known: &[String], tool_text: bool) -> Vec<Mask> {
     let p = patterns();
     let mut masks = Vec::new();
-    for m in p.pem.find_iter(text) {
-        masks.push(Mask::value(text, m.start(), m.end(), "private key"));
+    // Cheap guards first: most strings are words, and every rule below
+    // needs a marker character or prefix to match at all.
+    let has = |needle: &str| text.contains(needle);
+    if has("-----BEGIN") {
+        for m in p.pem.find_iter(text) {
+            masks.push(Mask::value(text, m.start(), m.end(), "private key"));
+        }
     }
-    for m in p.url.find_iter(text) {
-        masks.extend(url_masks(m.as_str(), m.start()));
+    if has("://") {
+        for m in p.url.find_iter(text) {
+            masks.extend(url_masks(m.as_str(), m.start()));
+        }
     }
-    for (regex, group) in [(&p.json_key, 2), (&p.header, 2), (&p.cookie_header, 2)] {
+    let keyed: &[(&Regex, usize)] = if has(":") {
+        &[(&p.json_key, 2), (&p.header, 2), (&p.cookie_header, 2)]
+    } else {
+        &[]
+    };
+    for (regex, group) in keyed.iter().copied() {
         for c in regex.captures_iter(text) {
             let (Some(key), Some(value)) = (c.get(1), c.get(group)) else {
                 continue;
@@ -838,7 +1021,12 @@ fn find_masks(text: &str, known: &[String], tool_text: bool) -> Vec<Mask> {
             masks.push(Mask::value(text, value.start(), value.end(), &kind).anchored(anchor));
         }
     }
-    for run in p.cookie_run.find_iter(text) {
+    let runs = if has("=") && has(";") {
+        p.cookie_run.find_iter(text).collect()
+    } else {
+        Vec::new()
+    };
+    for run in runs {
         let mut position = run.start();
         for pair in run.as_str().split(';') {
             let pair_start = position;
@@ -853,7 +1041,16 @@ fn find_masks(text: &str, known: &[String], tool_text: bool) -> Vec<Mask> {
             }
         }
     }
-    for c in p.bearer.captures_iter(text) {
+    let bearer = text
+        .as_bytes()
+        .windows(6)
+        .any(|w| w.eq_ignore_ascii_case(b"bearer"));
+    let bearers = if bearer {
+        p.bearer.captures_iter(text).collect()
+    } else {
+        Vec::new()
+    };
+    for c in bearers {
         // A token, not a word: "Bearer authentication" is prose.
         if let Some(token) = c
             .get(1)
@@ -866,22 +1063,54 @@ fn find_masks(text: &str, known: &[String], tool_text: bool) -> Vec<Mask> {
         }
     }
     for (kind, regex) in &p.shapes {
+        let needle = match *kind {
+            "jwt" => "eyJ",
+            "api key" => "sk-",
+            "github token" => "_",
+            "slack token" => "xox",
+            _ => "AKIA",
+        };
+        if text.len() < 16 || !has(needle) {
+            continue;
+        }
         for m in regex.find_iter(text) {
             masks.push(Mask::value(text, m.start(), m.end(), kind));
         }
     }
-    if tool_text {
+    if tool_text && text.len() >= 512 {
         for m in p.binary.find_iter(text) {
             let mut mask = Mask::value(text, m.start(), m.end(), "binary data");
             mask.secret = None;
             masks.push(mask);
         }
     }
+    masks.extend(known_masks(text, known));
+    masks.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+    let mut kept: Vec<Mask> = Vec::new();
+    for mask in masks {
+        if kept.last().is_none_or(|last| mask.start >= last.end) {
+            kept.push(mask);
+        }
+    }
+    kept
+}
+
+/// Every occurrence of a known secret (and its JSON-escaped spelling).
+fn known_masks(text: &str, known: &[String]) -> Vec<Mask> {
+    let mut masks = Vec::new();
     for secret in known {
-        let escaped = serde_json::to_string(secret).unwrap_or_default();
+        if secret.len() > text.len() {
+            continue;
+        }
+        let needs_escape = secret.bytes().any(|b| b == b'"' || b == b'\\' || b < 0x20);
+        let escaped = if needs_escape {
+            serde_json::to_string(secret).unwrap_or_default()
+        } else {
+            String::new()
+        };
         let escaped = escaped.trim_matches('"');
         for form in [secret.as_str(), escaped] {
-            if form.is_empty() {
+            if form.is_empty() || form.len() > text.len() {
                 continue;
             }
             for (start, _) in text.match_indices(form) {
@@ -891,14 +1120,7 @@ fn find_masks(text: &str, known: &[String], tool_text: bool) -> Vec<Mask> {
             }
         }
     }
-    masks.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
-    let mut kept: Vec<Mask> = Vec::new();
-    for mask in masks {
-        if kept.last().is_none_or(|last| mask.start >= last.end) {
-            kept.push(mask);
-        }
-    }
-    kept
+    masks
 }
 
 /// Apply sorted, non-overlapping masks. Returns the text and the masks with
@@ -950,6 +1172,8 @@ struct Walker<'a> {
     tool_text: bool,
     /// Strings are cookie text (see [`cookie_context`]).
     cookie: bool,
+    /// Decimal texts among the secrets, for numbers that repeat one.
+    known_numbers: std::collections::HashSet<String>,
 }
 
 impl<'a> Walker<'a> {
@@ -962,6 +1186,11 @@ impl<'a> Walker<'a> {
             cap: None,
             tool_text: kind == "tool",
             cookie: false,
+            known_numbers: known
+                .iter()
+                .filter(|k| k.parse::<f64>().is_ok())
+                .cloned()
+                .collect(),
         }
     }
     fn top(&mut self, data: &mut Value, kind: &str) {
@@ -1014,9 +1243,19 @@ impl<'a> Walker<'a> {
     fn walk(&mut self, value: &mut Value, path: String) {
         match value {
             Value::String(text) => self.text(text, &path),
+            // A number that is one of the secrets (a numeric OTP repeated).
+            Value::Number(n) if self.known_numbers.contains(&n.to_string()) => {
+                let length = n.to_string().len();
+                *value = marker("secret", length).into();
+                self.redactions.push(Redaction {
+                    path,
+                    kind: "secret".into(),
+                    length,
+                });
+            }
             Value::Array(items) => {
                 for (i, item) in items.iter_mut().enumerate() {
-                    self.walk(item, format!("{path}/{i}"));
+                    self.walk(item, child_path(&path, &i.to_string()));
                 }
             }
             Value::Object(object) => {
@@ -1026,11 +1265,11 @@ impl<'a> Walker<'a> {
                     if ID_KEYS.contains(&key.as_str()) {
                         continue;
                     }
-                    let child_path = format!("{path}/{}", pointer(key));
+                    let path = child_path(&path, key);
                     if let Some(kind) = secret_key(key) {
-                        self.mask(child, child_path, &kind);
+                        self.mask(child, path, &kind);
                     } else {
-                        self.walk(child, child_path);
+                        self.walk(child, path);
                     }
                 }
             }
@@ -1160,9 +1399,12 @@ impl<'a> Walker<'a> {
     }
 }
 
+/// Every string and number (as its decimal text) inside a masked value: an
+/// OTP sent as a number is as secret as one sent as text.
 fn collect_strings(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::String(s) => out.push(s.clone()),
+        Value::Number(n) => out.push(n.to_string()),
         Value::Array(items) => items.iter().for_each(|v| collect_strings(v, out)),
         Value::Object(map) => map.values().for_each(|v| collect_strings(v, out)),
         _ => {}
@@ -1820,6 +2062,218 @@ mod tests {
         assert_eq!(out["redactions"].as_array().unwrap().len(), MAX_REDACTIONS);
         assert_eq!(out["redactionsOmitted"], 2000 - MAX_REDACTIONS);
         assert_eq!(out["privacyClass"], "masked");
+    }
+
+    #[test]
+    fn numeric_secrets_are_masked_where_the_event_repeats_them() {
+        let out = event(
+            "tool",
+            json!({"completed":true,"item":{"name":"x","input":{"otp":483927},"output":"typed 483927","again":483927}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(!out.to_string().contains("483927"), "{out}");
+    }
+
+    #[test]
+    fn long_redaction_paths_still_fit_one_journal_line() {
+        let mut content = serde_json::Map::new();
+        for i in 0..64 {
+            content.insert(format!("{i}{}", "k".repeat(1100)), json!({"password":"x"}));
+        }
+        let out = event(
+            "tool",
+            json!({"completed":true,"item":{"type":"tool_result","tool_use_id":"t","content":content}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        assert!(
+            out.to_string().len() <= EVENT_BUDGET,
+            "{}",
+            out.to_string().len()
+        );
+        assert!(!out.to_string().contains("\"password\":\"x\""));
+    }
+
+    #[test]
+    fn ten_thousand_distinct_secrets_are_withheld_quickly() {
+        let rows: Vec<Value> = (0..10_000)
+            .map(
+                |i| json!({"password": format!("pw{i:06}xyz"), "label": format!("ok pw{i:06}xyz")}),
+            )
+            .collect();
+        let started = std::time::Instant::now();
+        let out = event(
+            "tool",
+            json!({"completed":true,"item":{"type":"tool_result","tool_use_id":"t","content":rows}}),
+            &mut Secrets::default(),
+        )
+        .unwrap()
+        .into_value();
+        let elapsed = started.elapsed();
+        let text = out.to_string();
+        assert!(!text.contains("pw000123xyz"));
+        assert!(text.len() <= EVENT_BUDGET);
+        // Debug build; release is several times faster.
+        assert!(elapsed < std::time::Duration::from_secs(3), "{elapsed:?}");
+    }
+
+    /// Deterministic random JSON with secrets in rule-triggering positions,
+    /// as strings and numbers, and echoes of them in ordinary text: no
+    /// secret survives, the event fits a journal line, and it is fast.
+    #[test]
+    fn random_events_never_leak_a_placed_secret() {
+        struct Rng(u64);
+        impl Rng {
+            fn next(&mut self) -> u64 {
+                self.0 ^= self.0 << 13;
+                self.0 ^= self.0 >> 7;
+                self.0 ^= self.0 << 17;
+                self.0
+            }
+            fn below(&mut self, n: u64) -> u64 {
+                self.next() % n.max(1)
+            }
+        }
+        const WORDS: &[&str] = &["alpha", "bravo", "carol", "delta", "echo", "fox", "golf"];
+        fn filler(rng: &mut Rng) -> String {
+            (0..rng.below(6) + 1)
+                .map(|_| WORDS[rng.below(WORDS.len() as u64) as usize])
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+        fn secret(rng: &mut Rng) -> String {
+            const CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+            let len = 8 + rng.below(9) as usize;
+            (0..len)
+                .map(|_| CHARS[rng.below(CHARS.len() as u64) as usize] as char)
+                .collect()
+        }
+        // A value placed where a rule masks it; returns it and its text.
+        fn placed(rng: &mut Rng, secrets: &mut Vec<String>) -> (String, Value) {
+            let numeric = rng.below(4) == 0;
+            let text = if numeric {
+                format!("{}", 100_000 + rng.below(899_999_999))
+            } else {
+                secret(rng)
+            };
+            secrets.push(text.clone());
+            let as_value = || {
+                if numeric {
+                    json!(text.parse::<u64>().unwrap())
+                } else {
+                    json!(text)
+                }
+            };
+            let key = [
+                "password",
+                "otp",
+                "token",
+                "apiKey",
+                "Authorization",
+                "cookie",
+            ][rng.below(6) as usize];
+            let value = match rng.below(4) {
+                0 => json!({ key: as_value() }),
+                1 => {
+                    json!({"name":"chrome_use_fill","input":{"selector":"#password","value":text}})
+                }
+                2 => json!({"url": format!("https://x.example/cb?access_token={text}&page=2")}),
+                _ => json!({"headers": {"Authorization": as_value()}}),
+            };
+            (key.to_string(), value)
+        }
+        fn tree(rng: &mut Rng, depth: u32, secrets: &mut Vec<String>) -> Value {
+            match rng.below(if depth > 4 { 3 } else { 7 }) {
+                0 => {
+                    // An echo of an earlier secret in ordinary text.
+                    if let Some(s) = secrets.get(rng.below(secrets.len() as u64 + 1) as usize) {
+                        json!(format!("{} {s} {}", filler(rng), filler(rng)))
+                    } else {
+                        json!(filler(rng))
+                    }
+                }
+                1 => json!(rng.below(1000)),
+                2 => json!(filler(rng)),
+                3 => placed(rng, secrets).1,
+                4 => {
+                    let n = if rng.below(20) == 0 {
+                        50 + rng.below(200)
+                    } else {
+                        rng.below(5)
+                    };
+                    Value::Array((0..n).map(|_| tree(rng, depth + 1, secrets)).collect())
+                }
+                _ => {
+                    let mut map = serde_json::Map::new();
+                    for i in 0..rng.below(5) + 1 {
+                        let key = if rng.below(8) == 0 {
+                            format!("k{i}{}", "x".repeat(rng.below(1500) as usize))
+                        } else {
+                            format!("field{i}")
+                        };
+                        map.insert(key, tree(rng, depth + 1, secrets));
+                    }
+                    Value::Object(map)
+                }
+            }
+        }
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        for round in 0..2000 {
+            let mut placed_secrets = Vec::new();
+            // Place secrets first so later echoes can repeat them.
+            let mut body = serde_json::Map::new();
+            for i in 0..rng.below(3) + 1 {
+                body.insert(format!("p{i}"), placed(&mut rng, &mut placed_secrets).1);
+            }
+            body.insert("rest".into(), tree(&mut rng, 0, &mut placed_secrets));
+            for i in 0..rng.below(3) {
+                if let Some(s) = placed_secrets.get(rng.below(placed_secrets.len() as u64) as usize)
+                {
+                    body.insert(format!("echo{i}"), json!(format!("typed {s} done")));
+                }
+            }
+            let kind = if rng.below(2) == 0 { "tool" } else { "request" };
+            if kind == "tool" && rng.below(4) == 0 {
+                // A page's own cookie read: a lone name=value is a cookie.
+                let cookie = secret(&mut rng);
+                placed_secrets.push(cookie.clone());
+                body.insert("input".into(), json!({"script": "return document.cookie"}));
+                body.insert("result".into(), json!(format!("sid={cookie}")));
+            }
+            let data = if kind == "tool" {
+                json!({"completed": true, "item": Value::Object(body)})
+            } else {
+                json!({"requestId": "r", "method": "can_use_tool", "params": Value::Object(body)})
+            };
+            let input = data.to_string().len();
+            let started = std::time::Instant::now();
+            let out = event(kind, data, &mut Secrets::default())
+                .unwrap()
+                .into_value();
+            // Debug build, about 7 MB/s on these trees; release is
+            // several times faster.
+            let limit = std::time::Duration::from_millis(300 + (input / 3000) as u64);
+            assert!(
+                started.elapsed() < limit,
+                "round {round} slow: {input} bytes in, {:?}",
+                started.elapsed()
+            );
+            let text = out.to_string();
+            assert!(
+                text.len() <= EVENT_BUDGET,
+                "round {round}: {} bytes",
+                text.len()
+            );
+            for s in &placed_secrets {
+                assert!(
+                    !text.contains(s.as_str()),
+                    "round {round}: {s} leaked in {text}"
+                );
+            }
+        }
     }
 
     #[test]
