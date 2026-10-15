@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod acp;
-mod artifacts;
+pub(crate) mod artifacts;
 mod attachments;
 mod backend;
 mod config_edit;

@@ -6,6 +6,8 @@
 //! a second, separately recorded effect (`deliver`).
 //!
 //! This module computes event payloads and state; the engine journals them.
+//! `capture_request`, `rewrite_capture_arguments` and `deliver` run in the
+//! chrome_use MCP process, so they are visible to the crate.
 #![allow(dead_code)] // Wired into the service by the integration step.
 
 use super::config_transaction::private_tree;
@@ -33,7 +35,7 @@ const SNIFF_BYTES: usize = 512;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     Screenshot,
     Download,
     Recording,
@@ -72,7 +74,7 @@ fn canonical_uuid(id: &str) -> Result<String, String> {
 }
 
 /// One path segment the CLI can write and every OS can name.
-pub(super) fn sanitize_name(raw: &str, kind: Kind) -> String {
+pub(crate) fn sanitize_name(raw: &str, kind: Kind) -> String {
     let last = raw.rsplit(['/', '\\']).next().unwrap_or("");
     let mut name: String = last
         .chars()
@@ -121,13 +123,13 @@ fn extension_of(name: &str) -> Option<String> {
 /// What a capture tool asks for before its lease: the artifact kind, the file
 /// name inside the allocated folder, and the agent's own destination, if any.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct CaptureRequest {
+pub(crate) struct CaptureRequest {
     pub kind: Kind,
     pub name: String,
     pub requested_destination: Option<String>,
 }
 
-pub(super) fn capture_request(tool: &str, arguments: &Value) -> Option<CaptureRequest> {
+pub(crate) fn capture_request(tool: &str, arguments: &Value) -> Option<CaptureRequest> {
     let path = arguments["path"]
         .as_str()
         .filter(|p| !p.trim().is_empty())
@@ -164,7 +166,7 @@ pub(super) fn capture_request(tool: &str, arguments: &Value) -> Option<CaptureRe
 
 /// The tool arguments the CLI runs with: the caller's `path` replaced by the
 /// lease's capture path. The original stays in `requested_destination`.
-pub(super) fn rewrite_capture_arguments(arguments: &Value, capture_path: &Path) -> Value {
+pub(crate) fn rewrite_capture_arguments(arguments: &Value, capture_path: &Path) -> Value {
     let mut rewritten = arguments.clone();
     if let Some(object) = rewritten.as_object_mut() {
         object.insert(
@@ -1348,13 +1350,13 @@ pub(super) fn read_chunk(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) enum DeliveryState {
+pub(crate) enum DeliveryState {
     Delivered,
     Failed,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct Delivery {
+pub(crate) struct Delivery {
     pub state: DeliveryState,
     pub path: Option<PathBuf>,
     pub digest: Option<String>,
@@ -1365,7 +1367,7 @@ pub(super) struct Delivery {
 /// the MCP process with the rights the CLI would have used for that path;
 /// destination rules follow `prepare_download_destination`. `delivered` only
 /// when the read-back digest equals the artifact digest.
-pub(super) fn deliver(capture: &Path, requested: &str, artifact_digest: &str) -> Delivery {
+pub(crate) fn deliver(capture: &Path, requested: &str, artifact_digest: &str) -> Delivery {
     let failed = |detail: &str, path: Option<PathBuf>| Delivery {
         state: DeliveryState::Failed,
         path,
