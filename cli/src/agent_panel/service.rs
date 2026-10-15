@@ -5,7 +5,7 @@
 use super::approval::{self, Pending};
 use super::backend::{self, Command as BackendCommand, Notice, Setup};
 use super::config_transaction::{atomic_write, private_open, private_tree};
-use super::conversation::{Conversation, Message, PageContext, Phase, Store};
+use super::conversation::{Continuation, Conversation, Message, PageContext, Phase, Store};
 use super::options::ModelOptions;
 use super::redact::{self, Redacted};
 use super::DiscoveryContext;
@@ -528,6 +528,96 @@ struct Job {
     retiring: bool,
     sender: mpsc::Sender<BackendCommand>,
 }
+
+/// What a backend process said about itself in its `ready` notice.
+#[derive(Clone, Default)]
+struct BackendInfo {
+    generation: u64,
+    version: Option<String>,
+    resumable: Option<bool>,
+}
+
+/// The turn a conversation is running, from `turnStarted` to `turnEnded`.
+struct Turn {
+    message_id: String,
+    generation: u64,
+    /// The turn was planned on the live process; `start` must find it there.
+    reuse: bool,
+    first_sequence: u64,
+    open_tools: std::collections::BTreeMap<String, OpenTool>,
+    /// Tool names by call id, for results that only carry the id (Claude).
+    names: HashMap<String, String>,
+    completed: Vec<String>,
+    answered: bool,
+    final_items: std::collections::BTreeSet<String>,
+}
+
+struct OpenTool {
+    name: String,
+    action_ids: Vec<String>,
+    browser: bool,
+}
+
+/// A failed turn start. `unconfirmed` names the old process generation whose
+/// exit was never confirmed; that leaves the conversation needing recovery.
+struct StartFailure {
+    reason: String,
+    unconfirmed: Option<u64>,
+}
+
+impl From<String> for StartFailure {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            unconfirmed: None,
+        }
+    }
+}
+impl From<&str> for StartFailure {
+    fn from(reason: &str) -> Self {
+        reason.to_string().into()
+    }
+}
+
+/// Backend versions whose committed fixtures show both a clean completion
+/// and what happens when the MCP client times out a chrome_use call (plan
+/// D1a rule 3). Only these keep their process after a cleanly completed
+/// turn; every other version, or a missing version, retires its generation
+/// after every turn. No fixture records the client-timeout behaviour yet.
+const GENERATION_REUSE: &[(&str, &str)] = &[];
+
+const NOT_RESUMABLE: &str =
+    "This agent cannot continue after an interrupted request. Start a new conversation.";
+
+/// Kinds that only add evidence; they skip the `state.json` rewrite.
+const EVIDENCE_KINDS: &[&str] = &[
+    "actionAdmitted",
+    "browserActionTarget",
+    "actionObserved",
+    "unboundActionReport",
+    "fileDelivered",
+    "artifactCreated",
+    "artifactState",
+    "artifactReady",
+    "artifactUnavailable",
+    "progressStalled",
+    "progressResumed",
+];
+
+/// Item types that are not tool calls (mirrors `panel-state.js`).
+const NOT_TOOLS: &[&str] = &[
+    "reasoning",
+    "userMessage",
+    "agentMessage",
+    "plan",
+    "contextCompaction",
+];
+
+static BROWSER_TOOL: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
+    regex_lite::Regex::new(r"^(?:mcp__chrome_use__)?chrome_use[_.][a-z_]+$")
+        .expect("browser tool pattern")
+});
+
 struct Engine {
     store: Store,
     chats: HashMap<String, Conversation>,
@@ -540,6 +630,17 @@ struct Engine {
     /// Per conversation: how often each request id was journaled, loaded
     /// from the journal on first need.
     request_ids: HashMap<String, HashMap<String, u32>>,
+    turns: HashMap<String, Turn>,
+    backends: HashMap<String, BackendInfo>,
+    /// Highest generation spawned per conversation in this service's life.
+    spawned: HashMap<String, u64>,
+    /// Conversations whose agent cannot resume its session (from the journal).
+    blocked: HashMap<String, bool>,
+    /// Last journaled control per conversation.
+    controls: HashMap<String, &'static str>,
+    reuse_allowlist: Vec<(String, String)>,
+    /// How long a retired process may take to confirm its exit.
+    retire_wait: Duration,
     profile: String,
     stop: bool,
     schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
@@ -559,6 +660,16 @@ impl Engine {
             secrets: HashMap::new(),
             revision: 0,
             request_ids: HashMap::new(),
+            turns: HashMap::new(),
+            backends: HashMap::new(),
+            spawned: HashMap::new(),
+            blocked: HashMap::new(),
+            controls: HashMap::new(),
+            reuse_allowlist: GENERATION_REUSE
+                .iter()
+                .map(|(agent, version)| (agent.to_string(), version.to_string()))
+                .collect(),
+            retire_wait: Duration::from_secs(10),
             profile,
             stop: false,
             schedules,
@@ -605,6 +716,8 @@ impl Engine {
     fn forget(&mut self, id: &str) {
         self.secrets.remove(id);
         self.request_ids.remove(id);
+        self.blocked.remove(id);
+        self.controls.remove(id);
     }
     fn chat(&mut self, id: &str) -> Result<&mut Conversation, String> {
         if !self.chats.contains_key(id) {
@@ -621,6 +734,7 @@ impl Engine {
                 }
             }
             let chat = self.store.load(id)?;
+            self.controls.insert(id.into(), chat.control());
             self.chats.insert(id.into(), chat);
         }
         self.chats
@@ -655,8 +769,280 @@ impl Engine {
             }
         }
         self.store.event(chat, kind, data)?;
-        if kind != "textDelta" {
+        if kind != "textDelta" && !EVIDENCE_KINDS.contains(&kind) {
             self.store.save(chat)?;
+        }
+        Ok(())
+    }
+    /// Sequence of the last journaled event.
+    fn last_sequence(&self, id: &str) -> u64 {
+        self.chats
+            .get(id)
+            .map_or(0, |chat| chat.next_sequence.saturating_sub(1))
+    }
+    /// Journal `controlChanged` when the derived control moved.
+    fn sync_control(&mut self, id: &str, reason: &str) -> Result<(), String> {
+        let Some(chat) = self.chats.get(id) else {
+            return Ok(());
+        };
+        let to = chat.control();
+        let message_id = chat.active.as_ref().map(|m| m.id.clone());
+        let from = self.controls.insert(id.into(), to);
+        if from == Some(to) {
+            return Ok(());
+        }
+        self.record(
+            id,
+            "controlChanged",
+            json!({"v":1,"messageId":message_id,"from":from,"to":to,"reason":reason}),
+        )
+    }
+    /// Whether this conversation's agent can no longer resume its session.
+    fn is_blocked(&mut self, id: &str) -> Result<bool, String> {
+        if let Some(blocked) = self.blocked.get(id) {
+            return Ok(*blocked);
+        }
+        let blocked = self.store.cannot_resume(id)?;
+        self.blocked.insert(id.into(), blocked);
+        Ok(blocked)
+    }
+    /// The live, non-retired process of `generation` may act for the active
+    /// message. Leases, assessments and recording use this (plan D1a).
+    #[allow(dead_code)]
+    fn admits(&self, id: &str, generation: u64) -> Result<&Message, &'static str> {
+        let job = self.jobs.get(id).ok_or("The agent process has ended")?;
+        if job.generation != generation || job.retiring {
+            return Err("This request belongs to an agent process that has been retired");
+        }
+        let chat = self.chats.get(id).ok_or("Conversation was not found")?;
+        if !matches!(
+            chat.phase,
+            Phase::Starting | Phase::Running | Phase::WaitingInput
+        ) {
+            return Err(if chat.phase == Phase::Stopping {
+                "The user stopped this request"
+            } else {
+                "The conversation needs recovery or has no running request"
+            });
+        }
+        chat.active
+            .as_ref()
+            .ok_or("The conversation has no running request")
+    }
+    /// Execution state of an action lease (`reported`, `admitted`), until
+    /// the lease store lands (plan 3.3): nothing is known.
+    fn lease_state(&self, _id: &str, _action_id: &str) -> Option<&'static str> {
+        None
+    }
+    /// Leases of this turn still open (plan 3.3); none until leases land.
+    fn open_leases(&self, _id: &str, _message_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+    /// Take the next message and journal `turnStarted` in the same lock.
+    /// Plans the generation the turn runs on: the live process when it may
+    /// be reused, otherwise a new one, retiring any process still around.
+    fn begin(&mut self, id: &str) -> Result<Option<Message>, String> {
+        if self.is_blocked(id)? {
+            return Ok(None);
+        }
+        let chat = self.chat(id)?;
+        let after_stop = chat.phase == Phase::Interrupted;
+        let Some(mut next) = chat.begin_next() else {
+            return Ok(None);
+        };
+        if after_stop {
+            next.continuation = Some(Continuation::AfterStop);
+            if let Some(active) = chat.active.as_mut() {
+                active.continuation = next.continuation;
+            }
+        }
+        let direct = chat.active_direct;
+        let (full_access, options) = (chat.full_access, chat.options.clone());
+        let reuse = self.jobs.get(id).is_some_and(|job| {
+            !job.retiring && job.full_access == full_access && job.options == options
+        });
+        if !reuse {
+            if let Some(job) = self.jobs.get_mut(id).filter(|job| !job.retiring) {
+                job.retiring = true;
+                let _ = job.sender.try_send(BackendCommand::Shutdown);
+            }
+        }
+        let generation = match self.jobs.get(id) {
+            Some(job) if reuse => job.generation,
+            _ => {
+                let chat = self.chat(id)?;
+                chat.generation += 1;
+                chat.generation
+            }
+        };
+        self.record(
+            id,
+            "turnStarted",
+            json!({"v":1,"messageId":next.id,"generation":generation,"direct":direct,"continuation":next.continuation}),
+        )?;
+        self.turns.insert(
+            id.into(),
+            Turn {
+                message_id: next.id.clone(),
+                generation,
+                reuse,
+                first_sequence: self.last_sequence(id),
+                open_tools: Default::default(),
+                names: HashMap::new(),
+                completed: Vec::new(),
+                answered: false,
+                final_items: Default::default(),
+            },
+        );
+        self.sync_control(id, "turnStarted")?;
+        Ok(Some(next))
+    }
+    /// Follow a `tool` notice: which calls of the running turn are open.
+    fn track_tool(&mut self, id: &str, data: &Value) {
+        let agent = self
+            .chats
+            .get(id)
+            .map(|c| c.agent_id.clone())
+            .unwrap_or_default();
+        let Some(turn) = self.turns.get_mut(id) else {
+            return;
+        };
+        let item = &data["item"];
+        if item["type"]
+            .as_str()
+            .is_some_and(|kind| NOT_TOOLS.contains(&kind))
+        {
+            return;
+        }
+        let Some(call) = ["toolCallId"]
+            .iter()
+            .find_map(|k| data[*k].as_str())
+            .or_else(|| {
+                ["id", "tool_use_id", "toolCallId"]
+                    .iter()
+                    .find_map(|k| item[*k].as_str())
+            })
+            .filter(|call| !call.is_empty() && call.len() <= 1024)
+            .map(String::from)
+        else {
+            return;
+        };
+        let name = ["name", "tool", "toolName", "title"]
+            .iter()
+            .find_map(|k| item[*k].as_str())
+            .map(String::from)
+            .or_else(|| turn.names.get(&call).cloned())
+            .unwrap_or_default();
+        if turn.names.len() < 1024 {
+            turn.names.insert(call.clone(), name.clone());
+        }
+        if data["completed"] == true {
+            turn.open_tools.remove(&call);
+            if turn.completed.len() < 256 {
+                turn.completed.push(call);
+            }
+            return;
+        }
+        let browser = BROWSER_TOOL.is_match(&name)
+            || item["server"] == "chrome_use"
+            || (agent == "opencode" && name == "execute");
+        let action_ids = data["actionIds"]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if turn.open_tools.len() < 256 {
+            turn.open_tools.insert(
+                call,
+                OpenTool {
+                    name,
+                    action_ids,
+                    browser,
+                },
+            );
+        }
+    }
+    /// Journal `turnEnded` and what follows it, then retire the generation
+    /// when the turn did not end cleanly (plan 4.1, D1a rule 2).
+    fn end_turn(&mut self, id: &str, outcome: &str, error: &Value) -> Result<(), String> {
+        let Some(turn) = self.turns.remove(id) else {
+            return Ok(());
+        };
+        let last = self.last_sequence(id);
+        let open_leases = self.open_leases(id, &turn.message_id);
+        self.record(
+            id,
+            "turnEnded",
+            json!({"v":1,"messageId":turn.message_id,"generation":turn.generation,"outcome":outcome,"error":error,"emptyAnswer":!turn.answered,"finalItemIds":turn.final_items,"sourceSequences":[turn.first_sequence,last],"openLeases":open_leases}),
+        )?;
+        if !turn.open_tools.is_empty() {
+            let unresolved: Vec<Value> = turn
+                .open_tools
+                .iter()
+                .take(64)
+                .map(|(call, tool)| {
+                    let action = tool.action_ids.first();
+                    let executed = action
+                        .and_then(|a| self.lease_state(id, a))
+                        .unwrap_or("unknown");
+                    json!({"toolCallId":call,"name":tool.name,"actionId":action,"executed":executed})
+                })
+                .collect();
+            let mut data = json!({"v":1,"messageId":turn.message_id,"outcome":outcome,"completed":turn.completed.iter().take(256).collect::<Vec<_>>(),"unresolved":unresolved});
+            if turn.open_tools.len() > 64 {
+                data["truncated"] = (turn.open_tools.len() - 64).into();
+            }
+            self.record(id, "batchInterrupted", data)?;
+        }
+        // Only what this generation's own process said counts.
+        let info = self
+            .backends
+            .get(id)
+            .filter(|info| info.generation == turn.generation)
+            .cloned()
+            .unwrap_or_default();
+        let agent = self.chat(id)?.agent_id.clone();
+        let reason = if outcome != "completed" {
+            Some("notCompleted")
+        } else if turn.open_tools.values().any(|tool| tool.browser) {
+            Some("openTool")
+        } else if !open_leases.is_empty() {
+            Some("openLease")
+        } else if !info.version.as_ref().is_some_and(|version| {
+            self.reuse_allowlist
+                .iter()
+                .any(|(a, v)| a == &agent && v == version)
+        }) {
+            Some("unlistedVersion")
+        } else {
+            None
+        };
+        let Some(reason) = reason else {
+            return Ok(());
+        };
+        if let Some(job) = self
+            .jobs
+            .get_mut(id)
+            .filter(|job| job.generation == turn.generation)
+        {
+            job.retiring = true;
+            let _ = job.sender.try_send(BackendCommand::Shutdown);
+        }
+        // Without a resumable session a new process would start an agent
+        // with no history, so the conversation stops here.
+        let resumable = info.resumable != Some(false) || self.chat(id)?.session_id.is_none();
+        self.record(
+            id,
+            "generationRetired",
+            json!({"v":1,"generation":turn.generation,"reason":reason,"resumable":resumable}),
+        )?;
+        if !resumable {
+            self.blocked.insert(id.into(), true);
+            self.chat(id)?.queue_paused = true;
         }
         Ok(())
     }
@@ -682,14 +1068,32 @@ impl Engine {
             .get(id)
             .is_some_and(|job| job.generation == generation && job.retiring)
         {
-            if notice.kind == "exited" {
-                self.jobs.remove(id);
-                self.requests.retain(|(chat, _), _| chat != id);
-                return Ok(None);
+            match notice.kind {
+                "exited" => {
+                    self.jobs.remove(id);
+                    self.requests.retain(|(chat, _), _| chat != id);
+                }
+                "processUnconfirmed" => {
+                    // A retired process whose exit is unconfirmed may still
+                    // act; nothing starts until the user recovers.
+                    self.jobs.remove(id);
+                    self.requests.retain(|(chat, _), _| chat != id);
+                    let chat = self.chat(id)?;
+                    chat.phase = Phase::RecoveryRequired;
+                    chat.queue_paused = true;
+                    chat.last_error = Some(
+                        notice.data["error"]
+                            .as_str()
+                            .unwrap_or("The retired agent process did not confirm its exit")
+                            .into(),
+                    );
+                    notice.data["generation"] = generation.into();
+                    self.record(id, notice.kind, notice.data)?;
+                    self.sync_control(id, "processUnconfirmed")?;
+                }
+                _ => {}
             }
-            if notice.kind != "processUnconfirmed" {
-                return Ok(None);
-            }
+            return Ok(None);
         }
         if self.chat(id)?.generation != generation {
             return Ok(None);
@@ -704,6 +1108,8 @@ impl Engine {
         if let Some(message) = self.chat(id)?.active.as_ref() {
             notice.data["messageId"] = message.id.clone().into();
         }
+        // The turn's outcome, decided before `terminal()` changes the phase.
+        let mut ended: Option<&'static str> = None;
         // Claude confirms a permission round trip by returning the matching
         // tool_use_id. A stdin write alone never resolves the request.
         if notice.kind == "tool" && notice.data["completed"] == true {
@@ -720,19 +1126,62 @@ impl Engine {
                     .map(|(key, pending)| (key.clone(), pending.request_id.clone()))
                     .collect();
                 for (key, request_id) in resolved {
-                    self.requests.remove(&key);
-                    self.record(id, "requestResolved", json!({"requestId":request_id}))?;
+                    let revision = self.requests.remove(&key).map(|p| p.revision);
+                    self.record(
+                        id,
+                        "requestResolved",
+                        json!({"requestId":request_id,"requestRevision":revision}),
+                    )?;
                 }
             }
         }
         let mut prepared = None;
         match notice.kind {
             "ready" => {
+                self.backends.insert(
+                    id.into(),
+                    BackendInfo {
+                        generation,
+                        version: notice.data["backendVersion"]
+                            .as_str()
+                            .filter(|v| v.len() <= 64)
+                            .map(String::from),
+                        resumable: notice.data["resumable"].as_bool(),
+                    },
+                );
                 let chat = self.chat(id)?;
                 chat.session_id = notice.data["sessionId"].as_str().map(String::from);
                 chat.model = notice.data["model"].as_str().map(String::from);
             }
+            "textFinal" | "textRole" => {
+                if let Some(turn) = self.turns.get_mut(id) {
+                    let item = notice.data["itemId"].as_str().unwrap_or("assistant");
+                    if notice.data["role"] == "final" && turn.final_items.len() < 64 {
+                        turn.final_items.insert(item.chars().take(256).collect());
+                    }
+                    if notice.data["text"]
+                        .as_str()
+                        .is_some_and(|t| !t.trim().is_empty())
+                    {
+                        turn.answered = true;
+                    }
+                }
+            }
             "running" | "textDelta" | "tool" => {
+                // A delta-only backend (OpenCode ACP) never sends textFinal;
+                // its streamed text is the answer.
+                if notice.kind == "textDelta"
+                    && notice.data["text"]
+                        .as_str()
+                        .is_some_and(|t| !t.trim().is_empty())
+                {
+                    if let Some(turn) = self.turns.get_mut(id) {
+                        turn.answered = true;
+                    }
+                }
+                if notice.kind == "tool" {
+                    self.track_tool(id, &notice.data);
+                }
                 let waiting = self.requests.keys().any(|(chat, _)| chat == id);
                 let chat = self.chat(id)?;
                 if chat.active.is_some() && chat.phase != Phase::Stopping {
@@ -790,7 +1239,9 @@ impl Engine {
             "requestResolved" => {
                 let key = serde_json::to_string(&notice.data["requestId"])
                     .map_err(|_| "Invalid backend request id")?;
-                self.requests.remove(&(id.into(), key));
+                if let Some(pending) = self.requests.remove(&(id.into(), key)) {
+                    notice.data["requestRevision"] = pending.revision.into();
+                }
             }
             "title" => {
                 if let Some(title) = notice.data["title"].as_str() {
@@ -801,11 +1252,17 @@ impl Engine {
                 let status = notice.data["status"]
                     .as_str()
                     .ok_or("Missing backend terminal status")?;
-                self.chat(id)?.terminal(
+                if self.chat(id)?.terminal(
                     generation,
                     status,
                     notice.data["error"].as_str().map(String::from),
-                )?;
+                )? {
+                    ended = Some(match status {
+                        "completed" => "completed",
+                        "interrupted" => "interrupted",
+                        _ => "failed",
+                    });
+                }
                 self.requests.retain(|(chat, _), _| chat != id);
             }
             "exited" => {
@@ -818,6 +1275,7 @@ impl Engine {
                     } else {
                         "failed"
                     };
+                    ended = Some(status);
                     chat.terminal(
                         generation,
                         status,
@@ -834,6 +1292,9 @@ impl Engine {
                 self.jobs.remove(id);
                 self.requests.retain(|(chat, _), _| chat != id);
                 let chat = self.chat(id)?;
+                if chat.active.is_some() {
+                    ended = Some("unknown");
+                }
                 chat.phase = Phase::RecoveryRequired;
                 chat.queue_paused = true;
                 chat.last_error = Some(
@@ -845,16 +1306,17 @@ impl Engine {
             }
             _ => {}
         }
+        let error = notice.data["error"].clone();
         match prepared {
             Some(data) => self.record_redacted(id, notice.kind, data)?,
             None => self.record(id, notice.kind, notice.data)?,
         }
+        if let Some(outcome) = ended {
+            self.end_turn(id, outcome, &error)?;
+        }
+        self.sync_control(id, notice.kind)?;
         if ["terminal", "exited"].contains(&notice.kind) {
-            let next = self.chat(id)?.begin_next();
-            if next.is_some() {
-                self.persist(id)?;
-            }
-            Ok(next)
+            self.begin(id)
         } else {
             Ok(None)
         }
@@ -1193,6 +1655,7 @@ async fn dispatch(
             let mut e = engine.lock().await;
             e.store.create(&chat)?;
             let result = chat.summary();
+            e.controls.insert(chat.id.clone(), chat.control());
             e.chats.insert(chat.id.clone(), chat);
             Ok(json!({"schemaVersion":1,"conversation":result}))
         }
@@ -1240,6 +1703,7 @@ async fn dispatch(
                     page: None,
                     attachments: Vec::new(),
                     skill: None,
+                    continuation: None,
                 },
             )?;
             e.record(
@@ -1325,7 +1789,16 @@ async fn dispatch(
                 id: p.message_id.clone(),
                 text: p.text.clone(),
                 page: p.page.clone(),
+                continuation: None,
             };
+            if e.is_blocked(&p.conversation_id)?
+                && !e
+                    .chat(&p.conversation_id)?
+                    .accepted
+                    .contains_key(&message.id)
+            {
+                return Err(NOT_RESUMABLE.into());
+            }
             // A client that only holds the stored projection may retry with
             // it; that is a duplicate, never a resend.
             let differs = e
@@ -1374,25 +1847,14 @@ async fn dispatch(
                     }
                 }
             }
-            let next = e.chat(&p.conversation_id)?.begin_next();
+            e.sync_control(&p.conversation_id, "conversationSend")?;
+            let next = e.begin(&p.conversation_id)?;
             e.persist(&p.conversation_id)?;
             drop(e);
             if let Some(message) = next {
-                if let Err(error) = start(engine, &p.conversation_id, message).await {
-                    let mut e = engine.lock().await;
-                    let chat = e.chat(&p.conversation_id)?;
-                    chat.phase = if direct {
-                        Phase::RecoveryRequired
-                    } else {
-                        Phase::Failed
-                    };
-                    chat.queue_paused = true;
-                    if !direct {
-                        chat.active = None;
-                    }
-                    chat.last_error = Some(error);
-                    e.persist(&p.conversation_id)?;
-                }
+                // A failed start is recorded on the conversation; the send
+                // itself was accepted.
+                let _ = launch(engine, &p.conversation_id, message).await;
             }
             let summary = engine.lock().await.chat(&p.conversation_id)?.summary();
             Ok(
@@ -1527,6 +1989,9 @@ async fn dispatch(
                 .map_err(|_| "Conversation control requires only conversationId")?;
             let mut e = engine.lock().await;
             if operation == "conversationResumeQueue" {
+                if e.is_blocked(&p.conversation_id)? {
+                    return Err(NOT_RESUMABLE.into());
+                }
                 let chat = e.chat(&p.conversation_id)?;
                 if chat.phase == Phase::RecoveryRequired {
                     return Err(
@@ -1537,12 +2002,12 @@ async fn dispatch(
                 if !chat.phase.busy() && chat.direct_message_id.is_some() {
                     chat.direct_ready = true;
                 }
-                let next = e.chat(&p.conversation_id)?.begin_next();
+                let next = e.begin(&p.conversation_id)?;
                 e.persist(&p.conversation_id)?;
                 let summary = e.chat(&p.conversation_id)?.summary();
                 drop(e);
                 if let Some(message) = next {
-                    start(engine, &p.conversation_id, message).await?;
+                    launch(engine, &p.conversation_id, message).await?;
                 }
                 return Ok(json!({"schemaVersion":1,"conversation":summary}));
             }
@@ -1555,6 +2020,7 @@ async fn dispatch(
                     .clone();
                 e.chat(&p.conversation_id)?.phase = Phase::Stopping;
                 e.persist(&p.conversation_id)?;
+                e.sync_control(&p.conversation_id, "conversationStop")?;
                 sender.try_send(BackendCommand::Interrupt).map_err(|_| {
                     "Backend could not receive interruption; outcome is unconfirmed"
                 })?;
@@ -1666,6 +2132,7 @@ fn stored_message(
         page,
         attachments,
         skill,
+        continuation: None,
     }))
 }
 
@@ -1788,54 +2255,93 @@ fn validate_reply(method: &str, original: &Value, result: &Value) -> Result<(), 
     }
 }
 
+/// Start the active message, then record a failed start. A message whose
+/// start failed was never written to any backend (`delivered: false`). When
+/// the old process did not confirm its exit, the message stays active and the
+/// conversation needs recovery; otherwise the turn simply failed.
+async fn launch(engine: &Arc<Mutex<Engine>>, id: &str, message: Message) -> Result<(), String> {
+    let Err(failure) = start(engine, id, message).await else {
+        return Ok(());
+    };
+    let mut e = engine.lock().await;
+    e.turns.remove(id);
+    let chat = e.chat(id)?;
+    let message_id = chat.active.as_ref().map(|m| m.id.clone());
+    if failure.unconfirmed.is_some() {
+        chat.phase = Phase::RecoveryRequired;
+    } else {
+        chat.phase = Phase::Failed;
+        chat.active = None;
+        chat.active_direct = false;
+    }
+    chat.queue_paused = true;
+    chat.last_error = Some(failure.reason.clone());
+    e.record(
+        id,
+        "turnStartFailed",
+        json!({"v":1,"messageId":message_id,"retiredGeneration":failure.unconfirmed,"reason":failure.reason,"delivered":false}),
+    )?;
+    e.sync_control(id, "turnStartFailed")?;
+    e.persist(id)?;
+    Err(failure.reason)
+}
+
 fn start<'a>(
     engine: &'a Arc<Mutex<Engine>>,
     id: &'a str,
     message: Message,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + std::marker::Send + 'a>>
-{
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<(), StartFailure>> + std::marker::Send + 'a>,
+> {
     Box::pin(async move {
         let mut e = engine.lock().await;
-        let wanted = e.chat(id)?.clone();
-        // A resumed CLI must have the requested conversation options. Wait for
-        // the old process to exit before starting its replacement.
-        if e.jobs.get(id).is_some_and(|job| {
-            job.full_access != wanted.full_access || job.options != wanted.options
-        }) {
-            let sender = e.jobs.get(id).ok_or("Backend disappeared")?.sender.clone();
-            sender
-                .try_send(BackendCommand::Shutdown)
-                .map_err(|_| "Backend shutdown was not dispatched")?;
-            e.jobs.get_mut(id).ok_or("Backend disappeared")?.retiring = true;
+        let planned = e.turns.get(id).map(|t| (t.generation, t.reuse));
+        // A retiring process never takes a new turn: wait for its exit, then
+        // start a new process that resumes the session.
+        if let Some(job) = e.jobs.get_mut(id) {
+            if !job.retiring && planned.is_some_and(|(g, reuse)| reuse && g == job.generation) {
+                let sender = job.sender.clone();
+                drop(e);
+                return sender
+                    .send(BackendCommand::Start(message))
+                    .await
+                    .map_err(|_| {
+                        "Backend process became unavailable before receiving the turn".into()
+                    });
+            }
+            let old = job.generation;
+            let wait = e.retire_wait;
+            let job = e.jobs.get_mut(id).ok_or("Backend disappeared")?;
+            if !job.retiring {
+                job.retiring = true;
+                job.sender
+                    .try_send(BackendCommand::Shutdown)
+                    .map_err(|_| "Backend shutdown was not dispatched")?;
+            }
             drop(e);
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            let deadline = tokio::time::Instant::now() + wait;
             loop {
-                let locked = engine.lock().await;
+                let mut locked = engine.lock().await;
                 if !locked.jobs.contains_key(id) {
-                    e = locked;
-                    if e.chat(id)?.phase == Phase::RecoveryRequired {
-                        return Err("Previous backend exit is unconfirmed".into());
+                    if locked.chat(id)?.phase == Phase::RecoveryRequired {
+                        return Err(StartFailure {
+                            reason: "Previous backend exit is unconfirmed".into(),
+                            unconfirmed: Some(old),
+                        });
                     }
+                    e = locked;
                     break;
                 }
                 drop(locked);
                 if tokio::time::Instant::now() > deadline {
-                    return Err(
-                        "Backend shutdown has not been confirmed; no replacement started".into(),
-                    );
+                    return Err(StartFailure {
+                        reason: "Backend shutdown has not been confirmed; no replacement started"
+                            .into(),
+                        unconfirmed: Some(old),
+                    });
                 }
                 tokio::time::sleep(Duration::from_millis(30)).await;
             }
-        }
-        if let Some(job) = e.jobs.get(id) {
-            let sender = job.sender.clone();
-            drop(e);
-            return sender
-                .send(BackendCommand::Start(message))
-                .await
-                .map_err(|_| {
-                    "Backend process became unavailable before receiving the turn".into()
-                });
         }
         if e.jobs.len() >= 4 {
             let idle = e
@@ -1893,11 +2399,28 @@ fn start<'a>(
         let workspace = e.store.directory.join(id).join("workspace");
         private_tree(&workspace)?;
         let profile = e.profile.clone();
-        let generation = {
-            let running = e.chat(id)?;
-            running.generation += 1;
-            running.generation
+        // The planned generation, unless a process already ran it (the
+        // planned process vanished): generations only grow.
+        let spawned = e.spawned.get(id).copied();
+        let generation = match planned {
+            Some((g, _)) if e.chat(id)?.generation == g && spawned.is_none_or(|s| s < g) => g,
+            _ => {
+                let running = e.chat(id)?;
+                running.generation += 1;
+                let g = running.generation;
+                let direct = running.active_direct;
+                let replanned = e.turns.get_mut(id).map(|turn| {
+                    turn.generation = g;
+                    turn.reuse = false;
+                    json!({"v":1,"messageId":turn.message_id,"generation":g,"direct":direct,"continuation":message.continuation,"replanned":true})
+                });
+                if let Some(data) = replanned {
+                    e.record(id, "turnStarted", data)?;
+                }
+                g
+            }
         };
+        e.spawned.insert(id.into(), generation);
         e.persist(id)?;
         let (commands, receive) = mpsc::channel(32);
         let (events, mut notices) = mpsc::channel(256);
@@ -1939,15 +2462,7 @@ fn start<'a>(
                 match next {
                     Ok(Some(message)) => {
                         drop(e);
-                        if let Err(error) = start(&owner, &chat_id, message).await {
-                            let mut e = owner.lock().await;
-                            if let Some(chat) = e.chats.get_mut(&chat_id) {
-                                chat.phase = Phase::RecoveryRequired;
-                                chat.queue_paused = true;
-                                chat.last_error = Some(error);
-                            }
-                            let _ = e.persist(&chat_id);
-                        }
+                        let _ = launch(&owner, &chat_id, message).await;
                     }
                     Ok(None) => {}
                     Err(error) => {
@@ -2404,7 +2919,7 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
     chat.options = schedule.options.clone();
     chat.full_access = schedule.full_access;
     e.store.create(&chat)?;
-    let prepared = (|| -> Result<(Message, Message), String> {
+    let prepared = (|| -> Result<Message, String> {
         let workspace = e.store.directory.join(&chat.id).join("workspace");
         private_tree(&workspace)?;
         let skill = schedule
@@ -2422,15 +2937,14 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
         let message = Message {
             id: uuid::Uuid::new_v4().to_string(),
             text: format!("[Scheduled task: {}. Work in your own background browser session; no user tab is attached.]\n\n{}", schedule.name, schedule.prompt),
-            page: None, attachments: Vec::new(), skill,
+            page: None, attachments: Vec::new(), skill, continuation: None,
         };
         chat.accept(message.clone())?;
         chat.title = schedule.name.clone();
-        let next = chat.begin_next().ok_or("Scheduled turn was not prepared")?;
         e.store.save(&chat)?;
-        Ok((message, next))
+        Ok(message)
     })();
-    let (message, next) = match prepared {
+    let message = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             e.store.delete(&chat.id).map_err(|cleanup| {
@@ -2440,8 +2954,14 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
         }
     };
     let chat_id = chat.id.clone();
+    e.controls.insert(chat_id.clone(), chat.control());
     e.chats.insert(chat_id.clone(), chat);
+    // `user` before `turnStarted`, as for every other message.
     e.record(&chat_id,"user",json!({"messageId":message.id,"text":message.text,"scheduleId":id,"skillId":schedule.skill_id}))?;
+    let next = e
+        .begin(&chat_id)?
+        .ok_or("Scheduled turn was not prepared")?;
+    e.persist(&chat_id)?;
     let schedule = e.schedules.get_mut(id).ok_or("Schedule disappeared")?;
     schedule.active_chat = Some(chat_id.clone());
     schedule.last_chat = Some(chat_id.clone());
@@ -2450,14 +2970,8 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
     schedule.finished_at = None;
     super::schedules::persist(&e.store.directory, &e.schedules)?;
     drop(e);
-    if let Err(error) = start(engine, &chat_id, next).await {
+    if let Err(error) = launch(engine, &chat_id, next).await {
         let mut e = engine.lock().await;
-        let chat = e.chat(&chat_id)?;
-        chat.phase = Phase::Failed;
-        chat.last_error = Some(error.clone());
-        chat.active = None;
-        chat.queue_paused = true;
-        e.persist(&chat_id)?;
         let schedule = e.schedules.get_mut(id).ok_or("Schedule disappeared")?;
         schedule.last_result = Some(format!("failed: {error}"));
         schedule.active_chat = None;
@@ -3114,6 +3628,7 @@ mod redaction_tests {
                     page: None,
                     attachments: Vec::new(),
                     skill: None,
+                    continuation: None,
                 });
             }
             // OpenCode only streams deltas; the tail must not be lost.
@@ -3210,6 +3725,7 @@ mod redaction_tests {
                 page: serde_json::from_value(raw["page"].clone()).unwrap(),
                 attachments: serde_json::from_value(raw["attachments"].clone()).unwrap(),
                 skill: None,
+                continuation: None,
             };
             let hash = message.fingerprint().unwrap();
             let chat = e.chats.get_mut(&f.id).unwrap();
@@ -3235,5 +3751,579 @@ mod redaction_tests {
                 .await
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+
+    struct Chat {
+        _dir: tempfile::TempDir,
+        engine: Arc<Mutex<Engine>>,
+        id: String,
+        commands: mpsc::Receiver<BackendCommand>,
+    }
+
+    /// A conversation with a live backend job of generation 0 that never
+    /// answers on its own.
+    async fn chat(agent: &str) -> Chat {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )));
+        let created = dispatch(&engine, "conversationCreate", &json!({"agentId":agent}))
+            .await
+            .unwrap();
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        let (sender, commands) = mpsc::channel(16);
+        engine.lock().await.jobs.insert(
+            id.clone(),
+            Job {
+                generation: 0,
+                full_access: false,
+                options: ModelOptions::default(),
+                retiring: false,
+                sender,
+            },
+        );
+        Chat {
+            _dir: dir,
+            engine,
+            id,
+            commands,
+        }
+    }
+
+    impl Chat {
+        async fn send(&self, text: &str) -> String {
+            let message = uuid::Uuid::new_v4().to_string();
+            dispatch(
+                &self.engine,
+                "conversationSend",
+                &json!({"conversationId":self.id,"messageId":message,"text":text}),
+            )
+            .await
+            .unwrap();
+            message
+        }
+        async fn notice(&self, kind: &'static str, data: Value) -> Option<Message> {
+            let generation = self.engine.lock().await.chat(&self.id).unwrap().generation;
+            self.notice_from(generation, kind, data).await
+        }
+        async fn notice_from(
+            &self,
+            generation: u64,
+            kind: &'static str,
+            data: Value,
+        ) -> Option<Message> {
+            let mut e = self.engine.lock().await;
+            e.notice(&self.id, generation, backend::notice(kind, data))
+                .unwrap()
+        }
+        async fn allow_reuse(&self, version: &str) {
+            let mut e = self.engine.lock().await;
+            e.reuse_allowlist = vec![("claude".into(), version.into())];
+            drop(e);
+            self.notice(
+                "ready",
+                json!({"sessionId":"s1","model":"m","backendVersion":version,"resumable":true}),
+            )
+            .await;
+        }
+        fn started(&mut self) -> Option<Message> {
+            loop {
+                match self.commands.try_recv() {
+                    Ok(BackendCommand::Start(message)) => return Some(message),
+                    Ok(_) => continue,
+                    Err(_) => return None,
+                }
+            }
+        }
+        fn shutdown_sent(&mut self) -> bool {
+            let mut seen = false;
+            while let Ok(command) = self.commands.try_recv() {
+                seen |= matches!(command, BackendCommand::Shutdown);
+            }
+            seen
+        }
+        async fn events(&self) -> Vec<Value> {
+            let mut out = Vec::new();
+            let mut after = 0;
+            loop {
+                let read = dispatch(
+                    &self.engine,
+                    "conversationRead",
+                    &json!({"conversationId":self.id,"after":after}),
+                )
+                .await
+                .unwrap();
+                out.extend(read["journal"]["events"].as_array().unwrap().clone());
+                after = read["journal"]["cursor"].as_u64().unwrap();
+                if read["journal"]["more"] != true {
+                    return out;
+                }
+            }
+        }
+        async fn kinds(&self, kind: &str) -> Vec<Value> {
+            self.events()
+                .await
+                .into_iter()
+                .filter(|e| e["kind"] == kind)
+                .map(|e| e["data"].clone())
+                .collect()
+        }
+        async fn control(&self) -> String {
+            let mut e = self.engine.lock().await;
+            e.chat(&self.id).unwrap().summary()["control"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turn_starts_once_and_ends_with_its_message_and_answer() {
+        let mut c = chat("claude").await;
+        let message = c.send("hello").await;
+        assert_eq!(c.started().unwrap().id, message);
+        let started = c.kinds("turnStarted").await;
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0]["messageId"], message);
+        assert_eq!(started[0]["generation"], 0);
+        assert_eq!(started[0]["continuation"], Value::Null);
+        assert_eq!(c.control().await, "agent");
+        c.notice(
+            "textFinal",
+            json!({"itemId":"m1","text":"Done.","part":0,"last":true,"role":"final"}),
+        )
+        .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        let ended = c.kinds("turnEnded").await;
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0]["messageId"], message);
+        assert_eq!(ended[0]["outcome"], "completed");
+        assert_eq!(ended[0]["emptyAnswer"], false);
+        assert_eq!(ended[0]["finalItemIds"], json!(["m1"]));
+        let range = ended[0]["sourceSequences"].as_array().unwrap();
+        assert!(range[0].as_u64().unwrap() < range[1].as_u64().unwrap());
+        // `turnEnded` follows the terminal event it describes.
+        let events = c.events().await;
+        let terminal = events.iter().position(|e| e["kind"] == "terminal").unwrap();
+        let end = events
+            .iter()
+            .position(|e| e["kind"] == "turnEnded")
+            .unwrap();
+        assert!(end > terminal);
+        assert_eq!(c.control().await, "stopped");
+        let controls: Vec<_> = c
+            .kinds("controlChanged")
+            .await
+            .into_iter()
+            .map(|d| (d["from"].clone(), d["to"].clone()))
+            .collect();
+        assert_eq!(
+            controls,
+            vec![
+                (json!("stopped"), json!("agent")),
+                (json!("agent"), json!("stopped"))
+            ]
+        );
+        // No version on the allowlist: the process retires after the turn.
+        let retired = c.kinds("generationRetired").await;
+        assert_eq!(retired[0]["reason"], "unlistedVersion");
+        assert_eq!(retired[0]["generation"], 0);
+        assert!(c.shutdown_sent());
+        assert!(c.engine.lock().await.jobs[&c.id].retiring);
+    }
+
+    #[tokio::test]
+    async fn turn_outcomes_follow_the_terminal_kind() {
+        for (kind, data, stopping, outcome) in [
+            (
+                "terminal",
+                json!({"status":"failed","error":"boom"}),
+                false,
+                "failed",
+            ),
+            (
+                "terminal",
+                json!({"status":"interrupted","error":null}),
+                true,
+                "interrupted",
+            ),
+            (
+                "exited",
+                json!({"error":null,"processExitConfirmed":true}),
+                true,
+                "interrupted",
+            ),
+            (
+                "exited",
+                json!({"error":"crash","processExitConfirmed":true}),
+                false,
+                "failed",
+            ),
+            (
+                "processUnconfirmed",
+                json!({"error":"lost","processExitConfirmed":false}),
+                false,
+                "unknown",
+            ),
+        ] {
+            let c = chat("claude").await;
+            let message = c.send("go").await;
+            if stopping {
+                dispatch(
+                    &c.engine,
+                    "conversationStop",
+                    &json!({"conversationId":c.id}),
+                )
+                .await
+                .unwrap();
+                assert_eq!(c.control().await, "stopRequested");
+            }
+            c.notice(kind, data).await;
+            let ended = c.kinds("turnEnded").await;
+            assert_eq!(ended.len(), 1, "{kind} {outcome}");
+            assert_eq!(ended[0]["messageId"], message, "{kind}");
+            assert_eq!(ended[0]["outcome"], outcome, "{kind}");
+            assert_eq!(ended[0]["emptyAnswer"], true, "{kind}");
+            let retired = c.kinds("generationRetired").await;
+            assert_eq!(retired[0]["reason"], "notCompleted", "{kind}");
+            let expected = if outcome == "unknown" {
+                "unknown"
+            } else {
+                "stopped"
+            };
+            assert_eq!(c.control().await, expected, "{kind}");
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_text_counts_as_an_answer() {
+        let c = chat("opencode").await;
+        c.send("go").await;
+        c.notice("textDelta", json!({"itemId":"a","text":"Here it is."}))
+            .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert_eq!(c.kinds("turnEnded").await[0]["emptyAnswer"], false);
+    }
+
+    #[tokio::test]
+    async fn open_tools_are_reported_and_retire_the_generation() {
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        let message = c.send("click it").await;
+        c.started();
+        let tool = |completed: bool, item: Value| json!({"completed":completed,"item":item});
+        c.notice("tool", tool(false, json!({"type":"tool_use","id":"t0","name":"mcp__chrome_use__chrome_use_read","input":{}})))
+            .await;
+        c.notice(
+            "tool",
+            tool(
+                true,
+                json!({"type":"tool_result","tool_use_id":"t0","content":"ok"}),
+            ),
+        )
+        .await;
+        c.notice("tool", tool(false, json!({"type":"tool_use","id":"t1","name":"mcp__chrome_use__chrome_use_click","input":{"selector":"#buy"}})))
+            .await;
+        // Reasoning is not a tool call.
+        c.notice("tool", tool(false, json!({"type":"reasoning","id":"r1"})))
+            .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        let batch = c.kinds("batchInterrupted").await;
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0]["messageId"], message);
+        assert_eq!(batch[0]["completed"], json!(["t0"]));
+        assert_eq!(
+            batch[0]["unresolved"],
+            json!([{"toolCallId":"t1","name":"mcp__chrome_use__chrome_use_click","actionId":null,"executed":"unknown"}])
+        );
+        // Even an allowlisted version retires with a browser call still open.
+        assert_eq!(c.kinds("generationRetired").await[0]["reason"], "openTool");
+        assert!(c.shutdown_sent());
+    }
+
+    #[tokio::test]
+    async fn an_allowlisted_version_keeps_its_process_after_a_clean_turn() {
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.send("one").await;
+        assert!(c.started().is_some());
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert!(c.kinds("generationRetired").await.is_empty());
+        assert!(!c.shutdown_sent());
+        let second = c.send("two").await;
+        assert_eq!(c.started().unwrap().id, second);
+        let started = c.kinds("turnStarted").await;
+        assert_eq!(started.len(), 2);
+        assert_eq!(started[1]["generation"], 0);
+        // A version the allowlist does not name retires.
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.notice(
+            "ready",
+            json!({"sessionId":"s1","backendVersion":"9.9.9","resumable":true}),
+        )
+        .await;
+        c.send("one").await;
+        c.started();
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert_eq!(
+            c.kinds("generationRetired").await[0]["reason"],
+            "unlistedVersion"
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_after_an_interrupted_turn_continue_after_stop() {
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.send("first").await;
+        c.started();
+        // Queued before the interrupt; the queue pauses after it.
+        let queued = c.send("second").await;
+        dispatch(
+            &c.engine,
+            "conversationStop",
+            &json!({"conversationId":c.id}),
+        )
+        .await
+        .unwrap();
+        assert!(c
+            .notice("terminal", json!({"status":"interrupted","error":null}))
+            .await
+            .is_none());
+        {
+            // The retired process exits; resuming the queue begins the
+            // queued message after the stop.
+            let generation = c.engine.lock().await.jobs[&c.id].generation;
+            c.notice_from(generation, "exited", json!({"error":null}))
+                .await;
+            let mut e = c.engine.lock().await;
+            e.chat(&c.id).unwrap().queue_paused = false;
+            let next = e.begin(&c.id).unwrap().unwrap();
+            assert_eq!(next.id, queued);
+            assert_eq!(next.continuation, Some(Continuation::AfterStop));
+            assert!(next
+                .prompt_text()
+                .starts_with("[The user stopped the previous request"));
+            assert_eq!(e.chat(&c.id).unwrap().control(), "resuming");
+            assert_eq!(
+                e.chat(&c.id).unwrap().active.as_ref().unwrap().continuation,
+                Some(Continuation::AfterStop)
+            );
+        }
+        let started = c.kinds("turnStarted").await;
+        assert_eq!(started[1]["continuation"], "afterStop");
+        assert_eq!(started[1]["generation"], 1);
+
+        // Stop & send: the direct message begins in the notice that ends the
+        // interrupted turn, and continues after the stop.
+        let mut c = chat("claude").await;
+        c.send("first").await;
+        c.started();
+        let direct = uuid::Uuid::new_v4().to_string();
+        dispatch(
+            &c.engine,
+            "conversationSendDirect",
+            &json!({"conversationId":c.id,"messageId":direct,"text":"instead"}),
+        )
+        .await
+        .unwrap();
+        let next = c
+            .notice("terminal", json!({"status":"interrupted","error":null}))
+            .await
+            .unwrap();
+        assert_eq!(next.id, direct);
+        assert_eq!(next.continuation, Some(Continuation::AfterStop));
+        let started = c.kinds("turnStarted").await;
+        assert_eq!(started.len(), 2);
+        assert_eq!(started[1]["direct"], true);
+
+        // Not after a completed turn.
+        let mut c = chat("claude").await;
+        c.allow_reuse("2.1.300").await;
+        c.send("first").await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        c.send("second").await;
+        c.started();
+        assert_eq!(c.started().unwrap().continuation, None);
+    }
+
+    #[tokio::test]
+    async fn a_retired_process_that_never_exits_keeps_the_next_message() {
+        let mut c = chat("claude").await;
+        c.engine.lock().await.retire_wait = Duration::from_millis(200);
+        c.send("first").await;
+        c.started();
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert!(c.shutdown_sent());
+        // The old process ignores Shutdown; the next message must not reach
+        // it, and no other process may start.
+        let second = c.send("second").await;
+        assert!(c.started().is_none());
+        let failed = c.kinds("turnStartFailed").await;
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0]["messageId"], second);
+        assert_eq!(failed[0]["delivered"], false);
+        assert_eq!(failed[0]["retiredGeneration"], 0);
+        let mut e = c.engine.lock().await;
+        let chat = e.chat(&c.id).unwrap();
+        assert_eq!(chat.phase, Phase::RecoveryRequired);
+        assert_eq!(chat.active.as_ref().unwrap().id, second);
+        assert_eq!(chat.control(), "unknown");
+        assert_eq!(chat.generation, 1);
+        assert!(e.jobs[&c.id].retiring);
+    }
+
+    #[tokio::test]
+    async fn a_non_resumable_agent_refuses_to_continue_after_an_interrupt() {
+        let mut c = chat("opencode").await;
+        c.notice(
+            "ready",
+            json!({"sessionId":"ses_1","backendVersion":"2.0.25","resumable":false}),
+        )
+        .await;
+        c.send("first").await;
+        c.started();
+        c.notice("terminal", json!({"status":"interrupted","error":null}))
+            .await;
+        let retired = c.kinds("generationRetired").await;
+        assert_eq!(retired[0]["resumable"], false);
+        let refused = dispatch(
+            &c.engine,
+            "conversationSend",
+            &json!({"conversationId":c.id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"again"}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused, NOT_RESUMABLE);
+        assert!(dispatch(
+            &c.engine,
+            "conversationResumeQueue",
+            &json!({"conversationId":c.id})
+        )
+        .await
+        .is_err());
+        assert!(c.started().is_none());
+        assert_eq!(c.kinds("turnStarted").await.len(), 1);
+        // A restarted service reads the refusal from the journal.
+        let root = c.engine.lock().await.store.directory.clone();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(root).unwrap(),
+            "fixture".into(),
+            Default::default(),
+        )));
+        assert_eq!(
+            dispatch(
+                &engine,
+                "conversationSend",
+                &json!({"conversationId":c.id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"again"}),
+            )
+            .await
+            .unwrap_err(),
+            NOT_RESUMABLE
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduled_runs_journal_user_before_turn_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            Default::default(),
+        )));
+        let saved = schedule_dispatch(
+            &engine,
+            "scheduleSave",
+            &json!({"name":"Daily","prompt":"Read the page","agentId":"codex","rule":{"kind":"interval","minutes":10},"options":{"toolAccess":"readFiles"}}),
+        )
+        .await
+        .unwrap();
+        let schedule = saved["schedule"]["id"].as_str().unwrap().to_string();
+        // Four busy conversations make the start fail before any process.
+        {
+            let mut e = engine.lock().await;
+            for _ in 0..4 {
+                let mut busy = Conversation::new("codex", None, None).unwrap();
+                busy.phase = Phase::Running;
+                e.store.create(&busy).unwrap();
+                let (sender, _) = mpsc::channel(1);
+                e.jobs.insert(
+                    busy.id.clone(),
+                    Job {
+                        generation: 1,
+                        full_access: false,
+                        options: ModelOptions::default(),
+                        retiring: false,
+                        sender,
+                    },
+                );
+                e.chats.insert(busy.id.clone(), busy);
+            }
+        }
+        assert!(run_schedule(&engine, &schedule).await.is_err());
+        let id = engine.lock().await.schedules[&schedule]
+            .last_chat
+            .clone()
+            .unwrap();
+        let read = dispatch(&engine, "conversationRead", &json!({"conversationId":id}))
+            .await
+            .unwrap();
+        let kinds: Vec<_> = read["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["kind"].as_str().unwrap().to_string())
+            .filter(|k| k != "controlChanged")
+            .collect();
+        assert_eq!(kinds, ["user", "turnStarted", "turnStartFailed"]);
+        let failed = &read["journal"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == "turnStartFailed")
+            .unwrap()["data"];
+        assert_eq!(failed["delivered"], false);
+        assert_eq!(failed["retiredGeneration"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn admission_needs_the_live_unretired_generation_and_a_running_turn() {
+        let c = chat("claude").await;
+        {
+            let e = c.engine.lock().await;
+            assert!(e.admits(&c.id, 0).is_err(), "idle");
+        }
+        let message = c.send("go").await;
+        {
+            let e = c.engine.lock().await;
+            assert_eq!(e.admits(&c.id, 0).unwrap().id, message);
+            assert!(e.admits(&c.id, 1).is_err(), "other generation");
+        }
+        dispatch(
+            &c.engine,
+            "conversationStop",
+            &json!({"conversationId":c.id}),
+        )
+        .await
+        .unwrap();
+        assert!(c.engine.lock().await.admits(&c.id, 0).is_err(), "stopping");
+        c.notice("terminal", json!({"status":"interrupted","error":null}))
+            .await;
+        assert!(c.engine.lock().await.admits(&c.id, 0).is_err(), "retired");
     }
 }

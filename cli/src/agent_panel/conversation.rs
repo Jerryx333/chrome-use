@@ -58,18 +58,37 @@ pub(super) struct Message {
     pub attachments: Vec<Attachment>,
     #[serde(default)]
     pub skill: Option<super::skill_library::SelectedSkill>,
+    /// Set by the host when the message starts after a stopped or recovered
+    /// turn, never at accept, and never part of the message's identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<Continuation>,
 }
+
+/// How a turn relates to the one before it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum Continuation {
+    AfterStop,
+    AfterRecovery,
+}
+
+const AFTER_STOP: &str = "[The user stopped the previous request and may have changed the pages. Observe the current page before acting. Do not repeat actions from the stopped request unless this message asks for them.]";
 
 impl Message {
     /// Preserve legacy text-only IDs, while binding rich messages to all inputs.
     pub fn prompt_text(&self) -> String {
+        let continuation = match self.continuation {
+            Some(Continuation::AfterStop) => format!("{AFTER_STOP}\n\n"),
+            // The fork preface (recovery) is written by the fork itself.
+            Some(Continuation::AfterRecovery) | None => String::new(),
+        };
         let skill = self.skill.as_ref().map(|s| s.preface()).unwrap_or_default();
         let page = self
             .page
             .as_ref()
             .map(|p| format!("{}\n\n", p.preface()))
             .unwrap_or_default();
-        format!("{skill}{page}{}", self.text)
+        format!("{continuation}{skill}{page}{}", self.text)
     }
     /// Request identity. The rule is the one v1.5.214 used and runs on the
     /// raw input, before any redaction, so retries across the upgrade match.
@@ -228,8 +247,26 @@ impl Conversation {
             schedule_id: None,
         })
     }
+    /// Who drives this conversation's agent process, derived from its phase.
+    /// It says nothing about other conversations or automation in Chrome.
+    pub(super) fn control(&self) -> &'static str {
+        match self.phase {
+            Phase::Starting
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|m| m.continuation.is_some()) =>
+            {
+                "resuming"
+            }
+            Phase::Starting | Phase::Running | Phase::WaitingInput => "agent",
+            Phase::Stopping => "stopRequested",
+            Phase::Idle | Phase::Interrupted | Phase::Failed => "stopped",
+            Phase::RecoveryRequired => "unknown",
+        }
+    }
     pub(super) fn summary(&self) -> Value {
-        json!({"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
+        json!({"control":self.control(),"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
     }
     pub(super) fn queue_snapshot(&self) -> Value {
         Value::Array(
@@ -757,6 +794,18 @@ impl Store {
         Ok(counts)
     }
 
+    /// Whether a generation of this conversation was retired without a way
+    /// to resume its agent session; the conversation cannot continue.
+    pub(super) fn cannot_resume(&self, id: &str) -> Result<bool, String> {
+        let mut blocked = false;
+        self.scan(id, |event| {
+            if event.kind == "generationRetired" && event.data["resumable"] == false {
+                blocked = true;
+            }
+        })?;
+        Ok(blocked)
+    }
+
     fn last_sequence(&self, id: &str) -> Result<u64, String> {
         self.scan(id, |_| {})
     }
@@ -881,6 +930,7 @@ mod tests {
             page: None,
             attachments: Vec::new(),
             skill: None,
+            continuation: None,
         }
     }
     fn rich(id: &str, url: &str) -> Message {
@@ -898,6 +948,7 @@ mod tests {
                 bytes: 1234,
             }],
             skill: None,
+            continuation: None,
         }
     }
     const TOKEN_A: &str = "https://shop.example/orders?access_token=SYNTH_TOKEN_A&x=1";
