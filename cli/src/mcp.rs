@@ -380,6 +380,7 @@ fn core_tools() -> Vec<Value> {
                 ("y", json!({ "type": "number", "description": "Viewport y coordinate (use with x instead of selector)." })),
                 ("newTab", json!({ "type": "boolean", "description": "Report a tab opened by this click without switching to it." })),
                 ("follow", json!({ "type": "boolean", "description": "If the click opens a new tab, switch the active tab to it." })),
+                ("observe", json!({ "type": "boolean", "description": "Report what the click changed: the page delta, the url, requests, a dialog, a new tab, and `announced` — the text of toasts and alert/status/aria-live regions that appeared, even ones gone before the result came back (--observe)." })),
                 ("tabId", json!({ "type": "string", "description": "Target tab id (e.g. t2), label, or targetId (--tab)." })),
                 ("force", json!({ "type": "boolean", "description": "With tabId: act on a tab this session does not own (the user's own, or another session's), in place and in the background (--tab <handle> --force). Only when the user asked you to act on that tab; the result has forced: true and the tab's title and url." })),
             ]), &[]),
@@ -990,6 +991,9 @@ fn call_click(arguments: &Value) -> Result<Value, ProtocolError> {
     }
     if optional_bool(arguments, "follow")?.unwrap_or(false) {
         args.push("--follow".to_string());
+    }
+    if optional_bool(arguments, "observe")?.unwrap_or(false) {
+        args.push("--observe".to_string());
     }
     if let Some(tab_id) = optional_string(arguments, "tabId")? {
         args.push("--tab".to_string());

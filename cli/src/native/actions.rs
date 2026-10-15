@@ -2466,6 +2466,12 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             return error_response(&id, &e);
         }
     }
+    // A selector that matches several elements is refused before anything
+    // runs (the observe baseline included): acting on the first match is how
+    // `click .iLNqted2.DiddnkXT` hit "充钻石" instead of "投稿" and said ✓.
+    if let Err(e) = Box::pin(refuse_ambiguous_selectors(action, cmd, state)).await {
+        return error_response(&id, &e);
+    }
     state.pre_action_document = None;
     state.capture_outcome = None;
     // `navigate --observe`: a page swap shares no nodes with the previous tree,
@@ -3014,6 +3020,12 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         let mut settled = settled;
         settled.mark_changed(observed.get("changed").and_then(|v| v.as_bool()) == Some(true));
         observed.insert("settle".into(), settled.to_json());
+        // Toasts and live regions seen while the action ran and the page
+        // settled, by their text at the time: a "saved" / "under review, not
+        // saved" toast is often gone before the snapshot above was taken.
+        if !settled.announced.is_empty() {
+            observed.insert("announced".into(), json!(settled.announced));
+        }
         if new_reqs.total > 0 {
             observed.insert("requests".into(), json!(new_reqs.lines));
             observed.insert("requestsTotal".into(), json!(new_reqs.total));
@@ -3042,8 +3054,11 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // (#274). Probe the target only when there was nothing to report —
         // on the path where the action visibly did something this costs
         // nothing, which is the constraint the request came with.
+        // A toast that came and went is a reaction: the page answered, even
+        // though nothing of it is left in the tree.
         if observed.get("changed").and_then(|v| v.as_bool()) == Some(false)
             && !observed.contains_key("humanCheck")
+            && !observed.contains_key("announced")
         {
             if let Some(sel) = cmd
                 .get("selector")
@@ -8158,6 +8173,16 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
         let session_id = mgr.active_session_id()?.to_string();
         let button = cmd.get("button").and_then(|v| v.as_str()).unwrap_or("left");
         let click_count = cmd.get("clickCount").and_then(|v| v.as_i64()).unwrap_or(1) as i32;
+        // `click <x> <y> --follow` took the flag and never looked for a tab:
+        // the same check as a selector click, when it was asked for.
+        let follow = cmd.get("follow").and_then(|v| v.as_bool()).unwrap_or(false);
+        let tab_baseline = if follow {
+            let before: std::collections::HashSet<String> =
+                mgr.pages_list().into_iter().map(|p| p.target_id).collect();
+            Some((before, mgr.relay_tab_baseline().await))
+        } else {
+            None
+        };
         let dialog_events = mgr.client.subscribe();
         if let Some(dialog) = wait_for_click_or_dialog(
             interaction::click_at_point(&mgr.client, &session_id, x, y, button, click_count),
@@ -8175,7 +8200,20 @@ async fn handle_click(cmd: &Value, state: &mut DaemonState) -> Result<Value, Str
                 "dialog": { "type": dialog_type, "message": message, "pending": true },
             }));
         }
-        return Ok(json!({ "clicked": { "x": x, "y": y } }));
+        let mut out = json!({ "clicked": { "x": x, "y": y } });
+        if let Some((before, relay_before)) = tab_baseline {
+            let pending = DeferredClickTabCheck {
+                before,
+                relay_before,
+                follow,
+                clicked_at: std::time::Instant::now(),
+                focus_watch: None,
+                raised_note: None,
+            };
+            let extra = finish_click_tab_check(state, pending).await;
+            merge_object(&mut out, extra);
+        }
+        return Ok(out);
     }
 
     let selector = cmd
@@ -8702,7 +8740,11 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
         return out;
     };
     let check = mgr
-        .adopt_newly_opened(&pending.before, pending.relay_before.as_ref())
+        .adopt_newly_opened(
+            &pending.before,
+            pending.relay_before.as_ref(),
+            pending.follow,
+        )
         .await;
     if let Some(w) = check.warning {
         out["openedTabWarning"] = json!(w);
@@ -8811,6 +8853,10 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
                 }
             }
         }
+    } else if pending.follow && out.get("openedTabStatus").is_some() {
+        // A tab opened but was not adopted (or may not have been): --follow
+        // asked to move, and the session did not.
+        out["followed"] = json!(false);
     }
     out
 }
@@ -11728,6 +11774,53 @@ fn describe_expect(cmd: &Value) -> String {
 ///
 /// `hover` belongs here (#501): it reveals menus and captions, and an agent
 /// otherwise hovers, then snapshots to see what appeared.
+/// Actions that act on the element a selector names, and the command fields
+/// that carry one. Reads (`get text`, `count`, `is visible` …) keep first-match.
+const UNIQUE_TARGET_ACTIONS: &[(&str, &[&str])] = &[
+    ("click", &["selector"]),
+    ("dblclick", &["selector"]),
+    ("hover", &["selector"]),
+    ("fill", &["selector"]),
+    ("type", &["selector"]),
+    ("press", &["selector"]),
+    ("select", &["selector"]),
+    ("multiselect", &["selector"]),
+    ("pick", &["selector"]),
+    ("check", &["selector"]),
+    ("uncheck", &["selector"]),
+    ("focus", &["selector"]),
+    ("tap", &["selector"]),
+    ("clear", &["selector"]),
+    ("setvalue", &["selector"]),
+    ("upload", &["selector"]),
+    ("dispatch", &["selector"]),
+    ("drag", &["source", "target"]),
+];
+
+/// Refuse the command when a selector it acts on matches several elements
+/// (see [`super::element::refuse_ambiguous_selector`]).
+async fn refuse_ambiguous_selectors(
+    action: &str,
+    cmd: &Value,
+    state: &DaemonState,
+) -> Result<(), String> {
+    let Some((_, fields)) = UNIQUE_TARGET_ACTIONS.iter().find(|(a, _)| *a == action) else {
+        return Ok(());
+    };
+    let Some(mgr) = state.browser.as_ref() else {
+        return Ok(());
+    };
+    let Ok(session_id) = mgr.active_session_id() else {
+        return Ok(());
+    };
+    for field in *fields {
+        if let Some(selector) = cmd.get(*field).and_then(Value::as_str) {
+            super::element::refuse_ambiguous_selector(&mgr.client, session_id, selector).await?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) const OBSERVABLE_ACTIONS: &[&str] = &[
     "click", "dblclick", "fill", "type", "press", "select", "pick", "check", "uncheck", "evaluate",
     "hover",

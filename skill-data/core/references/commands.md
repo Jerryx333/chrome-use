@@ -29,7 +29,7 @@ command reports a warning and preserves the session instead of requiring a
 restart. On macOS, `--launch` also disables `MacAppCodeSignClone` so a killed
 automation browser does not leave an APFS code-sign clone behind.
 
-Semantic `find role/text/label/placeholder/alt/title/testid` requires exactly one visible match, including locate-only queries. Ambiguity returns up to eight candidates with visible state and selector/context hints; no action is dispatched and input values are omitted. Narrow `--name`/`--exact`, or use `--within <CSS|@ref>` to restrict the query to exactly one container. A scope must belong to the active tab's main document; cross-frame refs and an explicitly selected iframe are refused; use direct frame refs or `frame main`. `find first/last/nth` explicitly selects an order and keeps its existing behavior. Plain CSS actions are unchanged. Roles and label names use Chrome accessibility data, including `aria-labelledby`; a semantic query re-resolves on each call. A detached target before dispatch fails safely; uncertain actions are never replayed.
+Semantic `find role/text/label/placeholder/alt/title/testid` requires exactly one visible match, including locate-only queries. Ambiguity returns up to eight candidates with visible state and selector/context hints; no action is dispatched and input values are omitted. Narrow `--name`/`--exact`, or use `--within <CSS|@ref>` to restrict the query to exactly one container. A scope must belong to the active tab's main document; cross-frame refs and an explicitly selected iframe are refused; use direct frame refs or `frame main`. `find first/last/nth` explicitly selects an order and keeps its existing behavior. A plain CSS selector or XPath given to an action (`click`, `fill`, `type`, `hover`, `check`, `select`, `drag` …) must match exactly one element too: one that matches several is refused with code `selector_ambiguous`, listing the first five matches with their text and position, and nothing is done. Narrow it, use a `@ref`, or choose by index with `find nth <index> <selector> <action>`; `AGENT_BROWSER_STRICT_SELECTORS=0` restores first-match for old scripts. Roles and label names use Chrome accessibility data, including `aria-labelledby`; a semantic query re-resolves on each call. A detached target before dispatch fails safely; uncertain actions are never replayed.
 
 The existing `chrome_use_find` tool in `mcp --tools all` accepts `within` with the same unique-scope rules; tool count is unchanged. `text` for fill/type is passed literally, including `--name --observe`, rather than parsed as CLI options.
 
@@ -627,6 +627,14 @@ on purpose, e.g. still blank after 2 s) or `unknown` (Chrome or the extension
 did not answer within the check's budget, so it may be attached but is not
 tracked). The check is bounded: about 2 s to find the tab plus 3 s to attach
 it. `tab adopt <url>` picks such a tab up later.
+
+A click in a tab the session does not own (taken with `tab adopt`, or driven
+with `--tab <handle> --force`, as the side panel does with your tab) never
+adopts what it opens: that tab is yours. The click still reports it —
+`openedTabStatus: unadopted`, `openedTabWarning` with its url, and with
+`--follow` `followed: false` — so the agent knows it is still on the old page;
+`tab adopt <url-substring>` takes the new tab. `click <x> <y> --follow` runs
+the same check as a selector click.
 
 A tab a page opens itself (`target=_blank`, `window.open`) brings Chrome to the
 front over whatever app the user is in: Chrome activates the window it opens a

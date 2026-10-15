@@ -7,7 +7,9 @@ use super::cdp::client::CdpClient;
 use super::cdp::types::{
     AXNode, AXProperty, AXValue, EvaluateParams, EvaluateResult, GetFullAXTreeResult,
 };
-use super::element::{resolve_ax_session, RefMap};
+use super::element::{
+    resolve_ax_session, visible_text, AxIdentity, DerivedName, RefMap, INVISIBLE_CHARS,
+};
 
 const INTERACTIVE_ROLES: &[&str] = &[
     "button",
@@ -76,14 +78,6 @@ const STRUCTURAL_ROLES: &[&str] = &[
     "RootWebArea",
 ];
 
-const INVISIBLE_CHARS: &[char] = &[
-    '\u{FEFF}', // BOM / Zero Width No-Break Space
-    '\u{200B}', // Zero Width Space
-    '\u{200C}', // Zero Width Non-Joiner
-    '\u{200D}', // Zero Width Joiner
-    '\u{2060}', // Word Joiner
-];
-
 /// Display form of an accessible name: zero-width characters removed, and a
 /// non-breaking space shown as the space it renders as. Deleting NBSP glued
 /// words together ("Capital&nbsp;Federal" read "CapitalFederal", so a
@@ -125,6 +119,12 @@ struct TreeNode {
     /// value in `snapshot` and `snapshot -i` — otherwise a synthesized label
     /// churns the ref between the two modes or fails its own identity check.
     ax_name: String,
+    /// Set when a pass below rewrote `role` (a label promoted to the hidden
+    /// radio it wraps): the role the AX tree reported.
+    ax_role: Option<String>,
+    /// Set when a pass below rewrote `name`: where the published name came
+    /// from. The ref then records the AX identity next to it.
+    derived_name: Option<DerivedName>,
     level: Option<i64>,
     checked: Option<String>,
     expanded: Option<bool>,
@@ -164,6 +164,8 @@ impl TreeNode {
             role: String::new(),
             name: String::new(),
             ax_name: String::new(),
+            ax_role: None,
+            derived_name: None,
             level: None,
             checked: None,
             expanded: None,
@@ -190,6 +192,8 @@ impl TreeNode {
         self.role = String::new();
         self.name = String::new();
         self.ax_name = String::new();
+        self.ax_role = None;
+        self.derived_name = None;
         self.level = None;
         self.checked = None;
         self.expanded = None;
@@ -675,13 +679,17 @@ async fn take_snapshot_at_depth(
     promote_hidden_inputs(&mut tree_nodes, &cursor_elements);
     for node in tree_nodes.iter_mut() {
         if node.name.is_empty() {
+            // Folded the way it is re-read before acting on the ref: an empty
+            // editor's text is a lone U+200B, which `.trim()` keeps and which
+            // then shows up as a name nobody can see.
             if let Some(fallback_name) = node
                 .backend_node_id
                 .and_then(|bid| cursor_elements.get(&bid))
-                .map(|info| info.fallback_name.as_str())
+                .map(|info| visible_text(&info.fallback_name))
                 .filter(|name| !name.is_empty())
             {
-                node.name = fallback_name.to_string();
+                node.name = fallback_name;
+                node.derived_name = Some(DerivedName::OwnText);
             }
         }
     }
@@ -703,6 +711,7 @@ async fn take_snapshot_at_depth(
                         .and_then(|bid| label_fallbacks.get(&bid))
                     {
                         node.name = label.clone();
+                        node.derived_name = Some(DerivedName::Context);
                     }
                 }
             }
@@ -783,6 +792,9 @@ async fn take_snapshot_at_depth(
             frame_id,
         );
         ref_map.set_fingerprint(&ref_id, build_ax_fingerprint(&tree_nodes, *idx));
+        if let Some(ax) = derived_ax_identity(&tree_nodes[*idx]) {
+            ref_map.set_ax_identity(&ref_id, ax);
+        }
 
         tree_nodes[*idx].has_ref = true;
         tree_nodes[*idx].ref_id = Some(ref_id);
@@ -1955,6 +1967,19 @@ async fn resolve_tagged_backend_ids(
 /// the input from the AX tree entirely, leaving only the label with role="LabelText"
 /// and an empty name. We detect these via cursor-interactive scanning and promote
 /// the label to the correct input role so consumers see role="radio" in data.refs.
+/// The AX identity to record next to a ref whose published role or name a
+/// snapshot pass rewrote; `None` when they are the AX tree's own.
+fn derived_ax_identity(node: &TreeNode) -> Option<AxIdentity> {
+    if node.ax_role.is_none() && (node.derived_name.is_none() || node.name == node.ax_name) {
+        return None;
+    }
+    Some(AxIdentity {
+        role: node.ax_role.clone().unwrap_or_else(|| node.role.clone()),
+        name: node.ax_name.clone(),
+        source: node.derived_name.unwrap_or(DerivedName::Context),
+    })
+}
+
 fn promote_hidden_inputs(
     tree_nodes: &mut [TreeNode],
     cursor_elements: &HashMap<i64, CursorElementInfo>,
@@ -1971,9 +1996,14 @@ fn promote_hidden_inputs(
             None => continue,
         };
         if let Some(input_kind) = cursor_info.hidden_input_kind {
-            node.role = input_kind.as_role().to_string();
-            if node.name.is_empty() && !cursor_info.text.is_empty() {
-                node.name = cursor_info.text.clone();
+            node.ax_role = Some(std::mem::replace(
+                &mut node.role,
+                input_kind.as_role().to_string(),
+            ));
+            let text = visible_text(&cursor_info.text);
+            if node.name.is_empty() && !text.is_empty() {
+                node.name = text;
+                node.derived_name = Some(DerivedName::OwnText);
             }
             if let Some(ref checked) = cursor_info.hidden_input_checked {
                 node.checked = Some(checked.clone());
@@ -2013,6 +2043,8 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
         tree_nodes.push(TreeNode {
             role,
             ax_name: name.clone(),
+            ax_role: None,
+            derived_name: None,
             name,
             level,
             checked,
@@ -2083,7 +2115,9 @@ fn build_tree(nodes: &[AXNode]) -> (Vec<TreeNode>, Vec<usize>) {
                     .map(|idx| tree_nodes[children_indices[idx]].name.clone())
                     .collect();
                 // Always aggregate into the first node of the sequence
-                tree_nodes[children_indices[start]].name = aggregated_name;
+                let first = &mut tree_nodes[children_indices[start]];
+                first.name = aggregated_name;
+                first.derived_name = Some(DerivedName::Context);
                 // Clear the rest of the nodes in the sequence (from start+1 to end-1)
                 for j in (start + 1)..end {
                     tree_nodes[children_indices[j]].clear();
@@ -4432,5 +4466,41 @@ mod tests {
         assert_eq!(b.tree.lines().count(), 1);
         assert!(b.truncated());
         assert_eq!(b.next, 1);
+    }
+}
+
+#[cfg(test)]
+mod derived_name_tests {
+    use super::*;
+
+    fn node(role: &str, name: &str) -> TreeNode {
+        let mut n = TreeNode::empty();
+        n.role = role.to_string();
+        n.ax_name = name.to_string();
+        n.name = name.to_string();
+        n
+    }
+
+    /// The ref of a clickable `<div>投稿</div>` records what the AX tree said
+    /// (`generic ""`), which is what the action-time check compares against.
+    #[test]
+    fn a_rewritten_name_records_the_ax_identity() {
+        let mut n = node("generic", "");
+        n.name = "投稿".into();
+        n.derived_name = Some(DerivedName::OwnText);
+        let ax = derived_ax_identity(&n).unwrap();
+        assert_eq!(
+            (ax.role.as_str(), ax.name.as_str(), ax.source),
+            ("generic", "", DerivedName::OwnText)
+        );
+        assert!(derived_ax_identity(&node("button", "Save")).is_none());
+        let mut promoted = node("LabelText", "Express");
+        promoted.ax_role = Some("LabelText".into());
+        promoted.role = "radio".into();
+        let ax = derived_ax_identity(&promoted).unwrap();
+        assert_eq!(
+            (ax.role.as_str(), ax.name.as_str(), ax.source),
+            ("LabelText", "Express", DerivedName::Context)
+        );
     }
 }

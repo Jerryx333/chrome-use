@@ -22,6 +22,15 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // Before every generic rule: the refusal lists each match's text, which
+    // may read as anything ("hidden", "timeout"). Nothing was done, and the
+    // same command fails the same way until the selector is narrowed.
+    if lower.contains(crate::native::element::SELECTOR_AMBIGUOUS_PREFIX) {
+        return ErrorMetadata {
+            code: "selector_ambiguous",
+            retryable: false,
+        };
+    }
     // An `open` whose wait ended without a usable page (#502). Its message
     // quotes the wait error ("Timeout waiting for Page.loadEventFired",
     // "Event stream closed") and the URL, either of which can read as a
@@ -541,5 +550,21 @@ mod tests {
         enrich_error_value(&mut value);
         assert_eq!(value["code"], "missing_url");
         assert_eq!(value["retryable"], false);
+    }
+}
+
+#[cfg(test)]
+mod selector_ambiguous_tests {
+    use super::*;
+
+    #[test]
+    fn an_ambiguous_selector_has_its_own_code() {
+        let msg = format!(
+            "{} `.btn` matches 3 elements, so nothing was done\n  [0] <div> \"timeout\" at (1,2) 3x4, hidden",
+            crate::native::element::SELECTOR_AMBIGUOUS_PREFIX
+        );
+        let m = classify_error(&msg);
+        assert_eq!(m.code, "selector_ambiguous");
+        assert!(!m.retryable);
     }
 }
