@@ -211,6 +211,34 @@ pub(super) fn identity(file: &File) -> Result<(u64, u64), String> {
         ((i.nFileIndexHigh as u64) << 32) | i.nFileIndexLow as u64,
     ))
 }
+/// Whether the open file's owner is the current user (or the token's default
+/// owner), as `protect` requires before taking a file over.
+pub(super) fn owned_by_current_user(file: &File) -> Result<bool, String> {
+    info(file)?;
+    let user = token_sid(TokenUser)?;
+    let default_owner = token_sid(TokenOwner)?;
+    unsafe {
+        let mut owner = ptr::null_mut();
+        let mut descriptor = ptr::null_mut();
+        let result = GetSecurityInfo(
+            file.as_raw_handle() as _,
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        );
+        if result != 0 {
+            return Err(format!("Cannot read the Windows file owner ({result})"));
+        }
+        let _descriptor = Local(descriptor);
+        Ok(!owner.is_null()
+            && (EqualSid(owner, user.as_ptr() as _) != 0
+                || EqualSid(owner, default_owner.as_ptr() as _) != 0))
+    }
+}
 pub(super) fn regular(file: &File) -> Result<(), String> {
     let i = info(file)?;
     if i.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 || i.nNumberOfLinks != 1 {

@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod acp;
+mod artifacts;
 mod attachments;
 mod backend;
 mod config_edit;
