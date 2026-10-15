@@ -961,29 +961,50 @@ mod tests {
             std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
         }
 
-        /// A leader in its own group that starts a long-lived child and then
-        /// exits: the usual unconfirmed case (leader reaped, group alive).
-        fn orphaned_group() -> (ProcessRecord, std::process::Child) {
+        /// Run `script` as the leader of a fresh session (and so a fresh
+        /// group), the way the service runs its backends under its own
+        /// `setsid`, and reap it. The record's session is that new session,
+        /// whatever session the test runner itself is in.
+        fn session_group(script: &str) -> ProcessRecord {
             use std::os::unix::process::CommandExt;
-            let mut leader = Command::new("/bin/sh")
-                .args(["-c", "sleep 60 & sleep 60 & exit 0"])
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", script])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .stdin(Stdio::null())
-                .process_group(0)
-                .spawn()
-                .unwrap();
+                .stdin(Stdio::null());
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut leader = command.spawn().unwrap();
             let pid = leader.id();
             let start = process_start_time(pid);
             leader.wait().unwrap();
-            let record = ProcessRecord {
+            ProcessRecord {
                 generation: Some(1),
                 pid: Some(pid),
                 pgid: Some(pid as i32),
                 process_start_time: start,
-                service_sid: current_session(),
-            };
-            (record, leader)
+                service_sid: Some(pid as i32),
+            }
+        }
+
+        /// The usual unconfirmed case: leader reaped, children keep the group.
+        fn orphaned_group() -> ProcessRecord {
+            let record = session_group("sleep 60 & sleep 60 & exit 0");
+            let pgid = record.pgid.unwrap();
+            assert_ne!(Some(pgid), current_session(), "not the runner's session");
+            assert_eq!(
+                unsafe { libc::kill(-pgid, 0) },
+                0,
+                "children keep the group alive"
+            );
+            record
         }
 
         fn kill_group(pgid: i32) {
@@ -994,7 +1015,7 @@ mod tests {
 
         #[tokio::test]
         async fn leader_dead_group_alive_is_alive_and_terminate_waits_for_esrch() {
-            let (record, _leader) = orphaned_group();
+            let record = orphaned_group();
             let pgid = record.pgid.unwrap();
             assert_eq!(
                 unsafe { libc::kill(-pgid, 0) },
@@ -1015,7 +1036,7 @@ mod tests {
 
         #[tokio::test]
         async fn without_the_os_proof_a_live_group_is_unknown_and_never_signalled() {
-            let (record, _leader) = orphaned_group();
+            let record = orphaned_group();
             let pgid = record.pgid.unwrap();
             let policy = ProofPolicy {
                 pid_allocation_proven: false,
@@ -1032,7 +1053,7 @@ mod tests {
 
         #[tokio::test]
         async fn members_in_another_session_make_the_group_unknown() {
-            let (record, _leader) = orphaned_group();
+            let record = orphaned_group();
             let pgid = record.pgid.unwrap();
             let foreign = ProcessRecord {
                 service_sid: Some(record.service_sid.unwrap() + 1),
@@ -1050,7 +1071,7 @@ mod tests {
 
         #[test]
         fn a_gone_group_is_exited_and_a_reused_leader_pid_is_unknown() {
-            let (record, _leader) = orphaned_group();
+            let record = orphaned_group();
             let pgid = record.pgid.unwrap();
             kill_group(pgid);
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -1087,28 +1108,44 @@ mod tests {
 
         #[tokio::test]
         async fn a_child_forked_during_terminate_is_caught_by_a_later_round() {
-            use std::os::unix::process::CommandExt;
             // Members keep forking replacements; terminate must loop until ESRCH.
-            let mut leader = Command::new("/bin/sh")
-                .args(["-c", "for i in 1 2 3 4; do (trap '' TERM; while :; do sleep 0.01 & wait; done) & done; exit 0"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .process_group(0)
-                .spawn()
-                .unwrap();
-            let pid = leader.id();
-            let start = process_start_time(pid);
-            leader.wait().unwrap();
-            let record = ProcessRecord {
-                generation: Some(1),
-                pid: Some(pid),
-                pgid: Some(pid as i32),
-                process_start_time: start,
-                service_sid: current_session(),
-            };
+            let record = session_group(
+                "for i in 1 2 3 4; do (trap '' TERM; while :; do sleep 0.01 & wait; done) & done; exit 0",
+            );
+            let pid = record.pid.unwrap();
             let ended = terminate_group(&record, PROVEN, Duration::from_secs(5)).await;
             assert!(ended.confirmed, "{}", ended.detail);
             assert!(unsafe { libc::kill(-(pid as i32), 0) } < 0);
+        }
+
+        /// A `ready` recorded in session 1 (PID 1's session in a container) or
+        /// with no session at all proves nothing: the live group is `unknown`
+        /// and is never signalled.
+        #[tokio::test]
+        async fn session_one_or_a_missing_session_is_unknown() {
+            let record = orphaned_group();
+            let pgid = record.pgid.unwrap();
+            for service_sid in [Value::from(1), Value::from(0), Value::Null] {
+                let ready = Event {
+                    sequence: 1,
+                    at: 0,
+                    kind: "ready".into(),
+                    data: json!({
+                        "pid": record.pid,
+                        "pgid": pgid,
+                        "processStartTime": record.process_start_time,
+                        "serviceSid": service_sid,
+                    }),
+                };
+                let loaded = ProcessRecord::from_events([&ready]).unwrap();
+                assert_eq!(loaded.service_sid, None);
+                let probe = probe_group(Some(&loaded), PROVEN);
+                assert_eq!(probe.state, ProcessState::Unknown, "{}", probe.reason);
+                let ended = terminate_group(&loaded, PROVEN, Duration::from_secs(1)).await;
+                assert!(!ended.confirmed);
+                assert_eq!(unsafe { libc::kill(-pgid, 0) }, 0, "nothing was signalled");
+            }
+            kill_group(pgid);
         }
 
         #[cfg(target_os = "linux")]
