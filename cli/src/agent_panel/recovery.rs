@@ -191,6 +191,7 @@ mod unix {
 
     #[cfg(target_os = "linux")]
     pub(super) struct LinuxStat {
+        pub state: char,
         pub pgrp: i32,
         pub session: i32,
         pub start_time: u64,
@@ -201,6 +202,7 @@ mod unix {
         let rest = &text[text.rfind(')')? + 1..];
         let fields: Vec<&str> = rest.split_whitespace().collect();
         Some(LinuxStat {
+            state: fields.first()?.chars().next()?,
             pgrp: fields.get(2)?.parse().ok()?,
             session: fields.get(3)?.parse().ok()?,
             start_time: fields.get(19)?.parse().ok()?,
@@ -227,6 +229,46 @@ mod unix {
         (n == size).then_some(info)
     }
 
+    /// Whether `pid` has exited and only waits to be reaped. A zombie cannot
+    /// act, but it keeps its process group in the kernel until its parent
+    /// (for an orphan, launchd or init) reaps it. `None` when unreadable.
+    pub(super) fn zombie(pid: i32) -> Option<bool> {
+        #[cfg(target_os = "linux")]
+        {
+            linux_stat(pid).map(|s| s.state == 'Z')
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // proc_pidinfo serves no record for a zombie (ESRCH); the
+            // kern.proc.pid sysctl does. `kinfo_proc` is 648 bytes with
+            // `kp_proc.p_stat` (a char) at offset 36 (xnu sys/sysctl.h,
+            // sys/proc.h; checked with offsetof on macOS 26).
+            const KINFO_PROC_SIZE: usize = 648;
+            const P_STAT_OFFSET: usize = 36;
+            let mut info = [0u8; KINFO_PROC_SIZE];
+            let mut length = KINFO_PROC_SIZE;
+            let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+            let status = unsafe {
+                libc::sysctl(
+                    mib.as_mut_ptr(),
+                    4,
+                    info.as_mut_ptr().cast(),
+                    &mut length,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            // A pid that no longer exists returns success with length 0.
+            (status == 0 && length == KINFO_PROC_SIZE)
+                .then(|| u32::from(info[P_STAT_OFFSET]) == libc::SZOMB)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
     enum Group {
         Gone,
         Live,
@@ -238,12 +280,36 @@ mod unix {
         }
         match errno() {
             libc::ESRCH => Group::Gone,
+            // macOS answers EPERM for a group whose members are all zombies
+            // (killed, not yet reaped). Such a tree cannot act: it is gone.
+            // The zombies may be reaped between the signal and the listing,
+            // so an empty listing counts too; a live group of another user
+            // would list its members.
+            libc::EPERM => match members(pgid) {
+                Ok((live, _)) if live.is_empty() => Group::Gone,
+                _ => Group::Foreign,
+            },
             _ => Group::Foreign,
         }
     }
 
-    /// Current members of the process group.
-    fn members(pgid: i32) -> Result<Vec<i32>, String> {
+    /// Current members of the process group that can still run, and how
+    /// many zombies it holds.
+    pub(super) fn members(pgid: i32) -> Result<(Vec<i32>, usize), String> {
+        let pids = listed_members(pgid)?;
+        let mut live = Vec::with_capacity(pids.len());
+        let mut zombies = 0;
+        for pid in pids {
+            match zombie(pid) {
+                Some(true) => zombies += 1,
+                // Unreadable or gone: kept, the caller re-checks the session.
+                _ => live.push(pid),
+            }
+        }
+        Ok((live, zombies))
+    }
+
+    fn listed_members(pgid: i32) -> Result<Vec<i32>, String> {
         #[cfg(target_os = "linux")]
         {
             let entries = std::fs::read_dir("/proc").map_err(|_| "Cannot enumerate processes")?;
@@ -314,10 +380,14 @@ mod unix {
                     .into(),
             );
         }
-        let pids = match members(pgid) {
-            Ok(pids) => pids,
+        let (pids, zombies) = match members(pgid) {
+            Ok(members) => members,
             Err(error) => return Proof::Unknown(error),
         };
+        // Only zombies left: nothing in the tree can act any more.
+        if pids.is_empty() && zombies > 0 {
+            return Proof::Gone;
+        }
         if pids.is_empty() {
             return match group_signal(pgid) {
                 Group::Gone => Proof::Gone,
@@ -627,7 +697,11 @@ impl Turn {
                     action.possibly_executed = d["possiblyExecuted"].as_bool();
                 }
                 "artifactCreated" => {
-                    if let Some(id) = d["artifactId"].as_str() {
+                    // Captures also appear in `actionAdmitted.outputs`.
+                    if let Some(id) = d["artifactId"]
+                        .as_str()
+                        .filter(|id| !turn.artifacts.iter().any(|(a, _)| a == id))
+                    {
                         turn.artifacts.push((
                             id.into(),
                             json!({"artifactId": id, "name": d["name"], "kind": d["kind"]}),
@@ -1092,6 +1166,52 @@ mod tests {
             kill_group(pgid);
         }
 
+        // A killed group whose members are not reaped yet holds only
+        // zombies; macOS then answers EPERM to kill(-pgid, 0). The tree
+        // cannot act, so it is exited, not "another user's group".
+        #[test]
+        fn a_group_of_unreaped_zombies_is_exited() {
+            use std::os::unix::process::CommandExt;
+            let mut command = Command::new("/bin/sleep");
+            command.arg("60");
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn().unwrap();
+            let pid = child.id() as i32;
+            let record = ProcessRecord {
+                generation: Some(1),
+                pid: None,
+                pgid: Some(pid),
+                process_start_time: None,
+                service_sid: Some(pid),
+            };
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while zombie(pid) != Some(true) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "never became a zombie"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(members(pid).unwrap(), (Vec::new(), 1));
+            let probe = probe_group(Some(&record), PROVEN);
+            assert_eq!(probe.state, ProcessState::Exited, "{}", probe.reason);
+            child.wait().unwrap();
+            assert_eq!(
+                probe_group(Some(&record), PROVEN).state,
+                ProcessState::Exited
+            );
+        }
+
         #[test]
         fn a_gone_group_is_exited_and_a_reused_leader_pid_is_unknown() {
             let record = orphaned_group();
@@ -1102,10 +1222,15 @@ mod tests {
                 assert!(std::time::Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(20));
             }
-            assert_eq!(
-                probe_group(Some(&record), PROVEN).state,
-                ProcessState::Exited
-            );
+            // Without the leader PID: once the group is gone that PID is
+            // free, and a busy test run may hand it to another process,
+            // which the probe rightly calls unknown (checked below).
+            let gone = ProcessRecord {
+                pid: None,
+                ..record.clone()
+            };
+            let probe = probe_group(Some(&gone), PROVEN);
+            assert_eq!(probe.state, ProcessState::Exited, "{}", probe.reason);
             // The recorded leader PID is this live test process with another start time.
             let me = ProcessRecord {
                 pid: Some(std::process::id()),
