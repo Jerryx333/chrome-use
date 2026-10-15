@@ -52,6 +52,9 @@ async function saveOk(){const r=await fetch('/api/draft',{method:'POST',body:doc
 const seen=[];new MutationObserver(list=>{for(const m of list){if(m.type==='attributes'&&m.target.id==='act'&&m.attributeName==='data-clicked')continue;seen.push({type:m.type,target:m.target.nodeName+(m.target.id?'#'+m.target.id:''),attr:m.attributeName,added:[...m.addedNodes].map(n=>n.nodeName),removed:[...m.removedNodes].map(n=>n.nodeName)});}}).observe(document,{subtree:true,childList:true,attributes:true,characterData:true});
 setInterval(()=>{const rootAttrs=[...document.documentElement.attributes].map(a=>a.name);navigator.sendBeacon('/log/stealth',JSON.stringify({mutations:seen,rootAttrs,nodes:document.getElementsByTagName('*').length}));},1000);
 </script>`),
+  // 1500 requests in bursts of 25, for the request-log bound (check 16).
+  '/burst': () => page('Burst', `<h1>Burst</h1><button id="act" onclick="this.dataset.clicked='1'">Act</button><button id="go" onclick="go()">Go</button><p id="sent">0</p>
+<script>async function go(){let n=0;for(let i=0;i<60;i++){await Promise.all(Array.from({length:25},()=>fetch('/ping?n='+(n++)).catch(()=>{})));document.getElementById('sent').textContent=n;}}</script>`),
   '/popup-page': () => page('Popup opener', '<a id="popup" href="/b?popup=1" target="_blank">Open popup</a>'),
 };
 
@@ -69,7 +72,7 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/api/login') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(page('Signed in', '<h1 id="title">Signed in</h1>')); }
   if (url.pathname === '/__secrets' && req.method === 'POST') { const v = JSON.parse(body); secrets.set(v.id, v); res.writeHead(204); return res.end(); }
   if (url.pathname === '/cookie' && secrets.has(q.get('id'))) res.setHeader('set-cookie', [`sid=${secrets.get(q.get('id')).cookie}; Path=/`, 'pref=compact; Path=/']);
-  if (url.pathname === '/log/stealth') { res.writeHead(204); return res.end(); }
+  if (url.pathname === '/log/stealth' || url.pathname === '/ping') { res.writeHead(204); return res.end(); }
   if (url.pathname.startsWith('/download/')) {
     const name = url.pathname.slice('/download/'.length);
     const disposition = { 'content-disposition': `attachment; filename="${q.get('as') || name.replace(/^(slow|abort)-/, '')}"` };

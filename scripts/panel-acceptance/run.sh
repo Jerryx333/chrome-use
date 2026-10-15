@@ -20,21 +20,6 @@ export HOST_BIN="$WORK/bin/chrome-use-$STAMP"
 cp "$SRC" "$HOST_BIN"
 chmod 755 "$HOST_BIN"
 export EXT_DIR="${EXT_DIR:-$PWD/ext}"
-# PATCH_PANEL_FLAGS=1: a copy of the extension whose host-connection.js passes
-# the numeric turn-view capability flags through (the shipped one drops them).
-# Only for showing what the turn view renders; never the shipped build.
-if [ "$PATCH_PANEL_FLAGS" = 1 ]; then
-  cp -R "$EXT_DIR" "$WORK/ext-patched"
-  python3 - "$WORK/ext-patched/host-connection.js" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-anchor = "    const featuresChanged ="
-patch = "    for (const key of ['turnEvidence','artifacts','recovery','recording','requestRevision']) if (Number.isInteger(reported?.[key])) features[key] = reported[key]\n"
-assert anchor in s
-open(p, 'w').write(s.replace(anchor, patch + anchor, 1))
-PY
-  export EXT_DIR="$WORK/ext-patched"
-fi
 # v1.5.214 release binary and extension for checks 15 and 16 (comparison runs).
 export OLD_BIN="${OLD_BIN:-$HOME/panel-accept/old/chrome-use}"
 export OLD_EXT_DIR="${OLD_EXT_DIR:-$HOME/panel-accept/old/ext}"

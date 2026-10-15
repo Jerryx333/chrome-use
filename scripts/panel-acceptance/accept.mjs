@@ -138,7 +138,7 @@ const h = {
     const text = await rig.cdp.evaluate(panel.sid, 'document.body.innerText');
     const transcript = await rig.cdp.evaluate(panel.sid, `(document.getElementById('transcript') || document.body).innerText`);
     const cards = await rig.cdp.evaluate(panel.sid, `document.querySelectorAll('#transcript article.turn-card').length`);
-    return { file: path.basename(file), text: text.slice(0, 6000), transcript: transcript.slice(0, 6000), turnCards: cards };
+    return { file: path.basename(file), text: text.slice(0, 6000), transcript: transcript.slice(0, 6000), turnCards: cards, tooManyRequestsBanner: /Too many native agent panel requests/.test(text) };
   },
   panelEval: (expr, panel) => rig.cdp.evaluate((panel || h.panel).sid, expr),
 };
