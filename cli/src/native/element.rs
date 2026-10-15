@@ -172,6 +172,75 @@ pub struct RefEntry {
     /// than the accessibility tree, which on that page had nothing to compare.
     #[serde(default)]
     pub dom_sourced: bool,
+    /// What the accessibility tree itself reported for this node, when the
+    /// role or name the snapshot published was derived from something else
+    /// (a cursor-interactive element's visible text, a nearby label, a hidden
+    /// radio the label wraps). Chrome gives a clickable `<div>投稿</div>` the
+    /// role `generic` and NO name, so checking the published name against the
+    /// live tree refused every such ref straight after the snapshot that
+    /// minted it. `None`: the published role + name are the AX ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ax_identity: Option<AxIdentity>,
+}
+
+/// The live-tree identity of a ref whose published role or name was derived.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AxIdentity {
+    pub role: String,
+    pub name: String,
+    pub source: DerivedName,
+}
+
+/// Where a ref's published name came from when the AX tree had none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DerivedName {
+    /// The element's own text (aria-label, title, direct or full text). The
+    /// text IS the identity — `投稿` and `充钻石` are both `generic ""` — so it
+    /// is re-read from the node before acting.
+    OwnText,
+    /// Context around the element (a form label, aggregated child text). The
+    /// node's own AX identity is what is checked, as for any nameless control.
+    Context,
+}
+
+impl RefEntry {
+    /// The role + name the live accessibility tree reports for this node.
+    pub fn ax_role_name(&self) -> (&str, &str) {
+        match &self.ax_identity {
+            Some(ax) => (ax.role.as_str(), ax.name.as_str()),
+            None => (self.role.as_str(), self.name.as_str()),
+        }
+    }
+
+    /// Whether the published name is the node's own text, read from the DOM
+    /// rather than the AX tree.
+    fn name_is_own_text(&self) -> bool {
+        self.ax_identity
+            .as_ref()
+            .is_some_and(|ax| ax.source == DerivedName::OwnText)
+    }
+}
+
+/// Characters a page inserts that render as nothing: rich editors pad lines and
+/// mention nodes with U+200B, and some frameworks wrap text in U+FEFF.
+pub(crate) const INVISIBLE_CHARS: &[char] = &[
+    '\u{FEFF}', // BOM / Zero Width No-Break Space
+    '\u{200B}', // Zero Width Space
+    '\u{200C}', // Zero Width Non-Joiner
+    '\u{200D}', // Zero Width Joiner
+    '\u{2060}', // Word Joiner
+];
+
+/// Text as a reader sees it: invisible characters dropped, NBSP and every other
+/// whitespace run folded to one space, ends trimmed. Used wherever page text is
+/// compared with text we recorded or wrote, so a page that re-wraps the same
+/// words (Douyin's editor) is not mistaken for a change.
+pub(crate) fn visible_text(s: &str) -> String {
+    s.replace(INVISIBLE_CHARS, "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `Clone` exists for `--observe`: the baseline snapshot must be numbered the
@@ -542,6 +611,7 @@ impl RefMap {
                 frame_id: frame_id.map(|s| s.to_string()),
                 fingerprint: None,
                 dom_sourced: false,
+                ax_identity: None,
             },
         );
     }
@@ -550,6 +620,14 @@ impl RefMap {
     pub fn mark_dom_sourced(&mut self, ref_id: &str) {
         if let Some(entry) = self.map.get_mut(ref_id) {
             entry.dom_sourced = true;
+        }
+    }
+
+    /// Record the live AX identity of a ref whose published role or name was
+    /// derived (see [`RefEntry::ax_identity`]). No-op if the ref is unknown.
+    pub fn set_ax_identity(&mut self, ref_id: &str, ax: AxIdentity) {
+        if let Some(entry) = self.map.get_mut(ref_id) {
+            entry.ax_identity = Some(ax);
         }
     }
 
@@ -580,6 +658,7 @@ impl RefMap {
                 frame_id: None,
                 fingerprint: None,
                 dom_sourced: false,
+                ax_identity: None,
             },
         );
     }
@@ -649,6 +728,7 @@ impl RefMap {
                 frame_id: m.frame_id,
                 fingerprint: m.fingerprint,
                 dom_sourced: false,
+                ax_identity: None,
             },
         );
     }
@@ -1052,11 +1132,12 @@ async fn reanchor_ref(
         .await
         .ok()?;
 
+    let (ax_role, ax_name) = entry.ax_role_name();
     let role_nodes: Vec<_> = tree
         .nodes
         .iter()
         .filter(|n| !n.ignored.unwrap_or(false))
-        .filter(|n| extract_ax_string(&n.role) == entry.role)
+        .filter(|n| extract_ax_string(&n.role) == ax_role)
         .collect();
     let same_role: Vec<(i64, String)> = role_nodes
         .iter()
@@ -1067,7 +1148,7 @@ async fn reanchor_ref(
         .collect();
     let live: Vec<(i64, String)> = role_nodes
         .iter()
-        .filter(|n| extract_ax_string(&n.name) == entry.name)
+        .filter(|n| extract_ax_string(&n.name) == ax_name)
         .filter_map(|n| {
             n.backend_d_o_m_node_id
                 .map(|id| (id, extract_ax_string(&n.value)))
@@ -1075,7 +1156,33 @@ async fn reanchor_ref(
         .collect();
 
     let matches: Vec<i64> = live.iter().map(|(id, _)| *id).collect();
-    if let Some(id) = pick_reanchor_target(&matches, cached, entry.nth) {
+    if entry.name_is_own_text() {
+        // Every clickable `<div>` shares the AX identity `generic ""`, so a
+        // match by it says nothing; only the cached node, its text re-read,
+        // can be confirmed (the probe may merely have run out of time).
+        let target = if matches.contains(&cached) {
+            match verify_own_text(client, effective_session_id, cached, "", entry).await {
+                RefCheck::Confirmed => Some(cached),
+                RefCheck::Suspect(_) => None,
+            }
+        } else {
+            None
+        };
+        return Some(Reanchor {
+            target,
+            candidates: usize::from(target.is_some()),
+            same_role,
+            live: live_identities(&tree.nodes),
+        });
+    }
+    // The snapshot numbered duplicates by the name it published; for a
+    // derived name that ordinal means nothing among AX-identity matches.
+    let nth = if entry.ax_identity.is_some() {
+        None
+    } else {
+        entry.nth
+    };
+    if let Some(id) = pick_reanchor_target(&matches, cached, nth) {
         return Some(Reanchor {
             target: Some(id),
             candidates: matches.len(),
@@ -1188,15 +1295,8 @@ async fn confirmed_backend_node_id(
         .await;
     }
 
-    let RefCheck::Suspect(err) = verify_ref_identity(
-        client,
-        effective_session_id,
-        backend_node_id,
-        ref_id,
-        &entry.role,
-        &entry.name,
-    )
-    .await
+    let RefCheck::Suspect(err) =
+        verify_ref_identity(client, effective_session_id, backend_node_id, ref_id, entry).await
     else {
         return Ok(backend_node_id);
     };
@@ -1978,16 +2078,7 @@ async fn confirm_kept_node(
             "the ref has no node id to check",
         ));
     };
-    match verify_ref_identity(
-        client,
-        effective_session_id,
-        backend_node_id,
-        ref_id,
-        &entry.role,
-        &entry.name,
-    )
-    .await
-    {
+    match verify_ref_identity(client, effective_session_id, backend_node_id, ref_id, entry).await {
         RefCheck::Confirmed => Ok(backend_node_id),
         RefCheck::Suspect(_) => Err(kept_ref_refusal(
             ref_map,
@@ -2039,16 +2130,7 @@ pub async fn verify_kept_ref(
         return Err(refuse("the ref has no node id to check"));
     };
     let effective = resolve_frame_session(entry.frame_id.as_deref(), session_id, iframe_sessions);
-    match verify_ref_identity(
-        client,
-        effective,
-        backend_node_id,
-        ref_id,
-        &entry.role,
-        &entry.name,
-    )
-    .await
-    {
+    match verify_ref_identity(client, effective, backend_node_id, ref_id, entry).await {
         RefCheck::Confirmed => Ok(()),
         RefCheck::Suspect(_) => Err(refuse(
             "its node is gone or no longer has that role and name",
@@ -2524,9 +2606,12 @@ async fn verify_ref_identity(
     session_id: &str,
     backend_node_id: i64,
     ref_id: &str,
-    expected_role: &str,
-    expected_name: &str,
+    entry: &RefEntry,
 ) -> RefCheck {
+    // What the agent was shown, for messages; what the AX tree reports, for
+    // the check itself (they differ for a ref whose name was derived).
+    let (expected_role, expected_name) = (entry.role.as_str(), entry.name.as_str());
+    let (ax_role, ax_name) = entry.ax_role_name();
     let params = serde_json::json!({
         "backendNodeId": backend_node_id,
         "fetchRelatives": false,
@@ -2579,13 +2664,126 @@ async fn verify_ref_identity(
     };
     let actual_role = extract_ax_string(&node.role);
     let actual_name = extract_ax_string(&node.name);
-    if actual_role == expected_role && actual_name == expected_name {
-        return RefCheck::Confirmed;
+    if actual_role == ax_role && actual_name == ax_name {
+        if !entry.name_is_own_text() {
+            return RefCheck::Confirmed;
+        }
+        // The AX identity of a clickable `<div>` is `generic ""` whatever it
+        // says, so on its own it would confirm a node a re-render handed to
+        // different content. Its text is the identity: re-read it.
+        return verify_own_text(client, session_id, backend_node_id, ref_id, entry).await;
+    }
+    if entry.ax_identity.is_some() {
+        // Show the agent the AX side of both, not "was 投稿, now empty" —
+        // the empty name is what the tree always said about this node.
+        return RefCheck::Suspect(format!(
+            "Ref {} no longer matches its snapshot. Was [{} \"{}\"] (accessibility tree: [{} \"{}\"]), \
+             now [{} \"{}\"].\n\
+             {}",
+            ref_id,
+            expected_role,
+            expected_name,
+            ax_role,
+            ax_name,
+            actual_role,
+            actual_name,
+            REF_RECOVERY_HINT,
+        ));
     }
     RefCheck::Suspect(format!(
         "Ref {} no longer matches its snapshot. Was [{} \"{}\"], now [{} \"{}\"].\n\
          {}",
         ref_id, expected_role, expected_name, actual_role, actual_name, REF_RECOVERY_HINT,
+    ))
+}
+
+/// Reads the text a cursor-interactive element was named from, the same way
+/// the snapshot did (`aria-label`, `title`, its direct text, its full text) and,
+/// for a label promoted to the radio it wraps, its full text. An editable
+/// region is confirmed without it: what an editor holds is its state, and the
+/// agent's own `type` changes it between snapshot and the next action.
+const OWN_TEXT_JS: &str = r#"function() {
+    const el = this;
+    if (!el.isConnected) return { connected: false };
+    if (el.isContentEditable) return { connected: true, editable: true };
+    const text = (el.textContent || '').trim().slice(0, 100);
+    const direct = Array.from(el.childNodes || [])
+        .filter(n => n.nodeType === Node.TEXT_NODE)
+        .map(n => n.textContent || '')
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 100);
+    const own = (el.getAttribute('aria-label') || el.getAttribute('title') || direct || text || '')
+        .trim()
+        .slice(0, 100);
+    return { connected: true, editable: false, own: own, text: text };
+}"#;
+
+/// Whether a node's re-read text still names it as the snapshot did.
+fn own_text_matches(recorded: &str, own: &str, text: &str) -> bool {
+    let want = visible_text(recorded);
+    !want.is_empty() && (visible_text(own) == want || visible_text(text) == want)
+}
+
+/// Confirm a ref whose name is its own visible text (see [`OWN_TEXT_JS`]).
+async fn verify_own_text(
+    client: &CdpClient,
+    session_id: &str,
+    backend_node_id: i64,
+    ref_id: &str,
+    entry: &RefEntry,
+) -> RefCheck {
+    let unconfirmed =
+        |why: &str| RefCheck::Suspect(unconfirmed_ref_error(ref_id, &entry.role, &entry.name, why));
+    let read = tokio::time::timeout(identity_probe_budget(), async {
+        let object_id = backend_object_id(client, session_id, backend_node_id).await?;
+        let reply = client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(serde_json::json!({
+                    "objectId": object_id,
+                    "functionDeclaration": OWN_TEXT_JS,
+                    "returnByValue": true,
+                })),
+                Some(session_id),
+            )
+            .await
+            .ok();
+        let _ = client
+            .send_command(
+                "Runtime.releaseObjectGroup",
+                Some(serde_json::json!({ "objectGroup": "chrome-use-ref-heal" })),
+                Some(session_id),
+            )
+            .await;
+        reply?.pointer("/result/value").cloned()
+    })
+    .await;
+    let Ok(Some(v)) = read else {
+        return unconfirmed("its text could not be read to confirm it is the same element");
+    };
+    if v.get("connected").and_then(Value::as_bool) != Some(true) {
+        return unconfirmed("the node is no longer in the document");
+    }
+    if v.get("editable").and_then(Value::as_bool) == Some(true) {
+        return RefCheck::Confirmed;
+    }
+    let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let (own, text) = (s("own"), s("text"));
+    if own_text_matches(&entry.name, &own, &text) {
+        return RefCheck::Confirmed;
+    }
+    let now = if own.is_empty() { text } else { own };
+    RefCheck::Suspect(format!(
+        "Ref {} no longer matches its snapshot. Was [{} \"{}\"], the same node now reads \"{}\" — \
+         the page re-used it for different content.\n\
+         {}",
+        ref_id,
+        entry.role,
+        entry.name,
+        visible_text(&now),
+        REF_RECOVERY_HINT,
     ))
 }
 
@@ -4430,6 +4628,7 @@ mod tests {
             frame_id: None,
             fingerprint: None,
             dom_sourced: false,
+            ax_identity: None,
         };
         let s = ref_hints::rank_suggestions("button", "Save", [("e14", "button", "Save changes")]);
         let e = stale_ref_error(
@@ -4833,6 +5032,7 @@ mod tests {
                 ..Default::default()
             }),
             dom_sourced: false,
+            ax_identity: None,
         };
         let err = indistinguishable_ref_error("e7", &entry, 3);
         assert!(err.contains("e7"), "{err}");
@@ -4992,6 +5192,7 @@ mod tests {
             frame_id: None,
             fingerprint: None,
             dom_sourced: false,
+            ax_identity: None,
         };
         let g = Guess {
             backend_node_id: 77,
@@ -5211,5 +5412,102 @@ mod tests {
         let session = resolve_frame_session(None, "parent-session", &iframe_sessions);
 
         assert_eq!(session, "parent-session");
+    }
+}
+
+#[cfg(test)]
+mod derived_identity_tests {
+    use super::*;
+
+    fn entry(role: &str, name: &str, ax: Option<AxIdentity>) -> RefEntry {
+        RefEntry {
+            backend_node_id: Some(7),
+            role: role.to_string(),
+            name: name.to_string(),
+            nth: None,
+            selector: None,
+            frame_id: None,
+            fingerprint: None,
+            dom_sourced: false,
+            ax_identity: ax,
+        }
+    }
+
+    #[test]
+    fn visible_text_drops_padding_editors_add() {
+        assert_eq!(visible_text("变迁。\u{200B}\n#少帅\u{a0}"), "变迁。 #少帅");
+        assert_eq!(visible_text("\u{200B}"), "");
+        assert_eq!(visible_text("  a \t b  "), "a b");
+    }
+
+    /// Douyin's "投稿" is `generic ""` in the AX tree. The identity check has
+    /// to compare against that, while messages keep the name the agent saw.
+    #[test]
+    fn a_derived_name_is_checked_against_the_ax_identity() {
+        let e = entry(
+            "generic",
+            "投稿",
+            Some(AxIdentity {
+                role: "generic".into(),
+                name: String::new(),
+                source: DerivedName::OwnText,
+            }),
+        );
+        assert_eq!(e.ax_role_name(), ("generic", ""));
+        assert!(e.name_is_own_text());
+        let plain = entry("button", "Save", None);
+        assert_eq!(plain.ax_role_name(), ("button", "Save"));
+        assert!(!plain.name_is_own_text());
+        let label = entry(
+            "radio",
+            "Express",
+            Some(AxIdentity {
+                role: "LabelText".into(),
+                name: String::new(),
+                source: DerivedName::Context,
+            }),
+        );
+        assert_eq!(label.ax_role_name(), ("LabelText", ""));
+        assert!(!label.name_is_own_text());
+    }
+
+    /// Refs persisted before the field existed still load, and an entry with
+    /// no derived identity serializes exactly as before.
+    #[test]
+    fn ax_identity_is_optional_on_disk() {
+        let old = r#"{"backend_node_id":1,"role":"button","name":"Go","nth":null,"selector":null,"frame_id":null,"fingerprint":null}"#;
+        let e: RefEntry = serde_json::from_str(old).unwrap();
+        assert!(e.ax_identity.is_none());
+        let json = serde_json::to_string(&entry("button", "Go", None)).unwrap();
+        assert!(!json.contains("ax_identity"), "{json}");
+        let derived = entry(
+            "generic",
+            "投稿",
+            Some(AxIdentity {
+                role: "generic".into(),
+                name: String::new(),
+                source: DerivedName::OwnText,
+            }),
+        );
+        let back: RefEntry =
+            serde_json::from_str(&serde_json::to_string(&derived).unwrap()).unwrap();
+        assert_eq!(back, derived);
+    }
+
+    /// The re-read text confirms the same content however the page wraps it,
+    /// and refuses a node now showing something else — the wrong-target guard.
+    #[test]
+    fn own_text_must_still_say_what_the_snapshot_said() {
+        assert!(own_text_matches("#少帅302.6亿", "#少帅302.6亿", ""));
+        assert!(own_text_matches(
+            "#少帅302.6亿",
+            "",
+            "\n  #少帅302.6亿\u{200B}\u{a0}"
+        ));
+        assert!(own_text_matches("投稿", "投稿", "投稿"));
+        assert!(!own_text_matches("投稿", "充钻石", "充钻石"));
+        assert!(!own_text_matches("投稿", "", ""));
+        // Nothing recorded to compare with: never a confirmation.
+        assert!(!own_text_matches("\u{200B}", "\u{200B}", ""));
     }
 }
