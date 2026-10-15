@@ -691,6 +691,8 @@ struct Engine {
     reuse_allowlist: Vec<(String, String)>,
     /// How long a retired process may take to confirm its exit.
     retire_wait: Duration,
+    /// Notified whenever a job leaves `jobs`.
+    job_exits: Arc<tokio::sync::Notify>,
     evidence: EvidenceState,
     /// Windows: jobs of process trees whose exit was not confirmed, with
     /// their generation. Only these prove anything about such a tree.
@@ -725,6 +727,7 @@ impl Engine {
                 .map(|(agent, version)| (agent.to_string(), version.to_string()))
                 .collect(),
             retire_wait: Duration::from_secs(10),
+            job_exits: Arc::new(tokio::sync::Notify::new()),
             evidence: EvidenceState::default(),
             #[cfg(windows)]
             held_jobs: HashMap::new(),
@@ -770,6 +773,11 @@ impl Engine {
                 pending.sent = true;
             }
         }
+    }
+    /// Drop a conversation's job and wake everyone waiting for it to go.
+    fn remove_job(&mut self, id: &str) {
+        self.jobs.remove(id);
+        self.job_exits.notify_waiters();
     }
     fn forget(&mut self, id: &str) {
         self.secrets.remove(id);
@@ -1208,13 +1216,13 @@ impl Engine {
         {
             match notice.kind {
                 "exited" => {
-                    self.jobs.remove(id);
+                    self.remove_job(id);
                     self.requests.retain(|(chat, _), _| chat != id);
                 }
                 "processUnconfirmed" => {
                     // A retired process whose exit is unconfirmed may still
                     // act; nothing starts until the user recovers.
-                    self.jobs.remove(id);
+                    self.remove_job(id);
                     self.requests.retain(|(chat, _), _| chat != id);
                     let chat = self.chat(id)?;
                     chat.phase = Phase::RecoveryRequired;
@@ -1405,7 +1413,7 @@ impl Engine {
                 self.requests.retain(|(chat, _), _| chat != id);
             }
             "exited" => {
-                self.jobs.remove(id);
+                self.remove_job(id);
                 self.requests.retain(|(chat, _), _| chat != id);
                 let chat = self.chat(id)?;
                 if chat.active.is_some() {
@@ -1428,7 +1436,7 @@ impl Engine {
                 }
             }
             "processUnconfirmed" => {
-                self.jobs.remove(id);
+                self.remove_job(id);
                 self.requests.retain(|(chat, _), _| chat != id);
                 let chat = self.chat(id)?;
                 if chat.active.is_some() {
@@ -2107,18 +2115,9 @@ async fn dispatch(
                     .map_err(|_| "Agent shutdown was not dispatched; nothing was deleted")?;
                 drop(e);
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-                loop {
-                    let locked = engine.lock().await;
-                    if !locked.jobs.contains_key(&id) {
-                        e = locked;
-                        break;
-                    }
-                    drop(locked);
-                    if tokio::time::Instant::now() > deadline {
-                        return Err("The agent process has not exited yet; nothing was deleted. Try again shortly.".into());
-                    }
-                    tokio::time::sleep(Duration::from_millis(30)).await;
-                }
+                e = wait_for_job_exit(engine, &id, deadline).await.ok_or(
+                    "The agent process has not exited yet; nothing was deleted. Try again shortly.",
+                )?;
             }
             // Real deletion also removes the CLI's own session history and the
             // conversation's browser session. Both run without the engine lock.
@@ -2535,28 +2534,20 @@ fn start<'a>(
             }
             drop(e);
             let deadline = tokio::time::Instant::now() + wait;
-            loop {
-                let mut locked = engine.lock().await;
-                if !locked.jobs.contains_key(id) {
-                    if locked.chat(id)?.phase == Phase::RecoveryRequired {
-                        return Err(StartFailure {
-                            reason: "Previous backend exit is unconfirmed".into(),
-                            unconfirmed: Some(old),
-                        });
-                    }
-                    e = locked;
-                    break;
-                }
-                drop(locked);
-                if tokio::time::Instant::now() > deadline {
-                    return Err(StartFailure {
-                        reason: "Backend shutdown has not been confirmed; no replacement started"
-                            .into(),
-                        unconfirmed: Some(old),
-                    });
-                }
-                tokio::time::sleep(Duration::from_millis(30)).await;
+            let Some(mut locked) = wait_for_job_exit(engine, id, deadline).await else {
+                return Err(StartFailure {
+                    reason: "Backend shutdown has not been confirmed; no replacement started"
+                        .into(),
+                    unconfirmed: Some(old),
+                });
+            };
+            if locked.chat(id)?.phase == Phase::RecoveryRequired {
+                return Err(StartFailure {
+                    reason: "Previous backend exit is unconfirmed".into(),
+                    unconfirmed: Some(old),
+                });
             }
+            e = locked;
             // Stopped while waiting: the turn already ended as interrupted
             // and nothing is started for it.
             if e.turns.get(id).map(|t| &t.message_id) != Some(&message.id) {
@@ -2586,18 +2577,9 @@ fn start<'a>(
                     .map_err(|_| "Idle backend shutdown was not dispatched")?;
                 drop(e);
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-                loop {
-                    let locked = engine.lock().await;
-                    if !locked.jobs.contains_key(&idle) {
-                        e = locked;
-                        break;
-                    }
-                    drop(locked);
-                    if tokio::time::Instant::now() > deadline {
-                        return Err("Idle backend shutdown has not been confirmed".into());
-                    }
-                    tokio::time::sleep(Duration::from_millis(30)).await;
-                }
+                e = wait_for_job_exit(engine, &idle, deadline)
+                    .await
+                    .ok_or("Idle backend shutdown has not been confirmed")?;
             } else {
                 return Err(
                     "Four conversations are running; wait or stop one before starting another"
@@ -2646,7 +2628,7 @@ fn start<'a>(
         }
         e.persist(id)?;
         let (commands, receive) = mpsc::channel(32);
-        let (events, mut notices) = mpsc::channel(256);
+        let (events, notices) = mpsc::channel(256);
         e.jobs.insert(
             id.into(),
             Job {
@@ -2678,44 +2660,89 @@ fn start<'a>(
         tokio::spawn(async move {
             backend::run(setup, receive, events).await;
         });
-        tokio::spawn(async move {
-            while let Some(notice) = notices.recv().await {
-                let mut e = owner.lock().await;
-                let next = e.notice(&chat_id, generation, notice);
-                let stops = !e.evidence.pending_stops.is_empty();
-                match next {
-                    Ok(Some(message)) => {
-                        drop(e);
-                        if stops {
-                            evidence_ops::run_pending_stops(&owner).await;
-                        }
-                        let _ = launch(&owner, &chat_id, message).await;
-                    }
-                    Ok(None) => {
-                        drop(e);
-                        if stops {
-                            evidence_ops::run_pending_stops(&owner).await;
-                        }
-                    }
-                    Err(error) => {
-                        if let Some(chat) = e.chats.get_mut(&chat_id) {
-                            chat.phase = Phase::RecoveryRequired;
-                            chat.queue_paused = true;
-                            chat.last_error = Some(error);
-                        }
-                        let _ = e.persist(&chat_id);
-                        if let Some(job) = e.jobs.get(&chat_id) {
-                            let _ = job.sender.try_send(BackendCommand::Shutdown);
-                        }
-                    }
-                }
-            }
-        });
+        spawn_pump(owner, chat_id, generation, notices);
         commands
             .send(BackendCommand::Start(message))
             .await
             .map_err(|_| "Backend process closed before accepting the turn".into())
     })
+}
+
+/// The job's notice pump. It must keep draining: the next message's start
+/// may wait for this same job's `exited`, so it runs in its own task.
+fn spawn_pump(
+    owner: Arc<Mutex<Engine>>,
+    chat_id: String,
+    generation: u64,
+    mut notices: mpsc::Receiver<Notice>,
+) {
+    tokio::spawn(async move {
+        while let Some(notice) = notices.recv().await {
+            let mut e = owner.lock().await;
+            let next = e.notice(&chat_id, generation, notice);
+            let stops = !e.evidence.pending_stops.is_empty();
+            match next {
+                Ok(next) => {
+                    drop(e);
+                    if stops {
+                        evidence_ops::run_pending_stops(&owner).await;
+                    }
+                    if let Some(message) = next {
+                        // Only one begin can be pending per conversation
+                        // (the phase is busy until it ends), so this cannot
+                        // race another launch. A failed start is recorded
+                        // by `launch` and keeps or releases the message.
+                        let (owner, chat_id) = (owner.clone(), chat_id.clone());
+                        tokio::spawn(async move {
+                            let _ = launch(&owner, &chat_id, message).await;
+                        });
+                    }
+                }
+                Err(error) => {
+                    if let Some(chat) = e.chats.get_mut(&chat_id) {
+                        chat.phase = Phase::RecoveryRequired;
+                        chat.queue_paused = true;
+                        chat.last_error = Some(error);
+                    }
+                    let _ = e.persist(&chat_id);
+                    if let Some(job) = e.jobs.get(&chat_id) {
+                        let _ = job.sender.try_send(BackendCommand::Shutdown);
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Wait until `id` has no job, woken by `job_exits` (with a slow poll as a
+/// fallback). Returns the lock, or `None` at the deadline.
+async fn wait_for_job_exit<'a>(
+    engine: &'a Arc<Mutex<Engine>>,
+    id: &str,
+    deadline: tokio::time::Instant,
+) -> Option<tokio::sync::MutexGuard<'a, Engine>> {
+    loop {
+        let locked = engine.lock().await;
+        if !locked.jobs.contains_key(id) {
+            return Some(locked);
+        }
+        let exits = locked.job_exits.clone();
+        let notified = exits.notified();
+        tokio::pin!(notified);
+        // Registered before the lock is released: a removal cannot slip
+        // between the check and the wait.
+        notified.as_mut().enable();
+        drop(locked);
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        let nap = (deadline - now).min(Duration::from_millis(500));
+        tokio::select! {
+            _ = &mut notified => {}
+            _ = tokio::time::sleep(nap) => {}
+        }
+    }
 }
 
 /// Bun-built agents extract native libraries to `$TMPDIR/.bun-<uid>-*` and
@@ -4549,6 +4576,172 @@ mod turn_tests {
         assert_eq!(chat.control(), "unknown");
         assert_eq!(chat.generation, 1);
         assert!(e.jobs[&c.id].retiring);
+    }
+
+    /// A conversation whose backend job has a real notice pump, and whose
+    /// next process is a script that idles (so a start can really spawn).
+    struct Pumped {
+        _dir: tempfile::TempDir,
+        engine: Arc<Mutex<Engine>>,
+        id: String,
+        commands: mpsc::Receiver<BackendCommand>,
+        events: mpsc::Sender<Notice>,
+    }
+
+    async fn pumped() -> Pumped {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("agent");
+        std::fs::write(&script, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            Default::default(),
+        )));
+        let created = dispatch(
+            &engine,
+            "conversationCreate",
+            &json!({"agentId":"claude","executable":script}),
+        )
+        .await
+        .unwrap();
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        let (sender, commands) = mpsc::channel(16);
+        let (events, notices) = mpsc::channel(16);
+        engine.lock().await.jobs.insert(
+            id.clone(),
+            Job {
+                generation: 0,
+                full_access: false,
+                options: ModelOptions::default(),
+                retiring: false,
+                sender,
+            },
+        );
+        spawn_pump(engine.clone(), id.clone(), 0, notices);
+        Pumped {
+            _dir: dir,
+            engine,
+            id,
+            commands,
+            events,
+        }
+    }
+
+    impl Pumped {
+        async fn send(&self, operation: &str, text: &str) -> String {
+            let message = uuid::Uuid::new_v4().to_string();
+            dispatch(
+                &self.engine,
+                operation,
+                &json!({"conversationId":self.id,"messageId":message,"text":text}),
+            )
+            .await
+            .unwrap();
+            message
+        }
+        async fn emit(&self, kind: &'static str, data: Value) {
+            self.events.send(backend::notice(kind, data)).await.unwrap();
+        }
+        async fn kinds(&self, kind: &str) -> Vec<Value> {
+            let e = self.engine.lock().await;
+            e.store
+                .all_events(&self.id)
+                .unwrap()
+                .into_iter()
+                .filter(|ev| ev.kind == kind)
+                .map(|ev| ev.data)
+                .collect()
+        }
+        /// The next message runs on a newly spawned generation 1.
+        async fn started_on_new_generation(&self, message: &str) {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let spawned = {
+                    let e = self.engine.lock().await;
+                    e.jobs.get(&self.id).map(|j| j.generation) == Some(1)
+                        && e.turns.get(&self.id).is_some_and(|t| t.dispatched)
+                };
+                if spawned {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    let mut e = self.engine.lock().await;
+                    let error = e.chat(&self.id).unwrap().last_error.clone();
+                    drop(e);
+                    panic!(
+                        "no new process: {error:?} {:?}",
+                        self.kinds("turnStartFailed").await
+                    );
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(self.kinds("turnStartFailed").await.is_empty());
+            let started = self.kinds("turnStarted").await;
+            let last = started.last().unwrap();
+            assert_eq!(last["messageId"], message);
+            assert_eq!(last["generation"], 1);
+        }
+    }
+
+    // Starting a process reads the environment that other tests change.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_queued_message_starts_on_a_new_process_once_the_retired_one_exits() {
+        let _env = crate::test_utils::EnvGuard::new(&[]);
+        let mut p = pumped().await;
+        p.send("conversationSend", "first").await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Start(_))
+        ));
+        let queued = p.send("conversationSend", "second").await;
+        // The turn completes; with no allowlisted version its process retires
+        // and the queued message waits for that process to exit.
+        p.emit("terminal", json!({"status":"completed","error":null}))
+            .await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Shutdown)
+        ));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // The pump is free to deliver the old process's exit.
+        p.emit("exited", json!({"error":null,"processExitConfirmed":true}))
+            .await;
+        p.started_on_new_generation(&queued).await;
+    }
+
+    // Starting a process reads the environment that other tests change.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn stop_and_send_starts_on_a_new_process_once_the_stopped_one_exits() {
+        let _env = crate::test_utils::EnvGuard::new(&[]);
+        let mut p = pumped().await;
+        p.send("conversationSend", "first").await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Start(_))
+        ));
+        let direct = p.send("conversationSendDirect", "instead").await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Interrupt)
+        ));
+        p.emit("terminal", json!({"status":"interrupted","error":null}))
+            .await;
+        assert!(matches!(
+            p.commands.recv().await,
+            Some(BackendCommand::Shutdown)
+        ));
+        p.emit("exited", json!({"error":null,"processExitConfirmed":true}))
+            .await;
+        p.started_on_new_generation(&direct).await;
+        let started = p.kinds("turnStarted").await;
+        assert_eq!(started.last().unwrap()["continuation"], "afterStop");
     }
 
     #[tokio::test]
