@@ -52,6 +52,15 @@ overwritten in place) and keeps the work directory short (`/tmp/pa/<stamp>`;
 daemon sockets must fit the 103-byte Unix limit). Long runs go under `nohup`
 with a done-file; SSH drops.
 
+Runs are strictly one at a time on a host: `run.sh` stops the fixture site,
+every `/tmp/pa` Chrome and the launchd jobs of earlier runs when it starts,
+so a second run started meanwhile breaks the first.
+
+The extension's native host can start the profile's panel service (through
+launchd on macOS) before the driver does. `rig.mjs` stops such a service and
+retries until the driver's own process owns the profile; before that, a lost
+race made whole runs fail together (checks 5, 7, 15 and 18).
+
 Inputs beyond the branch binary: the v1.5.214 release binary (`OLD_BIN`,
 checksum-verified from the GitHub release) and the v1.5.214 extension
 (`OLD_EXT_DIR`, `git archive v1.5.214 extensions/ab-connect`) for checks 15 and
