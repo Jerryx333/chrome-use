@@ -958,11 +958,11 @@ shows "unknown" whenever an event lacks the field.
 | Terminal outcome | `turn/completed.status` | `result.subtype`/`is_error` | `agent_settled` + `stopReason` | `stopReason` |
 | Tool call id | `item.id` | `tool_use.id` / `tool_use_id` | `toolCallId` | `toolCallId` |
 | Tool error flag | `status`/`error` | `is_error` | `isError` | `status: failed` |
-| actionId survives in tool result | *verify* (`content`, `structuredContent`) | *verify* (`content`) | *verify* (`result.content`) | *verify* (`rawOutput`/`content`) |
+| actionId survives in tool result | observed: `item.result.content[0]` marker and `item.result.structuredContent` both kept | observed: marker text **dropped** when `structuredContent` is present (`tool_result.content` becomes its JSON; `tool_use_result.structuredContent` kept); marker kept in `content[0]` without it | observed: `result.content[0]` kept; whole MCP result under `result.structuredContent` | observed: model-dependent; MCP runs inside codemode `execute`, ACP `content` is the script's return value (`structuredContent` JSON when present), `rawOutput` has no result |
 | Browser target and effect | host (MCP side channel) | host | host | host |
 | Artifacts | host | host | host | host |
-| Final vs commentary text | `agentMessage.phase` *verify*; else unknown | `result.result` → final | unknown | unknown |
-| Context compaction signal | `contextCompaction` item / `thread/compacted` *verify* | `system/compact_boundary` *verify* | `auto_compaction_end` *verify* | unknown |
+| Final vs commentary text | `agentMessage.phase` observed (`commentary`, `final_answer`); else unknown | `result.result` → final | unknown | unknown |
+| Context compaction signal | `contextCompaction` item observed (`thread/compacted` not observed) | `system/compact_boundary` observed (`compact_metadata.trigger`) | `compaction_start`/`compaction_end` with `reason` observed (`auto_compaction_end` not observed) | unknown |
 | Approval requests | yes | yes (`can_use_tool`) | none (Pi never asks) | yes |
 | Approval resolution confirm | `serverRequest/resolved` | matching `tool_use_id` result | n/a | tool completion / prompt end |
 | Interrupt confirmation | `turn/completed interrupted` | `result` while stopping | `agent_settled aborted` | `stopReason cancelled` |
