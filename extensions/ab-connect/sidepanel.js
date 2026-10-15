@@ -80,7 +80,11 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     agents: () => (panelSupport?.chatAgents || ['codex', 'claude']).filter(id => chatAgents.has(id)).map(id => ({ id, name: agentNames[id] })),
     preferredAgent: () => conversation?.agentId || nodes.agent.value || preferredAgent,
     executable: agentId => agentId === nodes.agent.value ? nodes.executable.value.trim() : '',
-    onResumed: async resumed => { await list(); rememberAgent(conversations.find(c => c.id === resumed.id)?.agentId || preferredAgent); select(resumed.id); },
+    onResumed: async (resumed, existing, refused) => {
+      await list(); rememberAgent(conversations.find(c => c.id === resumed.id)?.agentId || preferredAgent); select(resumed.id);
+      // The session's folder could not be the project (a system or home folder).
+      if (refused) error(t('panel_resume_project_refused', refused));
+    },
   });
   document.getElementById('resumeHost')?.append(resumePicker.container);
   // The project folder a new conversation's agent works in.

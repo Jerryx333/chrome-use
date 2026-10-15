@@ -361,3 +361,26 @@ test('project folder replies must match what was asked', async () => {
     if (valid) await reply; else await assert.rejects(reply, /Malformed/, `${operation} ${JSON.stringify(result)}`);
   }
 });
+
+test('every host operation an extension page calls passes the background page allowlist', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { pageOperationAllowed, INSPECT_OPERATIONS } = await import('./agent-panel-bridge.js');
+  const used = new Set();
+  for (const file of ['sidepanel.js', 'project-picker.js', 'resume-picker.js', 'options.js', 'image-attachment.js']) {
+    const text = readFileSync(new URL(file, import.meta.url), 'utf8');
+    for (const m of text.matchAll(/\b(?:api|inspectRequest)\(\s*'([A-Za-z]+)'/g)) used.add(m[1]);
+  }
+  for (const operation of ['inspectProject', 'inspectProjectBind', 'conversationProjectList', 'conversationSessionList']) assert.ok(used.has(operation), `${operation} found in the page sources`);
+  for (const operation of used) {
+    assert.ok(pageOperationAllowed(operation), `${operation} is refused for extension pages`);
+    const { bridge } = setup();
+    const pending = bridge.request(operation, {});
+    pending.catch(() => {});
+    assert.equal(bridge.pending.size, 1, `${operation} is not a supported bridge operation`);
+  }
+  // The authenticated input frame keeps delivery and session binding.
+  for (const operation of ['inspectDeliver', 'inspectBind', 'inspectStatus', 'inspectResolve']) {
+    assert.ok(INSPECT_OPERATIONS.includes(operation));
+    assert.equal(pageOperationAllowed(operation), false, operation);
+  }
+});

@@ -2109,6 +2109,14 @@
   "panel_resume_ownership": {
     "message": "After you continue a session here, don't keep using it in the terminal at the same time."
   },
+  "panel_resume_project_refused": {
+    "message": "The session's folder $FOLDER$ is a system or home folder, so this conversation works in its private folder instead.",
+    "placeholders": {
+      "folder": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_resume_resuming": {
     "message": "Opening…"
   },

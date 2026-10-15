@@ -838,3 +838,19 @@ test('the host\'s default conversation title is shown in the panel\'s language',
     assert.equal(titleOf({ title: 'Fix the build' }, 'panel_new_conversation'), 'Fix the build');
   } finally { installI18n('en'); }
 });
+
+test('a resumed session whose folder cannot be a project says so', async () => {
+  const created = { ...chat('resumed'), agentId: 'codex', resumed: { sessionId: 's9', cwd: '/' } };
+  const f = await fixture({
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, sessionResume: 1, chatAgents: ['codex'] } }),
+    conversationSessionList: params => ({ success: true, result: { schemaVersion: 1, agentId: params.agentId, supported: true, sessions: [{ sessionId: 's9', agentId: 'codex', title: 'x', cwd: '/', lastActive: 0, running: false, resumable: true, conversationId: null }] } }),
+    conversationResume: () => ({ success: true, result: { schemaVersion: 1, conversation: created, projectRefused: '/' } }),
+  });
+  f.chats.push(created);
+  f.nodes.get('message').value = '/resume'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  const row = walk(f.nodes.get('resumeHost'), n => typeof n.className === 'string' && n.className.split(' ').includes('resume-item'))[0];
+  row.fire('click'); await settle(); await settle(); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'resumed');
+  assert.match(f.nodes.get('notice').textContent, /folder \/ is a system or home folder/);
+  f.panel.close();
+});

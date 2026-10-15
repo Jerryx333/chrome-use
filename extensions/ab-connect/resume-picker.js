@@ -115,7 +115,7 @@ export function createResumePicker({ document, api, agents, preferredAgent, exec
       const result = await api('conversationResume', params);
       if (result.confirmRequired === 'running') { askRunning(row); return; }
       close();
-      await onResumed(result.conversation, result.existing === true);
+      await onResumed(result.conversation, result.existing === true, result.projectRefused || null);
     } finally { busy = false; if (!container.hidden && status.textContent === RESUME_TEXT.resuming) { status.textContent = ''; status.hidden = true; } }
   }
   // A session another terminal may still be writing is never attached

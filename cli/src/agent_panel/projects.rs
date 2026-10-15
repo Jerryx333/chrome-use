@@ -15,71 +15,89 @@ pub(super) const MAX_RECENT: usize = 30;
 /// How long the user may take to choose a folder.
 pub(super) const PICK_TIMEOUT: Duration = Duration::from_secs(280);
 
-/// System folders that are never a project: an agent working there could
-/// change the computer rather than a project.
+/// Folders that hold other people's or many projects: never a project
+/// themselves, but a folder inside one can be.
 #[cfg(not(windows))]
-const SYSTEM: &[&str] = &[
+const CONTAINERS: &[&str] = &[
     "/",
+    "/Users",
+    "/home",
+    "/Volumes",
+    "/Applications",
+    "/opt",
+    "/tmp",
+    "/private",
+    "/private/tmp",
+    "/mnt",
+    "/media",
+    "/srv",
+];
+
+/// System trees: neither they nor anything inside them is a project, since
+/// an agent working there could change the computer rather than a project.
+/// Paths are compared canonical, so macOS's /etc and /var appear as
+/// /private/etc and /private/var.
+#[cfg(not(windows))]
+const SYSTEM_TREES: &[&str] = &[
     "/System",
     "/Library",
-    "/Applications",
     "/bin",
     "/sbin",
     "/usr",
     "/etc",
     "/var",
-    "/private",
     "/private/etc",
     "/private/var",
-    "/private/tmp",
-    "/tmp",
     "/dev",
-    "/opt",
-    "/Volumes",
-    "/Users",
-    "/home",
-    "/root",
+    "/cores",
+    "/opt/homebrew",
+    "/opt/local",
+    "/nix",
     "/boot",
     "/proc",
     "/sys",
     "/lib",
     "/lib64",
     "/snap",
+    "/root",
 ];
 
-/// Whether `dir` (canonical) is a filesystem root or a system folder.
-fn system_folder(dir: &Path, home: Option<&Path>) -> bool {
+/// Whether `dir` (canonical) is a filesystem root, a system folder or inside
+/// one. `temp` is the user's own canonical temporary folder (on macOS inside
+/// /private/var), whose subfolders are allowed.
+fn system_folder(dir: &Path, home: Option<&Path>, temp: Option<&Path>) -> bool {
     if dir.parent().is_none() {
         return true;
     }
+    // The home folder itself holds every other project and the CLIs'
+    // configuration; a project is a folder inside it.
+    if home.is_some_and(|h| h == dir) {
+        return true;
+    }
+    if temp.is_some_and(|t| dir != t && dir.starts_with(t)) {
+        return false;
+    }
     #[cfg(not(windows))]
     {
-        if SYSTEM.iter().any(|s| dir == Path::new(s)) {
-            return true;
-        }
+        CONTAINERS.iter().any(|c| dir == Path::new(c))
+            || SYSTEM_TREES.iter().any(|t| dir.starts_with(t))
     }
     #[cfg(windows)]
     {
         let lower = dir.to_string_lossy().to_lowercase();
         let lower = lower.trim_start_matches(r"\\?\");
         let tail = lower.get(2..).unwrap_or("").trim_end_matches('\\');
-        if [
-            "",
+        let trees = [
             r"\windows",
             r"\program files",
             r"\program files (x86)",
             r"\programdata",
-            r"\users",
-        ]
-        .contains(&tail)
-            || tail.starts_with(r"\windows\")
-        {
-            return true;
-        }
+        ];
+        ["", r"\users"].contains(&tail)
+            || trees
+                .iter()
+                .any(|t| tail == *t || tail.starts_with(&format!("{t}\\")))
     }
-    // The home folder itself holds every other project and the CLIs'
-    // configuration; a project is a folder inside it.
-    home.is_some_and(|h| h == dir)
 }
 
 /// A chosen project directory: absolute, existing, a directory, not a system
@@ -99,7 +117,8 @@ pub(super) fn validate(raw: &str, panel_root: &Path) -> Result<PathBuf, String> 
         return Err(format!("{raw} is not a folder"));
     }
     let home = dirs::home_dir().and_then(|h| h.canonicalize().ok());
-    if system_folder(&dir, home.as_deref()) {
+    let temp = std::env::temp_dir().canonicalize().ok();
+    if system_folder(&dir, home.as_deref(), temp.as_deref()) {
         return Err(format!(
             "{} is a system or home folder; choose a project folder inside it",
             dir.display()
@@ -302,6 +321,43 @@ mod tests {
                 "home itself"
             );
         }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn system_trees_are_refused_with_everything_inside_them() {
+        let home = Path::new("/Users/me");
+        let temp = Path::new("/private/var/folders/ab/xyz/T");
+        let refused = |p: &str| system_folder(Path::new(p), Some(home), Some(temp));
+        for path in [
+            "/",
+            "/private/etc/ssh",
+            "/etc/ssh",
+            "/usr/local/etc",
+            "/usr/local",
+            "/System/Library",
+            "/Library/LaunchDaemons",
+            "/opt/homebrew/bin",
+            "/private/var/db",
+            "/Users",
+            "/Users/me",
+            "/opt",
+            "/private/tmp",
+        ] {
+            assert!(refused(path), "{path} must be refused");
+        }
+        for path in [
+            "/Users/me/code/app",
+            "/Users/me/Library/Mobile Documents/proj",
+            "/opt/projects/site",
+            "/home/me/src",
+            "/private/tmp/scratch-project",
+            "/private/var/folders/ab/xyz/T/project",
+        ] {
+            assert!(!refused(path), "{path} must be allowed");
+        }
+        // The temporary folder itself is still not a project.
+        assert!(refused("/private/var/folders/ab/xyz/T"));
     }
 
     #[test]

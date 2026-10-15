@@ -2230,6 +2230,26 @@ async fn dispatch(
                     json!({"schemaVersion":1,"confirmRequired":"running","session":session_row(&session,None)}),
                 );
             }
+            // The session's folder becomes the project when it may be one
+            // (the same checks as a chosen folder). Pi runs beside its MCP
+            // configuration instead (see Setup).
+            let (project, project_refused) = match (&session.cwd, p.agent_id.as_str()) {
+                (Some(cwd), agent) if agent != "pi" => {
+                    let panel_root = data_root(&DiscoveryContext::current()?)?;
+                    match super::projects::validate(&cwd.to_string_lossy(), &panel_root) {
+                        Ok(dir) => (Some(dir), None),
+                        // OpenCode restores a session only for its own folder.
+                        Err(_) if agent == "opencode" => {
+                            return Err(format!(
+                                "OpenCode continues a session only in its own folder, and {} cannot be a project folder (it is a system or home folder, or no longer exists)",
+                                cwd.display()
+                            ))
+                        }
+                        Err(_) => (None, Some(cwd.clone())),
+                    }
+                }
+                _ => (None, None),
+            };
             let history = if p.agent_id == "opencode" {
                 let executable = agent_executable(&p.agent_id, p.executable.clone())?;
                 sessions::opencode_history(
@@ -2251,11 +2271,7 @@ async fn dispatch(
             if let Some(title) = session.title.as_deref().and_then(redacted_line) {
                 chat.title = title.chars().take(80).collect();
             }
-            // The session's directory is the conversation's project; Pi
-            // runs beside its MCP configuration instead (see Setup).
-            if p.agent_id != "pi" {
-                chat.project = session.cwd.clone();
-            }
+            chat.project = project;
             chat.external = Some(External {
                 cwd: session.cwd.clone(),
                 session_file: (p.agent_id == "pi").then(|| session.file.clone()).flatten(),
@@ -2270,7 +2286,11 @@ async fn dispatch(
             e.controls.insert(id.clone(), chat.control());
             e.chats.insert(id.clone(), chat);
             e.import_history(&id, &p.agent_id, &session, &history)?;
-            Ok(json!({"schemaVersion":1,"conversation":e.chat(&id)?.summary()}))
+            // A refused folder: the conversation works in its private folder,
+            // and the panel says why.
+            Ok(
+                json!({"schemaVersion":1,"conversation":e.chat(&id)?.summary(),"projectRefused":project_refused}),
+            )
         }
         "conversationRead" => {
             let p: Events = serde_json::from_value(params.clone()).map_err(|_| {
@@ -3863,8 +3883,8 @@ mod schedule_tests {
             assert!(external.session_file.is_none());
             assert_eq!(
                 chat.project.as_deref(),
-                Some(project.as_path()),
-                "(C): the session's folder is the project"
+                Some(project.canonicalize().unwrap().as_path()),
+                "(C): the session's folder, checked, is the project"
             );
         }
 
@@ -3999,6 +4019,26 @@ mod schedule_tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn a_session_in_a_system_folder_resumes_in_the_private_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        // The session ran in "/", which is never a project.
+        claude_session(dir.path(), Path::new("/"), Duration::from_secs(3600));
+        let engine = resume_engine(dir.path());
+        let resumed = dispatch(
+            &engine,
+            "conversationResume",
+            &json!({"agentId":"claude","sessionId":EXTERNAL_SESSION}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed["projectRefused"], "/");
+        assert!(resumed["conversation"].get("project").is_none());
+        let id = resumed["conversation"]["id"].as_str().unwrap().to_string();
+        let mut e = engine.lock().await;
+        assert!(e.chat(&id).unwrap().project.is_none());
     }
 
     #[tokio::test]

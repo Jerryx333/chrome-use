@@ -10,6 +10,15 @@ const readOperations = ['conversationRead', 'conversationList', 'conversationArt
 // Inspect & Ask host operations. inspectDeliver is never replayed: a timeout
 // leaves the batch unconfirmed and the caller asks inspectDeliveryStatus.
 export const INSPECT_OPERATIONS = ['inspectStatus', 'inspectResolve', 'inspectClaimDecide', 'inspectBind', 'inspectUnbind', 'inspectBindings', 'inspectConsent', 'inspectDeliver', 'inspectDeliveryStatus', 'inspectLaunchCommand', 'inspectReplies', 'inspectProject', 'inspectProjectBind'];
+// Of those, what extension pages (the side panel, the options page) may ask:
+// managing bindings, consents and replies, and a site's project for a new
+// conversation. Delivery, binding to a session and status belong to the
+// authenticated input frame only.
+export const PAGE_INSPECT_OPERATIONS = ['inspectBindings', 'inspectUnbind', 'inspectConsent', 'inspectClaimDecide', 'inspectReplies', 'inspectProject', 'inspectProjectBind'];
+/** Whether an extension page's request may reach the host. */
+export function pageOperationAllowed(operation) {
+  return !INSPECT_OPERATIONS.includes(operation) || PAGE_INSPECT_OPERATIONS.includes(operation);
+}
 
 export class AgentPanelBridge {
   constructor({ send, schedule = (callback, delay) => globalThis.setTimeout(callback, delay), cancel = timer => globalThis.clearTimeout(timer), timeoutMs = 15000, maxPending = 16 }) {

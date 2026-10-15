@@ -2109,6 +2109,14 @@
   "panel_resume_ownership": {
     "message": "在这里继续会话后，请不要同时在终端里继续使用它。"
   },
+  "panel_resume_project_refused": {
+    "message": "该会话的文件夹 $FOLDER$ 是系统文件夹或主目录，所以这个会话改在私有文件夹中工作。",
+    "placeholders": {
+      "folder": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_resume_resuming": {
     "message": "正在打开…"
   },

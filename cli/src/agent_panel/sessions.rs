@@ -334,9 +334,9 @@ fn read_claude(id: &str, path: &Path, modified: SystemTime, live: &[(String, i64
         .find_map(|r| r["cwd"].as_str())
         .map(PathBuf::from);
     let (tail_lines, _, _) = tail(path, TITLE_TAIL_BYTES);
-    let named = tail_lines
+    let named = lines
         .iter()
-        .chain(lines.iter())
+        .chain(tail_lines.iter())
         .rev()
         .find_map(|r| {
             (r["type"] == "custom-title")
@@ -430,10 +430,11 @@ fn read_codex(
         .get(id)
         .cloned()
         .or_else(|| lines.iter().find_map(codex_record_user));
+    // Newest first: the end of the file, then its start.
     let (tail_lines, _, _) = tail(path, TITLE_TAIL_BYTES);
-    let model = tail_lines
+    let model = lines
         .iter()
-        .chain(lines.iter())
+        .chain(tail_lines.iter())
         .rev()
         .find_map(|r| {
             (r["type"] == "turn_context")
@@ -469,9 +470,9 @@ fn read_pi(id: &str, path: &Path, modified: SystemTime) -> Option<Session> {
         return None;
     }
     let (tail_lines, _, _) = tail(path, TITLE_TAIL_BYTES);
-    let named = tail_lines
+    let named = lines
         .iter()
-        .chain(lines.iter())
+        .chain(tail_lines.iter())
         .rev()
         .find_map(|r| {
             (r["type"] == "session_info")
@@ -1291,6 +1292,53 @@ mod tests {
         let panel = panel.replacen("\"originator\":\"codex_exec\",", "", 1);
         put(&codex_file(&h), &panel);
         assert!(list_files("codex", &h.roots, "", 10, Path::new("/panel")).is_empty());
+    }
+
+    #[test]
+    fn the_newest_model_and_title_win_in_long_sessions() {
+        let h = home();
+        let filler = |n: usize| -> String {
+            (0..n)
+                .map(|i| format!("{}\n", json!({"type":"event_msg","payload":{"type":"token_count","pad":format!("{i} {}", "x".repeat(1000))}})))
+                .collect()
+        };
+        // The start and the end of the file are read separately when it is long.
+        let mut codex = format!(
+            "{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":CODEX_ID,"cwd":"/p","originator":"codex_exec"}}),
+            json!({"type":"turn_context","payload":{"cwd":"/p","model":"old-model"}})
+        );
+        codex.push_str(&filler(400));
+        codex.push_str(&format!(
+            "{}\n",
+            json!({"type":"turn_context","payload":{"cwd":"/p","model":"new-model"}})
+        ));
+        put(&codex_file(&h), &codex);
+        assert_eq!(
+            find_file("codex", &h.roots, CODEX_ID)
+                .unwrap()
+                .model
+                .as_deref(),
+            Some("new-model")
+        );
+        let mut claude = format!(
+            "{}\n{}\n",
+            json!({"type":"user","cwd":"/p","message":{"role":"user","content":"hi"}}),
+            json!({"type":"custom-title","customTitle":"First name"})
+        );
+        claude.push_str(&filler(400));
+        claude.push_str(&format!(
+            "{}\n",
+            json!({"type":"custom-title","customTitle":"Renamed"})
+        ));
+        put(&claude_file(&h), &claude);
+        assert_eq!(
+            find_file("claude", &h.roots, CLAUDE_ID)
+                .unwrap()
+                .title
+                .as_deref(),
+            Some("Renamed")
+        );
     }
 
     #[test]

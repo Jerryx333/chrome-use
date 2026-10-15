@@ -19,7 +19,7 @@
 import { getRelayHealth, observeDebuggerCommand } from './relay-health.js';
 import { ScheduleNotifications } from './schedule-notifications.js';
 import { TurnNotifications, openFromNotification } from './turn-notifications.js';
-import { AgentPanelBridge, isAgentPanelSender, INSPECT_OPERATIONS } from './agent-panel-bridge.js';
+import { AgentPanelBridge, isAgentPanelSender, pageOperationAllowed } from './agent-panel-bridge.js';
 import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
 import { t } from './i18n.js';
@@ -143,9 +143,6 @@ const inspectController = new InspectController({
 });
 inspectController.install();
 if (chrome.runtime.getManifest().key) globalThis.__chromeUseInspect = inspectController;
-// Extension pages may manage bindings and consents (options page); delivery,
-// binding and status belong to the authenticated input frame only.
-const PAGE_INSPECT_OPERATIONS = ['inspectBindings', 'inspectUnbind', 'inspectConsent', 'inspectClaimDecide', 'inspectReplies'];
 const scheduleNotifications = new ScheduleNotifications({ storage: chrome.storage.local, notifications: chrome.notifications });
 function pollScheduleNotifications() {
   const state = hostConnection.snapshot();
@@ -2611,7 +2608,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ success: false, error: 'Agent services require the packaged extension panel' });
       return false;
     }
-    if (INSPECT_OPERATIONS.includes(msg.operation) && !PAGE_INSPECT_OPERATIONS.includes(msg.operation)) {
+    if (!pageOperationAllowed(msg.operation)) {
       sendResponse({ success: false, error: 'This Inspect & Ask operation is only available from the input panel' });
       return false;
     }
