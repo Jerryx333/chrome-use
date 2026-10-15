@@ -75,6 +75,14 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // `request_detail` for a request the bounded request log already
+    // dropped: asking again cannot bring it back.
+    if lower.contains(crate::native::tracked_requests::REQUEST_EVICTED) {
+        return ErrorMetadata {
+            code: "request_evicted",
+            retryable: false,
+        };
+    }
     if lower.contains("action_outcome_unknown:") {
         return ErrorMetadata {
             code: "action_outcome_unknown",
@@ -241,6 +249,16 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn an_evicted_request_has_its_own_code() {
+        let m = classify_error(
+            "request_evicted: request 12.3 was dropped from the request log, which keeps the \
+             newest 1000 requests; its details are gone.",
+        );
+        assert_eq!(m.code, "request_evicted");
+        assert!(!m.retryable);
+    }
 
     #[test]
     fn first_tab_failures_have_their_own_codes() {

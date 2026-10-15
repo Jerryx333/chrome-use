@@ -12854,6 +12854,7 @@ mod background_activation {
                 status: Some(200),
                 response_headers: None,
                 mime_type: Some("application/json".to_string()),
+                truncated: Vec::new(),
             });
         let response = execute_bounded(
             &fixture,

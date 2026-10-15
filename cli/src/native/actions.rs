@@ -244,6 +244,10 @@ pub struct TrackedRequest {
     pub response_headers: Option<Value>,
     #[serde(rename = "mimeType", skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    /// Fields cut to the per-entry caps (`postData`, `headers`,
+    /// `responseHeaders`); see `tracked_requests`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub truncated: Vec<&'static str>,
 }
 
 pub struct FetchPausedRequest {
@@ -541,7 +545,7 @@ pub struct DaemonState {
     pub confirm_actions: Option<ConfirmActions>,
     pub inspect_server: Option<InspectServer>,
     pub routes: Arc<RwLock<Vec<RouteEntry>>>,
-    pub tracked_requests: Vec<TrackedRequest>,
+    pub tracked_requests: super::tracked_requests::TrackedRequests,
     pub request_tracking: bool,
     /// The last `tab select` / `tab adopt` whose liveness probe never answered,
     /// as (what the caller asked for, when). A tab-gone error after one of these
@@ -709,7 +713,7 @@ impl DaemonState {
             confirm_actions: ConfirmActions::from_env(),
             inspect_server: None,
             routes: Arc::new(RwLock::new(Vec::new())),
-            tracked_requests: Vec::new(),
+            tracked_requests: Default::default(),
             request_tracking: false,
             last_unconfirmed_tab_switch: None,
             defer_click_tab_check: false,
@@ -1559,6 +1563,7 @@ impl DaemonState {
                                         status: None,
                                         response_headers: None,
                                         mime_type: None,
+                                        truncated: Vec::new(),
                                     });
                                 }
                             }
@@ -1589,6 +1594,7 @@ impl DaemonState {
                                 status: None,
                                 response_headers: None,
                                 mime_type: None,
+                                truncated: Vec::new(),
                             });
                         }
                         "Network.responseReceived"
@@ -1659,6 +1665,7 @@ impl DaemonState {
                                         entry.status = status;
                                         entry.mime_type = resp_mime;
                                         entry.response_headers = resp_headers;
+                                        super::tracked_requests::cap_entry(entry);
                                     }
                                 }
                             }
@@ -2473,7 +2480,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
     let observe_baseline = if observe {
         enable_request_tracking(state).await;
         let _ = state.drain_cdp_events();
-        let req_mark = state.tracked_requests.len();
+        let req_mark = state.tracked_requests.mark();
         let mgr = state.browser.as_ref().unwrap();
         let url = mgr.get_url().await;
         let resource_mark = Box::pin(mgr.evaluate(super::observation::RESOURCE_MARK_JS, None))
@@ -2957,13 +2964,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // Registering: the delta the caller reads names refs it will act on next.
         let snap1 = observe_snapshot_registering(state).await;
         let url1 = state.browser.as_ref().unwrap().get_url().await;
+        let (reqs_after_mark, reqs_evicted) = state.tracked_requests.since(req_mark);
         let new_reqs = super::observation::summarize_requests(
-            state
-                .tracked_requests
-                .get(req_mark..)
-                .unwrap_or_default()
-                .iter()
-                .map(|r| (r.method.as_str(), r.url.as_str())),
+            reqs_after_mark.map(|r| (r.method.as_str(), r.url.as_str())),
         );
         // A cross-origin overlay (a bank picker, a payment field) arrives as a
         // NEW out-of-process frame, and its content is in none of this tree —
@@ -3016,6 +3019,11 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             observed.insert("requestsTotal".into(), json!(new_reqs.total));
             observed.insert("requestsOmitted".into(), json!(new_reqs.omitted));
             observed.insert("requestsShortened".into(), json!(new_reqs.shortened));
+        }
+        // More requests than the log holds went out during the action: the
+        // oldest of them are gone, so the list above is not all of them.
+        if reqs_evicted > 0 {
+            observed.insert("requestsEvicted".into(), json!(reqs_evicted));
         }
         if !new_frames.is_empty() {
             observed.insert("newFrames".into(), json!(new_frames));
@@ -20570,6 +20578,12 @@ async fn handle_requests(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     if let Some(o) = origin {
         response["origin"] = json!(o);
     }
+    // The log keeps the newest `MAX_TRACKED_REQUESTS`; say when older ones
+    // were dropped so a short list is not read as "nothing else was sent".
+    let evicted = state.tracked_requests.evicted();
+    if evicted > 0 {
+        response["evicted"] = json!(evicted);
+    }
     Ok(response)
 }
 
@@ -20579,12 +20593,23 @@ async fn handle_request_detail(cmd: &Value, state: &mut DaemonState) -> Result<V
         .get("requestId")
         .and_then(Value::as_str)
         .ok_or("Missing 'requestId' parameter")?;
-    let entry = state
+    let Some(entry) = state
         .tracked_requests
         .iter()
         .rev()
         .find(|r| r.request_id == request_id)
-        .ok_or("Request not found")?;
+    else {
+        if state.tracked_requests.was_evicted(request_id) {
+            return Err(format!(
+                "{} request {request_id} was dropped from the request log, which keeps the \
+                 newest {} requests; its details are gone. Read a request's detail soon \
+                 after it is sent.",
+                super::tracked_requests::REQUEST_EVICTED,
+                super::tracked_requests::MAX_TRACKED_REQUESTS
+            ));
+        }
+        return Err("Request not found".to_string());
+    };
     let mut result = serde_json::to_value(entry).unwrap_or(json!({}));
     let body_result = match state.browser.as_ref() {
         Some(mgr) => match entry
@@ -25331,6 +25356,39 @@ mod tests {
         assert_eq!(result["status"], "changed");
     }
 
+    #[tokio::test]
+    async fn request_detail_names_an_evicted_request() {
+        use super::super::tracked_requests::MAX_TRACKED_REQUESTS;
+        let mut state = DaemonState::new();
+        for n in 0..=MAX_TRACKED_REQUESTS {
+            state.tracked_requests.push(TrackedRequest {
+                session_id: None,
+                url: format!("https://x.com/{n}"),
+                method: "GET".to_string(),
+                headers: json!({}),
+                timestamp: n as u64,
+                resource_type: "Fetch".to_string(),
+                request_id: format!("r{n}"),
+                post_data: None,
+                status: None,
+                response_headers: None,
+                mime_type: None,
+                truncated: Vec::new(),
+            });
+        }
+        let err = handle_request_detail(&json!({"requestId": "r0"}), &mut state)
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("request_evicted:"), "{err}");
+        let resp = error_response("1", &err);
+        assert_eq!(resp["code"], "request_evicted");
+        assert_eq!(resp["retryable"], false);
+        let err = handle_request_detail(&json!({"requestId": "never"}), &mut state)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "Request not found");
+    }
+
     #[test]
     fn test_request_matches_parity() {
         let r = TrackedRequest {
@@ -25345,6 +25403,7 @@ mod tests {
             status: Some(200),
             response_headers: None,
             mime_type: None,
+            truncated: Vec::new(),
         };
         assert!(request_matches(&r, Some("/api/save"), None, None, &[]));
         assert!(request_matches(

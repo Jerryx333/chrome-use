@@ -3,10 +3,9 @@
 //! the browser tools were pointed at before and after it ran. Everything here
 //! reads fields the daemon already holds; it sends no CDP command of its own.
 //!
-//! A panel command with `observe` also gets request tracking scoped to it:
-//! when tracking was off, it is off again afterwards and the requests the
-//! command recorded are dropped, so a panel observation does not leave every
-//! later request's headers and post data in daemon memory.
+//! A panel `observe` leaves request tracking alone. The daemon tracks requests
+//! from start (`DaemonState::new_with_stream`), so there is nothing to scope;
+//! what bounds that memory is the request log itself (`tracked_requests`).
 
 use serde_json::{json, Value};
 
@@ -17,8 +16,6 @@ use super::browser::{ActingTarget, BrowserManager};
 pub(crate) struct PanelStamp {
     action_id: String,
     before: Option<ActingTarget>,
-    /// `(request_tracking, tracked_requests.len())` before an observed command.
-    tracking: Option<(bool, usize)>,
 }
 
 /// Run one top-level command, stamping its reply when it carries
@@ -36,32 +33,22 @@ pub(crate) async fn execute_command_stamped(cmd: &Value, state: &mut DaemonState
 pub(crate) fn begin(cmd: &Value, state: &DaemonState) -> Option<PanelStamp> {
     let action_id =
         crate::connection::panel_action_id(cmd.get("_panelActionId").and_then(Value::as_str))?;
-    let observed = cmd.get("observe").and_then(Value::as_bool) == Some(true);
     Some(PanelStamp {
         action_id: action_id.to_string(),
         before: state
             .browser
             .as_ref()
             .and_then(BrowserManager::acting_target),
-        tracking: observed.then_some((state.request_tracking, state.tracked_requests.len())),
     })
 }
 
-/// Restore request tracking and stamp the reply, on success and on error alike.
+/// Stamp the reply, on success and on error alike.
 pub(crate) fn finish(
     stamp: PanelStamp,
     cmd: &Value,
     response: &mut Value,
     state: &mut DaemonState,
 ) {
-    if let Some((was_tracking, mark)) = stamp.tracking {
-        if !was_tracking {
-            // No `Network.disable`: the domain is on from attach either way;
-            // only the daemon's own bookkeeping goes back.
-            state.request_tracking = false;
-            state.tracked_requests.truncate(mark);
-        }
-    }
     let action = cmd.get("action").and_then(Value::as_str).unwrap_or("");
     let (after, opened) = match state.browser.as_ref() {
         Some(mgr) => reply_targets(action, response, mgr),
@@ -154,7 +141,7 @@ fn reply_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native::actions::{HarEntry, TrackedRequest};
+    use crate::native::actions::TrackedRequest;
     use crate::native::browser::{fake_cdp, PageInfo};
 
     const ID: &str = "0b5c3f4e-8a7d-4c2b-9e1f-6a2d8c4b7e90";
@@ -191,28 +178,7 @@ mod tests {
             status: None,
             response_headers: None,
             mime_type: None,
-        }
-    }
-
-    fn har_entry() -> HarEntry {
-        HarEntry {
-            request_id: "h1".into(),
-            wall_time: 0.0,
-            method: "GET".into(),
-            url: "https://shop.example/".into(),
-            request_headers: Vec::new(),
-            post_data: None,
-            request_body_size: 0,
-            resource_type: "Document".into(),
-            status: None,
-            status_text: String::new(),
-            http_version: String::new(),
-            response_headers: Vec::new(),
-            mime_type: String::new(),
-            redirect_url: String::new(),
-            response_body_size: 0,
-            cdp_timing: None,
-            loading_finished_timestamp: None,
+            truncated: Vec::new(),
         }
     }
 
@@ -375,82 +341,35 @@ mod tests {
         assert_eq!(context["after"], Value::Null);
     }
 
-    /// The command itself turning tracking on and recording requests, as
-    /// `--observe` does through `enable_request_tracking`.
-    fn run_observed(state: &mut DaemonState, recorded: usize) {
-        state.request_tracking = true;
-        for n in 0..recorded {
-            state.tracked_requests.push(request(100 + n));
-        }
-    }
-
+    /// A panel `observe` leaves tracking and the request log as the command
+    /// left them: tracking is on from daemon start, so dropping the command's
+    /// requests would take them from `network requests` and `expect request`.
     #[tokio::test]
-    async fn panel_observe_leaves_tracking_as_it_found_it() {
+    async fn panel_observe_leaves_request_tracking_alone() {
         for success in [true, false] {
             let (mut state, log) = state_with(vec![page(1, "cb-tab-41")]).await;
+            state.request_tracking = true;
             state.tracked_requests.push(request(1));
-            state.har_recording = true;
             let cmd = json!({"action": "click", "selector": "#save", "observe": true, "_panelActionId": ID});
             let stamp = begin(&cmd, &state).unwrap();
-            run_observed(&mut state, 3);
-            state.har_entries.push(har_entry());
+            state.tracked_requests.push(request(2));
             let mut response = if success {
                 json!({"success": true, "data": {}})
             } else {
                 json!({"success": false, "error": "Element not found"})
             };
             finish(stamp, &cmd, &mut response, &mut state);
-            assert!(!state.request_tracking, "success={success}");
-            assert_eq!(state.tracked_requests.len(), 1, "success={success}");
-            assert_eq!(state.tracked_requests[0].request_id, "r1");
-            assert_eq!(
-                state.har_entries.len(),
-                1,
-                "HAR entries are not ours to drop"
-            );
+            assert!(state.request_tracking, "success={success}");
+            let ids: Vec<_> = state
+                .tracked_requests
+                .iter()
+                .map(|r| r.request_id.as_str())
+                .collect();
+            assert_eq!(ids, ["r1", "r2"], "success={success}");
             assert!(
                 !log.lock().unwrap().iter().any(|m| m == "Network.disable"),
                 "sent Network.disable"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn tracking_someone_turned_on_is_left_alone() {
-        let (mut state, _) = state_with(vec![page(1, "cb-tab-41")]).await;
-        // `requests --clear` turned tracking on before the panel command.
-        state.request_tracking = true;
-        state.tracked_requests.push(request(1));
-        let cmd = json!({"action": "click", "observe": true, "_panelActionId": ID});
-        let stamp = begin(&cmd, &state).unwrap();
-        run_observed(&mut state, 2);
-        let mut response = json!({"success": true, "data": {}});
-        finish(stamp, &cmd, &mut response, &mut state);
-        assert!(state.request_tracking);
-        assert_eq!(state.tracked_requests.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn a_panel_command_without_observe_does_not_touch_tracking() {
-        let (mut state, _) = state_with(vec![page(1, "cb-tab-41")]).await;
-        let cmd = json!({"action": "requests", "clear": true, "_panelActionId": ID});
-        let stamp = begin(&cmd, &state).unwrap();
-        // `requests --clear` is the agent asking for tracking: it stays on.
-        run_observed(&mut state, 1);
-        let mut response = json!({"success": true, "data": {}});
-        finish(stamp, &cmd, &mut response, &mut state);
-        assert!(state.request_tracking);
-        assert_eq!(state.tracked_requests.len(), 1);
-    }
-
-    /// Plain CLI `--observe` keeps today's behaviour: tracking stays on.
-    #[tokio::test]
-    async fn plain_cli_observe_is_unchanged() {
-        let (mut state, _) = state_with(vec![page(1, "cb-tab-41")]).await;
-        let cmd = json!({"action": "click", "observe": true});
-        assert!(begin(&cmd, &state).is_none());
-        run_observed(&mut state, 2);
-        assert!(state.request_tracking);
-        assert_eq!(state.tracked_requests.len(), 2);
     }
 }
