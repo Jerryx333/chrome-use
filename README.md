@@ -181,6 +181,8 @@ History streams replies, expandable tool rows and requests. Tool output does not
 
 To delete a conversation, stop its response, click the header's delete button and confirm. Deletion removes panel history and that conversation's browser session, plus Codex rollout files, Claude session files/directories, OpenCode history through `session/delete`, or Pi session files inside the conversation folder. Codex's SQLite cache is left untouched. The panel reports cleanup failures or unconfirmed tab closure.
 
+`/resume` continues a Claude Code, Codex, OpenCode or Pi session you started in a terminal, and a new conversation can work in a project folder that a site can remember. See [Continue a terminal session](https://chrome-use.leeguoo.com/en/agent-panel.html#resume) and [Project folder](https://chrome-use.leeguoo.com/en/agent-panel.html#project).
+
 Panel history is stored locally under `~/.chrome-use/agent-panel`, scoped to the Chrome profile. The selected CLI may send tasks and page content to its configured model service, whose privacy policy applies. The side panel adds no webpage content script; opening it can change the page viewport. Inspect & Ask (below) injects into a page only when you press its shortcut or button. Custom programs require an absolute path.
 
 The panel also supports:
