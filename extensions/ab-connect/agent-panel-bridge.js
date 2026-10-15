@@ -3,7 +3,7 @@
 // replies must match the request's connection generation; no request is replayed.
 // Slow operations outlast the native host's own budget for them (32 s and 47 s),
 // so the host's answer arrives before this page gives up.
-const operationTimeouts = { agentInspect: 35000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000, inspectResolve: 20000, conversationArtifactRead: 12000, conversationRecoveryReview: 17000, conversationRecoveryTerminate: 17000, conversationRecoveryFork: 12000 };
+const operationTimeouts = { agentInspect: 35000, imageConvert: 30000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000, inspectResolve: 20000, conversationArtifactRead: 12000, conversationRecoveryReview: 17000, conversationRecoveryTerminate: 17000, conversationRecoveryFork: 12000 };
 // Reads that change nothing; a timeout there never leaves an outcome to confirm.
 const readOperations = ['conversationRead', 'conversationList', 'conversationArtifactRead', 'conversationRecoveryReview'];
 
@@ -25,7 +25,7 @@ export class AgentPanelBridge {
   }
 
   request(operation, params = {}) {
-    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
+    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'imageConvert', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
     if (this.pending.size >= this.maxPending) return Promise.reject(new Error('Too many pending agent panel requests'));
     const requestId = `${this.identity}:${this.generation}:${++this.sequence}`;
     return new Promise((resolve, reject) => {
@@ -93,6 +93,7 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
   if (['scheduleSave','scheduleRun'].includes(operation)) return typeof result.schedule?.id === 'string' && (!id || result.schedule.id === id) && (operation !== 'scheduleRun' || result.run?.dispatched === true && result.run.completed === false);
   if (operation === 'scheduleDelete') return result.deleted?.id === id;
   if (operation === 'discover') return Array.isArray(result.agents);
+  if (operation === 'imageConvert') return result.mediaType === 'image/jpeg' && typeof result.data === 'string' && result.data.length > 0;
   if (operation === 'inspectResolve') return ['bound', 'needsConfirm', 'unbound'].includes(result.state) && Array.isArray(result.pendingClaims) && typeof result.ocs?.installed === 'boolean';
   if (operation === 'inspectClaimDecide') return ['accepted', 'rejected'].includes(result.decided);
   if (operation === 'inspectStatus') return typeof result.ocs?.installed === 'boolean' && Array.isArray(result.sessions) && Array.isArray(result.candidates);

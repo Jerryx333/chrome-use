@@ -278,3 +278,16 @@ test('a timed-out read is not described as an unconfirmed conversation change', 
     await assert.rejects(reply, expected);
   }
 });
+
+test('HEIC conversion waits past the host converter budget and must return a JPEG', async () => {
+  const delays = [];
+  const timed = new AgentPanelBridge({ send() {}, schedule: (callback, delay) => { delays.push(delay); return 1; }, cancel() {} });
+  timed.request('imageConvert', { data: 'AAAA' }).catch(() => {});
+  assert.deepEqual(delays, [30000]);
+  for (const [result, ok] of [[{ schemaVersion: 1, mediaType: 'image/jpeg', data: '/9j/' }, true], [{ schemaVersion: 1, mediaType: 'image/png', data: 'iVBO' }, false], [{ schemaVersion: 1, mediaType: 'image/jpeg', data: '' }, false]]) {
+    const { bridge, messages } = setup();
+    const pending = bridge.request('imageConvert', { data: 'AAAA' });
+    bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result });
+    if (ok) assert.equal((await pending).data, '/9j/'); else await assert.rejects(pending, /Malformed/);
+  }
+});
