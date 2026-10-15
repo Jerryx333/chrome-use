@@ -3325,7 +3325,8 @@ fn build_ambiguity_probe_js(selector: &str) -> String {
 /// Whether an action's selector is subject to the one-match rule: a CSS
 /// selector or XPath. A `@ref`, a semantic pin and `text=` name one element by
 /// construction or have their own matching, and `AGENT_BROWSER_STRICT_SELECTORS=0`
-/// restores first-match for scripts written against it.
+/// (in the daemon's environment, so set when the session starts) restores
+/// first-match for scripts written against it.
 pub fn selector_needs_unique_match(selector: &str) -> bool {
     if std::env::var("AGENT_BROWSER_STRICT_SELECTORS").as_deref() == Ok("0") {
         return false;
@@ -3380,7 +3381,8 @@ pub(crate) fn ambiguous_selector_message(selector: &str, probe: &Value) -> Optio
          Narrow the selector until it matches one element, act on a @ref from `snapshot -i`, or \
          pick one by its index above: `find nth <index> {quoted} <action>` \
          (`find first` / `find last` for the ends).\n\
-         (Scripts written for first-match: AGENT_BROWSER_STRICT_SELECTORS=0.)"
+         (Scripts written for first-match: AGENT_BROWSER_STRICT_SELECTORS=0, read when the \
+         session's daemon starts.)"
     ))
 }
 

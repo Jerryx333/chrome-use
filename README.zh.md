@@ -260,7 +260,7 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 只有动作后的捕获失败时，`observed.refs` 说明 ref 怎么处理：`kept-unverified` 保留上一次快照的 ref，但之后的命令使用前会实时确认标签页、frame、文档和元素都没变，确认不了就拒绝，绝不按角色或名称重新定位（DOM 遍历得到的 ref 这时一律拒绝）；`dropped` 表示文档可能已经变了。两种情况都用 `snapshot -i` 取当前 ref，不要重放动作。
 
-语义 `find role/text/label/placeholder/alt/title/testid` 要求恰好一个可见匹配，只定位不操作时也一样。多个匹配会返回最多八个候选及可见状态、选择器和上下文提示，不派发动作，也不输出输入框的值。用 `--name`/`--exact` 消歧，或用 `--within <CSS|@ref>` 限定到唯一容器。范围必须属于当前标签页的主文档，跨 iframe 的 ref 和已选中的 iframe 上下文会被拒绝；可用 iframe 内的直接 ref 动作，或先 `frame main`。`find first/last/nth` 保留显式按序选择；传给动作（`click`、`fill`、`type`、`hover`、`check`、`select`、`drag` 等）的普通 CSS 选择器或 XPath 也必须恰好匹配一个元素：匹配多个时以 `selector_ambiguous` 拒绝，列出前五个匹配的文字和位置，什么都不做。收窄选择器、改用 `@ref`，或用 `find nth <序号> <选择器> <动作>` 按序号指定；旧脚本需要首个匹配时设 `AGENT_BROWSER_STRICT_SELECTORS=0`。role 和 label 名称来自 Chrome 无障碍数据，包含 `aria-labelledby`；每次语义调用重新定位。派发前目标已脱离时安全失败，结果不确定的动作不会重放。
+语义 `find role/text/label/placeholder/alt/title/testid` 要求恰好一个可见匹配，只定位不操作时也一样。多个匹配会返回最多八个候选及可见状态、选择器和上下文提示，不派发动作，也不输出输入框的值。用 `--name`/`--exact` 消歧，或用 `--within <CSS|@ref>` 限定到唯一容器。范围必须属于当前标签页的主文档，跨 iframe 的 ref 和已选中的 iframe 上下文会被拒绝；可用 iframe 内的直接 ref 动作，或先 `frame main`。`find first/last/nth` 保留显式按序选择；传给动作（`click`、`fill`、`type`、`hover`、`check`、`select`、`drag` 等）的普通 CSS 选择器或 XPath 也必须恰好匹配一个元素：匹配多个时以 `selector_ambiguous` 拒绝，列出前五个匹配的文字和位置，什么都不做。收窄选择器、改用 `@ref`，或用 `find nth <序号> <选择器> <动作>` 按序号指定；旧脚本需要首个匹配时设 `AGENT_BROWSER_STRICT_SELECTORS=0`（会话的 daemon 启动时读取）。role 和 label 名称来自 Chrome 无障碍数据，包含 `aria-labelledby`；每次语义调用重新定位。派发前目标已脱离时安全失败，结果不确定的动作不会重放。
 
 现有 `mcp --tools all` 的 `chrome_use_find` 工具接受 `within`，使用相同的唯一范围规则，工具数量不变。fill/type 的 `text` 按文字原样传入，`--name --observe` 不会被当作 CLI 参数。
 
