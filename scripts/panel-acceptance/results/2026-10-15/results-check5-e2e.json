@@ -1,0 +1,65 @@
+{
+  "startedAt": "2026-10-15T04:21:51.728Z",
+  "hostBin": "/tmp/pa/1015132150/bin/chrome-use-1015132150",
+  "checks": [
+    {
+      "id": 5,
+      "name": "Stop timeout with process alive",
+      "evidence": {
+        "leaderAlive": {
+          "unconfirmed": {
+            "error": "Backend did not confirm interruption; it was left running (e2e fault switch)",
+            "messageId": "dd61a70b-7ef0-4a8d-9d1e-bd350e25e2da",
+            "privacyClass": "public",
+            "processExitConfirmed": false,
+            "processStarted": true
+          },
+          "control": "unknown",
+          "phase": "recoveryRequired",
+          "review": {
+            "process": {
+              "canFork": false,
+              "canTerminate": false,
+              "pid": 42565,
+              "processStartTime": null,
+              "reason": "A process with the leader's PID is running but its start time does not match",
+              "state": "unknown"
+            },
+            "actions": 1,
+            "unresolved": []
+          },
+          "forkWhileAlive": {
+            "ok": false,
+            "error": "The old agent process is not proven to have exited"
+          }
+        }
+      },
+      "status": "fail",
+      "error": "Error: leaderAlive: review proves the group alive\n    at Object.run (file:///Users/leo/panel-accept/repo/scripts/panel-acceptance/checks.mjs:195:34)\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async file:///Users/leo/panel-accept/repo/scripts/panel-acceptance/accept.mjs:152:21",
+      "seconds": 11.2
+    }
+  ],
+  "chrome": "Chrome/155.0.8059.39",
+  "hostSha256": "sha256:c2c5476b8ea0a03107e14057ebaa6a0d19a70a1b768a14fef05742222c1e80ec",
+  "buildCommit": "36605e69-e2e",
+  "extensionTree": "97be9e1a1a7c93d8b5a428a7cddff1dcd733e22c0f1ab22b3077159a56f85f65",
+  "v15214Sha256": "sha256:d77538717467a0fd84b71b4465376d52998b67fa6e641dc0ad1db53b76a7bb41",
+  "v15214ExtensionTree": "815c3c3b7e088d7580f574fe1ceca9124478f7866e13dd945e43519efe464ffc",
+  "profile": "9f0f0501-5d7f-4364-b878-fcce03c9e999",
+  "extensionVersion": "0.5.57",
+  "finishedAt": "2026-10-15T04:22:08.526Z",
+  "proxyTimings": {
+    "agentActionBegin": {
+      "n": 1,
+      "p50": 33,
+      "p95": 33,
+      "max": 33
+    },
+    "agentActionReport": {
+      "n": 1,
+      "p50": 9,
+      "p95": 9,
+      "max": 9
+    }
+  }
+}

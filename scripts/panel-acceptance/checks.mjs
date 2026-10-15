@@ -158,17 +158,19 @@ export const checks = [
     async run(h, ev) {
       const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
       // A fixture backend that ignores the interrupt and has a child that would outlive the leader.
-      const stuck = async label => {
+      const stuck = async (label, flags = { ignoreInterrupt: true }) => {
         const conv = await h.create('codex');
-        const m = await h.send(conv.id, h.scenario(`c5${label}`, { ignoreInterrupt: true, steps: [{ tool: 'chrome_use_open', args: { url: h.site('/a') } }, { spawnChild: true }, { say: 'working', role: 'commentary' }, { sleep: 600000 }] }));
+        const m = await h.send(conv.id, h.scenario(`c5${label}`, { ...flags, steps: [{ tool: 'chrome_use_open', args: { url: h.site('/a') } }, { spawnChild: true }, { say: 'working', role: 'commentary' }, { sleep: 600000 }] }));
         await h.waitFor(() => h.hasSignal(conv.id, 'child-pid'), { timeout: 60000, label: 'child spawned' });
         const child = Number(fs.readFileSync(path.join(h.rig.accept, 'signals', `${conv.id}.child-pid`), 'utf8'));
         const stopAt = Date.now();
         await h.rig.service.call('conversationStop', { conversationId: conv.id });
         return { conv, messageId: m.messageId, child, stopAt };
       };
+      const failures = [];
+      const want = (ok, label) => { if (!ok) failures.push(label); };
       if (process.env.CHECK5_SWITCH !== '1') {
-        // Release build: the 10 s stop timeout kills and confirms the group.
+        // Release build, part 1: the 10 s stop timeout kills and confirms the group.
         const { conv, messageId, child, stopAt } = await stuck('kill');
         const events = await h.turnEnd(conv.id, messageId, 40000);
         ev.stopToEndMs = Date.now() - stopAt;
@@ -178,57 +180,62 @@ export const checks = [
         const summary = (await h.journal(conv.id)).conversation;
         ev.control = summary.control; ev.phase = summary.phase;
         ev.controlChanges = h.kinds(events, 'controlChanged').map(e => ({ sequence: e.sequence, from: e.data.from, to: e.data.to, reason: e.data.reason }));
-        h.assert.equal(exited?.data.processExitConfirmed, true, 'the 10 s timeout killed and confirmed the group');
-        h.assert.equal(ev.childAlive, false, 'the child that outlived the leader is gone');
-        h.assert.equal(summary.control, 'stopped');
-        h.assert.ok(ev.controlChanges.find(c => c.to === 'stopped')?.sequence > exited.sequence, 'control becomes stopped only after exited');
-        return { status: 'pass', note: 'no-switch half (release build). The switch half runs with the e2e-tests build: results-check5-e2e.json.' };
+        want(exited?.data.processExitConfirmed === true, 'the 10 s timeout killed and confirmed the group');
+        want(ev.childAlive === false, 'the child that outlived the leader is gone');
+        want(summary.control === 'stopped', 'control is stopped');
+        want(ev.controlChanges.find(c => c.to === 'stopped')?.sequence > exited?.sequence, 'control becomes stopped only after exited');
+        // Release build, part 2: the leader exits on Stop, its child keeps the
+        // group alive (plan 5.3's usual unconfirmed case), then recovery.
+        await recover('deadLeader', { exitOnInterrupt: true }, want, ev.deadLeader = {});
+        if (failures.length) throw new Error(failures.join('; '));
+        return { status: 'pass', note: 'release build: kill path, and dead leader with a live group through review, terminate, fork and a service restart. The leader-alive path needs the e2e build: results-check5-e2e.json. The Windows half needs the Windows runner and was not run.' };
       }
-      // e2e-tests build with CHROME_USE_E2E_SKIP_STOP_KILL=1 in the service environment.
-      const a = await stuck('switch');
-      const ua = await h.waitEvent(a.conv.id, 'processUnconfirmed', () => true, 40000);
-      ev.unconfirmed = ua.data;
-      const sa = (await h.journal(a.conv.id)).conversation;
-      ev.control = sa.control; ev.phase = sa.phase;
-      h.assert.equal(sa.control, 'unknown');
-      h.assert.ok(alive(a.child), 'the tree is still alive');
-      const review = await h.rig.service.call('conversationRecoveryReview', { conversationId: a.conv.id });
-      ev.reviewAlive = { process: review.process, actions: review.actions?.length, unresolved: review.unresolved };
-      h.assert.equal(review.process.state, 'alive', 'review proves the group alive');
-      const forkEarly = await h.rig.service.tryCall('conversationRecoveryFork', { conversationId: a.conv.id });
-      ev.forkWhileAlive = forkEarly;
-      h.assert.equal(forkEarly.ok, false, 'fork is refused while alive');
-      const term = await h.rig.service.call('conversationRecoveryTerminate', { conversationId: a.conv.id });
-      ev.terminate = term;
-      h.assert.equal(term.confirmed, true, 'terminate confirms the whole group gone');
-      h.assert.equal(alive(a.child), false, 'the child is gone');
-      const after = await h.rig.service.call('conversationRecoveryReview', { conversationId: a.conv.id });
-      ev.reviewAfter = after.process;
-      h.assert.equal(after.process.state, 'exited');
-      const fork = await h.rig.service.call('conversationRecoveryFork', { conversationId: a.conv.id });
-      ev.fork = { forkedFrom: fork.forkedFrom, id: fork.conversation.id, queued: fork.conversation.queued, phase: fork.conversation.phase };
-      const fe = await h.events(fork.conversation.id);
-      ev.forkKinds = fe.map(e => e.kind);
-      h.assert.equal(fork.forkedFrom, a.conv.id);
-      h.assert.equal(fe[0]?.kind, 'recoveryContext', 'the fork starts with recoveryContext');
-      h.assert.ok(!fe.some(e => ['user', 'turnStarted', 'ready'].includes(e.kind)), 'the fork sends nothing');
-      h.assert.equal(fork.conversation.queued, 0);
-      const orig = await h.events(a.conv.id);
-      h.assert.ok(orig.some(e => e.kind === 'recoveryTerminated' && e.data.confirmed === true) && orig.some(e => e.kind === 'recoveryForked'), 'recoveryTerminated and recoveryForked journaled');
-      // Restart the service with a second group still alive: review still proves it.
-      const b = await stuck('restart');
-      await h.waitEvent(b.conv.id, 'processUnconfirmed', () => true, 40000);
-      const { stopService, startService } = await import('./rig.mjs');
-      await stopService(h.rig);
-      await startService(h.rig);
-      h.assert.ok(alive(b.child), 'the group survived the service restart');
-      const rb = await h.rig.service.call('conversationRecoveryReview', { conversationId: b.conv.id });
-      ev.reviewAfterRestart = rb.process;
-      h.assert.equal(rb.process.state, 'alive', 'after a restart the review still proves ownership');
-      const tb = await h.rig.service.call('conversationRecoveryTerminate', { conversationId: b.conv.id });
-      ev.terminateAfterRestart = tb;
-      h.assert.equal(tb.confirmed, true);
-      return { status: 'pass', note: 'e2e-tests build with CHROME_USE_E2E_SKIP_STOP_KILL=1. The Windows half (unknown after restart) needs the Windows runner and was not run here.' };
+      // e2e-tests build with CHROME_USE_E2E_SKIP_STOP_KILL=1: the leader itself stays alive.
+      await recover('leaderAlive', { ignoreInterrupt: true }, want, ev.leaderAlive = {});
+      if (failures.length) throw new Error(failures.join('; '));
+      return { status: 'pass', note: 'e2e-tests build with CHROME_USE_E2E_SKIP_STOP_KILL=1 (leader left running).' };
+
+      async function recover(label, flags, want, r) {
+        const a = await stuck(label, flags);
+        const ua = await h.waitEvent(a.conv.id, 'processUnconfirmed', () => true, 40000).catch(() => null);
+        r.unconfirmed = ua?.data;
+        const sa = (await h.journal(a.conv.id)).conversation;
+        r.control = sa.control; r.phase = sa.phase;
+        want(ua && sa.control === 'unknown', `${label}: processUnconfirmed and control unknown`);
+        want(alive(a.child), `${label}: the group is still alive`);
+        const review = await h.rig.service.call('conversationRecoveryReview', { conversationId: a.conv.id });
+        r.review = { process: review.process, actions: review.actions?.length, unresolved: review.unresolved };
+        want(review.process.state === 'alive', `${label}: review proves the group alive`);
+        const forkEarly = await h.rig.service.tryCall('conversationRecoveryFork', { conversationId: a.conv.id });
+        r.forkWhileAlive = forkEarly;
+        want(!forkEarly.ok, `${label}: fork is refused while alive`);
+        if (review.process.state !== 'alive') { try { process.kill(a.child, 'SIGKILL'); } catch {} return; }
+        // A service restart with the group still alive: the review still proves it.
+        const { stopService, startService } = await import('./rig.mjs');
+        await stopService(h.rig);
+        await startService(h.rig);
+        want(alive(a.child), `${label}: the group survived the service restart`);
+        const rb = await h.rig.service.call('conversationRecoveryReview', { conversationId: a.conv.id });
+        r.reviewAfterRestart = rb.process;
+        want(rb.process.state === 'alive', `${label}: after a restart the review still proves ownership`);
+        const term = await h.rig.service.tryCall('conversationRecoveryTerminate', { conversationId: a.conv.id });
+        r.terminate = term;
+        want(term.ok && term.result.confirmed === true, `${label}: terminate confirms the whole group gone`);
+        want(!alive(a.child), `${label}: the child is gone`);
+        const after = await h.rig.service.call('conversationRecoveryReview', { conversationId: a.conv.id });
+        r.reviewAfter = after.process;
+        want(after.process.state === 'exited', `${label}: review says exited after terminate`);
+        const fork = await h.rig.service.tryCall('conversationRecoveryFork', { conversationId: a.conv.id });
+        if (!fork.ok) { want(false, `${label}: fork after exit: ${fork.error}`); return; }
+        r.fork = { forkedFrom: fork.result.forkedFrom, id: fork.result.conversation.id, queued: fork.result.conversation.queued };
+        const fe = await h.events(fork.result.conversation.id);
+        r.forkKinds = fe.map(e => e.kind);
+        want(fork.result.forkedFrom === a.conv.id, `${label}: forkedFrom`);
+        want(fe[0]?.kind === 'recoveryContext', `${label}: the fork starts with recoveryContext`);
+        want(!fe.some(e => ['user', 'turnStarted', 'ready'].includes(e.kind)) && fork.result.conversation.queued === 0, `${label}: the fork sends nothing`);
+        const orig = await h.events(a.conv.id);
+        want(orig.some(e => e.kind === 'recoveryTerminated' && e.data.confirmed === true) && orig.some(e => e.kind === 'recoveryForked'), `${label}: recoveryTerminated and recoveryForked journaled`);
+      }
     },
   },
   {
@@ -967,7 +974,8 @@ export const checks = [
           const win = await A2.evaluate(sw.sid, 'chrome.windows.getLastFocused()');
           const { targetId } = await b2.send('Target.createTarget', { url: 'chrome-extension://ciiljdlhdpfckdcfkphgmfalanpdejep/sidepanel.html?opener=1' });
           const os = await A2.attach(targetId);
-          await h.waitFor(() => A2.evaluate(os, 'document.readyState === "complete"'));
+          await h.waitFor(() => A2.evaluate(os, 'document.readyState === "complete" && !!document.body'));
+          await h.sleep(500);
           await A2.evaluate(os, `(() => { const b = document.createElement('button'); b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => chrome.sidePanel.open({ windowId: ${win.id} }); (document.body || document.documentElement).append(b); return true; })()`);
           await A2.click(os, 50, 40);
           const t = await h.waitFor(async () => (await b2.send('Target.getTargets')).targetInfos.find(x => x.url.endsWith('/sidepanel.html')), { label: 'old side panel' });

@@ -1,0 +1,190 @@
+{
+  "startedAt": "2026-10-15T04:20:21.282Z",
+  "hostBin": "/tmp/pa/1015132020/bin/chrome-use-1015132020",
+  "checks": [
+    {
+      "id": 5,
+      "name": "Stop timeout with process alive",
+      "evidence": {
+        "stopToEndMs": 10454,
+        "exited": {
+          "error": "Backend did not confirm interruption; its owned process was terminated",
+          "messageId": "f8d9fa9e-ca84-4cdc-afe5-92d2bf3d25e0",
+          "privacyClass": "public",
+          "processExitConfirmed": true,
+          "processStarted": true
+        },
+        "processUnconfirmed": 0,
+        "childAlive": false,
+        "control": "stopped",
+        "phase": "interrupted",
+        "controlChanges": [
+          {
+            "sequence": 3,
+            "from": "stopped",
+            "to": "agent",
+            "reason": "turnStarted"
+          },
+          {
+            "sequence": 12,
+            "from": "agent",
+            "to": "stopRequested",
+            "reason": "conversationStop"
+          },
+          {
+            "sequence": 18,
+            "from": "stopRequested",
+            "to": "stopped",
+            "reason": "exited"
+          }
+        ],
+        "deadLeader": {
+          "unconfirmed": {
+            "error": "Backend leader exited but its process group could not be confirmed empty",
+            "messageId": "b290852a-30a8-400e-b6b6-6e9c3b5860e3",
+            "privacyClass": "public",
+            "processExitConfirmed": false,
+            "processStarted": true
+          },
+          "control": "unknown",
+          "phase": "recoveryRequired",
+          "review": {
+            "process": {
+              "canFork": false,
+              "canTerminate": true,
+              "pid": 41912,
+              "processStartTime": null,
+              "reason": "1 process of the agent's group are still running in the service session",
+              "state": "alive"
+            },
+            "actions": 1,
+            "unresolved": []
+          },
+          "forkWhileAlive": {
+            "ok": false,
+            "error": "The old agent process is not proven to have exited"
+          },
+          "reviewAfterRestart": {
+            "canFork": false,
+            "canTerminate": true,
+            "pid": 41912,
+            "processStartTime": null,
+            "reason": "1 process of the agent's group are still running in the service session",
+            "state": "alive"
+          },
+          "terminate": {
+            "ok": true,
+            "result": {
+              "confirmed": true,
+              "detail": "The whole process group exited",
+              "schemaVersion": 1
+            }
+          },
+          "reviewAfter": {
+            "canFork": true,
+            "canTerminate": false,
+            "pid": 41912,
+            "processStartTime": null,
+            "reason": "The whole process group is gone",
+            "state": "exited"
+          },
+          "fork": {
+            "forkedFrom": "00387d33-3be3-4ab0-b4b1-95f1cf81ef02",
+            "id": "05869c97-5273-4f83-869e-11f3d43691f9",
+            "queued": 0
+          },
+          "forkKinds": [
+            "recoveryContext"
+          ]
+        }
+      },
+      "status": "pass",
+      "note": "release build: kill path, and dead leader with a live group through review, terminate, fork and a service restart. The leader-alive path needs the e2e build: results-check5-e2e.json. The Windows half needs the Windows runner and was not run.",
+      "seconds": 21.1
+    },
+    {
+      "id": 15,
+      "name": "Old journal and upgrade retry",
+      "evidence": {
+        "oldKinds": [
+          "user",
+          "ready",
+          "running",
+          "textDelta",
+          "textFinal",
+          "terminal",
+          "exited"
+        ],
+        "readKinds": [
+          "user",
+          "ready",
+          "running",
+          "textDelta",
+          "textFinal",
+          "terminal",
+          "exited"
+        ],
+        "projectedPage": {
+          "tabId": 7,
+          "title": "Page B",
+          "url": "http://127.0.0.1:8910/b?access_token=[redacted]&x=1"
+        },
+        "rawRetry": "ok",
+        "projectedRetry": "ok",
+        "oldLinesIdentical": true,
+        "newTurn": {
+          "outcome": "completed"
+        },
+        "panel": {
+          "file": "panel-check15-upgraded.png",
+          "text": "Conversation\nrun scenario c15old\nNew conversation\nrun scenario c15old\nrun scenario c5deadLeader\nrun scenario c5deadLeader\nrun scenario c5kill\nToo many native agent panel requests\nReady\nfixture-model\nrun scenario c15old\nSent with: Page B · 127.0.0.1:8910\n\nOld build reply.\n\nChecks not recorded\nCompleted\nrun scenario c15new\nActed on: Page A · 127.0.0.1:8910\nBrowser · open\nhttp://127.0.0.1:8910/a\nConfirmed\n\nNew build reply.\n\nNot checked\nCompleted\nMessage\nAttach images\nFull access\nConversation options\nRecord this task\n↑",
+          "transcript": "run scenario c15old\nSent with: Page B · 127.0.0.1:8910\n\nOld build reply.\n\nChecks not recorded\nCompleted\nrun scenario c15new\nActed on: Page A · 127.0.0.1:8910\nBrowser · open\nhttp://127.0.0.1:8910/a\nConfirmed\n\nNew build reply.\n\nNot checked\nCompleted",
+          "turnCards": 2,
+          "tooManyRequestsBanner": true
+        },
+        "panelChecks": [
+          {
+            "label": "old turn shows \"not recorded\" labels",
+            "ok": true
+          }
+        ],
+        "oldExtensionVersion": "0.5.57",
+        "oldExtensionProfile": "cd11f607-da52-4c9f-ba2c-37aed7506535",
+        "oldPanelRich": "run scenario c15old\nPage B\n\nOld build reply.\n\nrun scenario c15new\nBrowser · open\nhttp://127.0.0.1:8910/a\n\nNew build reply.",
+        "oldPanelApproval": "run scenario c15approval",
+        "oldPanelClicked": "Allow once",
+        "oldPanelReply": {
+          "allowed": true,
+          "raw": {
+            "decision": "accept"
+          }
+        }
+      },
+      "status": "pass",
+      "seconds": 32.3
+    }
+  ],
+  "chrome": "Chrome/155.0.8059.39",
+  "hostSha256": "sha256:68dce731ed9b29406e01ca7da6a56b2914536e8cb2c265058506653ff57a92ec",
+  "buildCommit": "36605e69",
+  "extensionTree": "97be9e1a1a7c93d8b5a428a7cddff1dcd733e22c0f1ab22b3077159a56f85f65",
+  "v15214Sha256": "sha256:d77538717467a0fd84b71b4465376d52998b67fa6e641dc0ad1db53b76a7bb41",
+  "v15214ExtensionTree": "815c3c3b7e088d7580f574fe1ceca9124478f7866e13dd945e43519efe464ffc",
+  "profile": "cd11f607-da52-4c9f-ba2c-37aed7506535",
+  "extensionVersion": "0.5.57",
+  "finishedAt": "2026-10-15T04:21:20.487Z",
+  "proxyTimings": {
+    "agentActionBegin": {
+      "n": 1,
+      "p50": 34,
+      "p95": 34,
+      "max": 34
+    },
+    "agentActionReport": {
+      "n": 1,
+      "p50": 11,
+      "p95": 11,
+      "max": 11
+    }
+  }
+}
