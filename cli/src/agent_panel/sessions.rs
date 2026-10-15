@@ -589,6 +589,30 @@ pub(super) fn list_files(
     found
 }
 
+/// Working directories of an agent's newest sessions with when each was
+/// last written, for the panel's list of recent project folders. Only the
+/// start of each file is read; the panel's own sessions are left out.
+pub(super) fn recent_directories(agent: &str, roots: &Roots, limit: usize) -> Vec<(PathBuf, u64)> {
+    session_files(agent, roots)
+        .into_iter()
+        .take(limit)
+        .filter_map(|(_, path, modified)| {
+            let lines = head(&path);
+            let cwd = match agent {
+                "codex" => {
+                    let meta = &lines.iter().find(|r| r["type"] == "session_meta")?["payload"];
+                    if meta["originator"] == "chrome_use_panel" {
+                        return None;
+                    }
+                    meta["cwd"].as_str()
+                }
+                _ => lines.iter().find_map(|r| r["cwd"].as_str()),
+            }?;
+            Some((PathBuf::from(cwd), millis(modified)))
+        })
+        .collect()
+}
+
 /// One file-based session by id, its file confirmed to be inside the agent's
 /// session directory.
 pub(super) fn find_file(agent: &str, roots: &Roots, id: &str) -> Result<Session, String> {

@@ -19,6 +19,9 @@ pub(super) struct Setup {
     /// The continued CLI session, when the conversation resumed one that
     /// was started outside the panel.
     pub external: Option<super::conversation::External>,
+    /// The user's project directory the agent works in, when the
+    /// conversation has one; panel files stay in `workspace`.
+    pub project: Option<PathBuf>,
     pub profile: String,
     pub browser_session: String,
     pub backend_session: Option<String>,
@@ -32,16 +35,14 @@ pub(super) struct Setup {
     pub generation: u64,
 }
 impl Setup {
-    /// Where the CLI process runs: a continued Claude or Codex session's own
-    /// directory when it still exists, else the conversation folder. Pi
-    /// reads its MCP servers from the directory it runs in, and OpenCode is
-    /// told the session's directory in the protocol, so both stay in the
-    /// conversation folder: the user's project is never written to.
+    /// Where the CLI process runs: Claude and Codex run in the
+    /// conversation's project directory when it still exists, else in the
+    /// conversation folder. Pi reads its MCP servers from the directory it
+    /// runs in, and OpenCode is told the project in the protocol, so both
+    /// stay in the conversation folder: no panel file is written into the
+    /// user's project.
     pub(super) fn process_directory(&self) -> &std::path::Path {
-        match (
-            self.agent_id.as_str(),
-            self.external.as_ref().and_then(|e| e.cwd.as_ref()),
-        ) {
+        match (self.agent_id.as_str(), self.project.as_ref()) {
             ("claude" | "codex", Some(cwd)) if cwd.is_dir() => cwd,
             _ => &self.workspace,
         }
@@ -1354,6 +1355,7 @@ mod tests {
             executable: "codex".into(),
             workspace: "/WORK".into(),
             external: None,
+            project: None,
             profile: "default".into(),
             browser_session: "panel-test".into(),
             backend_session: None,
@@ -1375,10 +1377,7 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let mut s = setup(false, None);
         assert_eq!(s.process_directory(), Path::new("/WORK"));
-        s.external = Some(super::super::conversation::External {
-            cwd: Some(project.path().into()),
-            session_file: None,
-        });
+        s.project = Some(project.path().into());
         for (agent, expected) in [
             ("claude", project.path()),
             ("codex", project.path()),
@@ -1392,7 +1391,7 @@ mod tests {
         }
         // A directory that no longer exists falls back to the conversation's.
         s.agent_id = "claude".into();
-        s.external.as_mut().unwrap().cwd = Some(project.path().join("gone"));
+        s.project = Some(project.path().join("gone"));
         assert_eq!(s.process_directory(), Path::new("/WORK"));
     }
 

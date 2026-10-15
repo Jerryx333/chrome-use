@@ -27,6 +27,7 @@ mod inspect;
 mod inspection;
 mod options;
 mod progress;
+mod projects;
 mod recovery;
 mod redact;
 mod schedules;
@@ -577,7 +578,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"heicConvert":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"inspectReplies":1,"requestRevision":1,"turnEvidence":1,"artifacts":1,"recovery":1,"recording":1,"sessionResume":1,"chatAgents":CHAT_AGENTS})
+    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"heicConvert":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"inspectReplies":1,"requestRevision":1,"turnEvidence":1,"artifacts":1,"recovery":1,"recording":1,"sessionResume":1,"projectDirectory":1,"chatAgents":CHAT_AGENTS})
 }
 
 /// `chrome-use inspect link|unlink|list`; returns the process exit code.
@@ -606,6 +607,8 @@ pub fn handle_for_profile(
         | "agentInspect"
         | "conversationCreate"
         | "conversationSessionList"
+        | "conversationProjectList"
+        | "conversationProjectChoose"
         | "conversationResume"
         | "conversationRead"
         | "conversationSend"
@@ -690,6 +693,7 @@ mod tests {
         assert_eq!(c["inspectReplies"], 1);
         assert_eq!(c["chatAgents"], json!(CHAT_AGENTS));
         assert_eq!(c["sessionResume"], 1);
+        assert_eq!(c["projectDirectory"], 1);
     }
 
     #[test]

@@ -164,6 +164,9 @@ fn operation_seconds(operation: &str) -> u64 {
         "conversationRecoveryReview" | "conversationRecoveryTerminate" => 15,
         // Listing or importing an OpenCode session starts OpenCode.
         "conversationSessionList" => 30,
+        // The user is choosing a folder in a native dialog.
+        "conversationProjectChoose" => 300,
+        "conversationProjectList" => 20,
         "conversationResume" => 45,
         _ => 10,
     }
@@ -562,6 +565,16 @@ pub(super) fn call(
         },
         params.clone(),
     )
+}
+
+/// A project folder chosen for a new conversation, checked.
+fn project_directory(agent: &str, raw: &str) -> Result<PathBuf, String> {
+    // Pi reads its MCP servers from the folder it runs in, so it would need
+    // a file written into the project.
+    if agent == "pi" {
+        return Err("Pi conversations work in their private folder; a project folder is not supported for Pi yet".into());
+    }
+    super::projects::validate(raw, &data_root(&DiscoveryContext::current()?)?)
 }
 
 /// The agent of a session listing or import: a panel agent, with an
@@ -1708,6 +1721,9 @@ impl Engine {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Create {
     agent_id: String,
+    /// The user's project folder the agent works in; absent: the
+    /// conversation's private folder.
+    project: Option<String>,
     #[serde(default)]
     options: ModelOptions,
     model: Option<String>,
@@ -2069,6 +2085,9 @@ async fn dispatch(
             p.options.validate(&p.agent_id)?;
             chat.options = p.options;
             chat.full_access = p.full_access;
+            if let Some(raw) = &p.project {
+                chat.project = Some(project_directory(&p.agent_id, raw)?);
+            }
             let mut e = engine.lock().await;
             e.store.create(&chat)?;
             let result = chat.summary();
@@ -2112,6 +2131,68 @@ async fn dispatch(
                 .map(|s| session_row(s, bound.get(&s.id)))
                 .collect();
             Ok(json!({"schemaVersion":1,"agentId":p.agent_id,"supported":true,"sessions":rows}))
+        }
+        "conversationProjectList" => {
+            if params != &json!({}) {
+                return Err("conversationProjectList takes no parameters".into());
+            }
+            let (panel, roots) = {
+                let e = engine.lock().await;
+                let panel: Vec<_> = e
+                    .store
+                    .list()
+                    .into_iter()
+                    .filter_map(|row| {
+                        Some((
+                            PathBuf::from(row["project"].as_str()?),
+                            "panel",
+                            row["updated"].as_u64().unwrap_or(0),
+                            None,
+                        ))
+                    })
+                    .collect();
+                (panel, e.session_roots.clone())
+            };
+            let panel_root = data_root(&DiscoveryContext::current()?)?;
+            let roots = roots.map_or_else(sessions::Roots::current, Ok)?;
+            let root = panel_root.clone();
+            let rows = tokio::task::spawn_blocking(move || {
+                let mut seen = panel;
+                for agent in ["claude", "codex"] {
+                    seen.extend(
+                        sessions::recent_directories(agent, &roots, 60)
+                            .into_iter()
+                            .map(|(path, at)| (path, agent, at, None)),
+                    );
+                }
+                seen.extend(
+                    super::inspect::bound_projects()
+                        .into_iter()
+                        .map(|(path, site, at)| (path, "site", at, Some(site))),
+                );
+                super::projects::merge(seen, &root)
+            })
+            .await
+            .map_err(|_| "Project folders could not be listed")?;
+            Ok(
+                json!({"schemaVersion":1,"projects":rows.iter().map(super::projects::row).collect::<Vec<_>>()}),
+            )
+        }
+        "conversationProjectChoose" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Choose {
+                prompt: Option<String>,
+            }
+            let p: Choose = serde_json::from_value(params.clone())
+                .map_err(|_| "conversationProjectChoose takes an optional prompt")?;
+            let prompt = p
+                .prompt
+                .filter(|t| {
+                    !t.trim().is_empty() && t.len() <= 200 && !t.chars().any(char::is_control)
+                })
+                .unwrap_or_else(|| "Choose the project folder for this conversation".into());
+            super::projects::choose(&prompt, &data_root(&DiscoveryContext::current()?)?).await
         }
         "conversationResume" => {
             let p: Resume = serde_json::from_value(params.clone()).map_err(|_| {
@@ -2169,6 +2250,11 @@ async fn dispatch(
             chat.model = session.model.clone();
             if let Some(title) = session.title.as_deref().and_then(redacted_line) {
                 chat.title = title.chars().take(80).collect();
+            }
+            // The session's directory is the conversation's project; Pi
+            // runs beside its MCP configuration instead (see Setup).
+            if p.agent_id != "pi" {
+                chat.project = session.cwd.clone();
             }
             chat.external = Some(External {
                 cwd: session.cwd.clone(),
@@ -2981,6 +3067,7 @@ fn start<'a>(
             executable,
             workspace,
             external: chat.external,
+            project: chat.project,
             profile,
             browser_session: format!("panel-{id}"),
             backend_session: chat.session_id,
@@ -3774,6 +3861,11 @@ mod schedule_tests {
             let external = chat.external.as_ref().unwrap();
             assert_eq!(external.cwd.as_deref(), Some(project.as_path()));
             assert!(external.session_file.is_none());
+            assert_eq!(
+                chat.project.as_deref(),
+                Some(project.as_path()),
+                "(C): the session's folder is the project"
+            );
         }
 
         let read = dispatch(
@@ -3849,6 +3941,64 @@ mod schedule_tests {
         assert_eq!(deleted["deleted"]["cliHistory"]["kept"], "external");
         assert_eq!(deleted["deleted"]["cliHistory"]["removed"], json!([]));
         assert_eq!(std::fs::read(&file).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn a_conversation_can_work_in_a_project_folder_chosen_at_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("app");
+        std::fs::create_dir(&project).unwrap();
+        let engine = engine(dir.path());
+        let created = dispatch(
+            &engine,
+            "conversationCreate",
+            &json!({"agentId":"claude","project":project}),
+        )
+        .await
+        .unwrap();
+        let canonical = project.canonicalize().unwrap();
+        assert_eq!(created["conversation"]["project"], json!(canonical));
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        {
+            let mut e = engine.lock().await;
+            assert_eq!(
+                e.chat(&id).unwrap().project.as_deref(),
+                Some(canonical.as_path())
+            );
+        }
+        // Remembered and offered again.
+        let listed = dispatch(&engine, "conversationProjectList", &json!({}))
+            .await
+            .unwrap();
+        let row = listed["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["path"] == json!(canonical))
+            .cloned()
+            .unwrap();
+        assert!(row["sources"].as_array().unwrap().contains(&json!("panel")));
+        // The default stays the private folder.
+        let plain = dispatch(&engine, "conversationCreate", &json!({"agentId":"codex"}))
+            .await
+            .unwrap();
+        assert!(plain["conversation"].get("project").is_none());
+        for bad in [
+            json!({"agentId":"claude","project":"relative"}),
+            json!({"agentId":"claude","project":dir.path().join("missing")}),
+            json!({"agentId":"claude","project":"/"}),
+            json!({"agentId":"pi","project":project}),
+        ] {
+            assert!(
+                dispatch(&engine, "conversationCreate", &bad).await.is_err(),
+                "{bad}"
+            );
+        }
+        assert!(
+            dispatch(&engine, "conversationProjectChoose", &json!({"path":"/"}))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

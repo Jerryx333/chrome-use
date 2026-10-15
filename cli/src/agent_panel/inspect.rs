@@ -27,6 +27,7 @@ mod config;
 mod facts;
 #[cfg(test)]
 mod match_tests;
+mod project;
 mod replies;
 mod resolve;
 mod scope;
@@ -35,6 +36,7 @@ mod testkit;
 
 pub(super) use cli::run as run_cli;
 use facts::{Facts, Probe, Relation};
+pub(super) use project::bound_projects;
 use scope::Target;
 
 const MAX_BINDINGS: usize = 256;
@@ -67,6 +69,8 @@ pub(super) const OPERATIONS: &[&str] = &[
     "inspectLaunchCommand",
     "inspectDeliveryStatus",
     "inspectReplies",
+    "inspectProject",
+    "inspectProjectBind",
 ];
 
 /// `profile` is the Chrome profile the native host was bound to; it picks
@@ -1758,6 +1762,8 @@ impl Inspect<'_> {
                 Ok(json!({ "delivery": delivery }))
             }
             "inspectReplies" => self.replies(parse(operation, params)?),
+            "inspectProject" => self.project(parse(operation, params)?),
+            "inspectProjectBind" => self.project_bind(parse(operation, params)?),
             _ => Err(format!("Unsupported agent panel operation: {operation}")),
         }
     }
@@ -2823,6 +2829,72 @@ mod tests {
         );
         let again = call(&w, &sys, "inspectUnbind", json!({"origin": ORIGIN})).unwrap();
         assert_eq!(again["existed"], false);
+    }
+
+    #[test]
+    fn a_site_remembers_the_project_its_panel_conversations_use() {
+        let w = world();
+        let sys = Fake::default();
+        let none = call(
+            &w,
+            &sys,
+            "inspectProject",
+            json!({"origin": ORIGIN, "pagePath": "/app"}),
+        )
+        .unwrap();
+        assert_eq!(none["binding"], Value::Null);
+        // Nothing was shown, so nothing is replaced.
+        let bound = call(
+            &w,
+            &sys,
+            "inspectProjectBind",
+            json!({"origin": ORIGIN, "root": w.project, "replaces": null}),
+        )
+        .unwrap();
+        let fingerprint = bound["binding"]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let found = call(
+            &w,
+            &sys,
+            "inspectProject",
+            json!({"origin": ORIGIN, "pagePath": "/app/x"}),
+        )
+        .unwrap();
+        assert_eq!(found["binding"]["root"], json!(w.project));
+        assert_eq!(found["binding"]["exists"], true);
+        assert_eq!(found["binding"]["fingerprint"], json!(fingerprint));
+        // The same shared store the options page lists.
+        let list = call(&w, &sys, "inspectBindings", json!({})).unwrap();
+        assert_eq!(list["bindings"].as_array().unwrap().len(), 1);
+        // A stale view never overwrites a binding that changed meanwhile.
+        let other = w.project.join("src");
+        assert!(call(
+            &w,
+            &sys,
+            "inspectProjectBind",
+            json!({"origin": ORIGIN, "root": other, "replaces": null})
+        )
+        .is_err());
+        let moved = call(
+            &w,
+            &sys,
+            "inspectProjectBind",
+            json!({"origin": ORIGIN, "root": other, "replaces": fingerprint}),
+        )
+        .unwrap();
+        assert_eq!(moved["binding"]["root"], json!(other));
+        for bad in [
+            json!({"origin": "not a url", "root": w.project, "replaces": null}),
+            json!({"origin": ORIGIN, "root": "relative", "replaces": null}),
+            json!({"origin": ORIGIN, "root": w.project}),
+        ] {
+            assert!(
+                call(&w, &sys, "inspectProjectBind", bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
