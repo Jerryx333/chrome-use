@@ -4089,7 +4089,7 @@ async fn nm_host_main() {
     let (to_ext, mut to_ext_rx) = mpsc::channel::<Vec<u8>>(4096);
     // Panel filesystem work must not block relay replies or accept unbounded
     // work. This gate is separate from CDP and never prepares a browser.
-    let panel_jobs = Arc::new(tokio::sync::Semaphore::new(4));
+    let panel_jobs = Arc::new(tokio::sync::Semaphore::new(PANEL_JOBS));
 
     // Single writer to Chrome (extension) over stdout, native-messaging framed.
     tokio::spawn(async move {
@@ -4168,21 +4168,16 @@ async fn nm_host_main() {
             let params = v.get("params").cloned().unwrap_or(serde_json::Value::Null);
             let panel_profile = bound_profile_id.clone();
             let tx = to_ext.clone();
-            let permit = panel_jobs.clone().try_acquire_owned();
+            let jobs = panel_jobs.clone();
             tokio::spawn(async move {
-                let result = match permit {
-                    Ok(permit) => tokio::task::spawn_blocking(move || {
-                        let _permit = permit;
-                        crate::agent_panel::handle_for_profile(
-                            &operation,
-                            &params,
-                            panel_profile.as_deref(),
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|_| Err("Agent panel service failed".into())),
-                    Err(_) => Err("Too many native agent panel requests".into()),
-                };
+                let result = run_panel_job(jobs, PANEL_QUEUE_WAIT, move || {
+                    crate::agent_panel::handle_for_profile(
+                        &operation,
+                        &params,
+                        panel_profile.as_deref(),
+                    )
+                })
+                .await;
                 let mut reply =
                     serde_json::json!({"method": "agentPanelReply", "requestId": request_id});
                 match result {
@@ -4436,8 +4431,70 @@ async fn handle_cdp_client(
     nm_log("[nm-host] cdp client disconnected");
 }
 
+/// Panel operations the native host runs at once. The panel bridge keeps at
+/// most 16 requests pending (`agent-panel-bridge.js` `maxPending`), so a
+/// first open that reads the list, the journal and artifact chunks together
+/// fits; further work waits for a slot instead of failing.
+const PANEL_JOBS: usize = 16;
+/// How long a panel operation may wait for a slot before it is refused.
+const PANEL_QUEUE_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Run one blocking panel operation under the host's job limit, waiting up
+/// to `wait` for a slot.
+async fn run_panel_job<F>(
+    jobs: std::sync::Arc<tokio::sync::Semaphore>,
+    wait: std::time::Duration,
+    job: F,
+) -> Result<serde_json::Value, String>
+where
+    F: FnOnce() -> Result<serde_json::Value, String> + Send + 'static,
+{
+    let permit = match tokio::time::timeout(wait, jobs.acquire_owned()).await {
+        Ok(Ok(permit)) => permit,
+        _ => return Err("Too many native agent panel requests".into()),
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        job()
+    })
+    .await
+    .unwrap_or_else(|_| Err("Agent panel service failed".into()))
+}
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn panel_jobs_beyond_the_limit_wait_for_a_slot_instead_of_failing() {
+        let jobs = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let first = tokio::spawn(run_panel_job(
+            jobs.clone(),
+            std::time::Duration::from_secs(5),
+            move || {
+                let _ = hold.recv();
+                Ok(serde_json::json!(1))
+            },
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let second = tokio::spawn(run_panel_job(
+            jobs.clone(),
+            std::time::Duration::from_secs(5),
+            || Ok(serde_json::json!(2)),
+        ));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        release.send(()).unwrap();
+        assert_eq!(first.await.unwrap().unwrap(), 1);
+        assert_eq!(second.await.unwrap().unwrap(), 2);
+        // A slot that never frees in time is refused, not hung.
+        let _held = jobs.clone().acquire_owned().await.unwrap();
+        let refused = run_panel_job(jobs, std::time::Duration::from_millis(50), || {
+            Ok(serde_json::json!(3))
+        })
+        .await;
+        assert_eq!(refused.unwrap_err(), "Too many native agent panel requests");
+        assert_eq!(PANEL_JOBS, 16);
+    }
+
     #[test]
     fn live_host_notice_distinguishes_installed_and_running_versions() {
         let mut health = super::RelayHealth {
