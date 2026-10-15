@@ -1,0 +1,4 @@
+{"id":"panel-state","type":"get_state"}
+{"type":"extension_ui_response","id":"e8a4eea9-a0e2-4696-ae29-3e326358e15f","cancelled":true}
+{"id":"panel-turn-fixture","type":"prompt","message":"First call the chrome_use_read tool, then call the chrome_use_wait tool once. If a tool call fails or times out, do not call it again. Finally answer with one short line that starts with the word done.","images":[]}
+{"id":"panel-turn-second","type":"prompt","message":"Reply with the single word ok. Do not call any tool.","images":[]}

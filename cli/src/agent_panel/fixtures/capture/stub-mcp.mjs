@@ -3,7 +3,10 @@
 // structuredContent; chrome_use_shot returns a marker and a 1x1 PNG image.
 // Every request and response is appended to $STUB_MCP_LOG when set.
 // STUB_MCP_NO_STRUCTURED=1 omits structuredContent; STUB_MCP_OUTPUT_SCHEMA=1
-// declares an outputSchema on chrome_use_read.
+// declares an outputSchema on chrome_use_read. STUB_MCP_SLEEP_MS adds
+// chrome_use_wait, which answers only after that many milliseconds, even when
+// the client cancelled the call meanwhile (the point is to see what the client
+// does with a late reply). Log lines carry `at` (epoch ms).
 import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
@@ -11,9 +14,11 @@ const READ_ID = "11111111-2222-4333-8444-555555555555";
 const SHOT_ID = "99999999-8888-4777-8666-555555555555";
 const PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const SLEEP_MS = Number(process.env.STUB_MCP_SLEEP_MS || 0);
+const WAIT_ID = "77777777-6666-4555-8444-333333333333";
 const log = (direction, value) => {
   if (process.env.STUB_MCP_LOG)
-    appendFileSync(process.env.STUB_MCP_LOG, JSON.stringify({ direction, value }) + "\n");
+    appendFileSync(process.env.STUB_MCP_LOG, JSON.stringify({ at: Date.now(), direction, value }) + "\n");
 };
 const send = (value) => {
   log("out", value);
@@ -45,8 +50,18 @@ const tools = [
     description: "Take a screenshot of the current page. Returns an image.",
     inputSchema: { type: "object", properties: {} },
   },
+  ...(SLEEP_MS
+    ? [{
+        name: "chrome_use_wait",
+        description: "Wait for the page to settle. Returns a chrome-use action marker.",
+        inputSchema: { type: "object", properties: {} },
+      }]
+    : []),
 ];
 
+process.stdout.on("error", (error) => log("event", `stdout error: ${error.code}`));
+process.stdin.on("close", () => log("event", "stdin closed"));
+process.on("SIGTERM", () => { log("event", "SIGTERM"); process.exit(0); });
 createInterface({ input: process.stdin }).on("line", (line) => {
   if (!line.trim()) return;
   const message = JSON.parse(line);
@@ -91,5 +106,21 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         isError: false,
       },
     });
+  if (method === "tools/call" && params?.name === "chrome_use_wait")
+    return setTimeout(() => {
+      try {
+        send({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: marker(WAIT_ID) }, { type: "text", text: "The page settled." }],
+            ...structured(WAIT_ID),
+            isError: false,
+          },
+        });
+      } catch (error) {
+        log("event", `late reply failed: ${error.message}`);
+      }
+    }, SLEEP_MS);
   send({ jsonrpc: "2.0", id, error: { code: -32601, message: `unsupported ${method}` } });
 });

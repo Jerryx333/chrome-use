@@ -25,6 +25,7 @@ driver sends one cheap compaction request.
 | `<backend>-tool-marker.stdin.jsonl` | the lines the driver wrote to the backend |
 | `*-no-structured.jsonl` | same run with `STUB_MCP_NO_STRUCTURED=1` (no `structuredContent`) |
 | `codex-tool-marker-full-access.jsonl` | Codex with `approvalPolicy: never`, `sandbox: danger-full-access` |
+| `<backend>-mcp-timeout.jsonl` (+ `.stdin.jsonl`, `.mcp.jsonl`) | MCP client-timeout run (see "MCP client timeout" below); `.mcp.jsonl` is the stub's log |
 | `capture/drive.mjs` | driver: launches a backend and speaks its protocol |
 | `capture/stub-mcp.mjs` | the stub MCP server |
 | `capture/redact.mjs` | raw capture to committed fixture |
@@ -183,3 +184,70 @@ tools were "not registered" and called nothing, even though the server log shows
   tool_search tool, but neither is active", yet `exposure: "direct"` tools were called normally.
 - Pi provider failure (the two 503 runs above): every retry produced `stopReason: "error"`, then
   `auto_retry_start` ×3, `auto_retry_end {success: false}`, and finally `agent_settled {aborted: false}`.
+
+## MCP client timeout (plan D1a rule 3)
+
+Captured 2026-10-15, same versions and hosts as above. The question: when the
+backend's MCP client gives up on a chrome_use call, can the turn complete while
+the MCP server is still working on that call?
+
+Setup (`MCP_TIMEOUT_S=5`): the stub adds `chrome_use_wait`, which replies only
+after 20 s (`STUB_MCP_SLEEP_MS`), even if the client cancelled it. The client
+timeout is set to 5 s through the channel the panel uses for its 120 s value:
+Codex `tool_timeout_sec` in the `chrome_use` server entry, Claude
+`MCP_TOOL_TIMEOUT=5000` in the environment, Pi `timeout: 5` in `.pi/mcp.json`.
+OpenCode's ACP `mcpServers` entry has no timeout field, so the run used
+`OPENCODE_CONFIG_CONTENT={"experimental":{"mcp_timeout":5000}}`. The prompt
+asks for `chrome_use_read` (a clean call), then `chrome_use_wait` once, no
+retry, then a line starting with `done`. After the first turn ends the driver
+waits 25 s (past the stub's late reply) and sends a second, tool-free turn.
+
+The driver writes `turn ended (...)` into the stub log when it sees the
+terminal event (Codex `turn/completed`, Claude `result`, Pi `agent_settled`,
+OpenCode the `session/prompt` response). The log is one file appended in
+order, and every line has `at` (epoch ms, one clock), so `.mcp.jsonl` shows
+whether the turn ended before the stub answered.
+
+```sh
+MCP_TIMEOUT_S=5 node capture/drive.mjs codex . mcptimeout                     # build host
+MCP_TIMEOUT_S=5 node capture/drive.mjs claude .                               # laptop
+MCP_TIMEOUT_S=5 PI_MODEL=claude/claude-haiku-5-5 node capture/drive.mjs pi .  # laptop
+MCP_TIMEOUT_S=5 XDG_DATA_HOME=$PWD/xdg BACKEND_BIN=/private/tmp/chrome-use-opencode-2.0.25 \
+  node capture/drive.mjs opencode . mcptimeout                                # build host
+OPENCODE_CONFIG_CONTENT={} STUB_MCP_SLEEP_MS=150000 MCP_TIMEOUT_S=5 XDG_DATA_HOME=... BACKEND_BIN=... \
+  node capture/drive.mjs opencode . mcptimeout-default                        # build host
+```
+
+| backend | timeout honoured | timed-out call as reported | sent to the MCP server | turn end vs stub reply | late reply |
+|---|---|---|---|---|---|
+| Codex 0.162.1 | yes, `durationMs: 5003` | `item/completed` `mcpToolCall` `status: "failed"`, `error.message` "... timed out awaiting tools/call after 5s" | nothing (no `notifications/cancelled`) | `turn/completed` `completed` 9.5 s after the call, 10.5 s before the reply | ignored; no line mentions the call again, second turn normal |
+| Claude 2.1.300 | yes, 5.0 s | `user` `tool_result` `is_error: true`, "MCP server \"chrome_use\" tool \"chrome_use_wait\" timed out after 5s" | `notifications/cancelled {requestId, reason: "SdkError: Request timed out"}` at 5.0 s | `result` `success` 8.8 s after the call, 11.2 s before the reply | ignored, as Codex |
+| Pi 1.1.0 | yes, 5.0 s (`timeout` is in seconds) | `tool_execution_end` `isError: true`, "MCP request timed out after 5000ms" | `notifications/cancelled {requestId, reason: "Request timed out"}` at 5.0 s | `agent_settled` 6.2 s after the call, 13.8 s before the reply | ignored, as Codex |
+| OpenCode 2.0.25 | **no**: the call ran the full 20 s | codemode `execute` `completed`, inner `chrome_use.chrome_use_wait` `completed` | nothing | the stub replied first; the turn ended 8.6 s later | n/a |
+
+OpenCode without any timeout setting, as the panel runs it
+(`opencode-mcp-timeout-default.*`, `OPENCODE_CONFIG_CONTENT={}`,
+`STUB_MCP_SLEEP_MS=150000`): the call ran the full 150 s, nothing was sent to the
+stub, and the turn ended 54 s after the reply. So up to 150 s OpenCode does not
+complete a turn with a call in flight; whether it has a longer built-in limit
+was not tested (the binary contains a `DEFAULT_TIMEOUT=600000`, owner unknown).
+
+In every backend that applies the timeout, the timed-out call is **closed**
+before the terminal event: the panel's adapters turn it into a `tool` notice
+with `completed: true` (`codex_tool_notice`, `claude_tool_results`,
+`pi_tool_end`), so the turn has no open chrome_use tool at its end and the
+completed-with-open-tools guard (D1a rule 2) cannot see that the MCP server is
+still running the call. The turn itself is an ordinary `completed`/`success`.
+The only protocol trace is the error text (Codex "timed out awaiting
+tools/call", Claude "timed out after", Pi "MCP request timed out").
+
+Verdict for the generation-reuse allowlist (`GENERATION_REUSE` in
+`service.rs`): **no version qualifies.** Codex 0.162.1, Claude 2.1.300 and
+Pi 1.1.0 complete a turn with a chrome_use call still in flight past the
+client timeout, and the guard does not detect it. Pi also reports no version
+in its handshake. OpenCode 2.0.25 did not end a turn early in 150 s, but its
+limit, if any, is unknown and the panel cannot set it, and the service already
+retires any backend without a client timeout (`mcpToolTimeoutSecs: null`). The tests
+`mcp_client_timeouts_complete_the_turn_with_the_call_still_running` and
+`opencode_waits_for_a_slow_mcp_call` in `backend.rs` check these facts against
+the fixtures.

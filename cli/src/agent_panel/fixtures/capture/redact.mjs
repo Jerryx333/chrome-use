@@ -39,10 +39,10 @@ for (const raw of readFileSync(input, "utf8").split("\n")) {
 const text = lines
   .join("\n")
   .replace(/[A-Za-z0-9._%+-]+@gmail\.com/g, "user@example.invalid")
-  .replace(/\/private\/tmp\/claude-[^"\\\s]*?\/scratchpad\/cap(?:190)?/g, "/WORK")
+  .replace(/\/private\/tmp\/claude-[^"\\\s]*?\/scratchpad\/[A-Za-z0-9_-]+/g, "/WORK")
   .replace(/\/Users\/leo\/fixture-capture\/out/g, "/WORK")
   .replace(/\/Users\/leo\/fixture-capture/g, "/CAPTURE")
-  .replace(/-private-tmp-claude-[^/"\\\s]*?-scratchpad-cap(?:190)?-/g, "-WORK-")
+  .replace(/-private-tmp-claude-[^/"\\\s]*?-scratchpad-[A-Za-z0-9_]+-/g, "-WORK-")
   .replace(/\/Users\/leo\b/g, "/Users/USER")
   .replace(/leos-MacBook-Pro\.local/g, "host.local");
 writeFileSync(output, text + "\n");

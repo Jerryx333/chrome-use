@@ -1,0 +1,15 @@
+{"at":1792029750614,"direction":"in","value":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"roots":{}},"clientInfo":{"name":"pi","version":"1.1.0"}}}}
+{"at":1792029750614,"direction":"out","value":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"chrome_use","version":"0.0.0-fixture"}}}}
+{"at":1792029750615,"direction":"in","value":{"jsonrpc":"2.0","method":"notifications/initialized"}}
+{"at":1792029750615,"direction":"in","value":{"jsonrpc":"2.0","id":2,"method":"tools/list"}}
+{"at":1792029750615,"direction":"out","value":{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"chrome_use_read","description":"Read the current page text. Returns a chrome-use action marker.","inputSchema":{"type":"object","properties":{}}},{"name":"chrome_use_shot","description":"Take a screenshot of the current page. Returns an image.","inputSchema":{"type":"object","properties":{}}},{"name":"chrome_use_wait","description":"Wait for the page to settle. Returns a chrome-use action marker.","inputSchema":{"type":"object","properties":{}}}]}}}
+{"at":1792029764172,"direction":"in","value":{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"chrome_use_read","arguments":{},"_meta":{"progressToken":3}}}}
+{"at":1792029764174,"direction":"out","value":{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"chrome-use action 11111111-2222-4333-8444-555555555555"},{"type":"text","text":"Page title: Fixture page. Body: hello from the stub."}],"structuredContent":{"chromeUseAction":{"actionId":"11111111-2222-4333-8444-555555555555"}},"isError":false}}}
+{"at":1792029765252,"direction":"in","value":{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"chrome_use_wait","arguments":{},"_meta":{"progressToken":4}}}}
+{"at":1792029770255,"direction":"in","value":{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":4,"reason":"Request timed out"}}}
+{"at":1792029771488,"direction":"driver","value":"turn ended (turn)"}
+{"at":1792029785255,"direction":"out","value":{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"chrome-use action 77777777-6666-4555-8444-333333333333"},{"type":"text","text":"The page settled."}],"structuredContent":{"chromeUseAction":{"actionId":"77777777-6666-4555-8444-333333333333"}},"isError":false}}}
+{"at":1792029796495,"direction":"driver","value":"second turn sent"}
+{"at":1792029805083,"direction":"driver","value":"turn ended (second)"}
+{"at":1792029808094,"direction":"driver","value":"finish: timeout run done"}
+{"at":1792029809615,"direction":"event","value":"SIGTERM"}

@@ -1649,4 +1649,172 @@ mod tests {
         assert!(server["tool_timeout_sec"].as_u64().unwrap() * 1000 > 5_000);
         const { assert!(MCP_TOOL_TIMEOUT_SECS >= 30) };
     }
+
+    /// Stub log of a `*-mcp-timeout` run: (direction, value) in file order,
+    /// which is time order (the driver notes terminal events in the same file).
+    fn stub_log(name: &str) -> Vec<(String, Value)> {
+        fixture(name)
+            .into_iter()
+            .map(|v| {
+                (
+                    v["direction"].as_str().unwrap().to_string(),
+                    v["value"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Where, in the stub log, the slow call arrived, the client cancelled it,
+    /// the first turn ended and the stub finally answered.
+    struct SlowCall {
+        call: usize,
+        cancelled: Option<usize>,
+        turn_ended: usize,
+        reply: usize,
+    }
+    fn slow_call(name: &str) -> SlowCall {
+        let log = stub_log(name);
+        let at = |f: &dyn Fn(&str, &Value) -> bool| log.iter().position(|(d, v)| f(d, v));
+        let call = at(&|d, v| d == "in" && v["params"]["name"] == "chrome_use_wait").unwrap();
+        let id = log[call].1["id"].clone();
+        SlowCall {
+            call,
+            cancelled: at(&|d, v| {
+                d == "in"
+                    && v["method"] == "notifications/cancelled"
+                    && v["params"]["requestId"] == id
+            }),
+            turn_ended: at(&|d, v| d == "driver" && v == "turn ended (turn)").unwrap(),
+            reply: at(&|d, v| d == "out" && v["id"] == id).unwrap(),
+        }
+    }
+
+    /// The tool notice for the slow call, and whether the backend said
+    /// anything more about that call after the turn's terminal line.
+    fn closed_before_turn_end(lines: &[Value], terminal: usize, notice: Notice, call_id: &str) {
+        assert_eq!(notice.data["completed"], true);
+        assert_eq!(notice.data["toolCallId"], call_id);
+        assert!(
+            lines[terminal + 1..]
+                .iter()
+                .all(|v| !v.to_string().contains(call_id)),
+            "the late reply reopened {call_id}"
+        );
+    }
+
+    // D1a rule 3: with the chrome_use client timeout set as the panel sets it
+    // (5 s here, 120 s in the panel) and a call that outlives it, Codex
+    // 0.162.1, Claude 2.1.300 and Pi 1.1.0 close the call as a failed tool and
+    // complete the turn while the MCP server is still working on it. The
+    // late reply is dropped. The open-tool guard therefore sees nothing open,
+    // so none of these versions may reuse a generation on the strength of it.
+    #[test]
+    fn mcp_client_timeouts_complete_the_turn_with_the_call_still_running() {
+        for name in ["codex", "claude", "pi"] {
+            let s = slow_call(&format!("{name}-mcp-timeout.mcp.jsonl"));
+            assert!(s.call < s.turn_ended && s.turn_ended < s.reply, "{name}");
+            // Codex sends no cancellation; Claude and Pi do, and the stub's
+            // reply is never answered or acknowledged.
+            assert_eq!(s.cancelled.is_some(), name != "codex", "{name}");
+            assert!(s.cancelled.is_none_or(|c| s.call < c && c < s.turn_ended));
+        }
+
+        let lines = fixture("codex-mcp-timeout.jsonl");
+        assert_eq!(
+            codex_version(&lines.iter().find(|v| v["id"] == 1).unwrap()["result"]),
+            "0.162.1"
+        );
+        let done = lines
+            .iter()
+            .position(|v| {
+                v["method"] == "item/completed" && v["params"]["item"]["tool"] == "chrome_use_wait"
+            })
+            .unwrap();
+        let item = &lines[done]["params"]["item"];
+        assert_eq!(item["status"], "failed");
+        assert!(item["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("timed out awaiting tools/call after 5s"));
+        assert!((5_000..6_000).contains(&item["durationMs"].as_u64().unwrap()));
+        let terminal = lines
+            .iter()
+            .position(|v| v["method"] == "turn/completed")
+            .unwrap();
+        assert!(done < terminal);
+        assert_eq!(lines[terminal]["params"]["turn"]["status"], "completed");
+        closed_before_turn_end(
+            &lines,
+            terminal,
+            codex_tool_notice(true, item),
+            item["id"].as_str().unwrap(),
+        );
+
+        let lines = fixture("claude-mcp-timeout.jsonl");
+        let init = lines
+            .iter()
+            .find(|v| v["type"] == "system" && v["subtype"] == "init")
+            .unwrap();
+        assert_eq!(init["claude_code_version"], "2.1.300");
+        let mut tools = ClaudeTools::default();
+        let mut wait = None;
+        for line in lines.iter().filter(|v| v["type"] == "assistant") {
+            for block in line["message"]["content"].as_array().unwrap() {
+                if block["type"] == "tool_use" {
+                    tools.remember(block);
+                    if block["name"] == "mcp__chrome_use__chrome_use_wait" {
+                        wait = block["id"].as_str();
+                    }
+                }
+            }
+        }
+        let wait = wait.unwrap();
+        let done = lines
+            .iter()
+            .position(|v| v["type"] == "user" && v.to_string().contains(wait))
+            .unwrap();
+        let block = &lines[done]["message"]["content"][0];
+        assert_eq!(block["is_error"], true);
+        assert!(block["content"]
+            .as_str()
+            .unwrap()
+            .contains("timed out after 5s"));
+        let terminal = lines.iter().position(|v| v["type"] == "result").unwrap();
+        assert!(done < terminal);
+        assert_eq!(lines[terminal]["subtype"], "success");
+        let notice = claude_tool_results(&lines[done], &tools).remove(0);
+        closed_before_turn_end(&lines, terminal, notice, wait);
+
+        // Pi reports no version, so it cannot be allowlisted in any case.
+        let lines = fixture("pi-mcp-timeout.jsonl");
+        let done = lines
+            .iter()
+            .position(|v| {
+                v["type"] == "tool_execution_end"
+                    && v["toolName"] == "mcp__chrome_use__chrome_use_wait"
+            })
+            .unwrap();
+        assert_eq!(lines[done]["isError"], true);
+        assert!(lines[done]
+            .to_string()
+            .contains("MCP request timed out after 5000ms"));
+        let terminal = lines
+            .iter()
+            .position(|v| v["type"] == "agent_settled")
+            .unwrap();
+        assert!(done < terminal);
+        let id = lines[done]["toolCallId"].as_str().unwrap();
+        closed_before_turn_end(&lines, terminal, pi_tool_end(&lines[done]), id);
+    }
+
+    // OpenCode 2.0.25 takes no client timeout from the ACP server entry and
+    // ignored `experimental.mcp_timeout`: the turn waited for the slow call.
+    #[test]
+    fn opencode_waits_for_a_slow_mcp_call() {
+        let s = slow_call("opencode-mcp-timeout.mcp.jsonl");
+        assert!(s.cancelled.is_none());
+        assert!(s.call < s.reply && s.reply < s.turn_ended);
+        let lines = fixture("opencode-mcp-timeout.jsonl");
+        assert_eq!(lines[0]["result"]["agentInfo"]["version"], "2.0.25");
+    }
 }
