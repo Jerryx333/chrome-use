@@ -107,7 +107,8 @@
           <strong>Nothing is written into the page's DOM to find elements.</strong> <code>snapshot</code>,
           <code>find</code>, <code>nth</code>, <code>pick</code> and <code>auth login</code> hold the elements they
           chose by node handle, never by a temporary marker attribute, which a page's <code>MutationObserver</code>
-          would see written and removed.
+          would see written and removed. State a command keeps in the page (a click watch, a key receipt, an upload
+          buffer) is likewise held by handle, never put on <code>window</code> or under a <code>Symbol.for</code> key.
         </li>
       </ul>
       <div class="du-callout tip">

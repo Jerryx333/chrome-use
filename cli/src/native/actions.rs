@@ -17807,55 +17807,111 @@ async fn eval_main_by_value(
 /// moves and form events. A click that produces none of them within a short
 /// window almost always landed on something that does not handle clicks —
 /// which used to be reported as a plain success (#354).
+///
+/// The watch is returned as a remote object and held by its handle: nothing
+/// is stored where the page could find it (a global, a `Symbol.for` key).
 const CLICK_WATCH_ARM_JS: &str = r#"(() => {
-    try {
-        const prev = window.__chromeUseClickWatch;
-        if (prev && prev.obs) prev.obs.disconnect();
-        if (prev && prev.onEvent) ['input', 'change', 'submit', 'toggle'].forEach(t => document.removeEventListener(t, prev.onEvent, true));
-        const st = { n: 0, url: location.href, focus: document.activeElement };
-        st.obs = new MutationObserver(ms => { st.n += ms.length; });
-        st.obs.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
-        st.onEvent = () => { st.n += 1; };
-        ['input', 'change', 'submit', 'toggle'].forEach(t => document.addEventListener(t, st.onEvent, true));
-        window.__chromeUseClickWatch = st;
-        return true;
-    } catch (e) { return false; }
+    const st = { n: 0, url: location.href, focus: document.activeElement };
+    st.obs = new MutationObserver(ms => { st.n += ms.length; });
+    st.obs.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    st.onEvent = () => { st.n += 1; };
+    ['input', 'change', 'submit', 'toggle'].forEach(t => document.addEventListener(t, st.onEvent, true));
+    return st;
 })()"#;
 
-const CLICK_WATCH_READ_JS: &str = r#"(() => {
-    const st = window.__chromeUseClickWatch;
-    if (!st) return { reacted: true };
-    return { reacted: st.n > 0 || location.href !== st.url || document.activeElement !== st.focus };
-})()"#;
+const CLICK_WATCH_READ_FN: &str = r#"function() {
+    return { reacted: this.n > 0 || location.href !== this.url || document.activeElement !== this.focus };
+}"#;
 
-const CLICK_WATCH_DISARM_JS: &str = r#"(() => {
-    const st = window.__chromeUseClickWatch;
-    if (!st) return;
-    if (st.obs) st.obs.disconnect();
-    if (st.onEvent) ['input', 'change', 'submit', 'toggle'].forEach(t => document.removeEventListener(t, st.onEvent, true));
-    delete window.__chromeUseClickWatch;
-})()"#;
+const CLICK_WATCH_DISARM_FN: &str = r#"function() {
+    this.obs.disconnect();
+    ['input', 'change', 'submit', 'toggle'].forEach(t => document.removeEventListener(t, this.onEvent, true));
+}"#;
+
+const CLICK_WATCH_GROUP: &str = "chrome-use-click-watch";
+
+/// Arm the click watch; its handle, or `None` when it could not be armed.
+async fn click_watch_arm(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+) -> Option<String> {
+    let reply = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({
+                "expression": CLICK_WATCH_ARM_JS,
+                "returnByValue": false,
+                "objectGroup": CLICK_WATCH_GROUP,
+            })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    if reply.get("exceptionDetails").is_some() {
+        return None;
+    }
+    reply["result"]["objectId"].as_str().map(String::from)
+}
+
+async fn click_watch_call(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    watch: &str,
+    function: &str,
+) -> Option<Value> {
+    let reply = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({ "objectId": watch, "functionDeclaration": function, "returnByValue": true })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    if reply.get("exceptionDetails").is_some() {
+        return None;
+    }
+    reply["result"].get("value").cloned()
+}
+
+async fn click_watch_disarm(client: &super::cdp::client::CdpClient, session_id: &str, watch: &str) {
+    let _ = click_watch_call(client, session_id, watch, CLICK_WATCH_DISARM_FN).await;
+    let _ = client
+        .send_command(
+            "Runtime.releaseObjectGroup",
+            Some(json!({ "objectGroup": CLICK_WATCH_GROUP })),
+            Some(session_id),
+        )
+        .await;
+}
 
 /// How long a located click may take to show any reaction before it is
 /// reported as having done nothing.
 const CLICK_REACTION_WINDOW_MS: u64 = 800;
 
 /// `Some(false)` when the watched click provably produced no reaction,
-/// `Some(true)` when it did (or the document went away — a navigation),
-/// `None` when the watch could not be read.
-async fn click_reacted(client: &super::cdp::client::CdpClient, session_id: &str) -> Option<bool> {
+/// `Some(true)` when it did (or the document went away — a navigation, which
+/// takes the watch with it), `None` when the watch could not be read.
+async fn click_reacted(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    watch: Option<&str>,
+) -> Option<bool> {
+    // No watch could be armed: nothing says the click did nothing.
+    let Some(watch) = watch else {
+        return Some(true);
+    };
     let started = std::time::Instant::now();
     loop {
-        let read = eval_main_by_value(client, session_id, CLICK_WATCH_READ_JS.to_string()).await;
+        let read = click_watch_call(client, session_id, watch, CLICK_WATCH_READ_FN).await;
         let reacted = match read {
             Some(v) => v.get("reacted").and_then(|r| r.as_bool()),
-            // The execution context is gone: the click navigated.
+            // The watch's document is gone: the click navigated.
             None => Some(true),
         };
         if reacted != Some(false)
             || started.elapsed() >= std::time::Duration::from_millis(CLICK_REACTION_WINDOW_MS)
         {
-            let _ = eval_main_by_value(client, session_id, CLICK_WATCH_DISARM_JS.to_string()).await;
+            click_watch_disarm(client, session_id, watch).await;
             return reacted;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -17917,26 +17973,41 @@ async fn finish_located(
                 ));
             }
         }
-        if let Some(mgr) = state.browser.as_ref() {
-            if let Ok(sid) = mgr.active_session_id() {
-                let sid = sid.to_string();
-                let _ = eval_main_by_value(&mgr.client, &sid, CLICK_WATCH_ARM_JS.to_string()).await;
-            }
-        }
     }
+    let watch = match (subaction == "click", state.browser.as_ref()) {
+        (true, Some(mgr)) => match mgr.active_session_id() {
+            Ok(sid) => {
+                let sid = sid.to_string();
+                click_watch_arm(&mgr.client, &sid).await.map(|w| (sid, w))
+            }
+            Err(_) => None,
+        },
+        _ => None,
+    };
 
-    let mut out = execute_subaction(cmd, state, selector).await?;
+    let mut out = match execute_subaction(cmd, state, selector).await {
+        Ok(out) => out,
+        Err(e) => {
+            if let (Some((sid, w)), Some(mgr)) = (watch.as_ref(), state.browser.as_ref()) {
+                click_watch_disarm(&mgr.client, sid, w).await;
+            }
+            return Err(e);
+        }
+    };
     if let Some(t) = target.as_ref() {
         out["target"] = t.clone();
     }
     if subaction == "click" {
         let reacted = match state.browser.as_ref() {
-            Some(mgr) => match mgr.active_session_id() {
-                Ok(sid) => {
-                    let sid = sid.to_string();
-                    click_reacted(&mgr.client, &sid).await
-                }
-                Err(_) => None,
+            Some(mgr) => match watch.as_ref() {
+                Some((sid, w)) => click_reacted(&mgr.client, sid, Some(w)).await,
+                None => match mgr.active_session_id() {
+                    Ok(sid) => {
+                        let sid = sid.to_string();
+                        click_reacted(&mgr.client, &sid, None).await
+                    }
+                    Err(_) => None,
+                },
             },
             None => None,
         };
@@ -21443,62 +21514,42 @@ async fn auth_submit(
                 == Some(Value::Bool(true));
         if found {
             let tag_json = serde_json::to_string(&submit_tag).unwrap_or_default();
-            let ready = scope_eval(
-                client,
-                scope,
-                &format!(
-                    "(() => {{ const b = cuAuth({tag_json}); \
-                     if (!b) return false; const k = Symbol.for('cu-clicked'); b[k] = ''; \
-                     b.addEventListener('click', (e) => {{ b[k] = e.isTrusted ? 'trusted' : 'synthetic'; }}, {{ once: true, capture: true }}); \
-                     b.focus(); return document.activeElement === b; }})()"
-                ),
-                true,
-            )
-            .await?
-            .result
-            .value
-                == Some(Value::Bool(true));
+            let watch = auth_click_watch(client, scope, &tag_json, true).await?;
+            let ready = match &watch {
+                Some(w) => {
+                    auth_handle_call(client, scope, w, "function() { return this.focused; }")
+                        .await?
+                        == Some(Value::Bool(true))
+                }
+                None => false,
+            };
             if ready {
                 interaction::press_key(client, &scope.page_session, "space").await?;
                 // The click normally lands with the key-up; give a slow page a
                 // moment before the DOM click below, so it is never clicked twice.
-                let tag_json = tag_json.clone();
+                let w = watch.as_deref().unwrap_or_default();
                 for _ in 0..4 {
                     tokio::time::sleep(Duration::from_millis(100)).await;
-                    let seen = scope_eval(
-                        client,
-                        scope,
-                        &format!(
-                            "(() => {{ const b = cuAuth({tag_json}); \
-                             return !b || !!b[Symbol.for('cu-clicked')]; }})()"
-                        ),
-                        true,
-                    )
-                    .await;
-                    match seen {
-                        Ok(r) if r.result.value == Some(Value::Bool(true)) => break,
+                    match auth_handle_call(client, scope, w, AUTH_CLICK_SEEN_FN).await {
+                        // Clicked, or the button (its document) is gone.
+                        Ok(Some(Value::Bool(true))) | Ok(None) => break,
                         Ok(_) => {}
                         Err(_) => break,
                     }
                 }
             }
             // Not focused: no key went out, so the DOM click below is the only one.
-            let clicked = scope_eval(
-                client,
-                scope,
-                &format!(
-                    "(() => {{ const b = cuAuth({tag_json}); \
-                     if (!b) return 'gone'; const k = Symbol.for('cu-clicked'); \
-                     if (b[k]) return b[k]; b.click(); return 'dom'; }})()"
-                ),
-                true,
-            )
-            .await;
+            let clicked = match &watch {
+                Some(w) => auth_handle_call(client, scope, w, AUTH_CLICK_DOM_FN)
+                    .await
+                    .map(|v| v.unwrap_or_else(|| json!("gone"))),
+                None => Ok(json!("gone")),
+            };
             return Ok(match clicked {
                 // Blocked once the key was out: the trusted click has happened
                 // (Space clicks on key-up); pressing again would submit twice.
                 Err(e) if ready && super::browser::is_debugger_access_denied(&e) => "button",
-                Ok(r) => match r.result.value.as_ref().and_then(Value::as_str) {
+                Ok(r) => match r.as_str() {
                     Some("dom") => "button (DOM click)",
                     Some("gone") if !ready => {
                         return Err(
@@ -21515,8 +21566,12 @@ async fn auth_submit(
             });
         }
     }
-    let receipt = format!("cu-enter-{marker}");
-    scope_eval(client, scope, &arm_enter_receipt(&receipt, field_tag), true).await?;
+    let armed = scope_eval(client, scope, &arm_enter_receipt(field_tag), false).await?;
+    let receipt = armed
+        .result
+        .object_id
+        .filter(|_| armed.exception_details.is_none())
+        .ok_or("auth login: could not watch for the Enter key on the page")?;
     let pressed = interaction::press_key_once(client, &scope.page_session, "Enter").await;
     if let Err(e) = &pressed {
         // Refused before it ran (a password manager's frame): the caller
@@ -21525,7 +21580,9 @@ async fn auth_submit(
             return Err(e.clone());
         }
     }
-    match enter_receipt(client, scope, &receipt).await {
+    let seen = enter_receipt(client, scope, &receipt).await;
+    let _ = auth_handle_call(client, scope, &receipt, ENTER_RECEIPT_DISARM_FN).await;
+    match seen {
         // The key reached the page, or the page went on to another document
         // (the submit navigated): the sign-in check after this judges it.
         KeyReceipt::Got | KeyReceipt::Moved => Ok("enter"),
@@ -21553,34 +21610,30 @@ enum KeyReceipt {
 
 /// Arm the page to record an Enter keydown (window capture phase, so the
 /// page's own handlers cannot hide it from us unless they stop it at the
-/// window first), then focus the field the key is for.
-fn arm_enter_receipt(receipt: &str, field_tag: Option<&str>) -> String {
+/// window first), then focus the field the key is for. Returns the receipt
+/// itself, held by its handle: nothing is stored on `window` or under a
+/// `Symbol.for` key, where the page could look.
+fn arm_enter_receipt(field_tag: Option<&str>) -> String {
     format!(
         r#"(() => {{
-            const k = Symbol.for({r});
-            const l = Symbol.for({r} + '-listener');
-            window[k] = 'armed';
-            if (!window[l]) {{
-                window[l] = true;
-                window.addEventListener('keydown', (e) => {{ if (e.key === 'Enter') window[k] = 'got'; }}, true);
-            }}
+            const st = {{ v: 'armed' }};
+            st.on = (e) => {{ if (e.key === 'Enter') st.v = 'got'; }};
+            window.addEventListener('keydown', st.on, true);
             const tag = {field};
             const el = tag === null ? null : cuAuth(tag);
             if (el && document.activeElement !== el) el.focus();
+            return st;
         }})()"#,
-        r = serde_json::to_string(receipt).unwrap_or_default(),
         field = serde_json::to_string(&field_tag).unwrap_or_default(),
     )
 }
 
-/// Read what `arm_enter_receipt` recorded: `'got'`, `'armed'` (nothing yet),
-/// or `undefined` once the armed document is gone.
-fn read_enter_receipt(receipt: &str) -> String {
-    format!(
-        "(() => {{ const v = window[Symbol.for({r})]; return v === undefined ? 'moved' : v; }})()",
-        r = serde_json::to_string(receipt).unwrap_or_default(),
-    )
-}
+/// Read what [`arm_enter_receipt`] recorded: `'got'` or `'armed'` (nothing
+/// yet). Once the armed document is gone, so is the receipt: `'moved'`.
+const ENTER_RECEIPT_READ_FN: &str = "function() { return this.v; }";
+
+const ENTER_RECEIPT_DISARM_FN: &str =
+    "function() { window.removeEventListener('keydown', this.on, true); }";
 
 fn parse_key_receipt(value: Option<&str>) -> Option<KeyReceipt> {
     match value {
@@ -21590,6 +21643,85 @@ fn parse_key_receipt(value: Option<&str>) -> Option<KeyReceipt> {
         _ => None,
     }
 }
+
+/// Call `function` on a handle this login holds (a click watch, a key
+/// receipt). `Ok(None)` when the handle's document is gone: the page moved
+/// on, and the handle with it.
+async fn auth_handle_call(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    handle: &str,
+    function: &str,
+) -> Result<Option<Value>, String> {
+    let reply = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({ "objectId": handle, "functionDeclaration": function, "returnByValue": true })),
+            Some(&scope.session_id),
+        )
+        .await;
+    match reply {
+        Ok(r) if r.get("exceptionDetails").is_some() => Err(format!(
+            "page script threw: {}",
+            r["exceptionDetails"]["text"].as_str().unwrap_or("")
+        )),
+        Ok(r) => Ok(Some(
+            r["result"].get("value").cloned().unwrap_or(Value::Null),
+        )),
+        Err(e) if handle_gone(&e) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// A handle's document is gone (navigated, or its frame went away).
+fn handle_gone(e: &str) -> bool {
+    page_went_away(e) || e.contains("Could not find object with given id")
+}
+
+/// Watch the button chosen for the tag (JSON) for the next click, and with
+/// `focus`, focus it. Returns the watch's handle, `None` when the button is
+/// gone. The watch records a trusted or synthetic click in itself, not on the
+/// button: an expando on a page element is something the page can see.
+async fn auth_click_watch(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    tag_json: &str,
+    focus: bool,
+) -> Result<Option<String>, String> {
+    let then = if focus {
+        "b.focus(); st.focused = document.activeElement === b;"
+    } else {
+        "const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur();"
+    };
+    let r = scope_eval(
+        client,
+        scope,
+        &format!(
+            "(() => {{ const b = cuAuth({tag_json}); if (!b) return null; \
+             const st = {{ b, clicked: '', focused: false }}; \
+             st.on = (e) => {{ st.clicked = e.isTrusted ? 'trusted' : 'synthetic'; }}; \
+             b.addEventListener('click', st.on, {{ once: true, capture: true }}); \
+             {then} return st; }})()"
+        ),
+        false,
+    )
+    .await?;
+    Ok(r.result.object_id.filter(|_| r.exception_details.is_none()))
+}
+
+/// On a click watch: whether the button was clicked (or left the page).
+const AUTH_CLICK_SEEN_FN: &str = "function() { return !this.b.isConnected || !!this.clicked; }";
+
+/// On a click watch: `'gone'`, how the click arrived, or click the button
+/// through the DOM now (`'dom'`). The watch stops listening either way.
+const AUTH_CLICK_DOM_FN: &str = r#"function() {
+    const b = this.b;
+    b.removeEventListener('click', this.on, { capture: true });
+    if (!b.isConnected) return 'gone';
+    if (this.clicked) return this.clicked;
+    b.click();
+    return 'dom';
+}"#;
 
 /// How long `auth_submit` watches for its Enter to reach the page. A
 /// delivered key is recorded before the CDP command returns; the wait is for
@@ -21602,11 +21734,13 @@ async fn enter_receipt(
     receipt: &str,
 ) -> KeyReceipt {
     let deadline = tokio::time::Instant::now() + Duration::from_millis(AUTH_ENTER_RECEIPT_MS);
-    let read = read_enter_receipt(receipt);
     let mut last = KeyReceipt::Unknown;
     loop {
-        match scope_eval(client, scope, &read, true).await {
-            Ok(r) => match parse_key_receipt(r.result.value.as_ref().and_then(Value::as_str)) {
+        let read = auth_handle_call(client, scope, receipt, ENTER_RECEIPT_READ_FN)
+            .await
+            .map(|v| v.unwrap_or_else(|| json!("moved")));
+        match read {
+            Ok(r) => match parse_key_receipt(r.as_str()) {
                 Some(KeyReceipt::Lost) => last = KeyReceipt::Lost,
                 Some(seen) => return seen,
                 None => {}
@@ -21678,18 +21812,7 @@ async fn auth_submit_after_lost_enter(
             ),
         };
     }
-    scope_eval(
-        client,
-        scope,
-        &format!(
-            "(() => {{ const b = cuAuth({tag_json}); \
-             if (!b) return false; const k = Symbol.for('cu-clicked'); b[k] = ''; \
-             b.addEventListener('click', (e) => {{ b[k] = e.isTrusted ? 'trusted' : 'synthetic'; }}, {{ once: true, capture: true }}); \
-             const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur(); return true; }})()"
-        ),
-        true,
-    )
-    .await?;
+    let watch = auth_click_watch(client, scope, &tag_json, false).await?;
     match super::element::SEMANTIC_PIN
         .scope(
             scope.node_pin(&submit_tag)?,
@@ -21713,35 +21836,20 @@ async fn auth_submit_after_lost_enter(
         Err(e) if submit_outcome_unknown(&e) => {}
         Err(e) => return Err(e),
     }
-    let seen = format!(
-        "(() => {{ const b = cuAuth({tag_json}); \
-         return !b ? 'gone' : (b[Symbol.for('cu-clicked')] || ''); }})()"
-    );
+    let Some(watch) = watch else {
+        return Ok("button (the Enter key did not reach the page)");
+    };
     for _ in 0..10 {
-        match scope_eval(client, scope, &seen, true).await {
-            Ok(r) => match r.result.value.as_ref().and_then(Value::as_str) {
-                Some("") => {}
-                _ => return Ok("button (the Enter key did not reach the page)"),
-            },
-            Err(e) if page_went_away(&e) => {
-                return Ok("button (the Enter key did not reach the page)")
-            }
+        match auth_handle_call(client, scope, &watch, AUTH_CLICK_SEEN_FN).await {
+            Ok(Some(Value::Bool(false))) => {}
+            Ok(_) => return Ok("button (the Enter key did not reach the page)"),
             Err(_) => {}
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    let clicked = scope_eval(
-        client,
-        scope,
-        &format!(
-            "(() => {{ const b = cuAuth({tag_json}); \
-             if (!b) return 'gone'; if (b[Symbol.for('cu-clicked')]) return 'seen'; b.click(); return 'dom'; }})()"
-        ),
-        true,
-    )
-    .await;
+    let clicked = auth_handle_call(client, scope, &watch, AUTH_CLICK_DOM_FN).await;
     match clicked {
-        Ok(r) if r.result.value.as_ref().and_then(Value::as_str) == Some("dom") => {
+        Ok(Some(v)) if v.as_str() == Some("dom") => {
             Ok("button (DOM click; the Enter key and the click did not reach the page)")
         }
         Ok(_) => Ok("button (the Enter key did not reach the page)"),
@@ -23261,39 +23369,61 @@ const PASSKEY_ADDED_ERROR: &str =
     account's security settings (its private key no longer exists).";
 
 /// While the temporary authenticator is installed, the page cannot register
-/// a passkey with it: `create()` is refused before it reaches Chrome. The
-/// original is kept under a symbol so [`RESTORE_CREATE_JS`] puts it back.
-const NO_CREATE_JS: &str = r#"(() => {
+/// a passkey with it: `create()` is refused before it reaches Chrome, with
+/// the error Chrome itself gives for a refused ceremony.
+///
+/// The original is kept in the wrapper's closure, never under a global or a
+/// `Symbol.for` key the page could look up: the wrapper hands it back only
+/// when called with this process's random token, which [`restore_create_js`]
+/// does after checking the own `create` is that wrapper.
+fn no_create_js() -> String {
+    format!(
+        r#"(() => {{
     'use strict';
-    const c = navigator.credentials, k = Symbol.for('cu-bwu-create');
+    const c = navigator.credentials, token = {token};
     if (!c) return false;
-    if (c[k]) return c.create !== c[k];
+    const own = Object.prototype.hasOwnProperty.call(c, 'create');
+    if (own && String(c.create).includes(token)) return true;
     const create = c.create;
-    try {
-        Object.defineProperty(c, k, { value: create, configurable: true });
-        c.create = function (o) {
+    try {{
+        c.create = function (o) {{
+            if (o === {token}) return create;
             return (o && o.publicKey)
-                ? Promise.reject(new DOMException('chrome-use auth login --bwu does not register passkeys', 'NotAllowedError'))
+                ? Promise.reject(new DOMException('The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.', 'NotAllowedError'))
                 : create.call(this, o);
-        };
-    } catch (e) {
+        }};
+    }} catch (e) {{
         return false;
-    }
+    }}
     // True only when the wrapper really replaced create().
-    return c.create !== create && c[k] === create;
-})()"#;
+    return c.create !== create && String(c.create).includes(token);
+}})()"#,
+        token = serde_json::to_string(no_create_token()).unwrap_or_default(),
+    )
+}
 
-/// Undo [`NO_CREATE_JS`] on the current document.
-const RESTORE_CREATE_JS: &str = r#"(() => {
-    const c = navigator.credentials, k = Symbol.for('cu-bwu-create');
-    if (!c || !Object.prototype.hasOwnProperty.call(c, k)) return true;
-    const original = c[k];
-    try { delete c.create; } catch (e) {}
-    if (c.create !== original) { try { c.create = original; } catch (e) {} }
-    try { delete c[k]; } catch (e) {}
-    // True only when create() is the original again and our marker is gone.
-    return c.create === original && !Object.prototype.hasOwnProperty.call(c, k);
-})()"#;
+/// Undo [`no_create_js`] on the current document.
+fn restore_create_js() -> String {
+    format!(
+        r#"(() => {{
+    const c = navigator.credentials, token = {token};
+    if (!c || !Object.prototype.hasOwnProperty.call(c, 'create')
+        || !String(c.create).includes(token)) return true;
+    const original = c.create(token);
+    try {{ delete c.create; }} catch (e) {{}}
+    if (c.create !== original) {{ try {{ c.create = original; }} catch (e) {{}} }}
+    // True only when create() is the original again.
+    return c.create === original;
+}})()"#,
+        token = serde_json::to_string(no_create_token()).unwrap_or_default(),
+    )
+}
+
+/// The random token [`no_create_js`]'s wrapper answers to (one per daemon).
+fn no_create_token() -> &'static str {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN.get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
+}
 
 /// Load the item's passkeys for this site into a virtual authenticator on the
 /// tab (Chrome's WebAuthn domain). The site's own `navigator.credentials.get`
@@ -23384,13 +23514,13 @@ async fn install_passkeys(
     a.no_create_script = client
         .send_command(
             "Page.addScriptToEvaluateOnNewDocument",
-            Some(json!({ "source": NO_CREATE_JS })),
+            Some(json!({ "source": no_create_js() })),
             Some(session_id),
         )
         .await
         .ok()
         .and_then(|v| v["identifier"].as_str().map(str::to_string));
-    let guard_now = auth_eval(client, session_id, NO_CREATE_JS.to_string()).await;
+    let guard_now = auth_eval(client, session_id, no_create_js()).await;
     if a.no_create_script.is_none() || guard_now != Ok(Some(Value::Bool(true))) {
         let cleanup = remove_passkeys(client, session_id, &a).await;
         return Err(with_cleanup(
@@ -23462,7 +23592,7 @@ async fn remove_passkeys(
         }
     }
     // A page that navigated away took the guard with it.
-    match auth_eval(client, session_id, RESTORE_CREATE_JS.to_string()).await {
+    match auth_eval(client, session_id, restore_create_js()).await {
         Ok(Some(Value::Bool(true))) => {}
         Err(e) if page_went_away(&e) => {}
         Ok(other) => failed.push(format!(
@@ -24665,14 +24795,17 @@ mod tests {
         // Armed and still waiting: the key did not arrive, so it is replaced.
         assert_eq!(parse_key_receipt(Some("armed")), Some(KeyReceipt::Lost));
         assert_eq!(parse_key_receipt(None), None);
-        let read = read_enter_receipt("cu-enter-x");
-        assert!(read.contains("'moved'"), "{read}");
-        let arm = arm_enter_receipt("cu-enter-x", Some("bwu1-x"));
+        let arm = arm_enter_receipt(Some("bwu1-x"));
         assert!(
             arm.contains("addEventListener('keydown'") && arm.contains("true)"),
             "{arm}"
         );
         assert!(arm.contains("bwu1-x"), "{arm}");
+        // The receipt is the returned object, never a page global.
+        assert!(
+            arm.contains("return st;") && !arm.contains(concat!("window", "[")),
+            "{arm}"
+        );
     }
 
     // #482: a detach under the key (the relay's action_outcome_unknown) is

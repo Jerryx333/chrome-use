@@ -60,68 +60,60 @@ pub fn total_size<'a>(paths: impl IntoIterator<Item = &'a str>) -> u64 {
         .sum()
 }
 
-/// A page-side property name for one upload, so two uploads into one page
-/// never share a buffer.
-pub fn page_key() -> String {
-    format!("__cuUpload_{}", uuid::Uuid::new_v4().simple())
+/// The CDP object group holding one upload's page-side buffer, so two
+/// uploads into one page never share a buffer and releasing one frees exactly
+/// its own. The buffer itself is a remote object held by its handle: nothing
+/// is stored on `window`, where the page could see it.
+pub fn object_group() -> String {
+    format!("chrome-use-upload-{}", uuid::Uuid::new_v4().simple())
 }
 
-const MISSING: &str =
+/// What a failed step says when the buffer's document is gone.
+pub const MISSING: &str =
     "the page lost the upload buffer (did it navigate or reload during the upload?)";
 
-/// Script that creates the page-side buffer.
-pub fn begin_script(key: &str) -> String {
-    format!(
-        "(() => {{ window[{k}] = {{ files: [] }}; return 0; }})()",
-        k = js_str(key)
-    )
-}
+/// Called on the target element: create the buffer in the element's world
+/// and return it (by reference).
+pub const BEGIN_FUNCTION: &str = "function() { return { files: [] }; }";
 
-/// Script that starts a new file in the buffer. Returns the file count.
-pub fn file_script(key: &str, name: &str, mime: &str, size: u64) -> String {
+/// Called on the buffer: start a new file. Returns the file count.
+pub fn file_function(name: &str, mime: &str, size: u64) -> String {
     format!(
-        "(() => {{ const s = window[{k}]; if (!s) throw new Error({m}); \
-         s.files.push({{ name: {n}, type: {t}, size: {size}, parts: [], got: 0 }}); \
-         return s.files.length; }})()",
-        k = js_str(key),
-        m = js_str(MISSING),
+        "function() {{ this.files.push({{ name: {n}, type: {t}, size: {size}, parts: [], got: 0 }}); \
+         return this.files.length; }}",
         n = js_str(name),
         t = js_str(mime),
     )
 }
 
-/// Script that decodes one base64 chunk into the current file and returns the
-/// bytes that file has received so far. The reply is a number, whatever the
-/// file size.
-pub fn chunk_script(key: &str, b64: &str) -> String {
+/// Called on the buffer: decode one base64 chunk into the current file and
+/// return the bytes that file has received so far. The reply is a number,
+/// whatever the file size.
+pub fn chunk_function(b64: &str) -> String {
     // base64's alphabet (A-Z a-z 0-9 + / =) needs no escaping inside a
     // single-quoted JS string.
     debug_assert!(b64
         .bytes()
         .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='));
     format!(
-        "(() => {{ const s = window[{k}]; if (!s) throw new Error({m}); \
-         const f = s.files[s.files.length - 1]; const b = '{b64}'; let u; \
+        "function() {{ const f = this.files[this.files.length - 1]; const b = '{b64}'; let u; \
          if (typeof Uint8Array.fromBase64 === 'function') {{ u = Uint8Array.fromBase64(b); }} \
          else {{ const bin = atob(b); u = new Uint8Array(bin.length); \
          for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); }} \
-         f.parts.push(new Blob([u])); f.got += u.length; return f.got; }})()",
-        k = js_str(key),
-        m = js_str(MISSING),
+         f.parts.push(new Blob([u])); f.got += u.length; return f.got; }}",
     )
 }
 
-/// Script that drops the buffer, whatever state it is in.
-pub fn discard_script(key: &str) -> String {
-    format!(
-        "(() => {{ try {{ delete window[{k}]; }} catch (e) {{ window[{k}] = undefined; }} return 0; }})()",
-        k = js_str(key)
-    )
+/// Whether a CDP error on the buffer's handle means its document is gone.
+pub fn buffer_gone(e: &str) -> bool {
+    e.contains("Could not find object with given id")
+        || e.contains("Cannot find context with specified id")
+        || e.contains("Execution context was destroyed")
 }
 
 /// `Runtime.callFunctionOn` body run on the target element: assemble the
-/// buffered files and attach them. Arguments: the buffer key, and whether a
-/// non-input target may take a synthetic drop/paste.
+/// buffered files and attach them. Arguments: the buffer (by handle), and
+/// whether a non-input target may take a synthetic drop/paste.
 ///
 /// A non-file-input target with the dropzone path off is a hard no-op
 /// (`noinput:0`): an uncancelled `drop` carrying a File makes Chrome navigate
@@ -129,9 +121,7 @@ pub fn discard_script(key: &str) -> String {
 /// drop is wrapped in a capture-phase `preventDefault` guard so the browser's
 /// default file navigation can never fire, while the page's own drop handlers
 /// still run.
-pub const ATTACH_FUNCTION: &str = r#"function(key, allowDropzone) {
-    const s = window[key];
-    try { delete window[key]; } catch (e) { window[key] = undefined; }
+pub const ATTACH_FUNCTION: &str = r#"function(s, allowDropzone) {
     if (!s) throw new Error('the page lost the upload buffer (did it navigate or reload during the upload?)');
     const dt = new DataTransfer();
     for (const f of s.files) {
@@ -315,16 +305,16 @@ mod tests {
     fn a_chunk_stays_under_the_native_messaging_cap_with_its_envelope() {
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(vec![0xffu8; CHUNK_BYTES]);
-        let script = chunk_script(&page_key(), &b64);
+        let script = chunk_function(&b64);
         // The relay wraps the command in a forwardCDPCommand envelope with a
         // session id; allow it a generous 4 KiB.
         let envelope = serde_json::json!({
             "id": i64::MAX,
             "method": "forwardCDPCommand",
             "params": {
-                "method": "Runtime.evaluate",
+                "method": "Runtime.callFunctionOn",
                 "sessionId": "cb-tab-2147483647",
-                "params": { "expression": script, "returnByValue": true },
+                "params": { "objectId": "-1234567890123456789.1.1", "functionDeclaration": script, "returnByValue": true },
             },
         })
         .to_string();
@@ -333,8 +323,8 @@ mod tests {
 
     #[test]
     fn chunk_replies_are_a_byte_count_not_the_buffer() {
-        let s = chunk_script("__k", "QUJD");
-        assert!(s.ends_with("return f.got; })()"), "{s}");
+        let s = chunk_function("QUJD");
+        assert!(s.ends_with("return f.got; }"), "{s}");
         assert!(
             !s.contains("+= '"),
             "a chunk must not grow a page-side string: {s}"
@@ -344,17 +334,18 @@ mod tests {
 
     #[test]
     fn scripts_quote_names_as_js_strings() {
-        let s = file_script("__k", "it's \"a\" clip.mp4", "video/mp4", 7);
+        let s = file_function("it's \"a\" clip.mp4", "video/mp4", 7);
         assert!(s.contains(r#"name: "it's \"a\" clip.mp4""#), "{s}");
         assert!(s.contains("size: 7"));
-        assert!(begin_script("__k").contains(r#"window["__k"] = { files: [] }"#));
-        assert!(discard_script("__k").contains(r#"delete window["__k"]"#));
+        // The buffer is a returned object, never a page global.
+        for script in [BEGIN_FUNCTION, ATTACH_FUNCTION, s.as_str()] {
+            assert!(!script.contains(concat!("window", "[")), "{script}");
+        }
     }
 
     #[test]
-    fn page_keys_differ_per_upload() {
-        assert_ne!(page_key(), page_key());
-        assert!(page_key().starts_with("__cuUpload_"));
+    fn object_groups_differ_per_upload() {
+        assert_ne!(object_group(), object_group());
     }
 
     #[test]
