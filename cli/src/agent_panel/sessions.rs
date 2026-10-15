@@ -230,7 +230,7 @@ fn session_files(agent: &str, roots: &Roots) -> Vec<(String, PathBuf, SystemTime
         }
         _ => {}
     }
-    files.sort_by(|a, b| b.2.cmp(&a.2));
+    files.sort_by_key(|f| std::cmp::Reverse(f.2));
     files
 }
 
@@ -377,17 +377,8 @@ fn claude_live(roots: &Roots) -> Vec<(String, i64)> {
         .collect()
 }
 
-#[cfg(unix)]
 fn pid_alive(pid: i64) -> bool {
-    if pid <= 0 || pid > i32::MAX as i64 {
-        return false;
-    }
-    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
-    alive || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-#[cfg(not(unix))]
-fn pid_alive(_pid: i64) -> bool {
-    false
+    u32::try_from(pid).is_ok_and(|pid| pid > 0 && crate::connection::is_pid_alive(pid))
 }
 
 /// Thread names Codex keeps in `session_index.jsonl`; later lines win.
@@ -1446,19 +1437,21 @@ mod tests {
     #[test]
     fn roots_follow_the_cli_overrides() {
         let mut context = DiscoveryContext::current().unwrap();
+        let x = std::env::temp_dir().join("x");
         context
             .environment
-            .insert("CODEX_HOME".into(), "/x/codex".into());
+            .insert("CODEX_HOME".into(), x.join("codex").into_os_string());
+        context.environment.insert(
+            "CLAUDE_CONFIG_DIR".into(),
+            x.join("claude").into_os_string(),
+        );
         context
             .environment
-            .insert("CLAUDE_CONFIG_DIR".into(), "/x/claude".into());
-        context
-            .environment
-            .insert("PI_CODING_AGENT_DIR".into(), "/x/pi".into());
+            .insert("PI_CODING_AGENT_DIR".into(), x.join("pi").into_os_string());
         context.environment.remove("PI_CODING_AGENT_SESSION_DIR");
         let roots = Roots::from_context(&context);
-        assert_eq!(roots.codex, PathBuf::from("/x/codex"));
-        assert_eq!(roots.claude, PathBuf::from("/x/claude"));
-        assert_eq!(roots.pi, PathBuf::from("/x/pi/sessions"));
+        assert_eq!(roots.codex, x.join("codex"));
+        assert_eq!(roots.claude, x.join("claude"));
+        assert_eq!(roots.pi, x.join("pi").join("sessions"));
     }
 }

@@ -157,7 +157,7 @@ pub(super) fn merge(
             }),
         }
     }
-    rows.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.last_used));
     rows.truncate(MAX_RECENT);
     rows
 }
@@ -236,7 +236,7 @@ pub(super) fn picked(success: bool, stdout: &[u8]) -> Option<String> {
 /// was chosen (validated), `{"cancelled": true}`, or `{"unavailable": true}`
 /// when this computer has no picker.
 pub(super) async fn choose(prompt: &str, panel_root: &Path) -> Result<Value, String> {
-    let Some((program, args)) = picker(prompt, |name| which(name)) else {
+    let Some((program, args)) = picker(prompt, which) else {
         return Ok(json!({"schemaVersion":1,"unavailable":true}));
     };
     let mut command = tokio::process::Command::new(&program);
