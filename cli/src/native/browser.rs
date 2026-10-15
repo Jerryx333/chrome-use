@@ -6704,7 +6704,34 @@ impl BrowserManager {
         }
     }
 
+    /// One cycle; on every exit (refocused, menu still open, a tab call that
+    /// failed) the remembered field handles are released.
     async fn cycle_pinned_tab_visibility_once(
+        &mut self,
+        blur_focused: bool,
+        second_try: bool,
+    ) -> Result<Option<String>, String> {
+        let session = self.active_target_id.as_ref().and_then(|t| {
+            self.pages
+                .iter()
+                .find(|p| &p.target_id == t)
+                .map(|p| p.session_id.clone())
+        });
+        let Some(session) = session else {
+            return self
+                .cycle_pinned_tab_visibility_inner(blur_focused, second_try)
+                .await;
+        };
+        super::element::release_after(
+            self.client.clone(),
+            &session,
+            REFOCUS_GROUP,
+            self.cycle_pinned_tab_visibility_inner(blur_focused, second_try),
+        )
+        .await
+    }
+
+    async fn cycle_pinned_tab_visibility_inner(
         &mut self,
         blur_focused: bool,
         second_try: bool,

@@ -29,15 +29,73 @@ pub fn semantic_pin_active(selector: &str) -> bool {
 /// Object group of the handles [`resolve_semantic_pin`] hands out.
 pub const SEMANTIC_PIN_GROUP: &str = "chrome-use-semantic-locator";
 
-/// Release the handles pinned commands resolved in `session`.
-pub async fn release_semantic_pin_handles(client: &CdpClient, session: &str) {
+/// Releases a CDP object group on every exit of the work it guards: an
+/// explicit [`GroupRelease::release`] after the work, or, when the work's
+/// future is dropped part-way (a cancelled command), a release spawned from
+/// `Drop`. Holding a handle is invisible to the page, but it pins the object
+/// (and whatever it references) until released or the document goes.
+pub struct GroupRelease {
+    client: std::sync::Arc<CdpClient>,
+    session: String,
+    group: &'static str,
+    armed: bool,
+}
+
+impl GroupRelease {
+    pub fn new(client: std::sync::Arc<CdpClient>, session: &str, group: &'static str) -> Self {
+        Self {
+            client,
+            session: session.to_string(),
+            group,
+            armed: true,
+        }
+    }
+
+    pub async fn release(mut self) {
+        self.armed = false;
+        release_object_group(&self.client, &self.session, self.group).await;
+    }
+}
+
+impl Drop for GroupRelease {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let (client, session, group) = (self.client.clone(), self.session.clone(), self.group);
+            rt.spawn(async move { release_object_group(&client, &session, group).await });
+        }
+    }
+}
+
+/// Run `work`, then release object `group` in `session`, whatever `work`
+/// returned (and if it is cancelled, see [`GroupRelease`]).
+pub async fn release_after<T>(
+    client: std::sync::Arc<CdpClient>,
+    session: &str,
+    group: &'static str,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    let guard = GroupRelease::new(client, session, group);
+    let out = work.await;
+    guard.release().await;
+    out
+}
+
+pub async fn release_object_group(client: &CdpClient, session: &str, group: &str) {
     let _ = client
         .send_command(
             "Runtime.releaseObjectGroup",
-            Some(json!({ "objectGroup": SEMANTIC_PIN_GROUP })),
+            Some(json!({ "objectGroup": group })),
             Some(session),
         )
         .await;
+}
+
+/// Release the handles pinned commands resolved in `session`.
+pub async fn release_semantic_pin_handles(client: &CdpClient, session: &str) {
+    release_object_group(client, session, SEMANTIC_PIN_GROUP).await;
 }
 
 pub async fn resolve_semantic_pin(client: &CdpClient, session: &str) -> Result<String, String> {
@@ -4570,6 +4628,86 @@ pub async fn get_element_styles(
 
 #[cfg(test)]
 mod tests {
+    /// A fake CDP endpoint that answers every command and records the
+    /// object groups it was asked to release.
+    async fn release_recorder() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use futures_util::{SinkExt, StreamExt};
+        let released = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let seen = released.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let seen = seen.clone();
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                        return;
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        let tokio_tungstenite::tungstenite::Message::Text(text) = msg else {
+                            continue;
+                        };
+                        let req: Value = serde_json::from_str(&text).unwrap();
+                        if req["method"] == "Runtime.releaseObjectGroup" {
+                            seen.lock().unwrap().push(
+                                req["params"]["objectGroup"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                            );
+                        }
+                        let mut out = json!({ "id": req["id"], "result": {} });
+                        if let Some(sid) = req.get("sessionId") {
+                            out["sessionId"] = sid.clone();
+                        }
+                        let reply =
+                            tokio_tungstenite::tungstenite::Message::Text(out.to_string().into());
+                        if ws.send(reply).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        (url, released)
+    }
+
+    #[tokio::test]
+    async fn object_groups_are_released_on_error_and_on_cancel() {
+        let (url, released) = release_recorder().await;
+        let client = std::sync::Arc::new(CdpClient::connect(&url).await.unwrap());
+
+        // The work fails: the group is released all the same.
+        let out: Result<(), String> = release_after(client.clone(), "S1", "group-error", async {
+            Err("menu still open".into())
+        })
+        .await;
+        assert!(out.is_err());
+        assert_eq!(*released.lock().unwrap(), vec!["group-error".to_string()]);
+
+        // The work is cancelled (its future dropped mid-way): released from Drop.
+        let pending = release_after(
+            client.clone(),
+            "S1",
+            "group-cancel",
+            std::future::pending::<()>(),
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), pending)
+                .await
+                .is_err()
+        );
+        for _ in 0..50 {
+            if released.lock().unwrap().len() == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            *released.lock().unwrap(),
+            vec!["group-error".to_string(), "group-cancel".to_string()]
+        );
+    }
 
     /// Each state has to say something different and actionable. Four ways of
     /// saying "unknown" would move the guessing back to the caller, which is

@@ -18245,15 +18245,33 @@ fn build_role_selector(role: &str, name: Option<&str>, exact: bool) -> String {
 }
 
 async fn handle_getbyrole(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let held = state.browser.as_ref().and_then(|mgr| {
+        let sid = mgr.active_session_id().ok()?.to_string();
+        Some((mgr.client.clone(), sid))
+    });
+    let Some((client, sid)) = held else {
+        return semantic_find(cmd, state).await;
+    };
+    // Every exit, error or not: the handles discovery, revalidation and the
+    // pinned action resolved are released now, not at the next `find`.
+    super::element::release_after(
+        client,
+        &sid,
+        super::element::SEMANTIC_PIN_GROUP,
+        semantic_find(cmd, state),
+    )
+    .await
+}
+
+async fn semantic_find(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let located = super::semantic_locator::locate(cmd, state).await?;
     super::semantic_locator::revalidate(cmd, state, &located.pin).await?;
-    let result = super::element::SEMANTIC_PIN
+    super::element::SEMANTIC_PIN
         .scope(
             located.pin,
             finish_located(cmd, state, super::element::PINNED_SELECTOR, located.extra),
         )
-        .await;
-    result
+        .await
 }
 
 async fn handle_semantic_locator(
