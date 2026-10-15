@@ -6595,6 +6595,153 @@ async fn e2e_snapshot_cursor_interactive() {
     assert_success(&resp);
 }
 
+/// Stealth: nothing chrome-use does may show up in the page's DOM. A
+/// MutationObserver sees a marker attribute's write and its later removal
+/// alike, so every command that once tagged nodes to find them again
+/// (snapshot's cursor / error / label scans, semantic `find`, `nth`, both
+/// `pick` paths) must leave the observer's record empty. The page's own
+/// handlers only write JS variables, so any record is chrome-use's.
+#[tokio::test]
+#[ignore]
+async fn e2e_commands_leave_no_dom_mutations() {
+    let page = r##"<!doctype html><html><head><meta charset="utf-8"><style>
+#sug { display: none; }
+#ac:not(:placeholder-shown) ~ #sug { display: block; }
+</style></head><body>
+<div id="card" style="cursor:pointer" onclick="window.__card = 1">Clickable card</div>
+<span class="error-message">Name is required</span>
+<form><label>Name <input id="name"></label></form>
+<div class="el-form-item"><label class="el-form-item__label">Region</label>
+  <div role="combobox" tabindex="0" aria-controls="lb" id="combo">Choose</div></div>
+<ul role="listbox" id="lb">
+  <li role="option" onclick="window.__picked = 'Alpha'">Alpha</li>
+  <li role="option" onclick="window.__picked = 'Beta'">Beta</li>
+</ul>
+<div><input id="ac" placeholder="City" role="combobox" aria-autocomplete="list" aria-controls="sug">
+  <ul id="sug" role="listbox">
+    <li role="option" onclick="window.__typed = 'Paris'; document.getElementById('ac').value = 'Paris'">Paris</li>
+    <li role="option" onclick="window.__typed = 'Prague'">Prague</li>
+  </ul></div>
+<button id="press" onclick="window.__press = (window.__press || 0) + 1">Press me</button>
+<button class="row" onclick="window.__row = 1">One</button>
+<button class="row" onclick="window.__row = 2">Two</button>
+<script>
+window.__muts = [];
+new MutationObserver((rs) => {
+  for (const r of rs) {
+    const t = r.target.nodeType === 1 ? (r.target.id || r.target.tagName) : r.target.nodeName;
+    window.__muts.push(r.type + ':' + (r.attributeName || '') + ':' + t);
+  }
+}).observe(document.documentElement, {
+  attributes: true, attributeOldValue: true, subtree: true, childList: true, characterData: true,
+});
+</script></body></html>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    async fn run(state: &mut DaemonState, cmd: Value) -> Value {
+        let resp = Box::pin(execute_command(&cmd, state)).await;
+        assert_success(&resp);
+        resp
+    }
+    async fn mutations(state: &mut DaemonState) -> Value {
+        let resp = Box::pin(execute_command(
+            &json!({ "id": "m", "action": "evaluate", "script": "JSON.stringify(window.__muts)" }),
+            state,
+        ))
+        .await;
+        assert_success(&resp);
+        get_data(&resp)["result"].clone()
+    }
+
+    // snapshot -i runs all three scans: the cursor card, the error span and
+    // the nameless combobox's label.
+    let snap = run(
+        &mut state,
+        json!({ "id": "s", "action": "snapshot", "interactive": true }),
+    )
+    .await;
+    let text = get_data(&snap)["snapshot"].as_str().unwrap().to_string();
+    assert!(text.contains("Clickable card"), "{text}");
+    assert!(text.contains("Name is required"), "{text}");
+    assert!(text.contains("Region"), "{text}");
+    assert_eq!(mutations(&mut state).await, json!("[]"), "snapshot -i");
+
+    // Semantic find: locate only, then click.
+    let found = run(
+        &mut state,
+        json!({ "id": "f1", "action": "getbyrole", "role": "button", "name": "Press me" }),
+    )
+    .await;
+    assert_eq!(get_data(&found)["located"]["tag"], "button", "{found}");
+    run(
+        &mut state,
+        json!({ "id": "f2", "action": "getbyrole", "role": "button", "name": "Press me", "subaction": "click" }),
+    )
+    .await;
+    assert_evaluate(&mut state, "f3", "window.__press", json!(1)).await;
+    run(
+        &mut state,
+        json!({ "id": "f4", "action": "getbylabel", "label": "Name", "subaction": "fill", "value": "Ada" }),
+    )
+    .await;
+    assert_evaluate(
+        &mut state,
+        "f5",
+        "document.getElementById('name').value",
+        json!("Ada"),
+    )
+    .await;
+    assert_eq!(mutations(&mut state).await, json!("[]"), "find");
+
+    // nth: describe, then click the second row button.
+    let nth = run(
+        &mut state,
+        json!({ "id": "n1", "action": "nth", "selector": "button.row", "index": 1 }),
+    )
+    .await;
+    assert_eq!(get_data(&nth)["located"]["name"], "Two", "{nth}");
+    assert_eq!(get_data(&nth)["count"], 2, "{nth}");
+    run(
+        &mut state,
+        json!({ "id": "n2", "action": "nth", "selector": "button.row", "index": -1, "subaction": "click" }),
+    )
+    .await;
+    assert_evaluate(&mut state, "n3", "window.__row", json!(2)).await;
+    assert_eq!(mutations(&mut state).await, json!("[]"), "nth");
+
+    // pick on a custom listbox (open, DOM click on the option handle).
+    let picked = run(
+        &mut state,
+        json!({ "id": "p1", "action": "pick", "selector": "#combo", "option": "Beta" }),
+    )
+    .await;
+    assert_eq!(get_data(&picked)["picked"], "Beta", "{picked}");
+    assert_evaluate(&mut state, "p2", "window.__picked", json!("Beta")).await;
+    assert_eq!(mutations(&mut state).await, json!("[]"), "pick (open)");
+
+    // pick on a type-to-search field: typed, then a trusted click on the
+    // pinned suggestion.
+    let typed = run(
+        &mut state,
+        json!({ "id": "p3", "action": "pick", "selector": "#ac", "option": "Paris" }),
+    )
+    .await;
+    assert_eq!(get_data(&typed)["via"], "typed", "{typed}");
+    assert_eq!(get_data(&typed)["dispatch"], "pointer", "{typed}");
+    assert_evaluate(&mut state, "p4", "window.__typed", json!("Paris")).await;
+    assert_eq!(mutations(&mut state).await, json!("[]"), "pick (typed)");
+
+    let _ = Box::pin(execute_command(
+        &json!({ "id": "99", "action": "close" }),
+        &mut state,
+    ))
+    .await;
+    server.abort();
+}
+
 /// Same backend DOM node keeps its ref while a modal is inserted and removed.
 /// New modal nodes receive new refs instead of shifting every later element.
 #[tokio::test]
@@ -7110,7 +7257,16 @@ async fn start_bwu_confirm_server() -> (String, tokio::task::JoinHandle<()>) {
                     .to_string();
                 let form = r#"<form id="f"><input type="text" name="user" autocomplete="username" />
 <input type="password" name="pass" /><button type="submit" id="go">Sign in</button></form>
-<div id="err" role="alert"></div>"#;
+<div id="err" role="alert"></div><script>
+// Recorded once the page is parsed: the parser's own appends are not ours.
+window.__muts = [];
+document.addEventListener('DOMContentLoaded', () => new MutationObserver((rs) => {
+  for (const r of rs) if (!(r.target.id === 'err' || (r.target.parentNode && r.target.parentNode.id === 'err')))
+    window.__muts.push(r.type + ':' + (r.attributeName || '') + ':' + (r.target.id || r.target.nodeName)
+      + ':+' + [...r.addedNodes].map((n) => n.nodeName + '#' + (n.id || '')).join(',')
+      + ':-' + [...r.removedNodes].map((n) => n.nodeName + '#' + (n.id || '')).join(','));
+}).observe(document.documentElement, { attributes: true, subtree: true, childList: true, characterData: true }));
+</script>"#;
                 let body = match path.as_str() {
                     "/stays" => format!(
                         r#"<!doctype html><html><body>{form}<script>
@@ -7195,6 +7351,14 @@ async fn e2e_auth_login_bwu_fails_when_the_form_stays() {
     assert!(err.contains("still on the page"), "{err}");
     assert!(err.contains("Wrong username or password"), "{err}");
     assert!(!err.contains("super-secret"), "{err}");
+    // Only the page's own error text changed in the DOM.
+    assert_evaluate(
+        &mut state,
+        "m",
+        "JSON.stringify(window.__muts)",
+        json!("[]"),
+    )
+    .await;
 }
 
 /// #482: an Enter the page never saw is replaced by the sign-in button, and
@@ -7346,6 +7510,11 @@ async fn e2e_auth_login_picks_usable_fields_and_guards_the_submit() {
 </form>
 <script>
   document.getElementById('f').addEventListener('submit', (e) => { e.preventDefault(); window.__submitted = true; });
+  // Everything that changes in the DOM, but the page's own readonly unlock.
+  window.__muts = [];
+  new MutationObserver((rs) => {
+    for (const r of rs) if (r.attributeName !== 'readonly') window.__muts.push(r.type + ':' + (r.attributeName || ''));
+  }).observe(document.documentElement, { attributes: true, subtree: true, childList: true, characterData: true });
 </script>"##
         .to_string();
     let swapping_page = r##"<!doctype html><meta charset="utf-8"><title>login</title>
@@ -7393,7 +7562,7 @@ async fn e2e_auth_login_picks_usable_fields_and_guards_the_submit() {
     .await;
     assert_success(&resp);
     let resp = Box::pin(execute_command(
-        &eval("({ ghost: ghost.value, email: email.value, pass: pass.value.length, submitted: !!window.__submitted, marked: document.querySelectorAll('[data-cu-auth]').length })"),
+        &eval("({ ghost: ghost.value, email: email.value, pass: pass.value.length, submitted: !!window.__submitted, muts: JSON.stringify(window.__muts) })"),
         &mut state,
     ))
     .await;
@@ -7402,7 +7571,10 @@ async fn e2e_auth_login_picks_usable_fields_and_guards_the_submit() {
     assert_eq!(r["email"], "user@example.com");
     assert_eq!(r["pass"], 14);
     assert_eq!(r["submitted"], true);
-    assert_eq!(r["marked"], 0, "markers are removed after the login");
+    assert_eq!(
+        r["muts"], "[]",
+        "the login wrote nothing into the page's DOM"
+    );
 
     // 2. --no-navigate refuses a page on another origin.
     let resp = Box::pin(execute_command(

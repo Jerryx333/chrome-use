@@ -1010,15 +1010,26 @@ pub fn comment_needle(comment: &str) -> String {
 }
 
 /// Run in the page: find the form's fields and button (by role/name, robust
-/// to GitHub's markup changes), tag them `data-cu-report=title|body|submit`
-/// for the follow-up `fill`/`click`, and report what the page holds.
+/// to GitHub's markup changes), describe where each is with a structural
+/// selector for the follow-up `fill`/`click`, and report what the page holds.
+/// Nothing is written into the page: a MutationObserver sees a marker
+/// attribute's write and its removal alike.
 const WEB_FORM_JS: &str = r#"(() => {
   const P = __PARAMS__;
   const vis = e => !!e && (e.offsetParent !== null || e.getClientRects().length > 0);
   const forLabel = e => (e.id ? (document.querySelector('label[for="' + CSS.escape(e.id) + '"]') || {}).innerText : '') || '';
   const label = e => [e.getAttribute('aria-label'), e.placeholder, e.name, forLabel(e)].filter(Boolean).join(' ').toLowerCase();
   const head = e => ((e.tagName === 'INPUT' ? e.value : e.innerText) || '').trim().split('\n')[0].trim().toLowerCase();
-  document.querySelectorAll('[data-cu-report]').forEach(e => e.removeAttribute('data-cu-report'));
+  const pathOf = e => {
+    if (!e) return null;
+    const parts = [];
+    for (let n = e; n && n.nodeType === 1 && n !== document.documentElement; n = n.parentElement) {
+      let i = 1;
+      for (let s = n.previousElementSibling; s; s = s.previousElementSibling) i++;
+      parts.unshift(n.tagName.toLowerCase() + ':nth-child(' + i + ')');
+    }
+    return parts.length ? ':root > ' + parts.join(' > ') : null;
+  };
   const login = (document.querySelector('meta[name="user-login"]') || {}).content || '';
   const fields = [...document.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), textarea')].filter(vis);
   const buttons = () => [...document.querySelectorAll('button, input[type=submit]')].filter(vis);
@@ -1045,9 +1056,6 @@ const WEB_FORM_JS: &str = r#"(() => {
     body = fields.find(e => e.tagName === 'TEXTAREA' && (e.name === 'comment[body]' || /comment/.test(label(e)))) || null;
     submit = body && near(body, ['comment']);
   }
-  if (title) title.setAttribute('data-cu-report', 'title');
-  if (body) body.setAttribute('data-cu-report', 'body');
-  if (submit) submit.setAttribute('data-cu-report', 'submit');
   let needleCount = 0, anchor = null;
   if (P.needle) {
     const text = document.body ? document.body.innerText : '';
@@ -1068,6 +1076,7 @@ const WEB_FORM_JS: &str = r#"(() => {
     submit: !!submit,
     submitDisabled: !!submit && (!!submit.disabled || submit.getAttribute('aria-disabled') === 'true'),
     needleCount, anchor,
+    at: { title: pathOf(title), body: pathOf(body), submit: pathOf(submit) },
   });
 })()"#;
 
@@ -1082,6 +1091,9 @@ pub struct FormState {
     pub submit_disabled: bool,
     pub needle_count: u64,
     pub anchor: Option<String>,
+    /// Where `title`, `body` and `submit` are: a selector for each, by
+    /// position in the document.
+    pub at: std::collections::BTreeMap<String, String>,
 }
 
 /// The `eval --json` reply of [`WEB_FORM_JS`].
@@ -1103,6 +1115,15 @@ pub fn parse_form_state(reply: &Value) -> Option<FormState> {
         submit_disabled: v.get("submitDisabled").and_then(|x| x.as_bool()) == Some(true),
         needle_count: v.get("needleCount").and_then(|x| x.as_u64()).unwrap_or(0),
         anchor: s("anchor").filter(|a| !a.is_empty()),
+        at: v
+            .get("at")
+            .and_then(|a| a.as_object())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -1195,8 +1216,16 @@ impl WebSession {
         Ok(s)
     }
 
-    fn fill(&self, field: &str, text: &str) -> Result<(), String> {
-        let sel = format!("[data-cu-report=\"{field}\"]");
+    /// Where `field` is on the page now (read fresh: the page may have
+    /// re-rendered since the last look).
+    fn locate(&self, mode: &str, needle: &str, field: &str) -> Result<String, String> {
+        self.state(mode, needle)
+            .and_then(|s| s.at.get(field).cloned())
+            .ok_or_else(|| format!("could not find the {field} field on the page"))
+    }
+
+    fn fill(&self, mode: &str, field: &str, text: &str) -> Result<(), String> {
+        let sel = self.locate(mode, "", field)?;
         self.run(&["fill", &sel, "--stdin"], Some(text), 30)
             .map(|_| ())
     }
@@ -1242,8 +1271,8 @@ impl WebSession {
         done: impl Fn(&FormState) -> bool,
     ) -> Result<Option<FormState>, String> {
         let press = || {
-            self.run(&["click", "[data-cu-report=\"submit\"]"], None, 30)
-                .map(|_| ())
+            let sel = self.locate(mode, needle, "submit")?;
+            self.run(&["click", &sel], None, 30).map(|_| ())
         };
         press()?;
         let s = self.wait(mode, needle, 12, &done);
@@ -1267,10 +1296,10 @@ impl WebSession {
             return Err(format!("could not find the title field on {}", s.url));
         }
         if !same_text(s.title.as_deref(), title) {
-            self.fill("title", title)?;
+            self.fill("issue", "title", title)?;
         }
         if !body_in_url || !same_text(s.body.as_deref(), body) {
-            self.fill("body", body)?;
+            self.fill("issue", "body", body)?;
         }
         self.verify("issue", "", Some(title), body)?;
         let s = self.press_until("issue", "", body, |s| {
@@ -1288,7 +1317,7 @@ impl WebSession {
         let needle = comment_needle(comment);
         let loaded = self.load("comment", &needle)?;
         let (before, old_anchor) = (loaded.needle_count, loaded.anchor);
-        self.fill("body", comment)?;
+        self.fill("comment", "body", comment)?;
         self.verify("comment", &needle, None, comment)?;
         match self.press_until("comment", &needle, comment, |s| s.needle_count > before)? {
             Some(s) if s.needle_count > before => {
@@ -2055,7 +2084,8 @@ mod tests {
         let inner = json!({
             "ready": "complete", "login": "me", "url": "https://github.com/a/b/issues/new",
             "title": "t", "body": "b", "submit": true, "submitDisabled": false,
-            "needleCount": 2, "anchor": "issuecomment-1"
+            "needleCount": 2, "anchor": "issuecomment-1",
+            "at": { "title": ":root > body:nth-child(2) > input:nth-child(1)", "body": null }
         });
         let reply = json!({ "success": true, "data": { "result": inner.to_string() } });
         let s = parse_form_state(&reply).unwrap();
@@ -2064,11 +2094,18 @@ mod tests {
         assert_eq!(s.title.as_deref(), Some("t"));
         assert_eq!(s.needle_count, 2);
         assert_eq!(s.anchor.as_deref(), Some("issuecomment-1"));
+        assert_eq!(
+            s.at.get("title").map(String::as_str),
+            Some(":root > body:nth-child(2) > input:nth-child(1)")
+        );
+        assert!(!s.at.contains_key("body"));
         // An object result works too; a missing field stays None.
         let reply = json!({ "data": { "result": { "login": "", "title": null } } });
         let s = parse_form_state(&reply).unwrap();
         assert!(!s.ready && s.login.is_empty() && s.title.is_none() && !s.submit);
         assert!(parse_form_state(&json!({ "data": {} })).is_none());
         assert!(WEB_FORM_JS.contains("__PARAMS__"));
+        // The fields are located by position, never marked in the page.
+        assert!(!WEB_FORM_JS.contains("setAttribute") && !WEB_FORM_JS.contains("removeAttribute"));
     }
 }

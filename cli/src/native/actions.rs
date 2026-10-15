@@ -9184,8 +9184,9 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
 }
 
 /// Shared page-side helpers for `pick`: whitespace normalisation and the
-/// option-candidate collector. Candidates are tagged `data-cu-pick-idx=<i>` so
-/// the Rust side can rank their texts and click one by index.
+/// option-candidate collector. The candidates come back as a remote array next
+/// to their texts, so the Rust side can rank the texts and click one by index
+/// without marking anything in the page.
 const PICK_JS_PRELUDE: &str = r#"
     const norm = s => String(s ?? '')
         .replace(/[\u200B\u200C\u200D\u2060\uFEFF]/g, '')
@@ -9260,13 +9261,12 @@ fn pick_collect_function() -> String {
                 await new Promise(r => setTimeout(r, 120));
                 opts = collect();
             }}
-            for (const o of doc.querySelectorAll('[data-cu-pick-idx]')) o.removeAttribute('data-cu-pick-idx');
-            opts.forEach((o, i) => o.setAttribute('data-cu-pick-idx', String(i)));
             return {{
                 texts: opts.map(o => norm(o.textContent)),
                 typeahead,
                 topFrame: window.top === window,
                 hidden: hiddenFields(),
+                opts,
             }};
         }}"#,
         prelude = PICK_JS_PRELUDE
@@ -9276,10 +9276,9 @@ fn pick_collect_function() -> String {
 /// Click candidate `idx` with a synthetic pointer/mouse sequence — what `pick`
 /// has always done for a portal menu, and the fallback when the option lives in
 /// a frame the trusted coordinate click can't address.
-const PICK_DOM_CLICK_JS: &str = r#"function(idx) {
-    const doc = this.ownerDocument || document;
-    const opt = doc.querySelector('[data-cu-pick-idx="' + idx + '"]');
-    if (!opt) return false;
+const PICK_DOM_CLICK_JS: &str = r#"function(opts, idx) {
+    const opt = opts && opts[idx];
+    if (!opt || !opt.isConnected) return false;
     const fire = t => opt.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
     (opt.scrollIntoView && opt.scrollIntoView({ block: 'center' }));
     ['pointermove', 'pointerover', 'mouseover', 'pointerdown', 'mousedown', 'mouseup', 'click'].forEach(fire);
@@ -9289,10 +9288,10 @@ const PICK_DOM_CLICK_JS: &str = r#"function(idx) {
 /// After the click: did the field take the option? Polls briefly for the
 /// field's value to match the option and for the list to close (or the option
 /// to be marked selected, or a hidden companion field to change), then
-/// reports what it saw and removes the candidate tags.
+/// reports what it saw.
 fn pick_verify_function() -> String {
     format!(
-        r#"async function(idx, chosen, hiddenBefore) {{
+        r#"async function(opts, idx, chosen, hiddenBefore) {{
             const el = this;
             {prelude}
             const lc = norm(chosen).toLowerCase();
@@ -9301,7 +9300,7 @@ fn pick_verify_function() -> String {
             for (;;) {{
                 const value = norm(el.value !== undefined ? el.value : el.textContent);
                 const lv = value.toLowerCase();
-                const opt = doc.querySelector('[data-cu-pick-idx="' + idx + '"]');
+                const opt = opts && opts[idx];
                 const closed = !opt || !opt.isConnected || !visible(opt)
                     || opt.getAttribute('aria-selected') === 'true';
                 const after = hiddenFields();
@@ -9313,7 +9312,6 @@ fn pick_verify_function() -> String {
                 if (r.verified || Date.now() > deadline) break;
                 await new Promise(res => setTimeout(res, 100));
             }}
-            for (const o of doc.querySelectorAll('[data-cu-pick-idx]')) o.removeAttribute('data-cu-pick-idx');
             return r;
         }}"#,
         prelude = PICK_JS_PRELUDE
@@ -9398,12 +9396,29 @@ fn pick_hidden_changed(verify: &Value) -> Option<Value> {
         .cloned()
 }
 
+/// Object group holding `pick`'s option handles; released when `pick` ends.
+const PICK_GROUP: &str = "chrome-use-pick";
+
+fn pick_val(v: Value) -> super::cdp::types::CallArgument {
+    super::cdp::types::CallArgument {
+        value: Some(v),
+        object_id: None,
+    }
+}
+
+fn pick_obj(object_id: &str) -> super::cdp::types::CallArgument {
+    super::cdp::types::CallArgument {
+        value: None,
+        object_id: Some(object_id.to_string()),
+    }
+}
+
 async fn pick_call(
     client: &CdpClient,
     session_id: &str,
     object_id: &str,
     func: String,
-    args: Vec<Value>,
+    args: Vec<super::cdp::types::CallArgument>,
 ) -> Result<Value, String> {
     let result: super::cdp::types::EvaluateResult = client
         .send_command_typed(
@@ -9411,14 +9426,7 @@ async fn pick_call(
             &super::cdp::types::CallFunctionOnParams {
                 function_declaration: func,
                 object_id: Some(object_id.to_string()),
-                arguments: Some(
-                    args.into_iter()
-                        .map(|v| super::cdp::types::CallArgument {
-                            value: Some(v),
-                            object_id: None,
-                        })
-                        .collect(),
-                ),
+                arguments: Some(args),
                 return_by_value: Some(true),
                 await_promise: Some(true),
             },
@@ -9431,6 +9439,102 @@ async fn pick_call(
     Ok(result.result.value.unwrap_or(Value::Null))
 }
 
+/// Run [`pick_collect_function`]: what it found, by value, and the option
+/// elements themselves as a remote array (in [`PICK_GROUP`]) for the click and
+/// the check after it.
+async fn pick_collect(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    args: Vec<Value>,
+) -> Result<(Value, Option<String>), String> {
+    let reply = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object_id,
+                "functionDeclaration": pick_collect_function(),
+                "arguments": args.into_iter().map(|v| json!({ "value": v })).collect::<Vec<_>>(),
+                "returnByValue": false,
+                "awaitPromise": true,
+                "objectGroup": PICK_GROUP,
+            })),
+            Some(session_id),
+        )
+        .await?;
+    if let Some(ex) = reply.get("exceptionDetails") {
+        return Err(format!(
+            "pick failed: {}",
+            ex.get("text").and_then(Value::as_str).unwrap_or("")
+        ));
+    }
+    let Some(found) = reply["result"]["objectId"].as_str() else {
+        return Ok((Value::Null, None));
+    };
+    let listed = pick_call(
+        client,
+        session_id,
+        found,
+        "function() { return { texts: this.texts, typeahead: this.typeahead, \
+         topFrame: this.topFrame, hidden: this.hidden }; }"
+            .to_string(),
+        Vec::new(),
+    )
+    .await?;
+    let opts = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": found,
+                "functionDeclaration": "function() { return this.opts; }",
+                "returnByValue": false,
+                "objectGroup": PICK_GROUP,
+            })),
+            Some(session_id),
+        )
+        .await?["result"]["objectId"]
+        .as_str()
+        .map(String::from);
+    Ok((listed, opts))
+}
+
+/// Pin option `idx` of `pick`'s remote option array for a trusted click in
+/// the top document (scope: the document element).
+async fn pick_option_pin(
+    client: &CdpClient,
+    session_id: &str,
+    opts: &str,
+    idx: usize,
+) -> Result<super::element::SemanticPin, String> {
+    let reply = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": opts,
+                "functionDeclaration": "function(i) { const o = this[i]; \
+                    return o && o.isConnected ? [o, o.ownerDocument.documentElement] : null; }",
+                "arguments": [{ "value": idx }],
+                "returnByValue": false,
+                "objectGroup": PICK_GROUP,
+            })),
+            Some(session_id),
+        )
+        .await?;
+    let pair = reply["result"]["objectId"]
+        .as_str()
+        .ok_or("pick failed: the option went away before it was clicked")?;
+    let parts = super::element::array_element_objects(client, session_id, pair).await?;
+    let (Some(option), Some(root)) = (parts.get(&0), parts.get(&1)) else {
+        return Err("pick failed: the option went away before it was clicked".to_string());
+    };
+    Ok(super::element::SemanticPin {
+        session: session_id.to_string(),
+        scope: super::element::object_backend_node_id(client, session_id, root).await?,
+        target: super::element::object_backend_node_id(client, session_id, option).await?,
+        require_visible: false,
+    })
+}
+
 /// Atomic combobox select: `pick <selector> --option "<text>"`. Opens the control
 /// (so a portal-rendered menu mounts), polls for the option by visible text, then
 /// fires the full pointer/mouse event sequence on it — covering native `<select>`,
@@ -9440,6 +9544,28 @@ async fn pick_call(
 /// way `type` does (trusted input, field cleared first), waits for suggestions,
 /// clicks the best one, and verifies the field took it.
 async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let mut held = None;
+    let result = pick_inner(cmd, state, &mut held).await;
+    if let (Some(sid), Some(mgr)) = (held, state.browser.as_ref()) {
+        let _ = mgr
+            .client
+            .send_command(
+                "Runtime.releaseObjectGroup",
+                Some(json!({ "objectGroup": PICK_GROUP })),
+                Some(&sid),
+            )
+            .await;
+    }
+    result
+}
+
+/// `pick` itself; `held` names the session whose [`PICK_GROUP`] holds option
+/// handles once there are any.
+async fn pick_inner(
+    cmd: &Value,
+    state: &mut DaemonState,
+    held: &mut Option<String>,
+) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
     let selector = cmd
@@ -9481,7 +9607,7 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             return { ok: true, picked: norm(opt.textContent), value: this.value };
         }"#
         .to_string(),
-        vec![json!(option)],
+        vec![pick_val(json!(option))],
     )
     .await?;
     if native.is_object() {
@@ -9500,14 +9626,15 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     }
 
     // Custom widget: open it and look for the option.
-    let opened = pick_call(
+    *held = Some(effective_session_id.clone());
+    let (opened, opts) = pick_collect(
         &mgr.client,
         &effective_session_id,
         &object_id,
-        pick_collect_function(),
         vec![json!(option), json!(true), json!(2500)],
     )
     .await?;
+    let opts = opts.ok_or("pick failed: the option list could not be read")?;
     let texts = pick_texts(&opened);
     let typeahead = opened
         .get("typeahead")
@@ -9519,7 +9646,7 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             &effective_session_id,
             &object_id,
             PICK_DOM_CLICK_JS.to_string(),
-            vec![json!(idx)],
+            vec![pick_obj(&opts), pick_val(json!(idx))],
         )
         .await?;
         let verify = pick_call(
@@ -9527,7 +9654,12 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             &effective_session_id,
             &object_id,
             pick_verify_function(),
-            vec![json!(idx), json!(texts[idx]), opened["hidden"].clone()],
+            vec![
+                pick_obj(&opts),
+                pick_val(json!(idx)),
+                pick_val(json!(texts[idx])),
+                pick_val(opened["hidden"].clone()),
+            ],
         )
         .await
         .unwrap_or(Value::Null);
@@ -9565,14 +9697,14 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         false,
     )
     .await?;
-    let listed = pick_call(
+    let (listed, opts) = pick_collect(
         &mgr.client,
         &effective_session_id,
         &object_id,
-        pick_collect_function(),
         vec![json!(option), json!(false), json!(5000)],
     )
     .await?;
+    let opts = opts.ok_or("pick failed: the suggestion list could not be read")?;
     let texts = pick_texts(&listed);
     let Some(idx) = pick_best_option(option, &texts) else {
         return Err(format!(
@@ -9595,17 +9727,24 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let mut dispatch = "dom";
     let mut click_warning = None;
     if top_frame && effective_session_id == session_id {
-        let outcome = interaction::click_reporting(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            &format!("[data-cu-pick-idx=\"{idx}\"]"),
-            "left",
-            1,
-            &state.iframe_sessions,
-            false,
-        )
-        .await?;
+        // Held by its backendNodeId (a pin), not by an attribute written into
+        // the page for a selector to find.
+        let pin = pick_option_pin(&mgr.client, &session_id, &opts, idx).await?;
+        let outcome = super::element::SEMANTIC_PIN
+            .scope(
+                pin,
+                interaction::click_reporting(
+                    &mgr.client,
+                    &session_id,
+                    &state.ref_map,
+                    super::element::PINNED_SELECTOR,
+                    "left",
+                    1,
+                    &state.iframe_sessions,
+                    false,
+                ),
+            )
+            .await?;
         dispatch = outcome.dispatch;
         click_warning = outcome.warning;
     } else {
@@ -9614,7 +9753,7 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             &effective_session_id,
             &object_id,
             PICK_DOM_CLICK_JS.to_string(),
-            vec![json!(idx)],
+            vec![pick_obj(&opts), pick_val(json!(idx))],
         )
         .await?;
     }
@@ -9624,7 +9763,12 @@ async fn handle_pick(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         &effective_session_id,
         &object_id,
         pick_verify_function(),
-        vec![json!(idx), json!(chosen), listed["hidden"].clone()],
+        vec![
+            pick_obj(&opts),
+            pick_val(json!(idx)),
+            pick_val(json!(chosen)),
+            pick_val(listed["hidden"].clone()),
+        ],
     )
     .await?;
     let verified = verify
@@ -17633,84 +17777,6 @@ fn find_subaction(cmd: &Value) -> &str {
         .unwrap_or("locate")
 }
 
-/// Drop every marker a previous `find` may have left behind (a daemon that
-/// died between locating and cleaning up), so this run's `querySelector`
-/// cannot pick up a stale node.
-fn with_located_marker_reset(locate_js: &str) -> String {
-    format!(
-        "(() => {{ document.querySelectorAll('[data-chrome-use-located]')\
-         .forEach(e => e.removeAttribute('data-chrome-use-located')); return {locate_js}; }})()"
-    )
-}
-
-/// A locate script returns `true`, or `{found: true, count, visibleCount}`
-/// when it can say how many nodes matched. `Some(extra)` when found.
-fn located_outcome(value: Option<&Value>) -> Option<Value> {
-    match value? {
-        Value::Bool(true) => Some(json!({})),
-        Value::Object(o) if o.get("found").and_then(|v| v.as_bool()) == Some(true) => {
-            let mut extra = o.clone();
-            extra.remove("found");
-            Some(Value::Object(extra))
-        }
-        _ => None,
-    }
-}
-
-/// Describe the located node — and, for a click, first move the marker to the
-/// nearest clickable ancestor. A text match lands on the innermost node that
-/// holds the words (a `<span>` inside a `div[role=button]`); a coordinate click
-/// on that span can still miss the control's hit area, and a DOM click on it
-/// fires nothing the control listens for (#354).
-fn located_target_js(retarget_to_clickable: bool) -> String {
-    format!(
-        r#"(() => {{
-            const el0 = document.querySelector('[data-chrome-use-located]');
-            if (!el0) return null;
-            const CLICKABLE = 'a[href], button, summary, label, select, input, textarea, '
-                + '[role=button], [role=link], [role=menuitem], [role=menuitemcheckbox], '
-                + '[role=menuitemradio], [role=tab], [role=option], [role=checkbox], '
-                + '[role=radio], [role=switch], [role=treeitem], [onclick]';
-            const norm = s => (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
-            const describe = el => {{
-                const r = el.getBoundingClientRect();
-                let visible = r.width > 0 && r.height > 0;
-                if (visible && typeof el.checkVisibility === 'function') {{
-                    visible = el.checkVisibility({{ checkOpacity: true, checkVisibilityCSS: true }});
-                }}
-                const text = norm(el.innerText || el.textContent);
-                const name = norm(el.getAttribute('aria-label') || el.getAttribute('title')
-                    || el.getAttribute('alt') || el.getAttribute('placeholder') || text);
-                const out = {{
-                    tag: el.tagName.toLowerCase(),
-                    visible,
-                    box: {{ x: Math.round(r.left), y: Math.round(r.top),
-                           width: Math.round(r.width), height: Math.round(r.height) }},
-                }};
-                const role = el.getAttribute('role');
-                if (role) out.role = role;
-                if (name) out.name = name.slice(0, 80);
-                if (text && text !== name) out.text = text.slice(0, 80);
-                return out;
-            }};
-            let el = el0, from = null;
-            if ({retarget} && el0.closest) {{
-                const c = el0.closest(CLICKABLE);
-                if (c && c !== el0 && c !== document.body && c !== document.documentElement) {{
-                    from = describe(el0);
-                    el0.removeAttribute('data-chrome-use-located');
-                    c.setAttribute('data-chrome-use-located', 'true');
-                    el = c;
-                }}
-            }}
-            const d = describe(el);
-            if (from) d.retargetedFrom = from;
-            return d;
-        }})()"#,
-        retarget = retarget_to_clickable,
-    )
-}
-
 /// Evaluate an expression in the main frame of the active page, by value.
 /// `None` on any failure — every caller treats that as "cannot tell".
 async fn eval_main_by_value(
@@ -17795,7 +17861,7 @@ async fn click_reacted(client: &super::cdp::client::CdpClient, session_id: &str)
     }
 }
 
-/// Everything a semantic `find` does once its locate script has marked a node:
+/// Everything a semantic `find` or `nth` does once it has pinned a node:
 /// describe it, answer a bare `find` with that description, refuse to click a
 /// node nobody can see, run the requested action, and say when a click
 /// changed nothing.
@@ -17804,38 +17870,26 @@ async fn finish_located(
     state: &mut DaemonState,
     selector: &str,
     locate_extra: Value,
-    retarget_to_clickable: bool,
 ) -> Result<Value, String> {
     let subaction = find_subaction(cmd);
     let target = if super::element::semantic_pin_active(selector) {
         let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
         let sid = mgr.active_session_id()?;
         let object = super::element::resolve_semantic_pin(&mgr.client, sid).await?;
-        let result=mgr.client.send_command("Runtime.callFunctionOn",Some(json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();return {tag:this.tagName.toLowerCase(),visible:true,role:this.getAttribute('role') || '',name:this.getAttribute('aria-label') || '',box:{x:r.x,y:r.y,width:r.width,height:r.height}}}","returnByValue":true})),Some(sid)).await?;
         let mut description = locate_extra
             .get("selectedDescription")
             .cloned()
             .unwrap_or_else(|| json!({}));
-        description["box"] = result["result"]["value"]["box"].clone();
-        description["visible"] = result["result"]["value"]["visible"].clone();
+        // `nth` describes its node itself (box and visibility included); a
+        // semantic match is visible by construction and gets its box here.
+        if description.get("box").is_none() {
+            let result=mgr.client.send_command("Runtime.callFunctionOn",Some(json!({"objectId":object,"functionDeclaration":"function(){const r=this.getBoundingClientRect();return {tag:this.tagName.toLowerCase(),visible:true,role:this.getAttribute('role') || '',name:this.getAttribute('aria-label') || '',box:{x:r.x,y:r.y,width:r.width,height:r.height}}}","returnByValue":true})),Some(sid)).await?;
+            description["box"] = result["result"]["value"]["box"].clone();
+            description["visible"] = result["result"]["value"]["visible"].clone();
+        }
         Some(description)
     } else {
-        match state.browser.as_ref() {
-            Some(mgr) => match mgr.active_session_id() {
-                Ok(sid) => {
-                    let sid = sid.to_string();
-                    eval_main_by_value(
-                        &mgr.client,
-                        &sid,
-                        located_target_js(retarget_to_clickable && subaction == "click"),
-                    )
-                    .await
-                    .filter(|v| v.is_object())
-                }
-                Err(_) => None,
-            },
-            None => None,
-        }
+        None
     };
 
     if subaction == "locate" {
@@ -18124,78 +18178,10 @@ async fn handle_getbyrole(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     let result = super::element::SEMANTIC_PIN
         .scope(
             located.pin,
-            finish_located(
-                cmd,
-                state,
-                "[data-chrome-use-located='true']",
-                located.extra,
-                false,
-            ),
+            finish_located(cmd, state, super::element::PINNED_SELECTOR, located.extra),
         )
         .await;
-    clear_semantic_marker(state).await;
     result
-}
-
-async fn clear_semantic_marker(state: &DaemonState) {
-    if let Some(browser) = state.browser.as_ref() {
-        let _ = browser.evaluate("document.querySelectorAll('[data-chrome-use-located]').forEach(e=>e.removeAttribute('data-chrome-use-located'))", None).await;
-    }
-}
-
-/// Locate script for `find text`. The old version took the first *leaf* in
-/// document order whose text contained the words — which is often a hidden
-/// duplicate, or a `<script>`/`<title>`, and never a control whose label is
-/// split across child nodes. That is how `find text "请求编入索引"` ended up
-/// clicking an account avatar, then clicking nothing at all (#354).
-///
-/// Now: the deepest element whose (whitespace-normalized) text holds the
-/// words, skipping non-rendered elements; ranked visible first, then an exact
-/// text match, then the shortest text; ties keep document order.
-fn text_locate_js(value: &str, exact: bool) -> String {
-    format!(
-        r#"(() => {{
-            const norm = s => (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
-            const want = norm({want});
-            if (!want) return false;
-            const exact = {exact};
-            const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'HEAD', 'TITLE', 'META', 'LINK']);
-            const holds = el => norm(el.textContent).includes(want);
-            const equals = el => norm(el.textContent) === want;
-            const found = [];
-            // Text containment is monotone upwards, so only subtrees that hold
-            // the words need visiting.
-            const visit = el => {{
-                const kids = Array.from(el.children).filter(c => !SKIP.has(c.tagName) && holds(c));
-                if (exact) {{
-                    if (equals(el) && !kids.some(equals)) found.push(el);
-                }} else if (!kids.length && el !== root) {{
-                    // `root` holding the words with no child that does means
-                    // they sit in a skipped element (a <script>), not on screen.
-                    found.push(el);
-                }}
-                kids.forEach(visit);
-            }};
-            const root = document.body || document.documentElement;
-            if (!root || !holds(root)) return false;
-            visit(root);
-            if (!found.length) return false;
-            const visible = el => {{
-                const r = el.getBoundingClientRect();
-                if (!(r.width > 0 && r.height > 0)) return false;
-                return typeof el.checkVisibility !== 'function'
-                    || el.checkVisibility({{ checkOpacity: true, checkVisibilityCSS: true }});
-            }};
-            const ranked = found.map((el, i) => ({{
-                el, i, vis: visible(el), eq: equals(el), len: norm(el.textContent).length,
-            }}));
-            ranked.sort((a, b) => (b.vis - a.vis) || (b.eq - a.eq) || (a.len - b.len) || (a.i - b.i));
-            ranked[0].el.setAttribute('data-chrome-use-located', 'true');
-            return {{ found: true, count: found.length, visibleCount: ranked.filter(r => r.vis).length }};
-        }})()"#,
-        want = serde_json::to_string(value).unwrap_or_default(),
-        exact = exact,
-    )
 }
 
 async fn handle_semantic_locator(
@@ -18243,32 +18229,28 @@ async fn handle_nth(cmd: &Value, state: &mut DaemonState) -> Result<Value, Strin
         .and_then(|v| v.as_i64())
         .ok_or("Missing 'index' parameter")?;
 
+    // The node is held by its backendNodeId (a pin), never marked with an
+    // attribute: a MutationObserver sees a marker's write and its removal.
     let js = format!(
         r#"(() => {{
             const els = document.querySelectorAll({sel});
             const idx = {idx} < 0 ? els.length + {idx} : {idx};
-            if (idx < 0 || idx >= els.length) return false;
-            els[idx].setAttribute('data-chrome-use-located', 'true');
-            return {{ found: true, count: els.length }};
+            if (idx < 0 || idx >= els.length) return null;
+            return [els[idx], document.documentElement, els.length];
         }})()"#,
         sel = serde_json::to_string(selector).unwrap_or_default(),
         idx = index,
     );
-
-    let result: super::cdp::types::EvaluateResult = mgr
+    let located = nth_pin(&mgr.client, &session_id, js).await;
+    let _ = mgr
         .client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &super::cdp::types::EvaluateParams {
-                expression: with_located_marker_reset(&js),
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
+        .send_command(
+            "Runtime.releaseObjectGroup",
+            Some(json!({ "objectGroup": NTH_GROUP })),
             Some(&session_id),
         )
-        .await?;
-
-    let Some(extra) = located_outcome(result.result.value.as_ref()) else {
+        .await;
+    let Some((pin, extra)) = located? else {
         return Err(format!(
             "No element at index {} for selector '{}'",
             index, selector
@@ -18276,19 +18258,91 @@ async fn handle_nth(cmd: &Value, state: &mut DaemonState) -> Result<Value, Strin
     };
 
     // The caller named this node with its own CSS selector: act on exactly it.
-    let located = "[data-chrome-use-located='true']";
-    let action_result = finish_located(cmd, state, located, extra, false).await;
+    super::element::SEMANTIC_PIN
+        .scope(
+            pin,
+            finish_located(cmd, state, super::element::PINNED_SELECTOR, extra),
+        )
+        .await
+}
 
-    if let Some(ref browser) = state.browser {
-        let _ = browser
-            .evaluate(
-                "document.querySelector('[data-chrome-use-located]')?.removeAttribute('data-chrome-use-located')",
-                None,
-            )
-            .await;
+const NTH_GROUP: &str = "chrome-use-nth";
+
+/// Describe a located node for `find`'s output: tag, visibility, box, and the
+/// role / name / text a caller recognises it by.
+const LOCATED_DESCRIBE_FUNCTION: &str = r#"function() {
+    const norm = s => (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
+    const r = this.getBoundingClientRect();
+    let visible = r.width > 0 && r.height > 0;
+    if (visible && typeof this.checkVisibility === 'function') {
+        visible = this.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
     }
+    const text = norm(this.innerText || this.textContent);
+    const name = norm(this.getAttribute('aria-label') || this.getAttribute('title')
+        || this.getAttribute('alt') || this.getAttribute('placeholder') || text);
+    const out = {
+        tag: this.tagName.toLowerCase(),
+        visible,
+        box: { x: Math.round(r.left), y: Math.round(r.top),
+               width: Math.round(r.width), height: Math.round(r.height) },
+    };
+    const role = this.getAttribute('role');
+    if (role) out.role = role;
+    if (name) out.name = name.slice(0, 80);
+    if (text && text !== name) out.text = text.slice(0, 80);
+    return out;
+}"#;
 
-    action_result
+/// Run `nth`'s locate script, which returns `[element, documentElement, count]`
+/// or `null`, and pin the element. `Ok(None)` when there is no such element.
+async fn nth_pin(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    js: String,
+) -> Result<Option<(super::element::SemanticPin, Value)>, String> {
+    let reply = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": js, "returnByValue": false, "objectGroup": NTH_GROUP })),
+            Some(session_id),
+        )
+        .await?;
+    let Some(array) = reply["result"]["objectId"].as_str() else {
+        return Ok(None);
+    };
+    if reply.get("exceptionDetails").is_some() {
+        return Ok(None);
+    }
+    let parts = super::element::array_element_objects(client, session_id, array).await?;
+    let (Some(target), Some(root)) = (parts.get(&0), parts.get(&1)) else {
+        return Ok(None);
+    };
+    let count = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({ "objectId": array, "functionDeclaration": "function() { return this[2]; }", "returnByValue": true })),
+            Some(session_id),
+        )
+        .await?["result"]["value"]
+        .clone();
+    let description = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({ "objectId": target, "functionDeclaration": LOCATED_DESCRIBE_FUNCTION, "returnByValue": true })),
+            Some(session_id),
+        )
+        .await?["result"]["value"]
+        .clone();
+    let pin = super::element::SemanticPin {
+        session: session_id.to_string(),
+        scope: super::element::object_backend_node_id(client, session_id, root).await?,
+        target: super::element::object_backend_node_id(client, session_id, target).await?,
+        require_visible: false,
+    };
+    Ok(Some((
+        pin,
+        json!({ "count": count, "selectedDescription": description }),
+    )))
 }
 
 async fn handle_find(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
@@ -20792,7 +20846,21 @@ struct AuthScope {
     context_id: std::sync::atomic::AtomicI64,
     /// A child frame's origin: its fields are filled only while it is there.
     frame_origin: Option<String>,
+    /// The elements this login chose, by tag: never marked in the page (a
+    /// MutationObserver sees an attribute written and removed), held here by
+    /// `backendNodeId` and handed to page scripts as `cuAuth(tag)`.
+    marked: std::sync::Mutex<HashMap<String, AuthNode>>,
 }
+
+/// An element a login chose, and the root element of its document.
+#[derive(Clone, Copy)]
+struct AuthNode {
+    node: i64,
+    root: i64,
+}
+
+/// Object group of the handles a login resolves; released when it ends.
+const AUTH_GROUP: &str = "chrome-use-auth";
 
 impl AuthScope {
     fn top(session_id: &str) -> Self {
@@ -20802,7 +20870,26 @@ impl AuthScope {
             frame_id: None,
             context_id: std::sync::atomic::AtomicI64::new(0),
             frame_origin: None,
+            marked: Default::default(),
         }
+    }
+
+    fn marked_node(&self, tag: &str) -> Option<AuthNode> {
+        self.marked.lock().ok()?.get(tag).copied()
+    }
+
+    /// Pin the element chosen for `tag` (a field or button in the top
+    /// document), for the shared `fill` / `click` paths.
+    fn node_pin(&self, tag: &str) -> Result<super::element::SemanticPin, String> {
+        let n = self
+            .marked_node(tag)
+            .ok_or("auth login: the field went away before it was used")?;
+        Ok(super::element::SemanticPin {
+            session: self.session_id.clone(),
+            scope: n.root,
+            target: n.node,
+            require_visible: false,
+        })
     }
 
     fn in_frame(&self) -> bool {
@@ -20900,21 +20987,25 @@ async fn scope_eval_once(
     let mut renewed = false;
     loop {
         let ctx = scope.context_id.load(std::sync::atomic::Ordering::Relaxed);
-        let mut params = json!({
-            "expression": expression,
-            "returnByValue": by_value,
-            "awaitPromise": false,
-        });
-        if ctx != 0 {
-            params["contextId"] = json!(ctx);
-        }
-        let result = client
-            .send_command_typed::<_, super::cdp::types::EvaluateResult>(
-                "Runtime.evaluate",
-                &params,
-                Some(&scope.session_id),
-            )
-            .await;
+        let result = if expression.contains("cuAuth(") {
+            scope_call_with_marked(client, scope, ctx, expression, by_value).await
+        } else {
+            let mut params = json!({
+                "expression": expression,
+                "returnByValue": by_value,
+                "awaitPromise": false,
+            });
+            if ctx != 0 {
+                params["contextId"] = json!(ctx);
+            }
+            client
+                .send_command_typed::<_, super::cdp::types::EvaluateResult>(
+                    "Runtime.evaluate",
+                    &params,
+                    Some(&scope.session_id),
+                )
+                .await
+        };
         match (result, scope.frame_id.as_deref()) {
             (Err(e), Some(frame)) if ctx != 0 && !renewed && page_went_away(&e) => {
                 renewed = true;
@@ -20930,48 +21021,186 @@ async fn scope_eval_once(
     }
 }
 
-/// The element `sel` matches in the scope, as a remote object.
+/// Run `expression` with `cuAuth(tag)` naming the element this login chose
+/// for `tag` (`null` once it is gone, as after a navigation). The elements
+/// are resolved from their `backendNodeId`s into the scope's world and passed
+/// as arguments, so nothing is written into the page to find them by.
+async fn scope_call_with_marked(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    ctx: i64,
+    expression: &str,
+    by_value: bool,
+) -> Result<super::cdp::types::EvaluateResult, String> {
+    let marked: Vec<(String, AuthNode)> = scope
+        .marked
+        .lock()
+        .map(|m| m.iter().map(|(t, n)| (t.clone(), *n)).collect())
+        .unwrap_or_default();
+    let mut tags = Vec::new();
+    let mut objects = Vec::new();
+    for (tag, n) in marked {
+        let mut params = json!({ "backendNodeId": n.node, "objectGroup": AUTH_GROUP });
+        if ctx != 0 {
+            params["executionContextId"] = json!(ctx);
+        }
+        let resolved = client
+            .send_command("DOM.resolveNode", Some(params), Some(&scope.session_id))
+            .await;
+        if let Some(id) = resolved
+            .ok()
+            .and_then(|r| r["object"]["objectId"].as_str().map(String::from))
+        {
+            tags.push(tag);
+            objects.push(id);
+        }
+    }
+    let function = format!(
+        "function(__tags, ...__els) {{ const __m = new Map(__tags.map((t, i) => [t, __els[i]])); \
+         const cuAuth = (t) => __m.get(t) || null; return ({expression}); }}"
+    );
+    let mut params = json!({
+        "functionDeclaration": function,
+        "arguments": std::iter::once(json!({ "value": tags }))
+            .chain(objects.iter().map(|id| json!({ "objectId": id })))
+            .collect::<Vec<_>>(),
+        "returnByValue": by_value,
+        "awaitPromise": false,
+        "objectGroup": AUTH_GROUP,
+    });
+    match objects.first() {
+        // Called on one of the elements: it runs in their world.
+        Some(first) => params["objectId"] = json!(first),
+        None if ctx != 0 => params["executionContextId"] = json!(ctx),
+        None => {
+            // Nothing chosen is on the page (any more): every lookup is null.
+            let mut params = json!({
+                "expression": format!("((cuAuth) => ({expression}))(() => null)"),
+                "returnByValue": by_value,
+                "awaitPromise": false,
+            });
+            if ctx != 0 {
+                params["contextId"] = json!(ctx);
+            }
+            return client
+                .send_command_typed("Runtime.evaluate", &params, Some(&scope.session_id))
+                .await;
+        }
+    }
+    client
+        .send_command_typed("Runtime.callFunctionOn", &params, Some(&scope.session_id))
+        .await
+}
+
+/// Run a script that returns the element to choose for `tag` (or a primitive
+/// that says why not), and remember the element under `tag`. Returns
+/// `true` once it is remembered, otherwise what the script returned.
+async fn scope_mark(
+    client: &super::cdp::client::CdpClient,
+    scope: &AuthScope,
+    expression: &str,
+    tag: &str,
+) -> Result<Option<Value>, String> {
+    let r = scope_eval(client, scope, expression, false).await?;
+    let Some(object) = r
+        .result
+        .object_id
+        .as_deref()
+        .filter(|_| r.exception_details.is_none())
+    else {
+        return Ok(r.result.value);
+    };
+    let node = super::element::object_backend_node_id(client, &scope.session_id, object).await?;
+    let root = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object,
+                "functionDeclaration": "function() { return this.ownerDocument.documentElement; }",
+                "returnByValue": false,
+                "objectGroup": AUTH_GROUP,
+            })),
+            Some(&scope.session_id),
+        )
+        .await?;
+    let root = root["result"]["objectId"]
+        .as_str()
+        .ok_or("auth login: the chosen element has no document")?;
+    let root = super::element::object_backend_node_id(client, &scope.session_id, root).await?;
+    if let Ok(mut m) = scope.marked.lock() {
+        m.insert(tag.to_string(), AuthNode { node, root });
+    }
+    Ok(Some(Value::Bool(true)))
+}
+
+/// Drop the handles a login resolved, in the tab and in the scope's frame.
+async fn release_auth_handles(
+    client: &super::cdp::client::CdpClient,
+    page_session: &str,
+    scope: &AuthScope,
+) {
+    for session in [page_session, scope.session_id.as_str()] {
+        let _ = client
+            .send_command(
+                "Runtime.releaseObjectGroup",
+                Some(json!({ "objectGroup": AUTH_GROUP })),
+                Some(session),
+            )
+            .await;
+    }
+}
+
+/// The element this login chose for `tag`, as a remote object in the scope.
 async fn auth_object(
     client: &super::cdp::client::CdpClient,
     scope: &AuthScope,
-    sel: &str,
+    tag: &str,
 ) -> Result<String, String> {
-    let expression = format!(
-        "document.querySelector({})",
-        serde_json::to_string(sel).unwrap_or_default()
-    );
-    let r = scope_eval(client, scope, &expression, false).await?;
-    if r.exception_details.is_some() {
-        return Err(format!("auth login: invalid selector {sel}"));
+    let gone = || "auth login: the field went away before it was filled".to_string();
+    let n = scope.marked_node(tag).ok_or_else(gone)?;
+    let ctx = scope.context_id.load(std::sync::atomic::Ordering::Relaxed);
+    let mut params = json!({ "backendNodeId": n.node, "objectGroup": AUTH_GROUP });
+    if ctx != 0 {
+        params["executionContextId"] = json!(ctx);
     }
-    r.result
-        .object_id
-        .ok_or_else(|| "auth login: the field went away before it was filled".to_string())
+    let r = client
+        .send_command("DOM.resolveNode", Some(params), Some(&scope.session_id))
+        .await
+        .map_err(|_| gone())?;
+    r["object"]["objectId"]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(gone)
 }
 
-/// `fill` for a field marked in the scope. The top document keeps the plain
-/// `fill` path; a child frame's field is resolved in its own document.
+/// `fill` for the field chosen for `tag`. The top document keeps the plain
+/// `fill` path (on the chosen node); a child frame's field is resolved in its
+/// own document.
 async fn auth_fill(
     client: &super::cdp::client::CdpClient,
     scope: &AuthScope,
     ref_map: &RefMap,
     iframe_sessions: &HashMap<String, String>,
-    sel: &str,
+    tag: &str,
     value: &str,
 ) -> Result<(), String> {
     if !scope.in_frame() {
-        return interaction::fill(
-            client,
-            &scope.session_id,
-            ref_map,
-            sel,
-            value,
-            iframe_sessions,
-        )
-        .await
-        .map(|_| ());
+        return super::element::SEMANTIC_PIN
+            .scope(
+                scope.node_pin(tag)?,
+                interaction::fill(
+                    client,
+                    &scope.session_id,
+                    ref_map,
+                    super::element::PINNED_SELECTOR,
+                    value,
+                    iframe_sessions,
+                ),
+            )
+            .await
+            .map(|_| ());
     }
-    let object_id = auth_object(client, scope, sel).await?;
+    let object_id = auth_object(client, scope, tag).await?;
     interaction::fill_object(client, &scope.session_id, &object_id, value)
         .await
         .map(|_| ())
@@ -21045,6 +21274,7 @@ async fn refresh_auth_frames(
             frame_id: Some(fid),
             context_id: std::sync::atomic::AtomicI64::new(ctx),
             frame_origin: Some(origin),
+            marked: Default::default(),
         });
     }
 }
@@ -21126,15 +21356,15 @@ async fn wait_for_auth_scope(
 const AUTH_SUBMIT_WORDS: &str = r"sign[\s_-]?in|log[\s_-]?in|log[\s_-]?on|continue|next|submit|verify|登录|登入|继续|下一步|确定";
 const AUTH_NOT_SUBMIT_WORDS: &str = r"passkey|security key|with google|with apple|with facebook|with microsoft|with github|forgot|reset|create|sign[\s_-]?up|register|cancel|back|show|hide|remember|help|通行密钥|忘记|注册|取消|返回";
 
-/// Mark the control that submits the form the field `field_tag` is in (the
+/// Find the control that submits the form the field `field_tag` is in (the
 /// whole document when it has no form): a visible, enabled button whose words
 /// say sign in / continue, or the form's own submit button, never one for
 /// another sign-in method ("Sign in with Passkey" sits next to Apple's).
-fn auth_submit_finder(field_tag: Option<&str>, submit_tag: &str) -> String {
+/// Returns the element, for [`scope_mark`], or `false`.
+fn auth_submit_finder(field_tag: Option<&str>) -> String {
     format!(
         r#"(() => {{
-            const field = {field} === null ? null
-                : document.querySelector('[data-cu-auth=' + JSON.stringify({field}) + ']');
+            const field = {field} === null ? null : cuAuth({field});
             const usable = (el) => {{
                 const r = el.getBoundingClientRect();
                 const s = window.getComputedStyle(el);
@@ -21158,18 +21388,11 @@ fn auth_submit_finder(field_tag: Option<&str>, submit_tag: &str) -> String {
                 if (!yes.test(words) && !submits) score = 0;
                 if (score > bestScore) {{ best = el; bestScore = score; }}
             }}
-            if (!best) return false;
-            for (const old of document.querySelectorAll('[data-cu-auth=' + JSON.stringify({tag}) + ']')) {{
-                if (old !== best) old.removeAttribute('data-cu-auth');
-            }}
-            best.setAttribute('data-cu-auth', {tag});
-            best[Symbol.for('cu-auth')] = {tag};
-            return true;
+            return best || false;
         }})()"#,
         field = serde_json::to_string(&field_tag).unwrap_or_default(),
         yes = serde_json::to_string(AUTH_SUBMIT_WORDS).unwrap_or_default(),
         no = serde_json::to_string(AUTH_NOT_SUBMIT_WORDS).unwrap_or_default(),
-        tag = serde_json::to_string(submit_tag).unwrap_or_default(),
     )
 }
 
@@ -21192,8 +21415,8 @@ fn auth_submit_finder(field_tag: Option<&str>, submit_tag: &str) -> String {
 /// command failed because the tab detached under it is judged the same way,
 /// by what the page shows afterwards, not reported as an unknown outcome.
 ///
-/// `marked`: the caller already marked the control (`data-cu-auth="submit-<marker>"`,
-/// a submit selector the user named).
+/// `marked`: the caller already chose the control (tag `submit-<marker>`, a
+/// submit selector the user named).
 #[allow(clippy::too_many_arguments)]
 async fn auth_submit(
     client: &super::cdp::client::CdpClient,
@@ -21207,15 +21430,7 @@ async fn auth_submit(
     if scope.in_frame() {
         let submit_tag = format!("submit-{marker}");
         let found = marked
-            || scope_eval(
-                client,
-                scope,
-                &auth_submit_finder(field_tag, &submit_tag),
-                true,
-            )
-            .await?
-            .result
-            .value
+            || scope_mark(client, scope, &auth_submit_finder(field_tag), &submit_tag).await?
                 == Some(Value::Bool(true));
         if found {
             let tag_json = serde_json::to_string(&submit_tag).unwrap_or_default();
@@ -21223,7 +21438,7 @@ async fn auth_submit(
                 client,
                 scope,
                 &format!(
-                    "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+                    "(() => {{ const b = cuAuth({tag_json}); \
                      if (!b) return false; const k = Symbol.for('cu-clicked'); b[k] = ''; \
                      b.addEventListener('click', (e) => {{ b[k] = e.isTrusted ? 'trusted' : 'synthetic'; }}, {{ once: true, capture: true }}); \
                      b.focus(); return document.activeElement === b; }})()"
@@ -21245,7 +21460,7 @@ async fn auth_submit(
                         client,
                         scope,
                         &format!(
-                            "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+                            "(() => {{ const b = cuAuth({tag_json}); \
                              return !b || !!b[Symbol.for('cu-clicked')]; }})()"
                         ),
                         true,
@@ -21263,7 +21478,7 @@ async fn auth_submit(
                 client,
                 scope,
                 &format!(
-                    "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+                    "(() => {{ const b = cuAuth({tag_json}); \
                      if (!b) return 'gone'; const k = Symbol.for('cu-clicked'); \
                      if (b[k]) return b[k]; b.click(); return 'dom'; }})()"
                 ),
@@ -21341,7 +21556,7 @@ fn arm_enter_receipt(receipt: &str, field_tag: Option<&str>) -> String {
                 window.addEventListener('keydown', (e) => {{ if (e.key === 'Enter') window[k] = 'got'; }}, true);
             }}
             const tag = {field};
-            const el = tag === null ? null : document.querySelector('[data-cu-auth=' + JSON.stringify(tag) + ']');
+            const el = tag === null ? null : cuAuth(tag);
             if (el && document.activeElement !== el) el.focus();
         }})()"#,
         r = serde_json::to_string(receipt).unwrap_or_default(),
@@ -21425,15 +21640,7 @@ async fn auth_submit_after_lost_enter(
 ) -> Result<&'static str, String> {
     let submit_tag = format!("submit-{marker}");
     let tag_json = serde_json::to_string(&submit_tag).unwrap_or_default();
-    let found = scope_eval(
-        client,
-        scope,
-        &auth_submit_finder(field_tag, &submit_tag),
-        true,
-    )
-    .await?
-    .result
-    .value
+    let found = scope_mark(client, scope, &auth_submit_finder(field_tag), &submit_tag).await?
         == Some(Value::Bool(true));
     if !found {
         let field = serde_json::to_string(&field_tag).unwrap_or_default();
@@ -21442,7 +21649,7 @@ async fn auth_submit_after_lost_enter(
             scope,
             &format!(
                 "(() => {{ const tag = {field}; \
-                 const el = tag === null ? null : document.querySelector('[data-cu-auth=' + JSON.stringify(tag) + ']'); \
+                 const el = tag === null ? null : cuAuth(tag); \
                  const f = el && el.form; if (!f) return false; \
                  if (typeof f.requestSubmit === 'function') f.requestSubmit(); else f.submit(); return true; }})()"
             ),
@@ -21466,7 +21673,7 @@ async fn auth_submit_after_lost_enter(
         client,
         scope,
         &format!(
-            "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+            "(() => {{ const b = cuAuth({tag_json}); \
              if (!b) return false; const k = Symbol.for('cu-clicked'); b[k] = ''; \
              b.addEventListener('click', (e) => {{ b[k] = e.isTrusted ? 'trusted' : 'synthetic'; }}, {{ once: true, capture: true }}); \
              const a = document.activeElement; if (a && a !== document.body && a.blur) a.blur(); return true; }})()"
@@ -21474,17 +21681,20 @@ async fn auth_submit_after_lost_enter(
         true,
     )
     .await?;
-    let selector = format!("[data-cu-auth=\"{submit_tag}\"]");
-    match interaction::click(
-        client,
-        &scope.session_id,
-        ref_map,
-        &selector,
-        "left",
-        1,
-        iframe_sessions,
-    )
-    .await
+    match super::element::SEMANTIC_PIN
+        .scope(
+            scope.node_pin(&submit_tag)?,
+            interaction::click(
+                client,
+                &scope.session_id,
+                ref_map,
+                super::element::PINNED_SELECTOR,
+                "left",
+                1,
+                iframe_sessions,
+            ),
+        )
+        .await
     {
         Ok(()) => {}
         // Refused before it ran: the caller closes the menu and submits again
@@ -21495,7 +21705,7 @@ async fn auth_submit_after_lost_enter(
         Err(e) => return Err(e),
     }
     let seen = format!(
-        "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+        "(() => {{ const b = cuAuth({tag_json}); \
          return !b ? 'gone' : (b[Symbol.for('cu-clicked')] || ''); }})()"
     );
     for _ in 0..10 {
@@ -21515,7 +21725,7 @@ async fn auth_submit_after_lost_enter(
         client,
         scope,
         &format!(
-            "(() => {{ const b = document.querySelector('[data-cu-auth=' + JSON.stringify({tag_json}) + ']'); \
+            "(() => {{ const b = cuAuth({tag_json}); \
              if (!b) return 'gone'; if (b[Symbol.for('cu-clicked')]) return 'seen'; b.click(); return 'dom'; }})()"
         ),
         true,
@@ -21582,8 +21792,9 @@ async fn auth_close_menu_after(mgr: &mut BrowserManager, closed: &mut u32) -> Op
 }
 
 /// Wait for the first USABLE element any of `selectors` matches (visible,
-/// enabled, editable; a hidden duplicate earlier in the DOM is skipped), mark
-/// it `data-cu-auth="<tag>"`, and return a selector for exactly that element.
+/// enabled, editable; a hidden duplicate earlier in the DOM is skipped),
+/// remember it under `tag` (see [`AuthScope::marked`]), and return the tag,
+/// which names exactly that element from then on.
 /// The login then fills and checks the element it chose, never "whatever
 /// `querySelector` returns now". (After upstream vercel-labs/agent-browser
 /// #2014.)
@@ -21604,7 +21815,6 @@ async fn mark_usable_auth_element(
 ) -> Result<String, String> {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
     let sels = serde_json::to_string(selectors).unwrap_or_default();
-    let tag_json = serde_json::to_string(tag).unwrap_or_default();
     let origin_json = serde_json::to_string(&origin).unwrap_or_default();
     let expression = format!(
         r#"(() => {{
@@ -21624,24 +21834,15 @@ async fn mark_usable_auth_element(
                 let found;
                 try {{ found = document.querySelectorAll(sel); }} catch (e) {{ continue; }}
                 for (const el of found) {{
-                    if (!usable(el)) continue;
-                    for (const old of document.querySelectorAll('[data-cu-auth=' + JSON.stringify({tag_json}) + ']')) {{
-                        if (old !== el) old.removeAttribute('data-cu-auth');
-                    }}
-                    el.setAttribute('data-cu-auth', {tag_json});
-                    // An expando cloneNode() does not copy: a field the page
-                    // swapped for a copy keeps the attribute but not this.
-                    el[Symbol.for('cu-auth')] = {tag_json};
-                    return true;
+                    if (usable(el)) return el;
                 }}
             }}
             return false;
         }})()"#
     );
     loop {
-        let result = scope_eval(client, scope, &expression, true).await?;
-        match result.result.value.as_ref() {
-            Some(Value::Bool(true)) => return Ok(format!("[data-cu-auth=\"{tag}\"]")),
+        match scope_mark(client, scope, &expression, tag).await?.as_ref() {
+            Some(Value::Bool(true)) => return Ok(tag.to_string()),
             Some(Value::String(now)) => {
                 return Err(format!(
                     "the page moved to {now} before the credentials were entered. Nothing was \
@@ -21967,12 +22168,12 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             r#"(() => {{
                 const origin = {origin};
                 if (origin !== null && location.origin !== origin) return 'the page moved to ' + location.origin;
-                const user = document.querySelector({user});
-                const pass = document.querySelector({pass});
-                const mine = (el, tag) => el && el.isConnected && el[Symbol.for('cu-auth')] === tag;
+                const user = cuAuth({user});
+                const pass = cuAuth({pass});
+                const mine = (el) => el && el.isConnected;
                 const norm = (v) => String(v || '').toLowerCase().replace(/[^\p{{L}}\p{{N}}@]/gu, '');
-                if (!mine(user, {user_tag})) return 'the username field was replaced after it was filled';
-                if (!mine(pass, {pass_tag})) return 'the password field was replaced after it was filled';
+                if (!mine(user)) return 'the username field was replaced after it was filled';
+                if (!mine(pass)) return 'the password field was replaced after it was filled';
                 if (norm(user.value) !== norm({username})) return 'the username field no longer holds the username';
                 if ((pass.value || '').length !== {pass_len}) return 'the password field no longer holds the password';
                 const a = document.activeElement;
@@ -21988,8 +22189,6 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             username = serde_json::to_string(&username).unwrap_or_default(),
             // JS string length counts UTF-16 code units.
             pass_len = password.encode_utf16().count(),
-            user_tag = serde_json::to_string(&user_tag).unwrap_or_default(),
-            pass_tag = serde_json::to_string(&pass_tag).unwrap_or_default(),
         );
         let verdict = unblocked!(scope_eval(&mgr.client, &scope, &check, true).await)?;
         if let Some(problem) = verdict
@@ -22018,16 +22217,20 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             {
                 auth_close_menu(&mut *mgr, &mut menu_closed, "auth login: the tab is blocked").await?;
             }
-            interaction::click(
-                &mgr.client,
-                &session_id,
-                &state.ref_map,
-                &sub_sel,
-                "left",
-                1,
-                &state.iframe_sessions,
-            )
-            .await?;
+            super::element::SEMANTIC_PIN
+                .scope(
+                    scope.node_pin(&sub_sel)?,
+                    interaction::click(
+                        &mgr.client,
+                        &session_id,
+                        &state.ref_map,
+                        super::element::PINNED_SELECTOR,
+                        "left",
+                        1,
+                        &state.iframe_sessions,
+                    ),
+                )
+                .await?;
             submit_via = Some("button");
         }
 
@@ -22068,23 +22271,9 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // still open on the last field is closed now.
     let menu_left_open = auth_close_menu_after(mgr, &mut menu_closed).await;
 
-    // Leave the page as found, whether or not the login went through: drop
-    // this login's markers (if the page is still there).
-    let cleanup = format!(
-        "(() => {{ for (const el of document.querySelectorAll('[data-cu-auth$=\"-{marker}\"]')) {{ \
-         el.removeAttribute('data-cu-auth'); delete el[Symbol.for('cu-auth')]; }} }})()"
-    );
-    let _ = mgr
-        .client
-        .send_command(
-            "Runtime.evaluate",
-            Some(json!({ "expression": cleanup })),
-            Some(&session_id),
-        )
-        .await;
-    if scope.in_frame() {
-        let _ = scope_eval(&mgr.client, &scope, &cleanup, true).await;
-    }
+    // Leave the page as found, whether or not the login went through.
+    // Nothing was written into the page to clean up; drop the handles.
+    release_auth_handles(&mgr.client, &session_id, &scope).await;
 
     outcome?;
     let mut out = json!({ "loggedIn": true, "name": name });
@@ -22320,7 +22509,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     let mut needs: Option<&'static str> = None;
     // Nothing to sign in to: not a sign-in URL and no login field anywhere.
     let mut already_signed_in = false;
-    // Every field this login filled (its `data-cu-auth` tag): the sign-in is
+    // Every field this login filled (its tag): the sign-in is
     // confirmed only once none of them is on the page any more.
     let mut filled_tags: Vec<String> = Vec::new();
     // What showed the login went through (#482), set only by `confirm_sign_in`.
@@ -22666,21 +22855,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     // opened on the last field is closed now, not by the next command.
     let menu_left_open = auth_close_menu_after(mgr, &mut menu_closed).await;
 
-    let cleanup = format!(
-        "(() => {{ for (const el of document.querySelectorAll('[data-cu-auth$=\"-{marker}\"]')) {{ \
-         el.removeAttribute('data-cu-auth'); delete el[Symbol.for('cu-auth')]; }} }})()"
-    );
-    let _ = mgr
-        .client
-        .send_command(
-            "Runtime.evaluate",
-            Some(json!({ "expression": cleanup })),
-            Some(&session_id),
-        )
-        .await;
-    if scope.in_frame() {
-        let _ = scope_eval(&mgr.client, &scope, &cleanup, true).await;
-    }
+    // Nothing was written into the page to clean up; drop the handles.
+    release_auth_handles(&mgr.client, &session_id, &scope).await;
 
     // The ceremony is over (check_passkey_accepted waited for its result):
     // the private key does not outlive the login. A cleanup that cannot be
@@ -22784,7 +22960,7 @@ fn sign_in_observer(tags: &[String]) -> String {
             }};
             let form = [...document.querySelectorAll('input[type=password]')].some(vis);
             for (const t of {tags}) {{
-                const el = document.querySelector('[data-cu-auth=' + JSON.stringify(t) + ']');
+                const el = cuAuth(t);
                 if (el && el.isConnected && vis(el)) form = true;
             }}
             let message = '';
@@ -22929,21 +23105,23 @@ async fn confirm_sign_in(
     via: Option<&str>,
 ) -> Result<String, String> {
     let observer = sign_in_observer(tags);
+    // The chosen fields are in the scope's document: the top document reads
+    // them only when it is the scope.
+    let top_observer = sign_in_observer(&[]);
+    let top_scope = AuthScope::top(session_id);
     let started = tokio::time::Instant::now();
     let deadline = started + Duration::from_millis(AUTH_BWU_CONFIRM_MS);
     let mut prev: Option<SignInObservation> = None;
     let mut last: Option<SignInObservation> = None;
     loop {
-        let top = mgr
-            .client
-            .send_command(
-                "Runtime.evaluate",
-                Some(json!({ "expression": observer, "returnByValue": true })),
-                Some(session_id),
-            )
-            .await;
+        let top = if scope.in_frame() {
+            scope_eval_once(&mgr.client, &top_scope, &top_observer, true).await
+        } else {
+            scope_eval_once(&mgr.client, scope, &observer, true).await
+        }
+        .map(|r| r.result.value);
         let mut now = match &top {
-            Ok(v) => parse_sign_in_observation(v.get("result").and_then(|r| r.get("value"))),
+            Ok(v) => parse_sign_in_observation(v.as_ref()),
             Err(e) if super::browser::is_debugger_access_denied(e) => {
                 if auth_close_menu(&mut *mgr, menu_closed, "").await.is_err() {
                     // Chrome's tab record still says where the tab is, but a
@@ -23493,25 +23671,33 @@ async fn click_passkey_button(
     iframe_sessions: &HashMap<String, String>,
     marker: &str,
 ) -> Result<(), String> {
+    // Clicked through a pin on the node itself: nothing is written into the
+    // page to find it by.
+    let scope = AuthScope::top(session_id);
     let tag = format!("bwupk-{marker}");
-    let expression = format!(
-        "(() => {{ const el = {PASSKEY_SIGNIN_CONTROL_JS}; if (!el) return false; \
-         el.setAttribute('data-cu-auth', {tag}); return true; }})()",
-        tag = serde_json::to_string(&tag).unwrap_or_default(),
-    );
-    if auth_eval(client, session_id, expression).await? != Some(Value::Bool(true)) {
-        return Err("no passkey sign-in button on this page".to_string());
-    }
-    interaction::click(
-        client,
-        session_id,
-        ref_map,
-        &format!("[data-cu-auth=\"{tag}\"]"),
-        "left",
-        1,
-        iframe_sessions,
-    )
-    .await
+    let found = scope_mark(client, &scope, PASSKEY_SIGNIN_CONTROL_JS, &tag).await;
+    let clicked = match found {
+        Ok(Some(Value::Bool(true))) => {
+            super::element::SEMANTIC_PIN
+                .scope(
+                    scope.node_pin(&tag)?,
+                    interaction::click(
+                        client,
+                        session_id,
+                        ref_map,
+                        super::element::PINNED_SELECTOR,
+                        "left",
+                        1,
+                        iframe_sessions,
+                    ),
+                )
+                .await
+        }
+        Ok(_) => Err("no passkey sign-in button on this page".to_string()),
+        Err(e) => Err(e),
+    };
+    release_auth_handles(client, session_id, &scope).await;
+    clicked
 }
 
 /// Type a one-time code into the marked field exactly once: focus, select
@@ -23535,7 +23721,7 @@ async fn type_code_once(
         Ok::<Option<Value>, String>(r.result.value)
     };
     let focused = eval(format!(
-        "(() => {{ const el = document.querySelector({sel_json}); if (!el) return false; \
+        "(() => {{ const el = cuAuth({sel_json}); if (!el) return false; \
          el.focus(); try {{ el.select(); }} catch (e) {{}} return document.activeElement === el; }})()"
     ))
     .await?;
@@ -23558,7 +23744,7 @@ async fn type_code_once(
         tokio::time::sleep(Duration::from_millis(150)).await;
         let state = match eval(format!(
             "(() => {{ if (location.origin !== {origin}) return 'moved'; \
-             const el = document.querySelector({sel_json}); \
+             const el = cuAuth({sel_json}); \
              if (!el || !el.isConnected || el.disabled || el.readOnly) return 'locked'; \
              return (el.value || '').length; }})()",
             origin = serde_json::to_string(origin).unwrap_or_default()
@@ -23651,8 +23837,8 @@ async fn verify_auth_fields(
         r#"(() => {{
             if (location.origin !== {origin}) return 'the page moved to ' + location.origin;
             for (const [tag, len] of {fields}) {{
-                const el = document.querySelector('[data-cu-auth=' + JSON.stringify(tag) + ']');
-                if (!el || !el.isConnected || el[Symbol.for('cu-auth')] !== tag) return 'a filled field was replaced';
+                const el = cuAuth(tag);
+                if (!el || !el.isConnected) return 'a filled field was replaced';
                 const n = (el.value || '').length;
                 if (len > 0 ? n !== len : n === 0) return 'a filled field no longer holds what was typed';
             }}
@@ -24329,8 +24515,10 @@ mod tests {
         ] {
             assert!(no.is_match(words), "{words}");
         }
-        let js = auth_submit_finder(Some("user-x"), "submit-x");
-        assert!(js.contains("submit-x") && js.contains("user-x"));
+        let js = auth_submit_finder(Some("user-x"));
+        assert!(js.contains("cuAuth(\"user-x\")"));
+        // The chosen button is handed back, never marked in the page.
+        assert!(!js.contains("setAttribute") && !js.contains(concat!("data-", "cu-")));
     }
 
     /// #373: a blocked command that could not be recovered must not steer the
@@ -25567,20 +25755,6 @@ mod tests {
     }
 
     #[test]
-    fn test_located_outcome_accepts_bool_and_counted_forms() {
-        assert_eq!(located_outcome(Some(&json!(true))), Some(json!({})));
-        assert_eq!(
-            located_outcome(Some(
-                &json!({ "found": true, "count": 3, "visibleCount": 1 })
-            )),
-            Some(json!({ "count": 3, "visibleCount": 1 }))
-        );
-        assert_eq!(located_outcome(Some(&json!(false))), None);
-        assert_eq!(located_outcome(Some(&json!({ "found": false }))), None);
-        assert_eq!(located_outcome(None), None);
-    }
-
-    #[test]
     fn test_describe_located_names_role_text_and_box() {
         let t = json!({
             "tag": "div", "role": "button", "name": "请求编入索引", "visible": true,
@@ -25590,28 +25764,6 @@ mod tests {
             describe_located(&t),
             "<div role=button> \"请求编入索引\" at (812,344) 120x36"
         );
-    }
-
-    #[test]
-    fn test_text_locate_js_skips_non_rendered_and_prefers_visible() {
-        let js = text_locate_js("请求编入索引", false);
-        assert!(js.contains("\"请求编入索引\""));
-        assert!(js.contains("'SCRIPT'") && js.contains("'TITLE'"));
-        assert!(js.contains("checkVisibility"));
-        assert!(js.contains("const exact = false;"));
-        assert!(text_locate_js("x", true).contains("const exact = true;"));
-        // The marker reset wraps the locate script, not the other way round.
-        let wrapped = with_located_marker_reset(&js);
-        assert!(
-            wrapped.starts_with("(() => { document.querySelectorAll('[data-chrome-use-located]')")
-        );
-    }
-
-    #[test]
-    fn test_located_target_js_retargets_only_when_asked() {
-        assert!(located_target_js(true).contains("if (true && el0.closest)"));
-        assert!(located_target_js(false).contains("if (false && el0.closest)"));
-        assert!(located_target_js(true).contains("[role=button]"));
     }
 
     fn unique_socket_dir(label: &str) -> PathBuf {
