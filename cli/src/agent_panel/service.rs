@@ -155,15 +155,27 @@ fn operation_seconds(operation: &str) -> u64 {
         "agentInspect" => 30,
         "skillImport" => 40,
         "conversationDelete" => 45,
+        "agentActionBegin" | "agentActionReport" | "agentDeliveryReport" => 5,
+        "agentRecordingAuthorize" | "agentRecordingStop" => 20,
         _ => 10,
     }
 }
 
 fn exchange(endpoint: &Endpoint, operation: &str, params: Value) -> Result<Value, String> {
+    let wait = Duration::from_secs(operation_seconds(operation) + 2);
+    exchange_within(endpoint, operation, params, wait)
+}
+
+fn exchange_within(
+    endpoint: &Endpoint,
+    operation: &str,
+    params: Value,
+    wait: Duration,
+) -> Result<Value, String> {
     let mut stream = TcpStream::connect_timeout(&endpoint.address, Duration::from_millis(750))
         .map_err(|_| "Agent service did not answer")?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(operation_seconds(operation) + 2)))
+        .set_read_timeout(Some(wait.max(Duration::from_millis(1))))
         .map_err(|_| "Cannot set agent service timeout")?;
     stream
         .set_write_timeout(Some(Duration::from_secs(3)))
@@ -444,12 +456,38 @@ fn launchd_plist(
     ))
 }
 
+/// Panel evidence calls from a tool: reach the running service of this
+/// profile or fail. A tool call never starts or replaces a service, and the
+/// whole exchange is bounded by the caller's budget.
+pub(super) fn call_existing(
+    operation: &str,
+    params: &Value,
+    profile: &str,
+    budget: Duration,
+) -> Result<Value, String> {
+    let deadline = Instant::now() + budget;
+    let context = DiscoveryContext::current()?;
+    let root = data_root(&context)?;
+    let directory = profile_directory(&root, profile)?;
+    let existing = endpoint(&directory, profile)?;
+    exchange_within(
+        &existing,
+        operation,
+        params.clone(),
+        deadline.saturating_duration_since(Instant::now()),
+    )
+}
+
 pub(super) fn call(
     operation: &str,
     params: &Value,
     profile: Option<&str>,
 ) -> Result<Value, String> {
     let profile = profile.ok_or("Conversation operations require a bound Chrome profile")?;
+    if super::evidence_proto::OPERATIONS.contains(&operation) {
+        let budget = Duration::from_secs(operation_seconds(operation));
+        return call_existing(operation, params, profile, budget);
+    }
     let context = DiscoveryContext::current()?;
     let root = data_root(&context)?;
     let directory = profile_directory(&root, profile)?;
@@ -1885,6 +1923,7 @@ fn start<'a>(
             mcp_executable: std::env::current_exe()
                 .map_err(|_| "Cannot locate browser tools executable")?,
             full_access: chat.full_access,
+            generation,
         };
         drop(e);
         let owner = engine.clone();

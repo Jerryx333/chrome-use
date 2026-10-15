@@ -19,6 +19,7 @@ mod config_edit;
 mod config_transaction;
 mod configuration;
 mod conversation;
+pub(crate) mod evidence_proto;
 mod inspect;
 mod inspection;
 mod options;
