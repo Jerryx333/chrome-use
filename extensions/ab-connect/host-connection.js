@@ -1,6 +1,11 @@
 // Connection state is evidence-based: constructing a Port is not a handshake.
 // The token is the actual Port object so late callbacks cannot confirm or clear
 // a newer connection after the service worker reconnects.
+// Host feature flags the panel may rely on. Boolean ones are `true`; versioned
+// ones are positive integers so a later host can raise the version.
+const BOOLEAN_FEATURES = ['conversationOptions','imageAttachments','heicConvert','skillLibrary','schedules','inspect','inspectResolve'];
+const VERSIONED_FEATURES = ['requestRevision','turnEvidence','artifacts','recovery','recording'];
+
 export class HostConnectionState {
   constructor() {
     this.port = null
@@ -27,8 +32,11 @@ export class HostConnectionState {
     const fullAccess = reported?.fullAccess === true
     const pageContext = reported?.pageContext === true
     const chatAgents = Array.isArray(reported?.chatAgents) && reported.chatAgents.every(id => typeof id === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(id)) ? [...new Set(reported.chatAgents)] : ['codex', 'claude']
-    const features = Object.fromEntries(['conversationOptions','imageAttachments','heicConvert','skillLibrary','schedules','inspect','inspectResolve'].filter(key => reported?.[key] === true).map(key => [key,true]));
-    const featuresChanged = ['conversationOptions','imageAttachments','heicConvert','skillLibrary','schedules','inspect','inspectResolve'].some(key => (reported?.[key] === true) !== (this.agentPanel?.[key] === true));
+    const features = Object.fromEntries([
+      ...BOOLEAN_FEATURES.filter(key => reported?.[key] === true).map(key => [key, true]),
+      ...VERSIONED_FEATURES.filter(key => Number.isSafeInteger(reported?.[key]) && reported[key] > 0).map(key => [key, reported[key]]),
+    ]);
+    const featuresChanged = [...BOOLEAN_FEATURES, ...VERSIONED_FEATURES].some(key => features[key] !== this.agentPanel?.[key]);
     const changed = (valid && featuresChanged) || !this.confirmed || (valid && (reported.mode !== this.agentPanel?.mode || reported.modelInspection !== this.agentPanel?.modelInspection || conversationDelete !== this.agentPanel?.conversationDelete || fullAccess !== this.agentPanel?.fullAccess || pageContext !== this.agentPanel?.pageContext || JSON.stringify(chatAgents) !== JSON.stringify(this.agentPanel?.chatAgents)))
     if (valid) this.agentPanel = {schemaVersion:1,mode:reported.mode,modelInspection:reported.modelInspection,conversationDelete,fullAccess,pageContext,chatAgents,...features}
     this.confirmed = true
