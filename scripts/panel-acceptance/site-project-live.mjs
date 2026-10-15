@@ -111,7 +111,7 @@ try {
   await shot('4-resume-warning');
   await panel(`[...document.querySelectorAll('.resume-picker button')].find(b => b.textContent === ${JSON.stringify(confirmLabel)}).click()`);
   await waitFor(() => panel(`!!document.querySelector('.imported-history')`), { timeout: 40000, label: 'imported history' });
-  const resumed = await panel(`({ header: document.getElementById('projectPath').textContent, imported: document.querySelector('.imported-history').innerText })`);
+  const resumed = await panel(`({ header: document.getElementById('projectPath').textContent, imported: document.querySelector('.imported-history').textContent, collapsed: !document.querySelector('.imported-history details').open })`);
   step('resumed', resumed);
   check(resumed.imported.includes(word), 'the earlier turn was imported');
   const list = await rig.service.call('conversationList', {});
