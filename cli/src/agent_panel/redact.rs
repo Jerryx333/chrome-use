@@ -138,6 +138,10 @@ pub(super) fn event(kind: &str, mut data: Value, secrets: &mut Secrets) -> Optio
     let mut walker = Walker::new(&known, kind);
     walker.cookie = kind == "tool" && cookie_context(&data, secrets);
     walker.top(&mut data, kind);
+    // Redacted whole above; only now bounded for the journal.
+    if kind == "tool" && !data["item"].is_null() {
+        data["item"] = bounded(&data["item"]);
+    }
     for secret in std::mem::take(&mut walker.learned) {
         secrets.learn(&secret);
     }
@@ -209,6 +213,105 @@ pub(super) fn legacy(kind: &str, data: &mut Value) {
 pub(super) fn url(text: &str) -> String {
     let masks = url_masks(text, 0);
     apply(text, &masks).0
+}
+
+/// The size one tool item or request may keep in the journal.
+pub(super) const ITEM_BUDGET: usize = 24000;
+
+/// Bound an already redacted tool item for the journal without losing its
+/// structure: long strings are cut and long arrays shortened. Redaction runs
+/// on the whole item first, so cutting can never hide a sensitive field.
+pub(super) fn bounded(value: &Value) -> Value {
+    if value.to_string().len() <= ITEM_BUDGET {
+        return value.clone();
+    }
+    for cap in [6000, 2000, 500, 100] {
+        let cut = cut_to(value, cap, 0);
+        if cut.to_string().len() <= ITEM_BUDGET {
+            return cut;
+        }
+    }
+    // Too wide or deep even then: keep what identifies the call and its
+    // arguments, each bounded, and say the rest was dropped.
+    let mut skeleton = serde_json::Map::new();
+    if let Some(object) = value.as_object() {
+        for key in [
+            "type",
+            "id",
+            "name",
+            "tool",
+            "server",
+            "toolName",
+            "tool_name",
+            "title",
+            "toolCallId",
+            "tool_use_id",
+            "status",
+            "is_error",
+            "isError",
+        ] {
+            if let Some(field) = object.get(key) {
+                skeleton.insert(key.into(), cut_to(field, 200, 18));
+            }
+        }
+        for key in ["input", "arguments", "rawInput", "args"] {
+            if let Some(field) = object.get(key) {
+                let args = cut_to(field, 200, 16);
+                if args.to_string().len() <= ITEM_BUDGET / 2 {
+                    skeleton.insert(key.into(), args);
+                }
+            }
+        }
+    }
+    skeleton.insert(
+        "output".into(),
+        "[The tool output was too large to keep]".into(),
+    );
+    Value::Object(skeleton)
+}
+
+fn cut_to(value: &Value, cap: usize, depth: usize) -> Value {
+    match value {
+        Value::String(text) if text.chars().count() > cap => {
+            let mut short: String = text.chars().take(cap).collect();
+            short.push_str("…[shortened]");
+            Value::String(short)
+        }
+        Value::Array(items) => {
+            let keep = (cap / 100).clamp(5, 50);
+            let mut out: Vec<Value> = items
+                .iter()
+                .take(keep)
+                .map(|item| cut_to(item, cap, depth + 1))
+                .collect();
+            if items.len() > keep {
+                out.push(format!("[{} more items]", items.len() - keep).into());
+            }
+            Value::Array(out)
+        }
+        Value::Object(map) if depth >= 20 => {
+            let _ = map;
+            "[nested data shortened]".into()
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), cut_to(v, cap, depth + 1)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// A redacted request whose params are too large to review: they become a
+/// bounded preview of their redacted text, marked `truncated`.
+pub(super) fn preview_params(mut request: Redacted) -> Redacted {
+    let preview: String = request.0["params"]
+        .to_string()
+        .chars()
+        .take(TOOL_TEXT)
+        .collect();
+    request.0["params"] = json!({"preview": preview, "truncated": true});
+    request
 }
 
 /// Text kept outside the journal (conversation title, last error, schedule
@@ -1588,6 +1691,39 @@ mod tests {
         .unwrap()
         .into_value();
         assert_eq!(plain["item"]["result"], "page=2 sort=asc");
+    }
+
+    #[test]
+    fn large_items_are_redacted_whole_before_they_are_bounded() {
+        // The word that marks the field sensitive sits past any cut.
+        let selector = format!("#{}password", "a".repeat(6100));
+        let data = json!({"completed":false,"toolCallId":"t1","item":{"type":"tool_use","id":"t1",
+            "name":"mcp__chrome_use__chrome_use_fill",
+            "input":{"selector":selector,"value":"plain-pass-SYNTH"},
+            "observation":"word ".repeat(8_000)}});
+        let out = event("tool", data, &mut Secrets::default())
+            .unwrap()
+            .into_value();
+        assert!(!out.to_string().contains("plain-pass-SYNTH"));
+        assert!(out["item"].to_string().len() <= ITEM_BUDGET);
+        assert_eq!(out["item"]["name"], "mcp__chrome_use__chrome_use_fill");
+        assert!(out["item"]["observation"]
+            .as_str()
+            .unwrap()
+            .contains("shortened"));
+        // An item too wide to cut keeps its call and redacted arguments.
+        let wide: serde_json::Map<String, Value> =
+            (0..5000).map(|i| (format!("k{i}"), json!("v"))).collect();
+        let data = json!({"completed":false,"item":{"type":"tool_use","id":"t2",
+            "name":"mcp__chrome_use__chrome_use_fill",
+            "input":{"selector":"#otp","value":"483927"},"extra":wide}});
+        let out = event("tool", data, &mut Secrets::default())
+            .unwrap()
+            .into_value();
+        assert!(out["item"].to_string().len() <= ITEM_BUDGET);
+        assert_eq!(out["item"]["name"], "mcp__chrome_use__chrome_use_fill");
+        assert_eq!(out["item"]["input"]["value"], "[redacted input, 6 chars]");
+        assert!(!out.to_string().contains("483927"));
     }
 
     #[test]

@@ -1364,10 +1364,22 @@ impl Engine {
                 };
                 notice.data["generation"] = generation.into();
                 notice.data["requestRevision"] = revision.into();
-                let original = notice.data["params"].clone();
-                let journaled = self
+                let mut original = notice.data["params"].clone();
+                // Redacted whole first; a request too large to review is then
+                // journaled as a preview of the redacted text, and no reply
+                // to it is accepted (`validate_reply` refuses `truncated`).
+                let too_large = original.to_string().len() > redact::ITEM_BUDGET;
+                let mut journaled = self
                     .redact(id, "request", notice.data.clone())
                     .ok_or("Backend request could not be recorded")?;
+                if too_large {
+                    journaled = redact::preview_params(journaled);
+                    if let Some(object) = original.as_object_mut() {
+                        object.insert("truncated".into(), true.into());
+                    } else {
+                        original = json!({"truncated": true});
+                    }
+                }
                 self.requests.insert(
                     (id.into(), key),
                     Pending {
@@ -3843,6 +3855,32 @@ mod redaction_tests {
         f.engine.lock().await.chat(&f.id).unwrap().phase = Phase::Running;
         f.fill_request("r3").await;
         assert_eq!(f.sent().unwrap()["behavior"], "allow");
+    }
+
+    #[tokio::test]
+    async fn a_request_too_large_to_review_is_redacted_whole_and_refused() {
+        let mut f = fixture(false).await;
+        f.notice(
+            "request",
+            json!({"requestId":"big","method":"can_use_tool","params":{"subtype":"can_use_tool",
+                "tool_name":"mcp__chrome_use__chrome_use_fill","tool_use_id":"tool-9",
+                "input":{"selector":"#otp","value":"483927","zz_note":"y".repeat(30_000)}}}),
+        )
+        .await;
+        let request = f.request_event().await;
+        assert_eq!(request["params"]["truncated"], true);
+        let preview = request["params"]["preview"].as_str().unwrap();
+        assert!(!preview.contains("483927"), "{preview}");
+        // The fill was recognised on the whole request before the preview.
+        assert!(preview.contains("[redacted input, 6 chars]"), "{preview}");
+        assert!(!f.on_disk("483927"));
+        let revision = request["requestRevision"].as_u64().unwrap();
+        assert!(f
+            .respond(json!({"requestId":"big","generation":0,"requestRevision":revision,"decision":"allow"}))
+            .await
+            .unwrap_err()
+            .contains("too large"));
+        assert!(f.sent().is_none());
     }
 
     #[tokio::test]

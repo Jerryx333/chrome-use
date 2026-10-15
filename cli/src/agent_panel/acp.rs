@@ -1,7 +1,7 @@
 //! OpenCode ACP v1 adapter. A private server belongs to this process group;
 //! only the prompt response confirms a turn's terminal outcome.
 use super::backend::{
-    compacted, emit_text, notice, opencode_tool_notice, short, write, Command, Notice, Setup,
+    compacted, emit_text, notice, opencode_tool_notice, write, Command, Notice, Setup,
 };
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::Path, time::Duration};
@@ -126,7 +126,7 @@ pub(super) async fn protocol(
                             write(input,json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"cancelled"}}})).await?;
                         } else {
                             permissions.insert(id.to_string(),(id.clone(),params["toolCall"]["toolCallId"].clone(),false));
-                            emit(events,"request",json!({"requestId":id,"method":method,"params":short(params)})).await?;
+                            emit(events,"request",json!({"requestId":id,"method":method,"params":params})).await?;
                         }
                     } else if method == "session/update" && ready && active.is_some() && params["sessionId"].as_str() == session.as_deref() {
                         let update = &params["update"];

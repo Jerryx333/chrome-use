@@ -95,14 +95,6 @@ pub(super) fn notice(kind: &'static str, data: Value) -> Notice {
         job: None,
     }
 }
-pub(super) fn short(value: &Value) -> Value {
-    let raw = value.to_string();
-    if raw.len() > 24000 {
-        json!({"preview":raw.chars().take(6000).collect::<String>(),"truncated":true})
-    } else {
-        value.clone()
-    }
-}
 
 /// Start a CLI and keep its stdio open across turns. Events are serialized by
 /// one driver task. Control responses are never mistaken for agent output.
@@ -500,7 +492,7 @@ async fn protocol(
                     if let Some(method)=value["method"].as_str() {
                         if let Some(id)=value.get("id") {
                             if !["item/commandExecution/requestApproval","item/fileChange/requestApproval","item/permissions/requestApproval","item/tool/requestUserInput","mcpServer/elicitation/request"].contains(&method) {return Err("Backend requested an unsupported host operation".into());}
-                            events.send(notice("request",json!({"requestId":id,"method":method,"params":short(&value["params"])}))).await.map_err(|_|"Event consumer closed")?;
+                            events.send(notice("request",json!({"requestId":id,"method":method,"params":value["params"]}))).await.map_err(|_|"Event consumer closed")?;
                         } else {
                             let p=&value["params"];
                             if p.get("threadId").is_some_and(|v|Some(v.as_str().unwrap_or(""))!=session.as_deref()) {continue;}
@@ -579,7 +571,7 @@ async fn protocol(
                         Some("assistant")=>{let id=value["message"]["id"].as_str().unwrap_or("assistant");if let Some(blocks)=value["message"]["content"].as_array(){for block in blocks {if block["type"]=="text" {if let Some(text)=block["text"].as_str(){emit_text(events,"textFinal",id,text).await?;}}else if block["type"]=="tool_use" {claude_tools.remember(block);events.send(tool_notice(false,block["id"].as_str(),Vec::new(),block)).await.map_err(|_|"Event consumer closed")?;}}}}
                         Some("user")=>{for event in claude_tool_results(&value,&claude_tools) {events.send(event).await.map_err(|_|"Event consumer closed")?;}}
                         Some("system") if value["subtype"]=="compact_boundary"=>{events.send(compacted("claude",value["compact_metadata"]["trigger"].clone())).await.map_err(|_|"Event consumer closed")?;}
-                        Some("control_request")=>{let id=value.get("request_id").ok_or("Claude control request has no identity")?;if value["request"]["subtype"]!="can_use_tool" {return Err("Claude requested an unsupported host operation".into());}events.send(notice("request",json!({"requestId":id,"method":"can_use_tool","params":short(&value["request"])}))).await.map_err(|_|"Event consumer closed")?;}
+                        Some("control_request")=>{let id=value.get("request_id").ok_or("Claude control request has no identity")?;if value["request"]["subtype"]!="can_use_tool" {return Err("Claude requested an unsupported host operation".into());}events.send(notice("request",json!({"requestId":id,"method":"can_use_tool","params":value["request"]}))).await.map_err(|_|"Event consumer closed")?;}
                         Some("result")=>{if !busy {continue;}
                         if value["result"].is_string() {events.send(notice("textRole",json!({"itemId":claude_message,"role":"final","source":"claude.result"}))).await.map_err(|_|"Event consumer closed")?;}let status=if value["subtype"]=="success" && value["is_error"]==false {"completed"}else if stopping {"interrupted"}else {"failed"};busy=false;stopping=false;stopping_at=None;events.send(notice("terminal",json!({"status":status,"error":if status=="failed" {json!("Claude returned an unsuccessful or unknown terminal result")}else{Value::Null}}))).await.map_err(|_|"Event consumer closed")?;}
                         _=>{}
@@ -956,7 +948,7 @@ fn content_marker_ids(content: &Value, found: &mut Vec<String>) {
     }
 }
 
-/// Image bytes never reach `short()` or the journal: `{type: "image",
+/// Image bytes never reach the service or the journal: `{type: "image",
 /// mimeType, bytes}` stays, the data goes. Handles MCP (`data`, `mimeType`)
 /// and Anthropic (`source.data`, `source.media_type`) blocks.
 pub(super) fn strip_images(value: &Value) -> Value {
@@ -996,7 +988,8 @@ pub(super) fn strip_images(value: &Value) -> Value {
 }
 
 /// A `tool` notice: ids extracted from the raw item first, then images
-/// stripped, then the structure-keeping size bound of [`bounded`].
+/// stripped. The item stays whole: the service redacts the full structure
+/// and only then bounds it for the journal (`redact::bounded`).
 pub(super) fn tool_notice(
     completed: bool,
     tool_call_id: Option<&str>,
@@ -1009,97 +1002,9 @@ pub(super) fn tool_notice(
             "completed": completed,
             "toolCallId": tool_call_id.filter(|id| !id.is_empty() && id.len() <= 1024),
             "actionIds": action_ids,
-            "item": bounded(&strip_images(item)),
+            "item": strip_images(item),
         }),
     )
-}
-
-/// The size `short` allows for one item.
-const ITEM_BUDGET: usize = 24000;
-
-/// Bound a tool item without losing its structure: long strings are cut and
-/// long arrays shortened, so the service's redaction still sees the tool
-/// name and keys such as `selector` and `value`. A plain-string preview, as
-/// `short` makes, would hide a password typed in a large item.
-pub(super) fn bounded(value: &Value) -> Value {
-    if value.to_string().len() <= ITEM_BUDGET {
-        return value.clone();
-    }
-    for cap in [6000, 2000, 500, 100] {
-        let cut = cut_to(value, cap, 0);
-        if cut.to_string().len() <= ITEM_BUDGET {
-            return cut;
-        }
-    }
-    // Too wide or deep even then: keep what identifies the call and its
-    // arguments, each bounded, and say the rest was dropped.
-    let mut skeleton = serde_json::Map::new();
-    if let Some(object) = value.as_object() {
-        for key in [
-            "type",
-            "id",
-            "name",
-            "tool",
-            "server",
-            "toolName",
-            "tool_name",
-            "title",
-            "toolCallId",
-            "tool_use_id",
-            "status",
-            "is_error",
-            "isError",
-        ] {
-            if let Some(field) = object.get(key) {
-                skeleton.insert(key.into(), cut_to(field, 200, 18));
-            }
-        }
-        for key in ["input", "arguments", "rawInput", "args"] {
-            if let Some(field) = object.get(key) {
-                let args = cut_to(field, 200, 16);
-                if args.to_string().len() <= ITEM_BUDGET / 2 {
-                    skeleton.insert(key.into(), args);
-                }
-            }
-        }
-    }
-    skeleton.insert(
-        "output".into(),
-        "[The tool output was too large to keep]".into(),
-    );
-    Value::Object(skeleton)
-}
-
-fn cut_to(value: &Value, cap: usize, depth: usize) -> Value {
-    match value {
-        Value::String(text) if text.chars().count() > cap => {
-            let mut short: String = text.chars().take(cap).collect();
-            short.push_str("…[shortened]");
-            Value::String(short)
-        }
-        Value::Array(items) => {
-            let keep = (cap / 100).clamp(5, 50);
-            let mut out: Vec<Value> = items
-                .iter()
-                .take(keep)
-                .map(|item| cut_to(item, cap, depth + 1))
-                .collect();
-            if items.len() > keep {
-                out.push(format!("[{} more items]", items.len() - keep).into());
-            }
-            Value::Array(out)
-        }
-        Value::Object(map) if depth >= 20 => {
-            let _ = map;
-            "[nested data shortened]".into()
-        }
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .map(|(k, v)| (k.clone(), cut_to(v, cap, depth + 1)))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
 }
 
 pub(super) fn compacted(backend: &str, trigger: Value) -> Notice {
@@ -2010,38 +1915,5 @@ mod tests {
             "Backend protocol initialization timed out".into()
         )));
         assert!(!leave_running_after(&Ok(())));
-    }
-
-    #[test]
-    fn a_large_tool_item_keeps_its_structure_for_redaction() {
-        let item = json!({"type":"tool_use","id":"t1","name":"mcp__chrome_use__chrome_use_fill",
-            "input":{"selector":"#password","value":"plain-SYNTH-pass"},
-            "observation":"x".repeat(40_000)});
-        let notice = tool_notice(false, Some("t1"), Vec::new(), &item);
-        let kept = &notice.data["item"];
-        assert!(kept.to_string().len() <= ITEM_BUDGET);
-        assert_eq!(kept["input"]["selector"], "#password");
-        assert!(kept["observation"]
-            .as_str()
-            .unwrap()
-            .ends_with("…[shortened]"));
-        let redacted = super::super::redact::event(
-            "tool",
-            notice.data.clone(),
-            &mut super::super::redact::Secrets::default(),
-        )
-        .unwrap()
-        .into_value();
-        assert!(!redacted.to_string().contains("plain-SYNTH-pass"));
-        // Even an item too wide to cut keeps the call and its arguments.
-        let wide: serde_json::Map<String, Value> =
-            (0..5000).map(|i| (format!("k{i}"), json!("v"))).collect();
-        let mut huge = json!({"type":"tool_use","id":"t2","name":"mcp__chrome_use__chrome_use_fill",
-            "input":{"selector":"#password","value":"plain-SYNTH-pass"}});
-        huge["extra"] = Value::Object(wide);
-        let kept = bounded(&huge);
-        assert!(kept.to_string().len() <= ITEM_BUDGET);
-        assert_eq!(kept["name"], "mcp__chrome_use__chrome_use_fill");
-        assert_eq!(kept["input"]["value"], "plain-SYNTH-pass");
     }
 }
