@@ -170,6 +170,14 @@ there is how an agent opens the wrong menu (or submits the wrong form) while the
 CLI prints `Done`. So an error here is the guard working — re-snapshot and
 re-target rather than reaching for `AGENT_BROWSER_VERIFY_REF=0`.
 
+A clickable `<div>` (`generic "投稿" … clickable [cursor:pointer]`) has no
+accessible name of its own: the snapshot names it from its text. Its ref is
+checked against what the accessibility tree really reports (`generic ""`) plus
+that text, re-read from the node — so the ref works straight after the
+snapshot, re-wrapped or zero-width-padded text still matches, and a node the
+page re-used for other content ("投稿" → "充钻石") is refused. An editable region
+named from its content is confirmed by its node, since typing changes the text.
+
 **A relocation is never silent, and never a rename.** When the ref's original
 node is gone, chrome-use acts on a replacement only if it is the *same control*:
 same role and the same accessible name (ignoring case and extra whitespace),
@@ -256,7 +264,7 @@ nothing. The ids it reports are accepted by `frame <id>` and `eval --frame
 > `find text "保存"` finds nothing while `snapshot -i` shows `button "收藏" [ref=eN]`
 > all along — just `click @eN`. (issue #55)
 
-Semantic `find role/text/label/placeholder/alt/title/testid` requires exactly one visible match, including locate-only queries. Ambiguity returns up to eight candidates with visible state and selector/context hints; no action is dispatched and input values are omitted. Narrow `--name`/`--exact`, or use `--within <CSS|@ref>` to restrict the query to exactly one container. A scope must belong to the active tab's main document; cross-frame refs and an explicitly selected iframe are refused; use direct frame refs or `frame main`. `find first/last/nth` explicitly selects an order and keeps its existing behavior. Plain CSS actions are unchanged. Roles and label names use Chrome accessibility data, including `aria-labelledby`; a semantic query re-resolves on each call. A detached target before dispatch fails safely; uncertain actions are never replayed.
+Semantic `find role/text/label/placeholder/alt/title/testid` requires exactly one visible match, including locate-only queries. Ambiguity returns up to eight candidates with visible state and selector/context hints; no action is dispatched and input values are omitted. Narrow `--name`/`--exact`, or use `--within <CSS|@ref>` to restrict the query to exactly one container. A scope must belong to the active tab's main document; cross-frame refs and an explicitly selected iframe are refused; use direct frame refs or `frame main`. `find first/last/nth` explicitly selects an order and keeps its existing behavior. A plain CSS selector or XPath given to an action (`click`, `fill`, `type`, `hover`, `check`, `select`, `drag` …) must match exactly one element too: one that matches several is refused with code `selector_ambiguous`, listing the first five matches with their text and position, and nothing is done. Narrow it, use a `@ref`, or choose by index with `find nth <index> <selector> <action>`; `AGENT_BROWSER_STRICT_SELECTORS=0` restores first-match for old scripts. Roles and label names use Chrome accessibility data, including `aria-labelledby`; a semantic query re-resolves on each call. A detached target before dispatch fails safely; uncertain actions are never replayed.
 
 The existing `chrome_use_find` tool in `mcp --tools all` accepts `within` with the same unique-scope rules; tool count is unchanged. `text` for fill/type is passed literally, including `--name --observe`, rather than parsed as CLI options.
 
@@ -275,6 +283,11 @@ page's own state took it, so read what the commands report:
 - `fill` warns when the field's form or dialog had a disabled Save/Submit
   before the fill and still has it after (JSON `commitControl`), and when it
   had to fall back to a synthetic write (`engine: input-synthetic`).
+- In a rich-text editor (`contenteditable`), `fill` and `type` compare the
+  visible text: zero-width characters (U+200B the editor pads lines and topic
+  nodes with), NBSP and whitespace runs do not count. A write the editor only
+  formatted succeeds with a ⚠ note ("the editor formatted the text"); missing
+  or changed characters are still an error.
 - `fill` accepts a field that only reformatted the value (Stripe turns `1234`
   into `12 / 34`, a card number into groups of four) and says so with a ⚠ note;
   a value that differs in any other way is still an error, and a card or
@@ -287,7 +300,12 @@ page's own state took it, so read what the commands report:
 - `keyboard type` reports `target` and `readBack`. It fails when the focused
   field did not change and warns when nothing editable had focus.
 - For a Save/Submit, use `click @ref --observe`: it reports the requests the
-  click sent. None, and no DOM change, means nothing was saved.
+  click sent. None, and no DOM change, means nothing was saved. It also reports
+  `observed.announced`: the text of toasts and alert/status/aria-live regions
+  (and `*toast*` / `*snackbar*` classes) that appeared while the click ran and
+  the page settled — kept even when the toast is gone before the result
+  (`视频审核中，修改未保存`), printed as `observed announced:`. A toast that
+  shows up after the settle is not in it: `wait --text` for that one.
 
 **Buttons that are really switches.** A button that wraps a checkbox, switch
 or radio shows as `button "简体中文" [toggles=checkbox(checked=true), ref=e1]`.
@@ -325,6 +343,14 @@ chrome-use click "#submit"
 chrome-use fill "input[name=email]" "user@test.com"
 chrome-use click "button.primary"
 ```
+
+An action's CSS selector or XPath must match exactly one element. A selector
+that matches several (`.iLNqted2.DiddnkXT` matched "投稿" and "充钻石"; so does
+`:last-child` once there are two lists) is refused with `selector_ambiguous`
+and the first five matches as `[index] <tag> "text" at (x,y) WxH`; nothing is
+clicked. Narrow the selector, use a `@ref`, or take one by its index:
+`find nth 1 ".iLNqted2.DiddnkXT" click`. Reads (`get text`, `count`,
+`is visible`) still use the first match.
 
 Escalation ladder: snapshot + `@eN` refs are quickest for straightforward
 pages → `find role/text/label` when you'd rather skip the snapshot → raw CSS

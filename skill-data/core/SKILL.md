@@ -111,7 +111,10 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    `Loading` needs `wait --text` for its final signal.
    A click that opened a tab reports `openedTab`; add `--follow` to move to
    it (`followed: true`). In your own Chrome that needs ab-connect 0.5.30+;
-   otherwise `openedTabWarning` says why it was left alone. A tab the page
+   otherwise `openedTabWarning` says why it was left alone (a tab opened
+   from a tab the session does not own stays the user's: `followed: false`,
+   take it with `tab adopt <url>`). `observed.announced` lists toast and
+   alert/status text that appeared during the click, even if it is gone. A tab the page
    opens brings Chrome to the front over the user's app, and
    `openedTabWarning` says so; on macOS chrome-use puts the user's app back
    in front (`focusRestored`; `AGENT_BROWSER_RESTORE_FOCUS=0` turns it
@@ -284,4 +287,4 @@ Run `chrome-use skills get <name>` with one name below.
 | Exploratory QA or reusable test suites | `dogfood` or `test` |
 | Cloud browsers | `vercel-sandbox` or `agentcore` |
 
-For repeated control names, discover the container with `find query`, then use semantic `find ... --within <CSS|@ref>`. Semantic queries refuse multiple visible matches; see core/interacting for bounded candidate diagnostics and explicit first/nth selection.
+For repeated control names, discover the container with `find query`, then use semantic `find ... --within <CSS|@ref>`. Semantic queries refuse multiple visible matches; see core/interacting for bounded candidate diagnostics and explicit first/nth selection. A CSS selector or XPath given to `click`/`fill`/`hover`/… is refused the same way when it matches several elements (`selector_ambiguous`, with each match's text and position): narrow it, use a `@ref`, or `find nth <index> <selector> <action>`.
