@@ -134,7 +134,7 @@ import { codeInspectorPlugin } from 'code-inspector-plugin';
 
 export default defineConfig({
   plugins: [
-    codeInspectorPlugin({ bundler: 'vite', pathType: 'relative' }),
+    codeInspectorPlugin({ bundler: 'vite', pathType: 'relative', hotKeys: false }),
     // ...your other plugins
   ],
 });</code></pre>
@@ -148,9 +148,13 @@ export default defineConfig({
 const { codeInspectorPlugin } = require('code-inspector-plugin');
 
 module.exports = {
-  plugins: [codeInspectorPlugin({ bundler: 'webpack', pathType: 'relative' })],
+  plugins: [codeInspectorPlugin({ bundler: 'webpack', pathType: 'relative', hotKeys: false })],
 };</code></pre>
       </div>
+      <p>
+        <code>hotKeys: false</code> 关掉插件自带的 Option/Alt+Shift 点选功能，否则按 Alt+Shift+C 时它也会响应。
+        chrome-use 只读取 <code>data-insp-path</code> 标记；如果你本来就在用插件自带的点选，可以保留，只是两者都会响应这个快捷键。
+      </p>
       <p>
         没有接插件时也能用：React 18 及以下的开发构建会读组件自带的源码位置，Vue 开发构建会读组件文件名；
         都读不到时，消息会标明“没有源码位置”，带上选择器和文本，让 agent 自己搜。React 19 已经去掉了组件上的源码位置，所以 React 19 项目建议接插件。
@@ -175,6 +179,7 @@ const isTestBuild = process.env.DEPLOY_ENV === 'test';
 codeInspectorPlugin({
   bundler: 'vite',
   pathType: 'relative',
+  hotKeys: false,
   dev: () => process.env.NODE_ENV === 'development' || isTestBuild,
   server: isTestBuild ? 'close' : 'open',
 });

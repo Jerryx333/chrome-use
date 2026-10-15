@@ -33,6 +33,8 @@ pub(super) struct EvidenceState {
     pub recordings: HashMap<String, Recording>,
     /// Recordings the host must stop (turn ended while capturing).
     pub pending_stops: Vec<String>,
+    /// Tests: hold every ingest this long, to outlive a caller's budget.
+    pub ingest_delay: Option<Duration>,
 }
 
 impl EvidenceState {
@@ -980,6 +982,24 @@ async fn wait_state(
     state
 }
 
+fn ingest_job(directory: &Path, job: IngestJob) -> artifacts::Outcome {
+    match (job.native, &job.reported) {
+        (Some(reason), _) => artifacts::Outcome::Unavailable(artifacts::Unavailable {
+            reason,
+            detail: "The browser reported the capture failed".into(),
+            bytes: None,
+            digest: None,
+        }),
+        (None, Some(path)) => artifacts::ingest(directory, &job.output, path, job.reserved),
+        (None, None) => artifacts::Outcome::Unavailable(artifacts::Unavailable {
+            reason: artifacts::Reason::Missing,
+            detail: "The tool reported no file".into(),
+            bytes: None,
+            digest: None,
+        }),
+    }
+}
+
 /// The agent-only side channel operations.
 pub(super) async fn evidence_dispatch(
     engine: &Arc<Mutex<Engine>>,
@@ -995,7 +1015,10 @@ pub(super) async fn evidence_dispatch(
         proto::OP_ACTION_REPORT => {
             let p: proto::ActionReport = proto::decode(params.clone())
                 .map_err(|_| "agentActionReport request is malformed")?;
-            let step = engine.lock().await.report_open(&p)?;
+            let (step, delay) = {
+                let mut e = engine.lock().await;
+                (e.report_open(&p)?, e.evidence.ingest_delay)
+            };
             let (directory, jobs) = match step {
                 ReportStep::Reply(reply) => return Ok(reply),
                 ReportStep::Ingest {
@@ -1003,37 +1026,44 @@ pub(super) async fn evidence_dispatch(
                     jobs,
                 } => (conversation_dir, jobs),
             };
-            let outcomes = tokio::task::spawn_blocking(move || {
-                jobs.into_iter()
-                    .map(|job| {
-                        let outcome = match (job.native, &job.reported) {
-                            (Some(reason), _) => {
-                                artifacts::Outcome::Unavailable(artifacts::Unavailable {
-                                    reason,
-                                    detail: "The browser reported the capture failed".into(),
-                                    bytes: None,
-                                    digest: None,
-                                })
-                            }
-                            (None, Some(path)) => {
-                                artifacts::ingest(&directory, &job.output, path, job.reserved)
-                            }
-                            (None, None) => {
-                                artifacts::Outcome::Unavailable(artifacts::Unavailable {
-                                    reason: artifacts::Reason::Missing,
-                                    detail: "The tool reported no file".into(),
-                                    bytes: None,
-                                    digest: None,
-                                })
-                            }
-                        };
-                        (job.output.artifact_id.clone(), outcome)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .await
-            .map_err(|_| "The capture could not be copied")?;
-            engine.lock().await.report_finish(&p, outcomes)
+            // The ingest and the lease's completion run in their own task:
+            // a caller that gave up (its 60 s budget, a dropped connection)
+            // must not leave the lease in Reporting. Later reports of this
+            // action get `pending`, then the recorded reply.
+            let owner = engine.clone();
+            let finish = tokio::spawn(async move {
+                let artifact_ids: Vec<String> = jobs
+                    .iter()
+                    .map(|job| job.output.artifact_id.clone())
+                    .collect();
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
+                let outcomes = tokio::task::spawn_blocking(move || {
+                    jobs.into_iter()
+                        .map(|job| (job.output.artifact_id.clone(), ingest_job(&directory, job)))
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .unwrap_or_else(|_| {
+                    artifact_ids
+                        .into_iter()
+                        .map(|id| {
+                            let failed = artifacts::Outcome::Unavailable(artifacts::Unavailable {
+                                reason: artifacts::Reason::Failed,
+                                detail: "The capture could not be copied".into(),
+                                bytes: None,
+                                digest: None,
+                            });
+                            (id, failed)
+                        })
+                        .collect()
+                });
+                owner.lock().await.report_finish(&p, outcomes)
+            });
+            finish
+                .await
+                .map_err(|_| "The report could not be recorded".to_string())?
         }
         proto::OP_DELIVERY_REPORT => {
             let p: proto::DeliveryReport = proto::decode(params.clone())
@@ -1675,6 +1705,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_open_lease_is_closed_on_reload_beyond_the_display_list() {
+        let c = chat_with("claude", false).await;
+        let message = c.send("many", false).await;
+        let mut actions = Vec::new();
+        for _ in 0..65 {
+            actions.push(c.begin("chrome_use_click", ToolClass::Act).await);
+        }
+        c.complete().await;
+        let listed = c.kinds("turnEnded").await[0]["openLeases"]
+            .as_array()
+            .unwrap()
+            .len();
+        assert_eq!(listed, 64);
+        let root = c.engine.lock().await.store.directory.clone();
+        let engine = Arc::new(Mutex::new(Engine::new(
+            Store::open(root).unwrap(),
+            "fixture".into(),
+            Default::default(),
+        )));
+        for action in &actions {
+            dispatch(
+                &engine,
+                proto::OP_ACTION_REPORT,
+                &proto::encode(&c.report(action, "chrome_use_click", ToolClass::Act)).unwrap(),
+            )
+            .await
+            .unwrap();
+        }
+        let events = engine.lock().await.store.all_events(&c.id).unwrap();
+        let late: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind == "browserActionTarget")
+            .collect();
+        assert_eq!(late.len(), 65);
+        assert!(late
+            .iter()
+            .all(|e| e.data["lateReported"] == true && e.data["messageId"] == message.as_str()));
+    }
+
+    #[tokio::test]
     async fn unknown_leases_are_quarantined_and_never_join_a_turn() {
         let c = chat_with("claude", false).await;
         c.send("go", false).await;
@@ -1868,6 +1938,54 @@ mod tests {
             .unwrap();
         assert_eq!(again["state"], "delivered");
         assert_eq!(c.kinds("fileDelivered").await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_ingest_that_outlives_its_caller_still_completes_the_lease() {
+        let c = chat_with("claude", false).await;
+        c.send("shoot", false).await;
+        let (action, reply) = c
+            .begin_with(
+                0,
+                "chrome_use_screenshot",
+                ToolClass::Capture,
+                vec![proto::OutputRequest {
+                    kind: proto::ArtifactKind::Screenshot,
+                    name: "page.png".into(),
+                }],
+                None,
+            )
+            .await;
+        let output = &reply["outputs"][0];
+        std::fs::write(output["path"].as_str().unwrap(), png()).unwrap();
+        let mut report = c.report(&action, "chrome_use_screenshot", ToolClass::Capture);
+        report.artifacts = vec![proto::ReportedArtifact {
+            artifact_id: output["artifactId"].as_str().unwrap().into(),
+            path: output["path"].as_str().unwrap().into(),
+        }];
+        c.engine.lock().await.evidence.ingest_delay = Some(Duration::from_millis(400));
+        // The caller gives up before the ingest finishes.
+        let params = proto::encode(&report).unwrap();
+        assert!(tokio::time::timeout(
+            Duration::from_millis(50),
+            dispatch(&c.engine, proto::OP_ACTION_REPORT, &params),
+        )
+        .await
+        .is_err());
+        // Meanwhile a retry is told to wait; afterwards it gets the result.
+        assert_eq!(c.send_report(&report).await, json!({"state":"pending"}));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let answer = c.send_report(&report).await;
+            if answer["bound"] == true {
+                assert_eq!(answer["verdict"], "confirmed");
+                assert_eq!(answer["artifacts"][0]["state"], "ready");
+                break;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "still {answer}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(c.kinds("actionObserved").await.len(), 1);
     }
 
     #[tokio::test]
