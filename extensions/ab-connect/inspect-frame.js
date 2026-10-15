@@ -347,10 +347,12 @@ function confirmCard(status) {
   const chosen = pairs.find(p => key(p) === state.chosenPair && live(p)) || null;
   const expanded = state.expandPairs || !card.preselected;
   const shown = expanded ? pairs : pairs.filter(p => key(p) === key(card.preselected));
+  // The heading states the choice in full, so what the buttons confirm is
+  // readable before pressing them.
+  box.append(chosen
+    ? h('div', { class: 'chooser-head' }, 'Send requests from ', h('strong', { text: scopeLabel(chosen.origin, chosen.pathScope) }), ' to ', h('strong', { text: chosen.sessionLabel || chosen.sessionId }))
+    : h('div', { class: 'chooser-head', text: 'Choose where requests from this page go:' }));
   const host = scopeLabel(pairs[0].origin, '/');
-  box.append(h('div', { class: 'chooser-head' },
-    expanded && !chosen ? 'Choose where requests from ' : 'Send requests from ',
-    h('strong', { text: host }), expanded && !chosen ? ' go:' : ' to:'));
   box.append(h('div', { class: 'list' }, shown.map(p => optionRow(p, live(p), key(p) === state.chosenPair))));
   if (!expanded && pairs.length > 1) box.append(h('button', { class: 'link small', onclick: () => { state.expandPairs = true; render(); } }, `Other matches (${pairs.length - 1})`));
   if (pairs.some(p => !live(p))) box.append(h('div', { class: 'small muted' }, 'To use a project without a running session, start Claude Code or Codex there, or run ', h('span', { class: 'mono', text: linkCommand(state.ctx.pageUrl, status.platform) }), ' in the session that should receive requests.'));
