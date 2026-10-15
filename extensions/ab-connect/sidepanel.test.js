@@ -30,8 +30,13 @@ async function fixture(overrides = {}, saved = {}) {
   const nodes = new Map(), calls = [], writes = [];
   let hostState;
   const chats = [chat('a', 'running'), chat('b')];
+  const presence = { posted: [], listeners: {} };
   const runtime = {
     onMessage: { addListener(listener) { hostState = listener; } },
+    ...(overrides.presence ? { connect({ name }) {
+      presence.name = name;
+      return { postMessage(message) { presence.posted.push(message); }, onMessage: { addListener(listener) { presence.listeners.message = listener; } }, onDisconnect: { addListener(listener) { presence.listeners.disconnect = listener; } }, disconnect() {} };
+    } } : {}),
     async sendMessage(request) {
       if (request.type === 'ab-status') return overrides.status ? {agentPanel:fullSupport,...overrides.status()} : { connected: true,agentPanel:fullSupport };
       calls.push(request);
@@ -49,9 +54,10 @@ async function fixture(overrides = {}, saved = {}) {
   };
   const document = { createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); } };
   for (const id of overrides.hiddenNodes || []) document.getElementById(id).hidden = true;
-  const panel = createPanel({ document, runtime, encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
+  const windows = overrides.presence ? { async getCurrent() { return { id: 7 }; } } : undefined;
+  const panel = createPanel({ document, runtime, windows, encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
-  return { panel, nodes, calls, chats, writes, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
+  return { panel, nodes, calls, chats, writes, presence, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
 
 test('a late stop acknowledgement cannot replace the selected conversation', async () => {
@@ -683,5 +689,17 @@ test('an older host without request revisions still gets the legacy result shape
   f.panel.select('a'); await settle();
   f.nodes.get('requests').querySelectorAll('button').find(b => b.textContent === 'Allow once').fire('click'); await settle();
   assert.deepEqual(f.calls.find(call => call.operation === 'conversationRespond').params, {conversationId:'a', requestId:'r', result:{behavior:'allow', updatedInput:{command:'ls'}}});
+  f.panel.close();
+});
+
+test('the panel reports the conversation it shows and switches when a notification is clicked', async () => {
+  const f = await fixture({ presence: true }, { ab_panel_conversation: 'a' });
+  assert.equal(f.presence.name, 'ab-panel-presence');
+  assert.deepEqual(f.presence.posted.at(-1), { type: 'presence', windowId: 7, conversationId: 'a', visible: true });
+  f.presence.listeners.message({ type: 'select', conversationId: 'b' }); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b');
+  assert.deepEqual(f.presence.posted.at(-1), { type: 'presence', windowId: 7, conversationId: 'b', visible: true });
+  f.nodes.get('agentsTab').fire('click'); await settle();
+  assert.equal(f.presence.posted.at(-1).visible, false);
   f.panel.close();
 });

@@ -184,6 +184,34 @@ pub(super) struct Event {
     pub data: Value,
 }
 
+/// The most recent turn that ended, for notifications: what a client keys a
+/// finished turn on without reading the journal. Rebuilt from the journal on
+/// load, never persisted in the state.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct LastTurn {
+    pub message_id: String,
+    pub outcome: String,
+    pub ended: u64,
+    /// First line of the turn's last redacted answer, at most 120 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+}
+
+/// The preview line of a journaled answer event. A message split into parts
+/// is previewed from its first part.
+pub(super) fn answer_preview(kind: &str, data: &Value) -> Option<String> {
+    if !matches!(kind, "textFinal" | "textRole") || data["part"].as_u64().unwrap_or(0) != 0 {
+        return None;
+    }
+    let line = data["text"]
+        .as_str()?
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())?;
+    Some(line.chars().take(120).collect())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Conversation {
@@ -222,6 +250,12 @@ pub(super) struct Conversation {
     pub site: Option<String>,
     #[serde(default)]
     pub schedule_id: Option<String>,
+    /// Older builds refuse unknown state fields, so this lives in the journal.
+    #[serde(skip)]
+    pub last_turn: Option<LastTurn>,
+    /// Revision of the newest unanswered approval request; live only.
+    #[serde(skip)]
+    pub waiting_request: Option<u64>,
 }
 
 impl Conversation {
@@ -266,6 +300,8 @@ impl Conversation {
             full_access: false,
             site: None,
             schedule_id: None,
+            last_turn: None,
+            waiting_request: None,
         })
     }
     /// Who drives this conversation's agent process, derived from its phase.
@@ -287,7 +323,7 @@ impl Conversation {
         }
     }
     pub(super) fn summary(&self) -> Value {
-        json!({"control":self.control(),"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
+        json!({"control":self.control(),"id":self.id,"agentId":self.agent_id,"title":self.title,"created":self.created,"updated":self.updated,"phase":self.phase,"generation":self.generation,"model":self.model,"requestedModel":self.requested_model,"options":self.options,"queued":self.queue.len(),"queuePaused":self.queue_paused,"directMessageId":self.direct_message_id,"activeMessageId":self.active.as_ref().map(|m|&m.id),"lastError":self.last_error,"lastSequence":self.next_sequence.saturating_sub(1),"fullAccess":self.full_access,"site":self.site,"scheduleId":self.schedule_id,"lastTurn":self.last_turn,"waitingRequest":self.waiting_request,"target":{"mode":"agentSession","session":format!("panel-{}",self.id)}})
     }
     pub(super) fn queue_snapshot(&self) -> Value {
         Value::Array(
@@ -486,6 +522,7 @@ impl Conversation {
         self.active_direct = false;
         self.last_error = error;
         self.active = None;
+        self.waiting_request = None;
         self.updated = now();
         Ok(true)
     }
@@ -586,7 +623,26 @@ impl Store {
         if chat.schema_version != 1 || chat.id != id {
             return Err("Conversation identity does not match its state".into());
         }
-        let cursor = self.last_sequence(id)?;
+        // One pass finds the journal's end and its last ended turn.
+        let mut preview: Option<(String, String)> = None;
+        let mut last_turn = None;
+        let cursor = self.scan(id, |event| {
+            let message = event.data["messageId"].as_str().unwrap_or("");
+            if let Some(line) = answer_preview(&event.kind, &event.data) {
+                preview = Some((message.into(), line));
+            } else if event.kind == "turnEnded" {
+                last_turn = Some(LastTurn {
+                    message_id: message.into(),
+                    outcome: event.data["outcome"].as_str().unwrap_or("unknown").into(),
+                    ended: event.at,
+                    preview: preview
+                        .take()
+                        .filter(|(id, _)| id == message)
+                        .map(|(_, line)| line),
+                });
+            }
+        })?;
+        chat.last_turn = last_turn;
         if chat.next_sequence > cursor + 1 {
             return Err(
                 "Conversation state is ahead of its journal; history cannot be assumed complete"
@@ -844,10 +900,6 @@ impl Store {
             }
         })?;
         Ok(blocked)
-    }
-
-    fn last_sequence(&self, id: &str) -> Result<u64, String> {
-        self.scan(id, |_| {})
     }
 
     /// Visit every event in order; refuses a gap, a torn line or corruption

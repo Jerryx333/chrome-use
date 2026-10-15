@@ -5,7 +5,9 @@
 use super::approval::{self, Pending};
 use super::backend::{self, Command as BackendCommand, Notice, Setup};
 use super::config_transaction::{atomic_write, private_open, private_tree};
-use super::conversation::{Continuation, Conversation, Message, PageContext, Phase, Store};
+use super::conversation::{
+    Continuation, Conversation, LastTurn, Message, PageContext, Phase, Store,
+};
 use super::options::ModelOptions;
 use super::redact::{self, Redacted};
 use super::DiscoveryContext;
@@ -562,6 +564,8 @@ struct Turn {
     final_items: std::collections::BTreeSet<String>,
     /// A chrome_use call of this turn was closed by its client's timeout.
     client_timeout: bool,
+    /// First line of the last redacted answer, for `lastTurn.preview`.
+    preview: Option<String>,
 }
 
 struct OpenTool {
@@ -812,6 +816,12 @@ impl Engine {
         redact::event(kind, data, self.secrets.entry(id.into()).or_default())
     }
     fn record_redacted(&mut self, id: &str, kind: &str, data: Redacted) -> Result<(), String> {
+        // Only the redacted text may become a notification preview.
+        if let Some(line) = super::conversation::answer_preview(kind, data.value()) {
+            if let Some(turn) = self.turns.get_mut(id) {
+                turn.preview = Some(line);
+            }
+        }
         let chat = self.chats.get_mut(id).ok_or("Conversation was not found")?;
         if matches!(kind, "terminal" | "exited" | "processUnconfirmed") {
             // Streamed text held back by the scrubber ends with its turn.
@@ -951,6 +961,7 @@ impl Engine {
                 answered: false,
                 final_items: Default::default(),
                 client_timeout: false,
+                preview: None,
             },
         );
         let started = self.last_sequence(id);
@@ -1081,6 +1092,13 @@ impl Engine {
         let last = self.last_sequence(id);
         let open_leases = self.open_lease_ids(id, &turn.message_id);
         self.evidence.detectors.remove(id);
+        // Set before `turnEnded` is journaled: that write saves the summary.
+        self.chat(id)?.last_turn = Some(LastTurn {
+            message_id: turn.message_id.clone(),
+            outcome: outcome.into(),
+            ended: super::conversation::now(),
+            preview: turn.preview.clone(),
+        });
         self.record(
             id,
             "turnEnded",
@@ -1427,6 +1445,14 @@ impl Engine {
             }
             _ => {}
         }
+        // Recomputed before journaling, which saves the summary.
+        let waiting = self
+            .requests
+            .iter()
+            .filter(|((chat, _), pending)| chat == id && !pending.sent)
+            .map(|(_, pending)| pending.revision)
+            .max();
+        self.chat(id)?.waiting_request = waiting;
         let error = notice.data["error"].clone();
         if notice.kind == "contextCompacted" {
             let message = notice.data["messageId"].clone();
@@ -4086,6 +4112,19 @@ mod turn_tests {
                 .map(|e| e["data"].clone())
                 .collect()
         }
+        /// This conversation's `conversationList` row.
+        async fn row(&self) -> Value {
+            let list = dispatch(&self.engine, "conversationList", &json!({}))
+                .await
+                .unwrap();
+            list["conversations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == self.id.as_str())
+                .unwrap()
+                .clone()
+        }
         async fn control(&self) -> String {
             let mut e = self.engine.lock().await;
             e.chat(&self.id).unwrap().summary()["control"]
@@ -4152,6 +4191,98 @@ mod turn_tests {
     }
 
     #[tokio::test]
+    async fn the_list_names_each_ended_turn_and_each_unanswered_request() {
+        let mut c = chat("codex").await;
+        assert_eq!(c.row().await["lastTurn"], Value::Null);
+        let message = c.send("check the page").await;
+        assert!(c.started().is_some());
+        c.notice(
+            "request",
+            json!({"requestId":3,"method":"item/commandExecution/requestApproval","params":{"command":"ls"}}),
+        )
+        .await;
+        let waiting = c.row().await;
+        assert_eq!(waiting["phase"], "waitingInput");
+        let revision = waiting["waitingRequest"].as_u64().unwrap();
+        c.notice("requestResolved", json!({"requestId":3})).await;
+        assert_eq!(c.row().await["waitingRequest"], Value::Null);
+        c.notice(
+            "request",
+            json!({"requestId":4,"method":"item/commandExecution/requestApproval","params":{"command":"pwd"}}),
+        )
+        .await;
+        let next = c.row().await["waitingRequest"].as_u64().unwrap();
+        assert!(next > revision);
+        c.notice(
+            "textFinal",
+            json!({"itemId":"m1","text":"\n  All 3 checks passed.\nDetails follow.","part":0,"last":true,"role":"final"}),
+        )
+        .await;
+        c.notice("terminal", json!({"status":"completed","error":null}))
+            .await;
+        let ended = c.row().await;
+        assert_eq!(ended["waitingRequest"], Value::Null);
+        assert_eq!(ended["lastTurn"]["messageId"], message);
+        assert_eq!(ended["lastTurn"]["outcome"], "completed");
+        assert_eq!(ended["lastTurn"]["preview"], "All 3 checks passed.");
+        assert!(ended["lastTurn"]["ended"].as_u64().unwrap() > 0);
+        // The state keeps the v1.5.214 shape, which refuses unknown fields.
+        let saved = std::fs::read(
+            c._dir
+                .path()
+                .join(format!("conversations/{}/state.json", c.id)),
+        )
+        .unwrap();
+        let state: serde_json::Map<String, Value> = serde_json::from_slice(&saved).unwrap();
+        let v1_5_214 = [
+            "schemaVersion",
+            "id",
+            "agentId",
+            "title",
+            "created",
+            "updated",
+            "phase",
+            "generation",
+            "sessionId",
+            "model",
+            "requestedModel",
+            "options",
+            "active",
+            "queue",
+            "queuePaused",
+            "directMessageId",
+            "directReady",
+            "activeDirect",
+            "accepted",
+            "nextSequence",
+            "lastError",
+            "executable",
+            "fullAccess",
+            "site",
+            "scheduleId",
+        ];
+        for key in state.keys() {
+            assert!(v1_5_214.contains(&key.as_str()), "{key}");
+        }
+        // A restarted service rebuilds the last turn from the journal.
+        let restarted = Arc::new(Mutex::new(Engine::new(
+            Store::open(c._dir.path().join("conversations")).unwrap(),
+            "fixture".into(),
+            std::collections::BTreeMap::new(),
+        )));
+        let reloaded = restarted.lock().await.chat(&c.id).unwrap().summary();
+        for field in ["messageId", "outcome", "preview"] {
+            assert_eq!(
+                reloaded["lastTurn"][field], ended["lastTurn"][field],
+                "{field}"
+            );
+        }
+        // `ended` is the journaled event's time, within a moment of the live one.
+        let at = |row: &Value| row["lastTurn"]["ended"].as_u64().unwrap();
+        assert!(at(&reloaded).abs_diff(at(&ended)) < 5000);
+    }
+
+    #[tokio::test]
     async fn turn_outcomes_follow_the_terminal_kind() {
         for (kind, data, stopping, outcome) in [
             (
@@ -4203,6 +4334,10 @@ mod turn_tests {
             assert_eq!(ended[0]["messageId"], message, "{kind}");
             assert_eq!(ended[0]["outcome"], outcome, "{kind}");
             assert_eq!(ended[0]["emptyAnswer"], true, "{kind}");
+            let row = c.row().await;
+            assert_eq!(row["lastTurn"]["messageId"], message, "{kind}");
+            assert_eq!(row["lastTurn"]["outcome"], outcome, "{kind}");
+            assert_eq!(row["lastTurn"]["preview"], Value::Null, "{kind}");
             let retired = c.kinds("generationRetired").await;
             assert_eq!(retired[0]["reason"], "notCompleted", "{kind}");
             let expected = if outcome == "unknown" {

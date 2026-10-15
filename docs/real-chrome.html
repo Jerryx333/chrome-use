@@ -87,6 +87,7 @@
       <h3>会话参数和定时提示</h3>
       <p><strong>Conversation options</strong> 设置允许的工具、Codex/Claude 推理强度和 Codex 服务等级。空闲时保存，下一次回复生效，不改 CLI 全局配置。Codex 无法移除可以读文件的 shell，OpenCode ACP 无法保证限制内置工具。审批开关只决定是否自动处理当前工具范围内的请求，Pi 没有逐次审批。</p>
       <p><strong>Agents &amp; models → Scheduled prompts</strong> 支持间隔、每天或工作日的本地时间、五字段 cron，并保存 agent、模型、会话参数、技能和明确的工具范围。每次运行使用独立后台浏览器 session，保留历史并在完成时通知。<strong>Run now</strong> 不改变下次到期时间。关闭侧栏不会停掉本地服务，停止服务则不再调度。重启或唤醒后，错过的周期只补跑一次；上次仍在执行或结果未确认时不会重叠执行或重放，确认未知结果前先看历史。</p>
+      <p>侧栏任务完成、失败、被停止、需要恢复或等待批准时，Chrome 会弹出通知，工具栏图标显示未看的数量；点通知会在侧栏打开对应会话。侧栏已在当前窗口显示的会话不会通知。可在 <strong>Settings → Notify when a task finishes</strong> 关闭。</p>
       <p>聊天不能创建比自己工具范围更大或审批权限更高的任务。定时聊天可以列出任务，但不能修改或触发任务，也不能重写供未来任务使用的技能库。agent 已结束不代表网页目标已达成。</p>
 
       <h2>一次性安装</h2>
