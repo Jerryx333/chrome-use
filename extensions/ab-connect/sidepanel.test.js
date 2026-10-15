@@ -794,7 +794,9 @@ test('a new conversation is created in the chosen project folder, shown in the h
   const created = [];
   const made = { ...chat('p'), agentId: 'codex', project: '/work/app' };
   const f = await fixture({
-    status: () => ({ connected: true, agentPanel: { ...fullSupport, projectDirectory: 1, chatAgents: ['codex', 'claude'] } }),
+    tabs: { async query() { return [{ id: 5, url: 'http://localhost:3000/dash', title: 'Dash' }]; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, projectDirectory: 1, inspect: true, chatAgents: ['codex', 'claude'] } }),
+    inspectProject: () => ({ success: true, result: { schemaVersion: 1, binding: null } }),
     conversationProjectList: () => ({ success: true, result: { schemaVersion: 1, projects: [{ path: '/work/app', sources: ['claude'] }] } }),
     conversationCreate: params => { created.push(params); return { success: true, result: { conversation: made } }; },
     conversationSend: () => ({ success: true, result: { conversation: made, message: { id: 'x', accepted: true, replayed: false } } }),
@@ -809,6 +811,9 @@ test('a new conversation is created in the chosen project folder, shown in the h
   assert.equal(f.nodes.get('projectPath').hidden, false);
   assert.match(f.nodes.get('projectPath').textContent, /Project: app/);
   assert.equal(f.nodes.get('projectPath').title, '/work/app');
+  // The remember question stays up after creation (a reset must not hide it).
+  const host = f.nodes.get('projectHost');
+  assert.equal(host.children.find(c => c.className === 'project-remember').hidden, false);
   f.panel.close();
 });
 

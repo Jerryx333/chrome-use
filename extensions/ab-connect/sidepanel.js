@@ -167,7 +167,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     if (projectPath) {
       // Fixed at creation: shown, never edited.
       projectPath.hidden = !conversation?.project;
-      projectPath.textContent = conversation?.project ? t('panel_project_header', folderLabel(conversation.project)) : '';
+      projectPath.textContent = conversation?.project ? t('panel_project_header', folderLabel(conversation.project).split(' · ')[0]) : '';
       projectPath.title = conversation?.project || '';
     }
     const optionAgent = conversation?.agentId || nodes.agent.value;
@@ -212,7 +212,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
     nodes.recordTask.disabled = !connected || sending;
     const busy = busyPhases.has(conversation?.phase);
     renderWorking();
-    nodes.status.classList.toggle('idle', !conversation || (conversation.phase === 'idle' && !conversation.model));
+    nodes.status.classList.toggle('idle', !conversation || (conversation.phase === 'idle' && !conversation.model && !conversation.project));
     nodes.status.classList.toggle('busy', busy);
     nodes.queue.textContent = pending ? t('panel_queue_unconfirmed') : conversation?.queued ? (conversation.queuePaused ? t('panel_queue_count_paused', conversation.queued) : t('panel_queue_count', conversation.queued)) : '';
     nodes.resume.hidden = !conversation?.queuePaused || !conversation?.queued;
@@ -976,7 +976,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, schedul
         const project = panelSupport?.projectDirectory ? projectChoice.value() : '';
         if (project) options.project = project;
         const result = await api('conversationCreate', options); rememberAgent(options.agentId);
-        if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); } conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        // After selecting it: selecting another conversation hides the question.
+        if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); }
       }
       const id = selected, pending = { id: crypto.randomUUID(), text, direct };
       imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();

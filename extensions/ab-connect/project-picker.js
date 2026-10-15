@@ -117,7 +117,8 @@ export function createProjectChoice({ document, api, select, host, supported, ca
     refresh, created,
     value: () => (agent === 'pi' || !supported() ? PRIVATE : current),
     setAgent(next) { agent = next; render(); },
-    reset() { chosenByUser = false; extra = []; ask.hidden = true; manual.hidden = true; },
+    // After a creation: the next conversation starts from the site's project again.
+    reset() { chosenByUser = false; extra = []; manual.hidden = true; },
     get binding() { return binding; },
     hideQuestion() { ask.hidden = true; },
   };
