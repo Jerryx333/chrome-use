@@ -252,7 +252,7 @@ pub(super) fn assess(
             "unknown" => ("unknown", "declared unknown".to_string(), None),
             _ => match supplied {
                 None => ("claimed", "no check was named".to_string(), None),
-                Some(check) => verify(check, message_id, leases, artifacts),
+                Some(check) => verify(check, &text, message_id, leases, artifacts),
             },
         };
         if status == "met" && computed != "checked" {
@@ -346,10 +346,12 @@ pub(super) fn not_assessed(message_id: &str) -> Value {
 
 /// One requirement's check against the evidence: `(computed, because,
 /// recorded predicate)`. For expect, readBack and urlMatch the predicate is
-/// the one the cited action recorded; the agent's restatement of it (quotes,
-/// "eq" for "==") is not compared.
+/// the one the cited action recorded. The agent's restatement of it may
+/// paraphrase (quotes, "==" for "contains") but must name nothing the
+/// recorded check does not: see [`consistent`].
 fn verify(
     check: &Value,
+    requirement: &str,
     message_id: &str,
     leases: &HashMap<String, Lease>,
     artifacts: &Artifacts,
@@ -387,7 +389,7 @@ fn verify(
             None,
         );
     }
-    let Some((recorded, journaled, _)) = &lease.check else {
+    let Some((recorded, journaled, raw)) = &lease.check else {
         return ("claimed", "the cited action recorded no check".into(), None);
     };
     let shown = Some(journaled.clone());
@@ -395,6 +397,23 @@ fn verify(
         return (
             "claimed",
             "the cited action recorded another kind of check".into(),
+            shown,
+        );
+    }
+    let against = raw.as_deref().unwrap_or(journaled);
+    let undescribed = predicate.trim().is_empty();
+    if undescribed {
+        if !shares_operand(requirement, against) {
+            return (
+                "claimed",
+                "the cited check does not match the requirement".into(),
+                shown,
+            );
+        }
+    } else if !consistent(predicate, against, wanted) {
+        return (
+            "claimed",
+            "the cited check records something else".into(),
             shown,
         );
     }
@@ -416,9 +435,14 @@ fn verify(
             shown,
         );
     }
+    let recorded_because = if undescribed {
+        "the browser recorded this check; the check was not described"
+    } else {
+        "the browser recorded this check"
+    };
     // Fresh: no later acting action of this turn on the same page.
     let (Some(sequence), Some(target)) = (lease.report_sequence, &lease.landing.target_id) else {
-        return ("checked", "the browser recorded this check".into(), shown);
+        return ("checked", recorded_because.into(), shown);
     };
     let stale = leases.values().any(|other| {
         other.message_id == message_id
@@ -433,8 +457,139 @@ fn verify(
             shown,
         )
     } else {
-        ("checked", "the browser recorded this check".into(), shown)
+        ("checked", recorded_because.into(), shown)
     }
+}
+
+/// Operator and filler words an agent may use when it restates a check;
+/// they name nothing to compare.
+const FILLER: &[&str] = &[
+    "eq",
+    "==",
+    "===",
+    "=",
+    ":",
+    "->",
+    "equals",
+    "equal",
+    "equaling",
+    "is",
+    "are",
+    "was",
+    "contains",
+    "contain",
+    "containing",
+    "includes",
+    "include",
+    "including",
+    "has",
+    "have",
+    "matches",
+    "match",
+    "matching",
+    "to",
+    "be",
+    "should",
+    "must",
+    "the",
+    "a",
+    "an",
+    "of",
+    "on",
+    "in",
+    "at",
+    "with",
+    "and",
+    "shows",
+    "show",
+    "showing",
+    "displayed",
+    "display",
+    "displays",
+    "element",
+    "value",
+    "reads",
+    "read",
+    "says",
+    "now",
+    "that",
+    "it",
+    "its",
+    "this",
+    "does",
+    "do",
+];
+
+/// Words that turn a check around.
+const NEGATIONS: &[&str] = &[
+    "not", "!=", "!==", "no", "without", "isn't", "doesn't", "don't", "never", "absent",
+];
+
+/// A predicate as lowercase tokens, quotes dropped: `text == "Order
+/// placed"` and `text Order placed` give the same tokens.
+fn tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .replace(
+            [
+                '"', '\'', '`', '\u{201c}', '\u{201d}', '\u{2018}', '\u{2019}',
+            ],
+            " ",
+        )
+        .split_whitespace()
+        .map(|t| {
+            t.trim_matches(|c: char| matches!(c, ',' | ';' | '(' | ')'))
+                .to_string()
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// Whether `needle` occurs in `hay` with no letter or digit right before
+/// or after it: `42` is in `contains 42` but not in `420`.
+fn occurs(hay: &str, needle: &str) -> bool {
+    hay.match_indices(needle).any(|(start, _)| {
+        let end = start + needle.len();
+        let before = hay[..start].chars().next_back();
+        let after = hay[end..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
+}
+
+/// Whether the agent's wording of a check names only what the recorded
+/// predicate holds: every operand it gives (selector, expected text or
+/// number, URL) occurs in the recorded one, and both say "not" or neither
+/// does. Operators and quoting may differ. A read-back records no value, so
+/// there only selectors are compared; a URL match records the landed URL,
+/// so there only URL parts are.
+fn consistent(label: &str, recorded: &str, kind: CheckKind) -> bool {
+    let recorded_tokens = tokens(recorded);
+    let hay = recorded_tokens.join(" ");
+    let label_tokens = tokens(label);
+    let negated = |t: &[String]| t.iter().any(|w| NEGATIONS.contains(&w.as_str()));
+    if kind == CheckKind::Expect && negated(&label_tokens) != negated(&recorded_tokens) {
+        return false;
+    }
+    let selector = |t: &str| t.starts_with(['#', '.', '[']) || t.contains(['[', '>']);
+    label_tokens
+        .iter()
+        .filter(|t| !FILLER.contains(&t.as_str()) && !NEGATIONS.contains(&t.as_str()))
+        .filter(|t| match kind {
+            CheckKind::ReadBack => selector(t),
+            CheckKind::UrlMatch => t.contains(['.', '/', ':', '?', '=']),
+            _ => true,
+        })
+        .all(|t| occurs(&hay, t))
+}
+
+/// Whether a requirement's own text names something the recorded predicate
+/// holds (used when the agent described no check).
+fn shares_operand(requirement: &str, recorded: &str) -> bool {
+    let hay = tokens(recorded).join(" ");
+    tokens(requirement)
+        .iter()
+        .filter(|t| !FILLER.contains(&t.as_str()) && !NEGATIONS.contains(&t.as_str()))
+        .filter(|t| t.chars().count() >= 2 || t.chars().all(|c| c.is_ascii_digit()))
+        .any(|t| occurs(&hay, t))
 }
 
 fn download_type(
@@ -474,5 +629,89 @@ fn download_type(
         State::Ready(_) => ("checked", "a non-empty file of that type was saved".into()),
         State::Unavailable(_) => ("checkFailed", "the file was not kept".into()),
         _ => ("claimed", "the file is not ready".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_restated_check_must_name_only_what_was_recorded() {
+        let expect = CheckKind::Expect;
+        // Paraphrases of the recorded predicate.
+        for label in [
+            "text Order placed",
+            "text == \"Order placed\"",
+            "text eq 'Order placed'",
+            "TEXT CONTAINS \"order placed\"",
+        ] {
+            assert!(consistent(label, "text Order placed", expect), "{label}");
+        }
+        assert!(consistent(
+            "#total == 42",
+            "text #total contains 42",
+            expect
+        ));
+        assert!(consistent(
+            "text #total contains 42",
+            "text #total contains 42",
+            expect
+        ));
+        // Check 3 of the acceptance run: another selector and value.
+        assert!(!consistent(
+            "text #total contains 42",
+            "text #title contains Page",
+            expect
+        ));
+        assert!(!consistent(
+            "#total == 42",
+            "text #total contains 420",
+            expect
+        ));
+        assert!(!consistent("text Paid", "text Order placed", expect));
+        // A negation on one side only.
+        assert!(!consistent(
+            "text #err contains Error",
+            "not text #err contains Error",
+            expect
+        ));
+        assert!(consistent(
+            "#err does not contain Error",
+            "not text #err contains Error",
+            expect
+        ));
+        // URLs compare as text inside the landed URL.
+        assert!(consistent(
+            "url contains example.com/a",
+            "https://example.com/a",
+            CheckKind::UrlMatch
+        ));
+        assert!(!consistent(
+            "shop.example",
+            "https://example.com/a",
+            CheckKind::UrlMatch
+        ));
+        // A read-back records no value: only its selector is compared.
+        assert!(consistent(
+            "#email == a@b.example",
+            "#email has the typed value",
+            CheckKind::ReadBack
+        ));
+        assert!(!consistent(
+            "#name == a@b.example",
+            "#email has the typed value",
+            CheckKind::ReadBack
+        ));
+    }
+
+    #[test]
+    fn an_undescribed_check_must_share_an_operand_with_the_requirement() {
+        assert!(shares_operand("Open page A", "text #title contains Page A"));
+        assert!(shares_operand("Totals equal 42", "text #total contains 42"));
+        assert!(!shares_operand(
+            "Totals equal 42",
+            "text #title contains Page"
+        ));
     }
 }

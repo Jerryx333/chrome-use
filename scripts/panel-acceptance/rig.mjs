@@ -38,7 +38,12 @@ export async function startRig({ dir, work, hostBin, chrome, extDir, sitePort = 
 
   // Native host with this run's HOME.
   const nm = path.join(work, 'nm-host.sh');
-  fs.writeFileSync(nm, `#!/bin/sh\nexport HOME="${home}"\nexport CHROME_USE_NO_UPDATE_CHECK=1\nexec "${hostBin}" __nm-host "$@"\n`, { mode: 0o755 });
+  // The service may be started by this native host (when the extension
+  // connects) before the driver starts it, and the first one owns the
+  // profile: give the host the same environment the driver's service gets.
+  const hostEnv = { HOME: home, CHROME_USE_NO_UPDATE_CHECK: '1', PANEL_ACCEPT_DIR: accept, XDG_DATA_HOME: path.join(work, 'xdg'), CODEX_HOME: process.env.REAL_CODEX_HOME || path.join(home, '.codex') };
+  const quote = v => `'${String(v).replace(/'/g, `'\\''`)}'`;
+  fs.writeFileSync(nm, `#!/bin/sh\n${Object.entries(hostEnv).map(([k, v]) => `export ${k}=${quote(v)}`).join('\n')}\nexec ${quote(hostBin)} __nm-host "$@"\n`, { mode: 0o755 });
   const userDataDir = path.join(work, 'chrome-profile');
   fs.mkdirSync(path.join(userDataDir, 'NativeMessagingHosts'), { recursive: true });
   fs.writeFileSync(path.join(userDataDir, 'NativeMessagingHosts', 'com.agent_browser.connect.json'), JSON.stringify({ name: 'com.agent_browser.connect', description: 'panel acceptance host', path: nm, type: 'stdio', allowed_origins: [`chrome-extension://${EXT_ID}/`] }));

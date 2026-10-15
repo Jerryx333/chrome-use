@@ -2051,6 +2051,37 @@ mod tests {
             paraphrase["requirements"][0]["check"]["label"],
             "text == \"Order placed\""
         );
+        // A label naming another selector and value than the recorded
+        // check (acceptance check 3) is only claimed.
+        let unrelated = c
+            .assess(0, met("text #total contains 42", &expect))
+            .await
+            .unwrap();
+        assert_eq!(unrelated["requirements"][0]["computed"], "claimed");
+        assert_eq!(
+            unrelated["requirements"][0]["because"],
+            "the cited check records something else"
+        );
+        assert_eq!(unrelated["status"], "notChecked");
+        assert_eq!(
+            unrelated["downgradedBecause"][0],
+            "requirement 1: the cited check records something else"
+        );
+        // No predicate named: checked only when the requirement itself
+        // names something the recorded check holds.
+        let undescribed = |text: &str| json!({"status":"done","requirements":[{"text":text,"status":"met","check":{"kind":"expect","evidence":expect}}]});
+        let named = c.assess(0, undescribed("Order placed")).await.unwrap();
+        assert_eq!(named["requirements"][0]["computed"], "checked");
+        assert_eq!(
+            named["requirements"][0]["because"],
+            "the browser recorded this check; the check was not described"
+        );
+        let unnamed = c.assess(0, undescribed("Totals equal 42")).await.unwrap();
+        assert_eq!(unnamed["requirements"][0]["computed"], "claimed");
+        assert_eq!(
+            unnamed["requirements"][0]["because"],
+            "the cited check does not match the requirement"
+        );
         // A failed expect fails the requirement whatever its label.
         let failing = c.begin("chrome_use_expect", ToolClass::Observe).await;
         c.send_report(&expect_report(&c, &failing, "text Paid", false))

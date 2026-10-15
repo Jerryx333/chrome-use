@@ -51,9 +51,15 @@ impl GroupRelease {
         }
     }
 
+    pub fn session(&self) -> &str {
+        &self.session
+    }
+
     pub async fn release(mut self) {
-        self.armed = false;
+        // Disarmed only once the release went through: cancelled before
+        // that (say, waiting for the CDP writer), `Drop` releases instead.
         release_object_group(&self.client, &self.session, self.group).await;
+        self.armed = false;
     }
 }
 
@@ -4706,6 +4712,33 @@ mod tests {
         assert_eq!(
             *released.lock().unwrap(),
             vec!["group-error".to_string(), "group-cancel".to_string()]
+        );
+    }
+
+    /// Round 6: cancelled while the release itself waits to be sent (the CDP
+    /// writer busy), the group is still released, from `Drop`.
+    #[tokio::test]
+    async fn object_group_is_released_when_the_release_is_cancelled() {
+        let (url, released) = release_recorder().await;
+        let client = std::sync::Arc::new(CdpClient::connect(&url).await.unwrap());
+        let guard = GroupRelease::new(client.clone(), "S1", "group-release-cancel");
+        let writer = client.hold_writer().await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), guard.release())
+                .await
+                .is_err()
+        );
+        assert!(released.lock().unwrap().is_empty());
+        drop(writer);
+        for _ in 0..50 {
+            if !released.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            *released.lock().unwrap(),
+            vec!["group-release-cancel".to_string()]
         );
     }
 

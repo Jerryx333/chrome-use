@@ -1,8 +1,24 @@
 # Changelog
 
-## 1.5.215
+## 1.5.216
 
 <!-- release:start -->
+Patch release for the agent panel shipped in 1.5.215. Works with extension ab-connect 0.5.58 (no extension change).
+
+### Bug Fixes
+
+- **Browser checks must match what was recorded.** A requirement now counts as checked only when the cited check records the same selector, value or URL the agent describes (paraphrases such as `==`/`contains`, quotes and case are accepted). Citing a confirmed but unrelated check is reported as "claimed" instead of checked.
+- **Redaction.** Protocol fields are kept unmasked only where the protocol puts them and only with identifier-shaped values, so a secret can no longer pass under a field named `name` or `status`; dispatch fields stay intact. A streamed answer with more than 256 secrets withholds the rest and still learns secrets split across chunks. A message whose text, page and attachments together would not fit one record is refused when sent.
+- **Passkey guard during `auth login --bwu`.** The `create()` guard covers the page, its existing frames and attached cross-site frames, keeps no way back to the original reachable from page script, and is restored by identity with a per-frame report. Page script that already ran before the login started is out of scope; a registered passkey still stops the login.
+- **Object groups** used by element lookups and the passkey guard are released even when a command is cancelled.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.215
+
 Requires extension ab-connect 0.5.58 for the turn view, task notifications and HEIC attachments (older extensions keep the previous view). Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -38,7 +54,6 @@ Requires extension ab-connect 0.5.58 for the turn view, task notifications and H
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.214
 

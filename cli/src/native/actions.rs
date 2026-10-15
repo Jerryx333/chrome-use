@@ -22610,12 +22610,18 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     }
     if passkey_first {
         webauthn_events = mgr.client.subscribe();
-        authenticator = install_passkeys(&mgr.client, &session_id, &passkeys, &host)
-            .await?
-            .ok_or_else(|| {
-                format!("auth login --bwu --passkey: the vault item has no passkey for {host}")
-            })?
-            .into();
+        authenticator = install_passkeys(
+            &mgr.client,
+            &session_id,
+            &state.iframe_sessions,
+            &passkeys,
+            &host,
+        )
+        .await?
+        .ok_or_else(|| {
+            format!("auth login --bwu --passkey: the vault item has no passkey for {host}")
+        })?
+        .into();
     }
     let user_selectors: Vec<&str> = AUTH_USER_SELECTORS
         .iter()
@@ -22901,7 +22907,7 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
             && page_asks_for_passkey(&mgr.client, &session_id, &origin, &current).await
         {
             webauthn_events = mgr.client.subscribe();
-            match install_passkeys(&mgr.client, &session_id, &passkeys, &host).await {
+            match install_passkeys(&mgr.client, &session_id, &state.iframe_sessions, &passkeys, &host).await {
                 Ok(Some(a)) => {
                     authenticator = Some(a);
                     let at = mgr.get_url().await.unwrap_or_default();
@@ -22996,8 +23002,8 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
     // The ceremony is over (check_passkey_accepted waited for its result):
     // the private key does not outlive the login. A cleanup that cannot be
     // confirmed is an error even when the login itself went through.
-    let cleanup = match &authenticator {
-        Some(a) => remove_passkeys(&mgr.client, &session_id, a).await,
+    let cleanup = match &mut authenticator {
+        Some(a) => remove_passkeys(&mgr.client, &session_id, &state.iframe_sessions, a).await,
         None => Ok(()),
     };
     match (outcome, cleanup) {
@@ -23366,8 +23372,9 @@ const PASSKEY_COUNTER_REFUSAL: &str = "this vault passkey keeps a signature coun
 /// A virtual authenticator installed for one `auth login --bwu`.
 struct PasskeyAuthenticator {
     id: String,
-    /// The new-document script that refuses `navigator.credentials.create`.
-    no_create_script: Option<String>,
+    /// The guard that refuses `navigator.credentials.create` (see
+    /// [`super::passkey_guard`]).
+    create_guard: super::passkey_guard::CreateGuard,
     /// Credential ids we imported (base64): their own `credentialAdded`
     /// events are not the page registering one.
     imported: Vec<String>,
@@ -23386,71 +23393,15 @@ const PASSKEY_ADDED_ERROR: &str =
     the temporary authenticator. Stopped; if the site says a passkey was added, remove it from the \
     account's security settings (its private key no longer exists).";
 
-/// While the temporary authenticator is installed, the page cannot register
-/// a passkey with it: `create()` is refused before it reaches Chrome, with
-/// the error Chrome itself gives for a refused ceremony.
-///
-/// The original is kept in the wrapper's closure, never under a global or a
-/// `Symbol.for` key the page could look up: the wrapper hands it back only
-/// when called with this process's random token, which [`restore_create_js`]
-/// does after checking the own `create` is that wrapper.
-fn no_create_js() -> String {
-    format!(
-        r#"(() => {{
-    'use strict';
-    const c = navigator.credentials, token = {token};
-    if (!c) return false;
-    const own = Object.prototype.hasOwnProperty.call(c, 'create');
-    if (own && String(c.create).includes(token)) return true;
-    const create = c.create;
-    try {{
-        c.create = function (o) {{
-            if (o === {token}) return create;
-            return (o && o.publicKey)
-                ? Promise.reject(new DOMException('The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.', 'NotAllowedError'))
-                : create.call(this, o);
-        }};
-    }} catch (e) {{
-        return false;
-    }}
-    // True only when the wrapper really replaced create().
-    return c.create !== create && String(c.create).includes(token);
-}})()"#,
-        token = serde_json::to_string(no_create_token()).unwrap_or_default(),
-    )
-}
-
-/// Undo [`no_create_js`] on the current document.
-fn restore_create_js() -> String {
-    format!(
-        r#"(() => {{
-    const c = navigator.credentials, token = {token};
-    if (!c || !Object.prototype.hasOwnProperty.call(c, 'create')
-        || !String(c.create).includes(token)) return true;
-    const original = c.create(token);
-    try {{ delete c.create; }} catch (e) {{}}
-    if (c.create !== original) {{ try {{ c.create = original; }} catch (e) {{}} }}
-    // True only when create() is the original again.
-    return c.create === original;
-}})()"#,
-        token = serde_json::to_string(no_create_token()).unwrap_or_default(),
-    )
-}
-
-/// The random token [`no_create_js`]'s wrapper answers to (one per daemon).
-fn no_create_token() -> &'static str {
-    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    TOKEN.get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
-}
-
 /// Load the item's passkeys for this site into a virtual authenticator on the
 /// tab (Chrome's WebAuthn domain). The site's own `navigator.credentials.get`
 /// is then answered by Chrome, signed with the vault key. Only passkeys whose
 /// rpId is the page's host or a parent of it. Ok(None) when none fits; Err
 /// when WebAuthn is unavailable or a passkey keeps a signature counter.
 async fn install_passkeys(
-    client: &super::cdp::client::CdpClient,
+    client: &Arc<super::cdp::client::CdpClient>,
     session_id: &str,
+    iframe_sessions: &HashMap<String, String>,
     passkeys: &[Value],
     host: &str,
 ) -> Result<Option<PasskeyAuthenticator>, String> {
@@ -23521,30 +23472,24 @@ async fn install_passkeys(
     };
     let mut a = PasskeyAuthenticator {
         id,
-        no_create_script: None,
+        create_guard: super::passkey_guard::CreateGuard::new(),
         imported: fits
             .iter()
             .filter_map(|p| p["credentialId"].as_str().map(str::to_string))
             .collect(),
     };
-    // Fail closed: without the create() guard on this page and the next ones,
-    // no authenticator stays installed.
-    a.no_create_script = client
-        .send_command(
-            "Page.addScriptToEvaluateOnNewDocument",
-            Some(json!({ "source": no_create_js() })),
-            Some(session_id),
-        )
-        .await
-        .ok()
-        .and_then(|v| v["identifier"].as_str().map(str::to_string));
-    let guard_now = auth_eval(client, session_id, no_create_js()).await;
-    if a.no_create_script.is_none() || guard_now != Ok(Some(Value::Bool(true))) {
-        let cleanup = remove_passkeys(client, session_id, &a).await;
+    // Fail closed: without the create() guard on this page, its frames and
+    // the next documents, no authenticator stays installed.
+    if let Err(e) =
+        super::passkey_guard::install(client, session_id, iframe_sessions, &mut a.create_guard)
+            .await
+    {
+        let cleanup = remove_passkeys(client, session_id, iframe_sessions, &mut a).await;
         return Err(with_cleanup(
-            "auth login --bwu: could not guard the page against registering a passkey, so the \
-             passkey was not used"
-                .to_string(),
+            format!(
+                "auth login --bwu: could not guard the page against registering a passkey ({e}), \
+                 so the passkey was not used"
+            ),
             cleanup,
         ));
     }
@@ -23567,7 +23512,7 @@ async fn install_passkeys(
             )
             .await
         {
-            let cleanup = remove_passkeys(client, session_id, &a).await;
+            let cleanup = remove_passkeys(client, session_id, iframe_sessions, &mut a).await;
             return Err(with_cleanup(
                 format!("auth login --bwu: Chrome refused the passkey ({e})"),
                 cleanup,
@@ -23580,9 +23525,10 @@ async fn install_passkeys(
 /// Remove the authenticator, its no-create script, and the WebAuthn
 /// environment, so later passkey logins on this tab use the real ones.
 async fn remove_passkeys(
-    client: &super::cdp::client::CdpClient,
+    client: &Arc<super::cdp::client::CdpClient>,
     session_id: &str,
-    a: &PasskeyAuthenticator,
+    iframe_sessions: &HashMap<String, String>,
+    a: &mut PasskeyAuthenticator,
 ) -> Result<(), String> {
     // Every step runs; any failure is reported, so nothing claims the key is
     // gone when that is not confirmed.
@@ -23597,27 +23543,13 @@ async fn remove_passkeys(
     {
         failed.push(format!("removing the virtual authenticator: {e}"));
     }
-    if let Some(script) = &a.no_create_script {
-        if let Err(e) = client
-            .send_command(
-                "Page.removeScriptToEvaluateOnNewDocument",
-                Some(json!({ "identifier": script })),
-                Some(session_id),
-            )
-            .await
-        {
-            failed.push(format!("removing the create() guard script: {e}"));
-        }
-    }
-    // A page that navigated away took the guard with it.
-    match auth_eval(client, session_id, restore_create_js()).await {
-        Ok(Some(Value::Bool(true))) => {}
-        Err(e) if page_went_away(&e) => {}
-        Ok(other) => failed.push(format!(
-            "restoring navigator.credentials.create: the page kept the guard ({})",
-            other.map_or_else(|| "no result".to_string(), |v| v.to_string())
-        )),
-        Err(e) => failed.push(format!("restoring navigator.credentials.create: {e}")),
+    // Every document guarded, the main one and its frames: a document that
+    // navigated away took its guard with it.
+    let report =
+        super::passkey_guard::restore(client, session_id, iframe_sessions, &mut a.create_guard)
+            .await;
+    if let Err(e) = super::passkey_guard::report_result(&report) {
+        failed.push(format!("restoring navigator.credentials.create: {e}"));
     }
     if let Err(e) = client
         .send_command("WebAuthn.disable", None, Some(session_id))
