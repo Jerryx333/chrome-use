@@ -1,7 +1,7 @@
 //! OpenCode ACP v1 adapter. A private server belongs to this process group;
 //! only the prompt response confirms a turn's terminal outcome.
 use super::backend::{
-    compacted, emit_text, notice, opencode_tool_notice, write, Command, Notice, Setup,
+    compacted, emit_text, notice, opencode_tool_notice, send_large, write, Command, Notice, Setup,
 };
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::Path, time::Duration};
@@ -126,7 +126,7 @@ pub(super) async fn protocol(
                             write(input,json!({"jsonrpc":"2.0","id":id,"result":{"outcome":{"outcome":"cancelled"}}})).await?;
                         } else {
                             permissions.insert(id.to_string(),(id.clone(),params["toolCall"]["toolCallId"].clone(),false));
-                            emit(events,"request",json!({"requestId":id,"method":method,"params":params})).await?;
+                            send_large(events,notice("request",json!({"requestId":id,"method":method,"params":params}))).await?;
                         }
                     } else if method == "session/update" && ready && active.is_some() && params["sessionId"].as_str() == session.as_deref() {
                         let update = &params["update"];
@@ -146,7 +146,7 @@ pub(super) async fn protocol(
                                 if item.get("rawOutput").is_some() { item["input"] = item["rawOutput"].clone(); }
                                 else if item.get("content").is_some() { item["input"] = item["content"].clone(); }
                                 let completed = ["completed","failed"].contains(&item["status"].as_str().unwrap_or(""));
-                                events.send(opencode_tool_notice(completed,item)).await.map_err(|_| "Event consumer closed")?;
+                                send_large(events,opencode_tool_notice(completed,item)).await?;
                                 if completed && update["toolCallId"].is_string() {
                                     let resolved: Vec<_> = permissions.iter().filter(|(_, (_, tool, sent))| *sent && *tool == update["toolCallId"]).map(|(key, (id, _, _))| (key.clone(),id.clone())).collect();
                                     for (key,id) in resolved { permissions.remove(&key); emit(events,"requestResolved",json!({"requestId":id})).await?; }

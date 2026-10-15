@@ -1374,11 +1374,22 @@ impl Engine {
                     .ok_or("Backend request could not be recorded")?;
                 if too_large {
                     journaled = redact::preview_params(journaled);
-                    if let Some(object) = original.as_object_mut() {
-                        object.insert("truncated".into(), true.into());
-                    } else {
-                        original = json!({"truncated": true});
+                    // Never approvable: keep only what resolving or
+                    // declining it needs, not the large original.
+                    let mut kept = serde_json::Map::new();
+                    for key in ["tool_use_id", "tool_name", "subtype", "options", "toolCall"] {
+                        if let Some(field) = original.get(key) {
+                            let field = match key {
+                                "toolCall" => json!({"toolCallId": field["toolCallId"]}),
+                                _ => field.clone(),
+                            };
+                            if field.to_string().len() <= 4096 {
+                                kept.insert(key.into(), field);
+                            }
+                        }
                     }
+                    kept.insert("truncated".into(), true.into());
+                    original = Value::Object(kept);
                 }
                 self.requests.insert(
                     (id.into(), key),
@@ -3873,6 +3884,14 @@ mod redaction_tests {
         assert!(!preview.contains("483927"), "{preview}");
         // The fill was recognised on the whole request before the preview.
         assert!(preview.contains("[redacted input, 6 chars]"), "{preview}");
+        // The never-approvable original is not kept in memory, only its ids.
+        {
+            let e = f.engine.lock().await;
+            let pending = e.requests.values().find(|p| p.request_id == "big").unwrap();
+            assert!(pending.original.get("input").is_none());
+            assert_eq!(pending.original["tool_use_id"], "tool-9");
+            assert_eq!(pending.original["truncated"], true);
+        }
         assert!(!f.on_disk("483927"));
         let revision = request["requestRevision"].as_u64().unwrap();
         assert!(f

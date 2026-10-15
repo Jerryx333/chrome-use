@@ -41,6 +41,35 @@ pub(super) struct Notice {
     /// probe can count the tree and end it (plan 5.3).
     #[cfg(windows)]
     pub job: Option<std::sync::Arc<super::windows::ProcessJob>>,
+    /// Bytes of [`NOTICE_BYTES`] this notice holds until it is dropped.
+    pub budget: Option<std::sync::Arc<tokio::sync::OwnedSemaphorePermit>>,
+}
+
+/// Bytes of tool items and request params that may wait, unredacted, in the
+/// notice queues of all conversations at once. Items are queued whole so
+/// the service can redact the full structure; past this budget the backend
+/// reader waits until the service has consumed earlier ones.
+const NOTICE_BUDGET: usize = 64 * 1024 * 1024;
+static NOTICE_BYTES: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(NOTICE_BUDGET)));
+
+/// Send a notice that may carry a large tool item or request: it first takes
+/// its size from the shared budget, released when the service drops it.
+pub(super) async fn send_large(
+    events: &mpsc::Sender<Notice>,
+    mut notice: Notice,
+) -> Result<(), String> {
+    let size = notice.data.to_string().len().clamp(1, NOTICE_BUDGET) as u32;
+    let permit = NOTICE_BYTES
+        .clone()
+        .acquire_many_owned(size)
+        .await
+        .map_err(|_| "Event budget closed")?;
+    notice.budget = Some(std::sync::Arc::new(permit));
+    events
+        .send(notice)
+        .await
+        .map_err(|_| "Event consumer closed".into())
 }
 
 /// A backend that did not confirm a stop within 10 s.
@@ -93,6 +122,7 @@ pub(super) fn notice(kind: &'static str, data: Value) -> Notice {
         data,
         #[cfg(windows)]
         job: None,
+        budget: None,
     }
 }
 
@@ -492,7 +522,7 @@ async fn protocol(
                     if let Some(method)=value["method"].as_str() {
                         if let Some(id)=value.get("id") {
                             if !["item/commandExecution/requestApproval","item/fileChange/requestApproval","item/permissions/requestApproval","item/tool/requestUserInput","mcpServer/elicitation/request"].contains(&method) {return Err("Backend requested an unsupported host operation".into());}
-                            events.send(notice("request",json!({"requestId":id,"method":method,"params":value["params"]}))).await.map_err(|_|"Event consumer closed")?;
+                            send_large(events,notice("request",json!({"requestId":id,"method":method,"params":value["params"]}))).await?;
                         } else {
                             let p=&value["params"];
                             if p.get("threadId").is_some_and(|v|Some(v.as_str().unwrap_or(""))!=session.as_deref()) {continue;}
@@ -504,7 +534,7 @@ async fn protocol(
                                 "item/started"|"item/completed"=>{let item=&p["item"];if item["type"]=="userMessage" {continue;}
                                 if item["type"]=="agentMessage" {if method=="item/completed" {if let Some(text)=item["text"].as_str(){emit_text_role(events,"textFinal",item["id"].as_str().unwrap_or("assistant"),text,codex_role(item)).await?;}}}
                                 else if item["type"]=="contextCompaction" {if method=="item/completed" {events.send(compacted("codex",Value::Null)).await.map_err(|_|"Event consumer closed")?;}}
-                                else {events.send(codex_tool_notice(method=="item/completed",item)).await.map_err(|_|"Event consumer closed")?;}}
+                                else {send_large(events,codex_tool_notice(method=="item/completed",item)).await?;}}
                                 "serverRequest/resolved"=>{events.send(notice("requestResolved",json!({"requestId":p["requestId"]}))).await.map_err(|_|"Event consumer closed")?;}
                                 "mcpServer/startupStatus/updated" if p["name"]=="chrome_use" && p["status"]=="failed"=>return Err("The conversation's chrome-use browser tools did not start".into()),
                                 "thread/name/updated"=>{if let Some(name)=p["threadName"].as_str(){events.send(notice("title",json!({"title":name}))).await.map_err(|_|"Event consumer closed")?;}}
@@ -568,10 +598,10 @@ async fn protocol(
                         Some("control_response")=>{let response=&value["response"];if response["request_id"]=="panel-initialize" {if response["subtype"]!="success" {return Err("Claude refused control-protocol initialization".into());}ready=true;if queued.is_some(){send_turn(false,&setup.workspace,stdin,&mut next_id,&mut requests,&session,&mut queued).await?;busy=true;}}}
                         Some("system") if value["subtype"]=="init"=>{let returned=value["session_id"].as_str().ok_or("Claude session has no identity")?.to_string();if session.as_ref().is_some_and(|s|s!=&returned){return Err("Claude resumed a different conversation".into());}session=Some(returned.clone());events.send(notice("ready",ready_data(json!({"sessionId":returned,"model":value["model"],"pid":pid,"backendVersion":value["claude_code_version"].as_str(),"resumable":true}),&process))).await.map_err(|_|"Event consumer closed")?;events.send(notice("running",json!({"turnId":null}))).await.map_err(|_|"Event consumer closed")?;}
                         Some("stream_event")=>{let e=&value["event"];if e["type"]=="message_start" {claude_message=e["message"]["id"].as_str().unwrap_or("assistant").into();}else if e["type"]=="content_block_delta" && e["delta"]["type"]=="text_delta" {if let Some(text)=e["delta"]["text"].as_str(){emit_text(events,"textDelta",&claude_message,text).await?;}}}
-                        Some("assistant")=>{let id=value["message"]["id"].as_str().unwrap_or("assistant");if let Some(blocks)=value["message"]["content"].as_array(){for block in blocks {if block["type"]=="text" {if let Some(text)=block["text"].as_str(){emit_text(events,"textFinal",id,text).await?;}}else if block["type"]=="tool_use" {claude_tools.remember(block);events.send(tool_notice(false,block["id"].as_str(),Vec::new(),block)).await.map_err(|_|"Event consumer closed")?;}}}}
-                        Some("user")=>{for event in claude_tool_results(&value,&claude_tools) {events.send(event).await.map_err(|_|"Event consumer closed")?;}}
+                        Some("assistant")=>{let id=value["message"]["id"].as_str().unwrap_or("assistant");if let Some(blocks)=value["message"]["content"].as_array(){for block in blocks {if block["type"]=="text" {if let Some(text)=block["text"].as_str(){emit_text(events,"textFinal",id,text).await?;}}else if block["type"]=="tool_use" {claude_tools.remember(block);send_large(events,tool_notice(false,block["id"].as_str(),Vec::new(),block)).await?;}}}}
+                        Some("user")=>{for event in claude_tool_results(&value,&claude_tools) {send_large(events,event).await?;}}
                         Some("system") if value["subtype"]=="compact_boundary"=>{events.send(compacted("claude",value["compact_metadata"]["trigger"].clone())).await.map_err(|_|"Event consumer closed")?;}
-                        Some("control_request")=>{let id=value.get("request_id").ok_or("Claude control request has no identity")?;if value["request"]["subtype"]!="can_use_tool" {return Err("Claude requested an unsupported host operation".into());}events.send(notice("request",json!({"requestId":id,"method":"can_use_tool","params":value["request"]}))).await.map_err(|_|"Event consumer closed")?;}
+                        Some("control_request")=>{let id=value.get("request_id").ok_or("Claude control request has no identity")?;if value["request"]["subtype"]!="can_use_tool" {return Err("Claude requested an unsupported host operation".into());}send_large(events,notice("request",json!({"requestId":id,"method":"can_use_tool","params":value["request"]}))).await?;}
                         Some("result")=>{if !busy {continue;}
                         if value["result"].is_string() {events.send(notice("textRole",json!({"itemId":claude_message,"role":"final","source":"claude.result"}))).await.map_err(|_|"Event consumer closed")?;}let status=if value["subtype"]=="success" && value["is_error"]==false {"completed"}else if stopping {"interrupted"}else {"failed"};busy=false;stopping=false;stopping_at=None;events.send(notice("terminal",json!({"status":status,"error":if status=="failed" {json!("Claude returned an unsuccessful or unknown terminal result")}else{Value::Null}}))).await.map_err(|_|"Event consumer closed")?;}
                         _=>{}
@@ -774,10 +804,10 @@ async fn pi_protocol(
                     }
                     "message_end" if value["message"]["role"] == "assistant" => pi_message_end(&mut failure, &value["message"]),
                     "tool_execution_start" => {
-                        events.send(tool_notice(false, value["toolCallId"].as_str(), Vec::new(), &json!({"id":value["toolCallId"],"name":value["toolName"],"input":value["args"]}))).await.map_err(|_| "Event consumer closed")?;
+                        send_large(events, tool_notice(false, value["toolCallId"].as_str(), Vec::new(), &json!({"id":value["toolCallId"],"name":value["toolName"],"input":value["args"]}))).await?;
                     }
                     "tool_execution_end" => {
-                        events.send(pi_tool_end(&value)).await.map_err(|_| "Event consumer closed")?;
+                        send_large(events, pi_tool_end(&value)).await?;
                     }
                     "compaction_end" if value["aborted"] != true && value["errorMessage"].is_null() => {
                         events.send(compacted("pi", value["reason"].clone())).await.map_err(|_| "Event consumer closed")?;
@@ -1915,5 +1945,20 @@ mod tests {
             "Backend protocol initialization timed out".into()
         )));
         assert!(!leave_running_after(&Ok(())));
+    }
+
+    #[tokio::test]
+    async fn queued_large_notices_hold_their_bytes_until_consumed() {
+        let (events, mut queue) = mpsc::channel(4);
+        let payload = "x".repeat(100_000);
+        let before = NOTICE_BYTES.available_permits();
+        send_large(&events, notice("tool", json!({"item": payload})))
+            .await
+            .unwrap();
+        // Held while queued (other tests may hold some too).
+        assert!(NOTICE_BYTES.available_permits() + 100_000 <= before + 1024);
+        let received = queue.recv().await.unwrap();
+        drop(received);
+        assert!(NOTICE_BYTES.available_permits() + 1024 >= before);
     }
 }
