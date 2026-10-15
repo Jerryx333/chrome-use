@@ -2459,6 +2459,12 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             return error_response(&id, &e);
         }
     }
+    // A selector that matches several elements is refused before anything
+    // runs (the observe baseline included): acting on the first match is how
+    // `click .iLNqted2.DiddnkXT` hit "充钻石" instead of "投稿" and said ✓.
+    if let Err(e) = Box::pin(refuse_ambiguous_selectors(action, cmd, state)).await {
+        return error_response(&id, &e);
+    }
     state.pre_action_document = None;
     state.capture_outcome = None;
     // `navigate --observe`: a page swap shares no nodes with the previous tree,
@@ -11720,6 +11726,53 @@ fn describe_expect(cmd: &Value) -> String {
 ///
 /// `hover` belongs here (#501): it reveals menus and captions, and an agent
 /// otherwise hovers, then snapshots to see what appeared.
+/// Actions that act on the element a selector names, and the command fields
+/// that carry one. Reads (`get text`, `count`, `is visible` …) keep first-match.
+const UNIQUE_TARGET_ACTIONS: &[(&str, &[&str])] = &[
+    ("click", &["selector"]),
+    ("dblclick", &["selector"]),
+    ("hover", &["selector"]),
+    ("fill", &["selector"]),
+    ("type", &["selector"]),
+    ("press", &["selector"]),
+    ("select", &["selector"]),
+    ("multiselect", &["selector"]),
+    ("pick", &["selector"]),
+    ("check", &["selector"]),
+    ("uncheck", &["selector"]),
+    ("focus", &["selector"]),
+    ("tap", &["selector"]),
+    ("clear", &["selector"]),
+    ("setvalue", &["selector"]),
+    ("upload", &["selector"]),
+    ("dispatch", &["selector"]),
+    ("drag", &["source", "target"]),
+];
+
+/// Refuse the command when a selector it acts on matches several elements
+/// (see [`super::element::refuse_ambiguous_selector`]).
+async fn refuse_ambiguous_selectors(
+    action: &str,
+    cmd: &Value,
+    state: &DaemonState,
+) -> Result<(), String> {
+    let Some((_, fields)) = UNIQUE_TARGET_ACTIONS.iter().find(|(a, _)| *a == action) else {
+        return Ok(());
+    };
+    let Some(mgr) = state.browser.as_ref() else {
+        return Ok(());
+    };
+    let Ok(session_id) = mgr.active_session_id() else {
+        return Ok(());
+    };
+    for field in *fields {
+        if let Some(selector) = cmd.get(*field).and_then(Value::as_str) {
+            super::element::refuse_ambiguous_selector(&mgr.client, session_id, selector).await?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) const OBSERVABLE_ACTIONS: &[&str] = &[
     "click", "dblclick", "fill", "type", "press", "select", "pick", "check", "uncheck", "evaluate",
     "hover",

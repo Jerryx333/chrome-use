@@ -3122,6 +3122,150 @@ fn build_find_element_js(selector: &str) -> String {
     )
 }
 
+/// Prefix of the refusal for a selector that matches several elements; the
+/// error envelope maps it to the `selector_ambiguous` code.
+pub const SELECTOR_AMBIGUOUS_PREFIX: &str = "selector_ambiguous:";
+
+/// How many of an ambiguous selector's matches the refusal describes.
+const AMBIGUOUS_SHOWN: usize = 5;
+
+/// Count what a CSS selector or XPath matches and describe the first few
+/// matches. `null` when it matches at most one element or does not parse (the
+/// action reports that itself).
+fn build_ambiguity_probe_js(selector: &str) -> String {
+    let list = match xpath_of(selector) {
+        Some(xpath) => format!(
+            "(() => {{ const r = document.evaluate({}, document, null, \
+             XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null); const a = []; \
+             for (let i = 0; i < r.snapshotLength; i++) a.push(r.snapshotItem(i)); return a; }})()",
+            serde_json::to_string(xpath).unwrap_or_default()
+        ),
+        None => format!(
+            "Array.from(document.querySelectorAll({}))",
+            serde_json::to_string(selector).unwrap_or_default()
+        ),
+    };
+    format!(
+        r#"(() => {{
+  let els;
+  try {{ els = {list}; }} catch (_e) {{ return null; }}
+  els = els.filter(e => e && e.nodeType === 1);
+  if (els.length < 2) return null;
+  const norm = s => (s == null ? '' : String(s)).replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').replace(/\s+/g, ' ').trim();
+  const matches = els.slice(0, {shown}).map(e => {{
+    const r = e.getBoundingClientRect();
+    const st = getComputedStyle(e);
+    const text = norm(e.innerText || e.textContent) || norm(e.getAttribute('aria-label')) || norm(e.value);
+    return {{
+      tag: e.tagName.toLowerCase(),
+      text: text.length > 40 ? text.slice(0, 40) + '…' : text,
+      x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2),
+      w: Math.round(r.width), h: Math.round(r.height),
+      visible: r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none',
+    }};
+  }});
+  return {{ count: els.length, matches }};
+}})()"#,
+        list = list,
+        shown = AMBIGUOUS_SHOWN,
+    )
+}
+
+/// Whether an action's selector is subject to the one-match rule: a CSS
+/// selector or XPath. A `@ref`, a semantic pin and `text=` name one element by
+/// construction or have their own matching, and `AGENT_BROWSER_STRICT_SELECTORS=0`
+/// restores first-match for scripts written against it.
+pub fn selector_needs_unique_match(selector: &str) -> bool {
+    if std::env::var("AGENT_BROWSER_STRICT_SELECTORS").as_deref() == Ok("0") {
+        return false;
+    }
+    !(selector.trim().is_empty()
+        || parse_ref(selector).is_some()
+        || semantic_pin_active(selector)
+        || selector.starts_with("text="))
+}
+
+/// The refusal text for a selector the probe found several matches for.
+pub(crate) fn ambiguous_selector_message(selector: &str, probe: &Value) -> Option<String> {
+    let count = probe.get("count").and_then(Value::as_u64)?;
+    if count < 2 {
+        return None;
+    }
+    let mut lines = String::new();
+    for (i, m) in probe
+        .get("matches")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let s = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
+        let n = |k: &str| m.get(k).and_then(Value::as_i64).unwrap_or(0);
+        let hidden = if m.get("visible").and_then(Value::as_bool) == Some(false) {
+            ", hidden"
+        } else {
+            ""
+        };
+        lines.push_str(&format!(
+            "  [{i}] <{}> {:?} at ({},{}) {}x{}{hidden}\n",
+            s("tag"),
+            s("text"),
+            n("x"),
+            n("y"),
+            n("w"),
+            n("h"),
+        ));
+    }
+    let more = (count as usize)
+        .checked_sub(AMBIGUOUS_SHOWN)
+        .filter(|n| *n > 0)
+        .map(|n| format!("  … and {n} more\n"))
+        .unwrap_or_default();
+    let quoted = serde_json::to_string(selector).unwrap_or_default();
+    Some(format!(
+        "{SELECTOR_AMBIGUOUS_PREFIX} `{selector}` matches {count} elements, so nothing was done \
+         — acting on the first one is how a click lands on the wrong control.\n\
+         {lines}{more}\
+         Narrow the selector until it matches one element, act on a @ref from `snapshot -i`, or \
+         pick one by its index above: `find nth <index> {quoted} <action>` \
+         (`find first` / `find last` for the ends).\n\
+         (Scripts written for first-match: AGENT_BROWSER_STRICT_SELECTORS=0.)"
+    ))
+}
+
+/// Refuse a selector that matches more than one element. `Ok` when it matches
+/// one, none (the action reports the miss) or cannot be probed.
+pub async fn refuse_ambiguous_selector(
+    client: &CdpClient,
+    session_id: &str,
+    selector: &str,
+) -> Result<(), String> {
+    if !selector_needs_unique_match(selector) {
+        return Ok(());
+    }
+    let Ok(result) = client
+        .send_command_typed::<_, EvaluateResult>(
+            "Runtime.evaluate",
+            &EvaluateParams {
+                expression: build_ambiguity_probe_js(selector),
+                return_by_value: Some(true),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await
+    else {
+        return Ok(());
+    };
+    match result.result.value {
+        Some(probe) => match ambiguous_selector_message(selector, &probe) {
+            Some(msg) => Err(msg),
+            None => Ok(()),
+        },
+        None => Ok(()),
+    }
+}
+
 /// Build a JS expression that counts matching DOM elements by CSS selector or XPath.
 fn build_count_elements_js(selector: &str) -> String {
     if let Some(xpath) = xpath_of(selector) {
@@ -5509,5 +5653,57 @@ mod derived_identity_tests {
         assert!(!own_text_matches("投稿", "", ""));
         // Nothing recorded to compare with: never a confirmation.
         assert!(!own_text_matches("\u{200B}", "\u{200B}", ""));
+    }
+
+    #[test]
+    fn only_css_and_xpath_need_a_unique_match() {
+        assert!(selector_needs_unique_match(".iLNqted2.DiddnkXT"));
+        assert!(selector_needs_unique_match("//div[@role='button']"));
+        assert!(!selector_needs_unique_match("@e12"));
+        assert!(!selector_needs_unique_match("text=投稿"));
+        assert!(!selector_needs_unique_match(""));
+    }
+
+    #[test]
+    fn the_ambiguity_refusal_lists_matches_and_the_way_out() {
+        let probe = json!({
+            "count": 7,
+            "matches": [
+                { "tag": "div", "text": "投稿", "x": 960, "y": 28, "w": 48, "h": 32, "visible": true },
+                { "tag": "div", "text": "充钻石", "x": 1040, "y": 28, "w": 60, "h": 32, "visible": true },
+                { "tag": "div", "text": "", "x": 0, "y": 0, "w": 0, "h": 0, "visible": false },
+            ],
+        });
+        let msg = ambiguous_selector_message(".iLNqted2.DiddnkXT", &probe).unwrap();
+        assert!(msg.starts_with(SELECTOR_AMBIGUOUS_PREFIX), "{msg}");
+        assert!(msg.contains("matches 7 elements"), "{msg}");
+        assert!(
+            msg.contains("[0] <div> \"投稿\" at (960,28) 48x32\n"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("[1] <div> \"充钻石\" at (1040,28) 60x32\n"),
+            "{msg}"
+        );
+        assert!(msg.contains("[2] <div> \"\" at (0,0) 0x0, hidden"), "{msg}");
+        assert!(msg.contains("and 2 more"), "{msg}");
+        assert!(
+            msg.contains("find nth <index> \".iLNqted2.DiddnkXT\" <action>"),
+            "{msg}"
+        );
+        assert!(ambiguous_selector_message(".x", &json!({ "count": 1 })).is_none());
+        assert!(ambiguous_selector_message(".x", &Value::Null).is_none());
+    }
+
+    #[test]
+    fn the_ambiguity_probe_reads_css_and_xpath() {
+        let css = build_ambiguity_probe_js(".a > b");
+        assert!(
+            css.contains(r#"document.querySelectorAll(".a > b")"#),
+            "{css}"
+        );
+        let xp = build_ambiguity_probe_js("//li");
+        assert!(xp.contains("ORDERED_NODE_SNAPSHOT_TYPE"), "{xp}");
+        assert!(xp.contains(r#""//li""#), "{xp}");
     }
 }
