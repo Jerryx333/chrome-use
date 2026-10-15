@@ -613,6 +613,24 @@
   "inspect_remove_title": {
     "message": "移除这个元素"
   },
+  "inspect_reply_from": {
+    "message": "$AGENT$ 的回复",
+    "placeholders": {
+      "agent": {
+        "content": "$1",
+        "example": "chrome-use-91"
+      }
+    }
+  },
+  "inspect_reply_truncated": {
+    "message": "回复太长，这里只显示了前面一部分；完整内容在 agent 会话里。"
+  },
+  "inspect_reply_unlinked": {
+    "message": "没有对应到某一批发送"
+  },
+  "inspect_reply_waiting": {
+    "message": "agent 的回复会显示在这里。"
+  },
   "inspect_retake_screenshots": {
     "message": "重新截图"
   },
@@ -2483,6 +2501,9 @@
   },
   "sidepanel_import_source_placeholder": {
     "message": "绝对路径或仓库地址"
+  },
+  "sidepanel_inspect_replies": {
+    "message": "agent 的回复"
   },
   "sidepanel_jump_latest": {
     "message": "↓ 最新"

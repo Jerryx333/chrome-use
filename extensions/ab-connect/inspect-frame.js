@@ -6,6 +6,8 @@
 
 import { t, applyI18n } from './i18n.js';
 import { plain, inlineCode } from './inspect-format.js';
+import { renderMarkdown } from './markdown.js';
+import { renderReplies, validReplies } from './inspect-replies.js';
 import { visibilityVerdict, editorUrl, deliveryMessage, LOCKED_STATES, newDeliveryId, scopeLabel, evidenceLabels, revisionText, reasonText, targetLabel, linkCommand, shortPath, tailPath } from './inspect-frame-logic.js';
 
 const $ = id => document.getElementById(id);
@@ -24,6 +26,9 @@ const state = {
   annotations: [], images: [], imageReason: null, attach: new Map(), edited: new Map(),
   instruction: '', deliveryId: null, delivery: null, busy: false, notice: null,
   choosing: false, paused: false, revision: null, launch: null,
+  // Agent replies to the batch in `deliveryId`; `null` until the host says
+  // it keeps them, `false` when it does not.
+  replies: null,
 };
 
 let bgPort = null;
@@ -166,6 +171,7 @@ async function onAuthorized(message) {
   view.hidden = false;
   if (state.settings?.enabled) await refreshStatus();
   render();
+  watchReplies();
 }
 
 // Drafts keep your words only: the instruction, per-element notes keyed by
@@ -591,7 +597,40 @@ function deliveryView() {
   const message = deliveryMessage(state.delivery);
   return h('div', { class: `notice ${message.tone} small stack` },
     h('div', { text: message.text }),
-    locked() ? h('div', { class: 'actions' }, h('button', { onclick: checkDelivery }, t('inspect_check_status')), h('button', { onclick: newBatch }, t('inspect_new_batch'))) : null);
+    locked() ? h('div', { class: 'actions' }, h('button', { onclick: checkDelivery }, t('inspect_check_status')), h('button', { onclick: newBatch }, t('inspect_new_batch'))) : null,
+    repliesView());
+}
+
+function repliesView() {
+  if (!locked() || !Array.isArray(state.replies)) return null;
+  if (!state.replies.length) return h('div', { class: 'muted small', text: t('inspect_reply_waiting') });
+  const list = h('div', { class: 'stack' });
+  renderReplies(document, list, state.replies, renderMarkdown);
+  return list;
+}
+
+// While a sent batch is shown, ask for its replies. Stops for a new batch,
+// a host that keeps none, or a closed frame.
+const REPLY_POLL_MS = 8000;
+let replyPoll = null;
+function watchReplies() {
+  clearTimeout(replyPoll);
+  const deliveryId = state.deliveryId;
+  if (!deliveryId || !locked() || state.replies === false) return;
+  const tick = async () => {
+    if (state.deliveryId !== deliveryId || state.ended) return;
+    try {
+      const { replies } = await request('replies', { deliveryId });
+      if (state.deliveryId !== deliveryId) return;
+      if (replies === null) { state.replies = false; render(); return; }
+      const next = validReplies({ replies });
+      const changed = !Array.isArray(state.replies) || next.length !== state.replies.length;
+      state.replies = next;
+      if (changed) render();
+    } catch {}
+    replyPoll = setTimeout(tick, REPLY_POLL_MS);
+  };
+  void tick();
 }
 
 // ---- actions ---------------------------------------------------------------
@@ -678,6 +717,7 @@ async function submit() {
     const { result } = await request('deliver', { deliveryId: state.deliveryId, revision: selection, instruction, images, notes, ...shown });
     state.delivery = result;
     if (!deliveryMessage(result).locked) state.deliveryId = null;
+    else watchReplies();
     if (['noBinding', 'sessionChanged', 'noSession', 'targetChanged', 'upgradeRequired'].includes(result?.state)) await refreshStatus();
   });
 }
@@ -692,6 +732,8 @@ async function checkDelivery() {
 }
 
 function newBatch() {
+  clearTimeout(replyPoll);
+  if (state.replies !== false) state.replies = null;
   state.delivery = null;
   state.deliveryId = null;
   state.notice = null;

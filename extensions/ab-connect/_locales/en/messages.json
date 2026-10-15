@@ -613,6 +613,24 @@
   "inspect_remove_title": {
     "message": "Remove this element"
   },
+  "inspect_reply_from": {
+    "message": "Reply from $AGENT$",
+    "placeholders": {
+      "agent": {
+        "content": "$1",
+        "example": "chrome-use-91"
+      }
+    }
+  },
+  "inspect_reply_truncated": {
+    "message": "The reply was shortened; the agent session has the full text."
+  },
+  "inspect_reply_unlinked": {
+    "message": "Not linked to a sent batch"
+  },
+  "inspect_reply_waiting": {
+    "message": "The agent's reply will appear here."
+  },
   "inspect_retake_screenshots": {
     "message": "Retake screenshots"
   },
@@ -2483,6 +2501,9 @@
   },
   "sidepanel_import_source_placeholder": {
     "message": "Absolute path or repository URL"
+  },
+  "sidepanel_inspect_replies": {
+    "message": "Replies from agents"
   },
   "sidepanel_jump_latest": {
     "message": "↓ Latest"
