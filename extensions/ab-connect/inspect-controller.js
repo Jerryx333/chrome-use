@@ -21,6 +21,7 @@ const MAX_DESTINATIONS = 200;
 const MAX_ELEMENTS = 8;
 const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const CAPTURE_GAP_MS = 600;
 const EDITORS = ['vscode', 'cursor', 'windsurf', 'webstorm', 'none'];
 
 export const DEFAULT_INSPECT_SETTINGS = Object.freeze({ enabled: false, editor: 'vscode' });
@@ -312,6 +313,11 @@ export class InspectController {
     const stale = () => instance.revoked || instance.selectionRevision !== selection;
     const fail = reason => { if (!stale()) instance.port?.postMessage({ type: 'images', revision: selection, images: instance.annotations.map(() => null), reason }); };
     if (stale()) return;
+    // Chrome allows two visible-tab captures a second; quick picks would
+    // otherwise end in a quota error instead of a screenshot.
+    const wait = (this.lastCaptureAt || 0) + CAPTURE_GAP_MS - Date.now();
+    if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    if (stale()) return;
     try {
       const generationBefore = instance.generation;
       const before = await c.tabs.get(instance.tabId);
@@ -328,6 +334,7 @@ export class InspectController {
       let documentAfter;
       try {
         if (!before.active) return fail(t('inspect_capture_needs_visible_tab'));
+        this.lastCaptureAt = Date.now();
         dataUrl = await c.tabs.captureVisibleTab(before.windowId, { format: 'png' });
         after = await c.tabs.get(instance.tabId);
         documentAfter = (await c.webNavigation.getFrame({ tabId: instance.tabId, frameId: 0 }))?.documentId;

@@ -110,12 +110,13 @@
   // Listeners in same-origin frames, attached when the pointer first enters
   // one; events there arrive in frame coordinates and are moved to the top's.
   const frameWindows = new Set();
-  function watchFrame(node) {
+  function watchFrame(node, depth = 0) {
     const doc = sameOriginDocument(node);
     const win = doc?.defaultView;
-    if (!win || frameWindows.has(win)) return;
+    if (!win || frameWindows.has(win) || depth > 4) return;
     frameWindows.add(win);
     for (const [name, fn] of listeners) win.addEventListener(name, fn, true);
+    for (const child of doc.querySelectorAll('iframe,frame')) watchFrame(child, depth + 1);
   }
   function topPoint(event) {
     const win = event.view || event.target?.ownerDocument?.defaultView;
@@ -480,6 +481,8 @@
     buildUi();
     chrome.runtime.onMessage.addListener(onBackground);
     for (const [name, fn] of listeners) window.addEventListener(name, fn, true);
+    // The pointer may already rest inside a frame, where no crossing tells us.
+    for (const node of document.querySelectorAll('iframe,frame')) watchFrame(node);
     if (!hello.enabled) openPanel();
   }
 
