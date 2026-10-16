@@ -66,7 +66,15 @@ b.listeners.push(m => { if (m.method === 'Runtime.exceptionThrown') results.logs
 await b.send('Runtime.enable', {}, sw.sid);
 // These scenarios cover the terminal destination (ocs); the side-panel
 // destination, the default since 0.5.67, has its own live check.
-const terminalFor = tabId => `chrome.tabs.get(${tabId}).then(t => chrome.storage.local.get('inspectDestinations').then(s => chrome.storage.local.set({ inspectDestinations: { ...(s.inspectDestinations || {}), [new URL(t.url).origin]: 'terminal' } })))`;
+const terminalFor = tabId => `(async () => {
+  let origin = null;
+  for (let i = 0; i < 50 && !origin; i++) {
+    const t = await chrome.tabs.get(${tabId});
+    try { origin = new URL(t.url || t.pendingUrl).origin; } catch { await new Promise(r => setTimeout(r, 100)); }
+  }
+  const s = await chrome.storage.local.get('inspectDestinations');
+  await chrome.storage.local.set({ inspectDestinations: { ...(s.inspectDestinations || {}), [origin]: 'terminal' } });
+})()`;
 const hook = expr => A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.${expr}`);
 await waitFor(() => hook('inspectState(-1)').then(s => s.hostReady), { timeout: 30000, label: 'native host with inspect capability' });
 results.extensionId = new URL(sw.target.url).host;
