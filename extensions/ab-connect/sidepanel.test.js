@@ -33,6 +33,7 @@ async function fixture(overrides = {}, saved = {}) {
   const chats = [chat('a', 'running'), chat('b')];
   const presence = { posted: [], listeners: {} };
   const runtime = {
+    ...(overrides.getURL ? { getURL: overrides.getURL } : {}),
     onMessage: { addListener(listener) { hostState = listener; } },
     ...(overrides.presence ? { connect({ name }) {
       presence.name = name;
@@ -41,6 +42,7 @@ async function fixture(overrides = {}, saved = {}) {
     async sendMessage(request) {
       if (request.type === 'ab-status') return overrides.status ? {agentPanel:fullSupport,...overrides.status()} : { connected: true,agentPanel:fullSupport };
       calls.push(request);
+      if (request.type === 'ab-tab-grant') return overrides.tabGrant ? overrides.tabGrant(request) : { success: true, grants: [] };
       if (overrides[request.operation]) return overrides[request.operation](request.params);
       let result;
       switch (request.operation) {
@@ -55,10 +57,11 @@ async function fixture(overrides = {}, saved = {}) {
   };
   const document = { createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); } };
   for (const id of overrides.hiddenNodes || []) document.getElementById(id).hidden = true;
-  const windows = overrides.presence ? { async getCurrent() { return { id: 7 }; } } : undefined;
-  const panel = createPanel({ document, runtime, windows, encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
+  const windows = overrides.presence || overrides.mode === 'tab' ? { async getCurrent() { return { id: 7 }; } } : undefined;
+  const locations = [];
+  const panel = createPanel({ document, runtime, windows, mode: overrides.mode, initialConversation: overrides.initialConversation, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
-  return { panel, nodes, calls, chats, writes, presence, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
+  return { panel, nodes, calls, chats, writes, presence, locations, grantUpdate(grants) { hostState({ type: 'ab-tab-grants', grants }); }, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
 
 test('a late stop acknowledgement cannot replace the selected conversation', async () => {
@@ -852,5 +855,121 @@ test('a resumed session whose folder cannot be a project says so', async () => {
   row.fire('click'); await settle(); await settle(); await settle();
   assert.equal(f.nodes.get('conversation').value, 'resumed');
   assert.match(f.nodes.get('notice').textContent, /folder \/ is a system or home folder/);
+  f.panel.close();
+});
+
+// ---- Tab modes (0.5.62) ------------------------------------------------------
+
+const webTabs = () => [
+  { id: 11, windowId: 7, url: 'https://old.example/a', title: 'Old', lastAccessed: 100 },
+  { id: 12, windowId: 7, url: 'https://shop.example/cart', title: 'Cart', lastAccessed: 300 },
+  { id: 13, windowId: 7, url: 'chrome://settings', title: 'Settings', lastAccessed: 400 },
+  { id: 99, windowId: 7, url: 'chrome-extension://own/sidepanel.html?mode=tab', title: 'Panel', lastAccessed: 500 },
+];
+function tabApi(list = webTabs()) {
+  const listeners = {};
+  return { listeners, created: [], async query(filter) { return filter.windowId === 7 ? list : []; }, async getCurrent() { return { id: 99 }; }, async create(options) { this.created.push(options); return {}; },
+    onActivated: { addListener(f) { listeners.activated = f; } }, onUpdated: { addListener(f) { listeners.updated = f; } }, onRemoved: { addListener(f) { listeners.removed = f; } } };
+}
+const grantSupport = { connected: true, agentPanel: { ...fullSupport, pageContext: true, tabGrant: 1 } };
+
+test('a panel tab opens its own conversation and never changes the side panel\'s', async () => {
+  const tabs = tabApi();
+  const f = await fixture({ mode: 'tab', initialConversation: 'b', tabs, status: () => grantSupport }, { ab_panel_conversation: 'a' });
+  await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b');
+  f.panel.select('a'); await settle();
+  assert.ok(!f.writes.some(w => 'ab_panel_conversation' in w), 'the side panel selection is untouched');
+  assert.deepEqual(f.locations.slice(-1), ['a']);
+  // "This page": the last web tab of the window, not the panel tab itself
+  // and not a Chrome page; the user can pick another.
+  assert.equal(f.nodes.get('pagePicker').value, '12');
+  assert.equal(f.nodes.get('pagePicker').hidden, false);
+  assert.equal(f.nodes.get('pageTitle').hidden, true);
+  assert.deepEqual(f.nodes.get('pagePicker').children.map(o => o.value), ['11', '12']);
+  f.nodes.get('pagePicker').value = '11'; f.nodes.get('pagePicker').fire('change'); await settle();
+  assert.equal(f.nodes.get('pageTitle').textContent, 'Old');
+  // A tab of the window becoming active does not override an explicit pick.
+  tabs.listeners.activated({ tabId: 12, windowId: 7 }); await settle();
+  assert.equal(f.nodes.get('pageTitle').textContent, 'Old');
+  assert.equal(f.nodes.get('openInTab').hidden, true);
+  f.panel.close();
+});
+
+test('the side panel opens the selected conversation in a tab', async () => {
+  const tabs = tabApi();
+  const f = await fixture({ tabs, getURL: path => `chrome-extension://own/${path}`, status: () => grantSupport }, { ab_panel_conversation: 'b' });
+  assert.equal(f.nodes.get('openInTab').hidden, false);
+  f.nodes.get('openInTab').fire('click'); await settle();
+  assert.deepEqual(tabs.created, [{ url: 'chrome-extension://own/sidepanel.html?mode=tab&conversation=b' }]);
+  f.panel.close();
+});
+
+test('a pending send from one view survives the other view saving its own', async () => {
+  const f = await fixture({ conversationMessageStatus: async () => ({ success: true, result: { message: { known: true } } }) }, { ab_panel_conversation: 'a', ab_panel_pending: { a: 'accepted', other: 'kept' } });
+  await settle();
+  const pending = f.writes.filter(write => 'ab_panel_pending' in write);
+  assert.ok(pending.length > 0);
+  for (const write of pending) assert.equal(write.ab_panel_pending.other, 'kept');
+  assert.ok(pending.some(write => !('a' in write.ab_panel_pending)));
+  f.panel.close();
+});
+
+test('lending the page beside the panel, sending with it and taking it back', async () => {
+  const grantCalls = [];
+  const grant = { tabId: 12, conversationId: 'b', url: 'https://shop.example/cart', title: 'Cart' };
+  const tabs = { async query() { return [{ id: 12, url: 'https://shop.example/cart', title: 'Cart' }]; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ tabs, status: () => grantSupport,
+    tabGrant: request => { grantCalls.push(request); return request.action === 'list' ? { success: true, grants: [] } : request.action === 'grant' ? { success: true, grant, service: { granted: true, tabId: 12, adopted: true } } : { success: true, grant, service: { granted: false } }; },
+    conversationSend: async params => ({ success: true, result: { conversation: chat('b'), message: { id: params.messageId, accepted: true, replayed: false } } }),
+  }, { ab_panel_conversation: 'b' });
+  await settle();
+  const button = f.nodes.get('grantTab');
+  assert.equal(button.hidden, false);
+  assert.equal(f.nodes.get('grantBar').hidden, true);
+  button.fire('click'); await settle(); await settle();
+  assert.deepEqual(grantCalls.find(c => c.action === 'grant'), { type: 'ab-tab-grant', action: 'grant', tabId: 12, conversationId: 'b', conversationTitle: 'b' });
+  assert.equal(f.nodes.get('grantBar').hidden, false);
+  assert.match(f.nodes.get('grantText').textContent, /Cart/);
+  assert.equal(button.hidden, true, 'the lent tab is not offered again');
+  // Every message repeats the grant to the service.
+  f.nodes.get('message').value = 'go'; await f.panel.send(); await settle();
+  const sent = f.calls.find(c => c.operation === 'conversationSend');
+  assert.deepEqual(sent.params.tabGrant, { tabId: 12, url: 'https://shop.example/cart', title: 'Cart' });
+  f.nodes.get('grantRevoke').fire('click'); await settle(); await settle();
+  assert.deepEqual(grantCalls.at(-1), { type: 'ab-tab-grant', action: 'revoke', conversationId: 'b' });
+  assert.equal(f.nodes.get('grantBar').hidden, true);
+  f.panel.close();
+});
+
+test('every view follows grants made elsewhere, and Stop takes the tab back', async () => {
+  const grantCalls = [];
+  const f = await fixture({ status: () => grantSupport, tabGrant: request => { grantCalls.push(request); return { success: true, grants: [], grant: null }; },
+    conversationStop: async () => ({ success: true, result: { conversation: chat('a', 'stopping') } }) }, { ab_panel_conversation: 'a' });
+  await settle();
+  f.grantUpdate([{ tabId: 5, conversationId: 'a', url: 'chrome://newtab/', title: 'New Tab' }]);
+  assert.equal(f.nodes.get('grantBar').hidden, false);
+  assert.equal(f.nodes.get('grantNote').hidden, false, 'a page the agent cannot use is named');
+  f.nodes.get('stop').fire('click'); await settle(); await settle();
+  assert.ok(grantCalls.some(c => c.action === 'revoke' && c.conversationId === 'a'));
+  f.grantUpdate([]);
+  assert.equal(f.nodes.get('grantBar').hidden, true);
+  f.panel.close();
+});
+
+test('a refused grant is explained in the panel\'s language', async () => {
+  const tabs = { async query() { return [{ id: 12, url: 'https://shop.example/', title: 'Shop' }]; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ tabs, status: () => grantSupport, tabGrant: request => request.action === 'grant' ? { success: false, error: 'Another conversation is using this tab', reason: 'otherConversation' } : { success: true, grants: [] } }, { ab_panel_conversation: 'b' });
+  await settle();
+  f.nodes.get('grantTab').fire('click'); await settle(); await settle();
+  assert.equal(f.nodes.get('notice').textContent, 'Another conversation is using this tab. Take it back there first.');
+  assert.equal(f.nodes.get('grantBar').hidden, true);
+  f.panel.close();
+});
+
+test('a title given in another view shows in this one', async () => {
+  const f = await fixture({ conversationRead: async params => ({ success: true, result: { conversation: { ...chat(params.conversationId), title: 'Renamed elsewhere' }, journal: { events: [], cursor: 0, more: false } } }) }, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('conversationTitle').textContent, 'Renamed elsewhere');
   f.panel.close();
 });

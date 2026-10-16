@@ -3,7 +3,7 @@
 // replies must match the request's connection generation; no request is replayed.
 // Slow operations outlast the native host's own budget for them (32 s and 47 s),
 // so the host's answer arrives before this page gives up.
-const operationTimeouts = { agentInspect: 35000, imageConvert: 30000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000, inspectResolve: 20000, conversationArtifactRead: 12000, conversationRecoveryReview: 17000, conversationRecoveryTerminate: 17000, conversationRecoveryFork: 12000, conversationSessionList: 35000, conversationResume: 50000, conversationProjectList: 25000, conversationProjectChoose: 305000 };
+const operationTimeouts = { agentInspect: 35000, imageConvert: 30000, conversationDelete: 50000, skillImport: 45000, inspectDeliver: 35000, inspectStatus: 20000, inspectResolve: 20000, conversationArtifactRead: 12000, conversationRecoveryReview: 17000, conversationRecoveryTerminate: 17000, conversationRecoveryFork: 12000, conversationSessionList: 35000, conversationResume: 50000, conversationProjectList: 25000, conversationProjectChoose: 305000, conversationTabGrant: 30000 };
 // Reads that change nothing; a timeout there never leaves an outcome to confirm.
 const readOperations = ['conversationRead', 'conversationList', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationSessionList', 'conversationProjectList'];
 
@@ -34,7 +34,7 @@ export class AgentPanelBridge {
   }
 
   request(operation, params = {}) {
-    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationSessionList', 'conversationResume', 'conversationProjectList', 'conversationProjectChoose', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'imageConvert', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
+    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationSessionList', 'conversationResume', 'conversationProjectList', 'conversationProjectChoose', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationTabGrant', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'imageConvert', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
     if (this.pending.size >= this.maxPending) return Promise.reject(new Error('Too many pending agent panel requests'));
     const requestId = `${this.identity}:${this.generation}:${++this.sequence}`;
     return new Promise((resolve, reject) => {
@@ -138,6 +138,9 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
     // A host that dropped the requested project folder would run elsewhere.
     if (operation === 'conversationCreate' && project && typeof conversation.project !== 'string') return false;
     if (!['idle', 'starting', 'running', 'waitingInput', 'stopping', 'failed', 'interrupted', 'recoveryRequired'].includes(conversation.phase)) return false;
+    // The service reports whether the conversation's browser session took
+    // the tab; it never claims that for a tab it was not given.
+    if (operation === 'conversationTabGrant') return typeof result.tabGrant?.granted === 'boolean' && (result.tabGrant.granted ? Number.isInteger(result.tabGrant.tabId) && typeof result.tabGrant.adopted === 'boolean' : result.tabGrant.adopted === undefined);
     if (operation === 'conversationSetOptions') return result.conversation.options && Object.entries(requestedOptions || {}).every(([key,value]) => result.conversation.options[key] === value);
     if (operation === 'conversationSkillSelect') return result.skill?.catalogId === skillId && typeof result.skill?.id === 'string' && typeof result.skill.name === 'string';
     if (operation.startsWith('conversationAttachment')) return typeof result.attachment?.id === 'string' && ['image/png','image/jpeg','image/webp'].includes(result.attachment.mediaType) && Number.isInteger(result.attachment.bytes) && (operation === 'conversationAttachmentPut' || result.attachment.id === attachmentId && typeof result.data === 'string');
@@ -164,10 +167,13 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
 // caller-supplied operation or claimed identity.
 export function isAgentPanelSender(sender, runtime) {
   if (sender?.id !== runtime.id) return false;
-  if (sender.url === runtime.getURL('sidepanel.html')) return !sender.tab;
-  // The options page opens in its own tab (options_ui.open_in_tab), so it
-  // carries sender.tab. It is not web-accessible, so a web page cannot frame
-  // it; require the top frame of that tab.
-  if (sender.url === runtime.getURL('options.html')) return !sender.tab || sender.frameId === 0;
+  // The page itself, whatever its query (`?mode=tab&conversation=…`).
+  if (typeof sender.url !== 'string') return false;
+  const page = sender.url.split(/[?#]/)[0];
+  // The side panel has no tab. Opened as a full-page tab ("Open in a tab")
+  // it does, like the options page (options_ui.open_in_tab). Neither page is
+  // web-accessible, so a web page cannot frame them; require the top frame
+  // of that tab.
+  if (page === runtime.getURL('sidepanel.html') || page === runtime.getURL('options.html')) return !sender.tab || sender.frameId === 0;
   return false;
 }

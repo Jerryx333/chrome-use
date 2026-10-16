@@ -93,6 +93,12 @@ pub(super) struct Message {
     /// The fork preface of an `afterRecovery` message, set by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preface: Option<String>,
+    /// The user's tab the conversation may drive, set by the host when the
+    /// turn starts from the grant live at that moment. Never stored and
+    /// never part of the identity: a queued message follows the grant as
+    /// it is when it runs, not as it was when it was sent.
+    #[serde(skip)]
+    pub tab_grant: Option<Box<PageContext>>,
 }
 
 /// How a turn relates to the one before it.
@@ -118,12 +124,20 @@ impl Message {
             None => String::new(),
         };
         let skill = self.skill.as_ref().map(|s| s.preface()).unwrap_or_default();
+        let grant = self
+            .tab_grant
+            .as_ref()
+            .map(|g| format!("{}\n\n", g.grant_preface()))
+            .unwrap_or_default();
+        // The granted tab already says what "this page" is when it is the
+        // page the message was sent from.
         let page = self
             .page
             .as_ref()
+            .filter(|p| self.tab_grant.as_ref().is_none_or(|g| g.tab_id != p.tab_id))
             .map(|p| format!("{}\n\n", p.preface()))
             .unwrap_or_default();
-        format!("{continuation}{skill}{page}{}", self.text)
+        format!("{continuation}{skill}{grant}{page}{}", self.text)
     }
     /// Request identity. The rule is the one v1.5.214 used and runs on the
     /// raw input, before any redaction, so retries across the upgrade match.
@@ -193,6 +207,31 @@ impl PageContext {
         let title = self.title.replace(['\r', '\n'], " ");
         format!(
             "[The user is looking at their own tab \"{title}\" ({url}). When they refer to \"this page\" or \"the current page\", read or act on it with the chrome_use tools using tabId \"chrome-tab:{id}\" and force: true.]",
+            url = self.url,
+            id = self.tab_id
+        )
+    }
+    /// A tab the user may grant: a web page, not the Chrome Web Store
+    /// (Chrome lets no extension drive it).
+    pub(super) fn validate_grant(&self) -> Result<(), String> {
+        self.validate()?;
+        let parsed = url::Url::parse(&self.url).map_err(|_| "Invalid page context")?;
+        let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+        if !matches!(parsed.scheme(), "http" | "https")
+            || host == "chromewebstore.google.com"
+            || (host == "chrome.google.com" && parsed.path().starts_with("/webstore"))
+        {
+            return Err("Only a web page can be given to the agent; Chrome pages and the Chrome Web Store cannot".into());
+        }
+        Ok(())
+    }
+    /// The line that gives the agent the user's tab for the whole
+    /// conversation, on every turn while the grant lasts. The extension
+    /// refuses the tab once the user takes it back, whatever this says.
+    pub(super) fn grant_preface(&self) -> String {
+        let title = self.title.replace(['\r', '\n'], " ");
+        format!(
+            "[The user has let you use their own tab \"{title}\" ({url}) for this conversation. Do the browser work for this request in that tab: pass tabId \"chrome-tab:{id}\" and force: true to the chrome_use tools. It is the user's tab: never close it, and open another tab only when the request needs one. If a call on it is refused because the user took the tab back, stop using it and tell the user.]",
             url = self.url,
             id = self.tab_id
         )
@@ -1087,6 +1126,7 @@ mod tests {
             continuation: None,
             record: false,
             preface: None,
+            tab_grant: None,
         }
     }
     fn rich(id: &str, url: &str) -> Message {
@@ -1107,6 +1147,7 @@ mod tests {
             continuation: None,
             record: false,
             preface: None,
+            tab_grant: None,
         }
     }
     const TOKEN_A: &str = "https://shop.example/orders?access_token=SYNTH_TOKEN_A&x=1";
@@ -1150,6 +1191,59 @@ mod tests {
                 .unwrap_err(),
             TOO_LONG_ENCODED
         );
+    }
+
+    #[test]
+    fn a_granted_tab_is_named_on_every_turn_and_never_stored() {
+        let page = PageContext {
+            tab_id: 7,
+            url: "https://shop.example/cart".into(),
+            title: "Cart".into(),
+        };
+        let mut m = message("Fill the form");
+        m.page = Some(page.clone());
+        let before = m.fingerprint().unwrap();
+        m.tab_grant = Some(Box::new(page.clone()));
+        let text = m.prompt_text();
+        assert!(text.contains("let you use their own tab \"Cart\" (https://shop.example/cart)"));
+        assert!(text.contains("tabId \"chrome-tab:7\" and force: true"));
+        assert!(text.contains("never close it"));
+        // The same tab is not described twice.
+        assert!(!text.contains("is looking at their own tab"));
+        m.page = Some(PageContext {
+            tab_id: 8,
+            ..page.clone()
+        });
+        let both = m.prompt_text();
+        assert!(both.contains("chrome-tab:7") && both.contains("chrome-tab:8"));
+        m.page = Some(page);
+        assert_eq!(m.fingerprint().unwrap(), before);
+        let saved = serde_json::to_string(&m).unwrap();
+        assert!(!saved.contains("tabGrant") && !saved.contains("let you use"));
+    }
+
+    #[test]
+    fn only_web_pages_can_be_granted() {
+        let page = |url: &str| PageContext {
+            tab_id: 1,
+            url: url.into(),
+            title: "t".into(),
+        };
+        assert!(page("https://example.com/").validate_grant().is_ok());
+        assert!(page("http://127.0.0.1:8080/form").validate_grant().is_ok());
+        for refused in [
+            "chrome://settings",
+            "chrome-extension://abc/options.html",
+            "file:///etc/hosts",
+            "https://chromewebstore.google.com/detail/abc",
+            "https://chrome.google.com/webstore/detail/abc",
+            "not a url",
+        ] {
+            assert!(page(refused).validate_grant().is_err(), "{refused}");
+        }
+        assert!(page("https://chrome.google.com/search")
+            .validate_grant()
+            .is_ok());
     }
 
     #[test]

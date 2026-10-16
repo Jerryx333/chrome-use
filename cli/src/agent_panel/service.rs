@@ -858,6 +858,10 @@ struct Engine {
     schedules: std::collections::BTreeMap<String, super::schedules::Schedule>,
     /// Where CLI sessions are looked up; tests point it at fixtures.
     session_roots: Option<sessions::Roots>,
+    /// The user's tab each conversation may drive, as the extension last
+    /// reported it. Kept in memory only: the extension holds the grant for
+    /// the browser session, enforces it, and repeats it with every message.
+    tab_grants: HashMap<String, PageContext>,
 }
 
 impl Engine {
@@ -892,6 +896,7 @@ impl Engine {
             stop: false,
             schedules,
             session_roots: None,
+            tab_grants: HashMap::new(),
         }
     }
     /// Answer every waiting approval for a full-access conversation exactly as
@@ -941,6 +946,31 @@ impl Engine {
     fn remove_job(&mut self, id: &str) {
         self.jobs.remove(id);
         self.job_exits.notify_waiters();
+    }
+    /// Record the tab a conversation may drive. Whether it changed.
+    fn set_tab_grant(&mut self, id: &str, grant: Option<PageContext>) -> Result<bool, String> {
+        match grant {
+            Some(grant) => {
+                grant.validate_grant()?;
+                // Like a message's page, the agent and the journal get the
+                // URL without credentials or token parameters.
+                // A title may repeat the URL (a page without one) or carry a
+                // token of its own; both are masked.
+                let url = redact::url(&grant.url);
+                let grant = PageContext {
+                    title: redact::text_for_compare(&grant.title.replace(&grant.url, &url)),
+                    url,
+                    ..grant
+                };
+                let changed = self
+                    .tab_grants
+                    .get(id)
+                    .is_none_or(|old| old.tab_id != grant.tab_id || old.url != grant.url);
+                self.tab_grants.insert(id.into(), grant);
+                Ok(changed)
+            }
+            None => Ok(self.tab_grants.remove(id).is_some()),
+        }
     }
     fn forget(&mut self, id: &str) {
         self.secrets.remove(id);
@@ -1121,6 +1151,8 @@ impl Engine {
             active.continuation = next.continuation;
             active.preface = next.preface.clone();
         }
+        next.tab_grant = self.tab_grants.get(id).cloned().map(Box::new);
+        let chat = self.chat(id)?;
         let direct = chat.active_direct;
         let (full_access, options) = (chat.full_access, chat.options.clone());
         let reuse = self.jobs.get(id).is_some_and(|job| {
@@ -1786,6 +1818,28 @@ struct Send {
     /// The user allowed recording this request (plan 6.4).
     #[serde(default)]
     record: bool,
+    /// The tab the user lets this conversation drive (`null`: none), as the
+    /// extension holds it now. Absent: leave the service's record alone.
+    #[serde(default, deserialize_with = "present")]
+    tab_grant: Option<Option<PageContext>>,
+}
+
+/// A field that is present, `null` included, as opposed to absent.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TabGrant {
+    conversation_id: String,
+    /// Required: a tab, or `null` to take the tab back.
+    #[serde(deserialize_with = "present")]
+    grant: Option<Option<PageContext>>,
 }
 
 #[derive(Deserialize)]
@@ -2339,6 +2393,7 @@ async fn dispatch(
                     continuation: None,
                     record: false,
                     preface: None,
+                    tab_grant: None,
                 },
             )?;
             e.record(
@@ -2416,6 +2471,10 @@ async fn dispatch(
                     chat.site = page_site(&page.url);
                 }
             }
+            if let Some(grant) = &p.tab_grant {
+                e.chat(&p.conversation_id)?;
+                e.set_tab_grant(&p.conversation_id, grant.clone())?;
+            }
             if p.attachments.len() > super::attachments::MAX_IMAGES {
                 return Err("A message supports up to five images".into());
             }
@@ -2436,6 +2495,7 @@ async fn dispatch(
                 continuation: None,
                 record: p.record,
                 preface: None,
+                tab_grant: None,
             };
             if e.is_blocked(&p.conversation_id)?
                 && !e
@@ -2525,6 +2585,47 @@ async fn dispatch(
             chat.updated = super::conversation::now();
             e.persist(&p.conversation_id)?;
             Ok(json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary()}))
+        }
+        "conversationTabGrant" => {
+            let p: TabGrant = serde_json::from_value(params.clone())
+                .map_err(|_| "conversationTabGrant requires conversationId and grant")?;
+            let requested = p.grant.flatten();
+            let mut e = engine.lock().await;
+            e.chat(&p.conversation_id)?;
+            let changed = e.set_tab_grant(&p.conversation_id, requested.clone())?;
+            if changed {
+                let data = match e.tab_grants.get(&p.conversation_id) {
+                    Some(g) => json!({"granted":true,"tabId":g.tab_id,"url":g.url}),
+                    None => json!({"granted":false}),
+                };
+                e.record(&p.conversation_id, "tabGrant", data)?;
+            }
+            let profile = e.profile.clone();
+            drop(e);
+            // The conversation's browser session takes the tab now, so a
+            // command without a tab handle drives it too. The extension
+            // decides whether it may; a refusal is reported, not hidden.
+            let adopted = match &requested {
+                Some(g) => Some(
+                    adopt_granted_tab(&profile, &format!("panel-{}", p.conversation_id), g.tab_id)
+                        .await,
+                ),
+                None => None,
+            };
+            let mut e = engine.lock().await;
+            let mut grant = json!({"granted":requested.is_some()});
+            if let Some(g) = &requested {
+                grant["tabId"] = json!(g.tab_id);
+            }
+            if let Some(result) = adopted {
+                grant["adopted"] = json!(result.is_ok());
+                if let Err(error) = result {
+                    grant["error"] = json!(error);
+                }
+            }
+            Ok(
+                json!({"schemaVersion":1,"conversation":e.chat(&p.conversation_id)?.summary(),"tabGrant":grant}),
+            )
         }
         "conversationSetAccess" => {
             let p: SetAccess = serde_json::from_value(params.clone())
@@ -2621,6 +2722,7 @@ async fn dispatch(
             }
             e.chats.remove(&id);
             e.forget(&id);
+            e.tab_grants.remove(&id);
             #[cfg(windows)]
             e.held_jobs.remove(&id);
             e.requests.retain(|(chat, _), _| chat != &id);
@@ -2786,6 +2888,7 @@ fn stored_message(
         continuation: None,
         record: false,
         preface: None,
+        tab_grant: None,
     }))
 }
 
@@ -3340,6 +3443,42 @@ mod approval_tests {
     }
 }
 
+/// Make a granted tab the active tab of the conversation's browser session
+/// (`tab adopt chrome-tab:<id>`): adopted, never created, so the session
+/// never closes it. The error is chrome-use's own message.
+async fn adopt_granted_tab(profile: &str, session: &str, tab_id: i64) -> Result<(), String> {
+    // A test binary would run itself as a test filter, not as chrome-use.
+    if cfg!(test) {
+        return Err(format!("not run in tests ({profile}, {session}, {tab_id})"));
+    }
+    let executable = std::env::current_exe().map_err(|_| "Cannot locate chrome-use")?;
+    let mut command = tokio::process::Command::new(&executable);
+    command
+        .args(["--json", "tab", "adopt", &format!("chrome-tab:{tab_id}")])
+        .env("AGENT_BROWSER_BROWSER", profile)
+        .env("AGENT_BROWSER_SESSION", session)
+        .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(20), command.output())
+        .await
+        .map_err(|_| "chrome-use did not confirm the tab within 20 seconds".to_string())?
+        .map_err(|e| format!("chrome-use could not run: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let message = text
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
+        .and_then(|v| v["error"].as_str().map(str::to_string))
+        .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).trim().to_string());
+    Err(message.chars().take(500).collect())
+}
+
 /// Close a deleted conversation's own chrome-use browser session (its tabs).
 /// A session with no daemon and no tabs returns at once without starting one.
 async fn close_browser_session(profile: &str, session: &str) -> Value {
@@ -3663,7 +3802,7 @@ async fn run_schedule(engine: &Arc<Mutex<Engine>>, id: &str) -> Result<Value, St
         let message = Message {
             id: uuid::Uuid::new_v4().to_string(),
             text: format!("[Scheduled task: {}. Work in your own background browser session; no user tab is attached.]\n\n{}", schedule.name, schedule.prompt),
-            page: None, attachments: Vec::new(), skill, continuation: None, record: false, preface: None,
+            page: None, attachments: Vec::new(), skill, continuation: None, record: false, preface: None, tab_grant: None,
         };
         chat.accept(message.clone())?;
         chat.title = schedule.name.clone();
@@ -3961,6 +4100,110 @@ mod schedule_tests {
         assert_eq!(deleted["deleted"]["cliHistory"]["kept"], "external");
         assert_eq!(deleted["deleted"]["cliHistory"]["removed"], json!([]));
         assert_eq!(std::fs::read(&file).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn a_tab_grant_is_kept_per_conversation_until_taken_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = engine(dir.path());
+        let created = dispatch(&engine, "conversationCreate", &json!({"agentId":"claude"}))
+            .await
+            .unwrap();
+        let id = created["conversation"]["id"].as_str().unwrap().to_string();
+        let grant = json!({"tabId":7,"url":"https://shop.example/cart","title":"Cart"});
+        for refused in [
+            json!({"tabId":7,"url":"chrome://settings","title":"Settings"}),
+            json!({"tabId":7,"url":"https://chromewebstore.google.com/detail/x","title":"Store"}),
+            json!({"tabId":7,"url":"https://chrome.google.com/webstore/detail/x","title":"Store"}),
+        ] {
+            assert!(dispatch(
+                &engine,
+                "conversationTabGrant",
+                &json!({"conversationId":id,"grant":refused})
+            )
+            .await
+            .is_err());
+        }
+        assert!(engine.lock().await.tab_grants.is_empty());
+        let granted = dispatch(
+            &engine,
+            "conversationTabGrant",
+            &json!({"conversationId":id,"grant":grant}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(granted["tabGrant"]["granted"], true);
+        assert_eq!(granted["tabGrant"]["tabId"], 7);
+        // The session's adoption is reported, never assumed.
+        assert_eq!(granted["tabGrant"]["adopted"], false);
+        assert!(granted["tabGrant"]["error"].is_string());
+        assert_eq!(engine.lock().await.tab_grants[&id].tab_id, 7);
+        // A token in the lent tab's URL reaches neither the prompt nor the journal.
+        let secret = json!({"tabId":7,"url":"https://shop.example/cart?access_token=SYNTH_GRANT_TOKEN&x=1","title":"Cart"});
+        dispatch(
+            &engine,
+            "conversationTabGrant",
+            &json!({"conversationId":id,"grant":secret}),
+        )
+        .await
+        .unwrap();
+        let held = engine.lock().await.tab_grants[&id].clone();
+        assert!(!held.url.contains("SYNTH_GRANT_TOKEN") && held.url.contains("access_token="));
+        assert!(!held.grant_preface().contains("SYNTH_GRANT_TOKEN"));
+        // A title that is the URL itself is masked the same way.
+        let untitled = json!({"tabId":7,"url":"https://shop.example/cart?access_token=SYNTH_TITLE_TOKEN","title":"https://shop.example/cart?access_token=SYNTH_TITLE_TOKEN"});
+        dispatch(
+            &engine,
+            "conversationTabGrant",
+            &json!({"conversationId":id,"grant":untitled}),
+        )
+        .await
+        .unwrap();
+        let held = engine.lock().await.tab_grants[&id].clone();
+        assert!(
+            !held.title.contains("SYNTH_TITLE_TOKEN")
+                && !held.grant_preface().contains("SYNTH_TITLE_TOKEN")
+        );
+        let journal = dispatch(
+            &engine,
+            "conversationRead",
+            &json!({"conversationId":id,"after":0}),
+        )
+        .await
+        .unwrap();
+        let text = journal["journal"].to_string();
+        assert!(text.contains("tabGrant") && !text.contains("SYNTH_GRANT_TOKEN"));
+        // A message that says there is none takes it back; one that says
+        // nothing about it leaves it alone.
+        let mut send = json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"hello","tabGrant":grant});
+        let _ = dispatch(&engine, "conversationSend", &send).await;
+        assert_eq!(engine.lock().await.tab_grants[&id].tab_id, 7);
+        send["tabGrant"] = Value::Null;
+        send["messageId"] = json!(uuid::Uuid::new_v4().to_string());
+        let _ = dispatch(&engine, "conversationSend", &send).await;
+        assert!(!engine.lock().await.tab_grants.contains_key(&id));
+        let revoked = dispatch(
+            &engine,
+            "conversationTabGrant",
+            &json!({"conversationId":id,"grant":null}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(revoked["tabGrant"], json!({"granted":false}));
+        assert!(dispatch(
+            &engine,
+            "conversationTabGrant",
+            &json!({"conversationId":id})
+        )
+        .await
+        .is_err());
+        assert!(dispatch(
+            &engine,
+            "conversationTabGrant",
+            &json!({"conversationId":"missing","grant":null})
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
@@ -4721,6 +4964,7 @@ mod redaction_tests {
                     continuation: None,
                     record: false,
                     preface: None,
+                    tab_grant: None,
                 });
             }
             // OpenCode only streams deltas; the tail must not be lost.
@@ -4820,6 +5064,7 @@ mod redaction_tests {
                 continuation: None,
                 record: false,
                 preface: None,
+                tab_grant: None,
             };
             let hash = message.fingerprint().unwrap();
             let chat = e.chats.get_mut(&f.id).unwrap();

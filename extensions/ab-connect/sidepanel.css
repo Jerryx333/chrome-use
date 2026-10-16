@@ -337,3 +337,18 @@ button.stop { background:var(--ink); border-color:var(--ink); color:var(--bg); f
 .project-host .project-manual input { flex:1; min-width:160px; }
 .project-host .project-manual .hint { flex-basis:100%; margin:0; }
 .project-host .project-remember > span { flex-basis:100%; }
+
+/* "Let the agent use this tab" */
+.grant-bar { display:flex; align-items:center; gap:8px; margin:8px 12px 0; padding:7px 10px; border:1px solid #7c3aed; border-radius:10px; background:rgb(124 58 237 / .08); font-size:12px; }
+.grant-dot { flex:none; width:8px; height:8px; border-radius:50%; background:#7c3aed; animation:pulse 1.6s ease-in-out infinite; }
+.grant-body { flex:1; min-width:0; display:flex; flex-direction:column; }
+.grant-body > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.grant-bar button { flex:none; color:#7c3aed; font-weight:600; }
+.grant-tab { display:block; margin:0 0 4px; padding:2px 8px; font-size:12px; color:#7c3aed; }
+.page-chip select { width:auto; max-width:min(60vw,420px); padding:0 4px; border:0; background:transparent; font-size:12px; color:var(--ink); }
+.page-label { flex:none; }
+
+/* The panel as a full-page tab: one centred column. */
+html[data-mode="tab"] body { align-items:center; background:var(--surface); }
+html[data-mode="tab"] main { width:min(100%, 880px); background:var(--bg); border-left:1px solid var(--line); border-right:1px solid var(--line); }
+html[data-mode="tab"] .conversation-menu { left:auto; right:auto; width:min(calc(100% - 16px), 560px); }

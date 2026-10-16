@@ -1,4 +1,21 @@
 {
+  "bg_grant_action_title": {
+    "message": "chrome-use：agent 可以使用这个标签页（对话“$TITLE$”）。打开侧栏可收回。",
+    "placeholders": {
+      "title": {
+        "content": "$1"
+      }
+    }
+  },
+  "bg_grant_badge": {
+    "message": "AI"
+  },
+  "bg_grant_service_unavailable": {
+    "message": "本机 agent 服务没有接受这个标签页。请把 chrome-use 更新到 1.5.221 或更高版本，并确认已连接。"
+  },
+  "bg_grant_untitled": {
+    "message": "未命名"
+  },
   "bg_notify_connected_message": {
     "message": "已连上本机 CLI，可以操作你的标签页了。"
   },
@@ -1622,6 +1639,57 @@
   "panel_fork_context": {
     "message": "这个会话接续自另一个会话，那个会话的最后一个请求结果未知。其中列出的操作可能已经生效。"
   },
+  "panel_grant_active": {
+    "message": "agent 可以使用你的标签页：$TITLE$ · $ORIGIN$",
+    "placeholders": {
+      "title": {
+        "content": "$1"
+      },
+      "origin": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_grant_not_adopted": {
+    "message": "已告诉 agent 可以用你的标签页，但它的浏览器会话还没接管：$ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_grant_page_unusable": {
+    "message": "这个标签页现在显示的页面 agent 用不了。授权会保留，直到你收回或关闭标签页。"
+  },
+  "panel_grant_refused_agent_tab": {
+    "message": "这个标签页本来就是 agent 自己的。"
+  },
+  "panel_grant_refused_closed": {
+    "message": "这个标签页已关闭。"
+  },
+  "panel_grant_refused_not_web": {
+    "message": "只能把网页交给 agent，Chrome 自身的页面不行。"
+  },
+  "panel_grant_refused_other": {
+    "message": "另一个对话正在使用这个标签页，请先在那边收回。"
+  },
+  "panel_grant_refused_web_store": {
+    "message": "Chrome 不允许扩展操作 Chrome 应用商店，agent 不能使用这个标签页。"
+  },
+  "panel_grant_switch": {
+    "message": "改为让 agent 使用这个标签页"
+  },
+  "panel_grant_use": {
+    "message": "让 agent 使用这个标签页"
+  },
+  "panel_grant_use_title": {
+    "message": "在这个对话里，agent 会用你的登录状态在 $URL$ 中操作，直到你收回标签页。借出期间该标签页的工具栏图标显示 AI。",
+    "placeholders": {
+      "url": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_image_attached": {
     "message": "附加的图片"
   },
@@ -1754,6 +1822,22 @@
   },
   "panel_page_fallback": {
     "message": "某个页面"
+  },
+  "panel_page_tab_last_active": {
+    "message": "你在这个窗口里最后使用的标签页：$URL$。可以在列表里换一个。",
+    "placeholders": {
+      "url": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_page_tab_picked": {
+    "message": "你选的标签页：$URL$",
+    "placeholders": {
+      "url": {
+        "content": "$1"
+      }
+    }
   },
   "panel_page_you_sent": {
     "message": "你发送的页面"
@@ -2677,6 +2761,9 @@
   "sidepanel_full_access": {
     "message": "完整权限"
   },
+  "sidepanel_grant_take_back": {
+    "message": "收回标签页"
+  },
   "sidepanel_import_archive": {
     "message": "本地 ZIP 或 .skill 压缩包"
   },
@@ -2740,8 +2827,17 @@
   "sidepanel_no_skill": {
     "message": "不用技能"
   },
+  "sidepanel_open_in_tab": {
+    "message": "在标签页中打开"
+  },
   "sidepanel_page_detach": {
     "message": "不发送这个页面"
+  },
+  "sidepanel_page_from_window": {
+    "message": "页面："
+  },
+  "sidepanel_page_picker": {
+    "message": "这个窗口里的哪个标签页"
   },
   "sidepanel_page_title": {
     "message": "chrome-use 助手"

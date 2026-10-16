@@ -1,4 +1,21 @@
 {
+  "bg_grant_action_title": {
+    "message": "chrome-use: the agent can use this tab (conversation \"$TITLE$\"). Open the side panel to take it back.",
+    "placeholders": {
+      "title": {
+        "content": "$1"
+      }
+    }
+  },
+  "bg_grant_badge": {
+    "message": "AI"
+  },
+  "bg_grant_service_unavailable": {
+    "message": "The local agent service did not accept the tab. Update chrome-use to 1.5.221 or later and check that it is connected."
+  },
+  "bg_grant_untitled": {
+    "message": "Untitled"
+  },
   "bg_notify_connected_message": {
     "message": "Bridged to your local CLI — ready to drive your tabs."
   },
@@ -1622,6 +1639,57 @@
   "panel_fork_context": {
     "message": "This conversation continues one whose last request ended with an unknown outcome. Actions listed there may already have taken effect."
   },
+  "panel_grant_active": {
+    "message": "The agent can use your tab: $TITLE$ · $ORIGIN$",
+    "placeholders": {
+      "title": {
+        "content": "$1"
+      },
+      "origin": {
+        "content": "$2"
+      }
+    }
+  },
+  "panel_grant_not_adopted": {
+    "message": "The agent was told about your tab, but its browser session did not take it yet: $ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_grant_page_unusable": {
+    "message": "The tab now shows a page the agent cannot use. The grant stays until you take it back or close the tab."
+  },
+  "panel_grant_refused_agent_tab": {
+    "message": "This tab is already one of the agent's own tabs."
+  },
+  "panel_grant_refused_closed": {
+    "message": "The tab was closed."
+  },
+  "panel_grant_refused_not_web": {
+    "message": "Only a web page can be given to the agent. Chrome's own pages cannot."
+  },
+  "panel_grant_refused_other": {
+    "message": "Another conversation is using this tab. Take it back there first."
+  },
+  "panel_grant_refused_web_store": {
+    "message": "Chrome does not let extensions use the Chrome Web Store, so the agent cannot use this tab."
+  },
+  "panel_grant_switch": {
+    "message": "Let the agent use this tab instead"
+  },
+  "panel_grant_use": {
+    "message": "Let the agent use this tab"
+  },
+  "panel_grant_use_title": {
+    "message": "The agent works in $URL$ with your logins for this conversation, until you take the tab back. Its toolbar badge shows AI while it is lent.",
+    "placeholders": {
+      "url": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_image_attached": {
     "message": "Attached image"
   },
@@ -1754,6 +1822,22 @@
   },
   "panel_page_fallback": {
     "message": "a page"
+  },
+  "panel_page_tab_last_active": {
+    "message": "The last tab you used in this window: $URL$. Pick another in the list.",
+    "placeholders": {
+      "url": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_page_tab_picked": {
+    "message": "The tab you picked: $URL$",
+    "placeholders": {
+      "url": {
+        "content": "$1"
+      }
+    }
   },
   "panel_page_you_sent": {
     "message": "the page you sent"
@@ -2677,6 +2761,9 @@
   "sidepanel_full_access": {
     "message": "Full access"
   },
+  "sidepanel_grant_take_back": {
+    "message": "Take back the tab"
+  },
   "sidepanel_import_archive": {
     "message": "Local ZIP or .skill archive"
   },
@@ -2740,8 +2827,17 @@
   "sidepanel_no_skill": {
     "message": "No skill"
   },
+  "sidepanel_open_in_tab": {
+    "message": "Open in a tab"
+  },
   "sidepanel_page_detach": {
     "message": "Don't send this page"
+  },
+  "sidepanel_page_from_window": {
+    "message": "Page:"
+  },
+  "sidepanel_page_picker": {
+    "message": "Which tab of this window"
   },
   "sidepanel_page_title": {
     "message": "chrome-use assistant"

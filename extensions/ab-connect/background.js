@@ -84,6 +84,7 @@ import {
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
 import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION } from './user-tab-organizer.js';
+import { createTabGrants, LENT_TAB_CLOSE, TAKEN_BACK } from './tab-grant.js';
 import {
   followReplacement,
   forgetReplacement,
@@ -439,6 +440,12 @@ if (chrome.windows && chrome.windows.onFocusChanged) {
 // not the whole window. (Issue: banner occludes the user's foreground tab.)
 const ownedTabs = new Set();
 
+// "Let the agent use this tab" (0.5.62): user tabs lent to one side-panel
+// conversation, and tabs taken back from one (refused until granted again or
+// closed). See tab-grant.js.
+const tabGrants = createTabGrants({ storage: chrome.storage.session });
+void tabGrants.load();
+
 // removed tabId -> the tabId Chrome put in its place (a discard, a prerender
 // swap). Followed by recoverSessionTab so a `cb-tab-<old>` session finds its
 // tab again instead of reporting it gone. Only tabs the relay knows are
@@ -668,12 +675,105 @@ function postToHost(msg, method) {
 }
 
 function setBadge(tabId, kind) {
+  // A lent tab shows that, whatever else is true of it.
+  if (tabGrants.get(tabId)) { showGrantIndicator(tabId); return; }
   const map = { on: turnBadge, connecting: '…', error: '!' };
   const colors = { on: turnBadge ? '#2563eb' : '#16a34a', connecting: '#d97706', error: '#b91c1c' };
   try {
     chrome.action.setBadgeText({ tabId, text: map[kind] ?? '' });
     if (colors[kind]) chrome.action.setBadgeBackgroundColor({ tabId, color: colors[kind] });
   } catch {}
+}
+
+// A lent tab carries its own toolbar badge and tooltip: signals outside the
+// page, so nothing a site could read changes. Chrome clears a tab's action
+// state when it navigates; tabs.onUpdated puts it back.
+function showGrantIndicator(tabId) {
+  const grant = tabGrants.get(tabId);
+  try {
+    if (grant) {
+      chrome.action.setBadgeText({ tabId, text: t('bg_grant_badge') });
+      chrome.action.setBadgeBackgroundColor({ tabId, color: '#7c3aed' });
+      chrome.action.setTitle({ tabId, title: t('bg_grant_action_title', grant.conversationTitle || t('bg_grant_untitled')) });
+      return;
+    }
+    chrome.action.setTitle({ tabId, title: t('ext_action_title') });
+  } catch {}
+  if (tabs.has(tabId)) { setBadge(tabId, port ? 'on' : 'connecting'); return; }
+  // `null` hands the tab back to the global badge (the turn count).
+  try { void chrome.action.setBadgeText({ tabId, text: null }).catch(() => {}); } catch {}
+}
+
+function publishTabGrants() {
+  try { chrome.runtime.sendMessage({ type: 'ab-tab-grants', grants: tabGrants.list() }).catch(() => {}); } catch {}
+}
+
+// Tell the panel service which tab a conversation may drive (null: none).
+// A failure is returned, never thrown: the extension's grant and refusal are
+// what protect the tab.
+async function tellServiceGrant(conversationId, grant) {
+  const state = hostConnection.snapshot();
+  if (!port || !state.connected || !(state.agentPanel?.tabGrant >= 1)) return { error: t('bg_grant_service_unavailable') };
+  try {
+    const result = await agentPanelBridge.request('conversationTabGrant', { conversationId, grant: grant ? { tabId: grant.tabId, url: grant.url, title: grant.title } : null });
+    return result.tabGrant;
+  } catch (error) {
+    return { error: String(error?.message || error) };
+  }
+}
+
+// Take a lent tab back at once: refuse it from now on, let go of the
+// debugger (no relay command can re-attach a refused tab), clear its
+// indicator, then tell the service.
+async function takeBackTab(tabId, { tellService = true } = {}) {
+  const grant = await tabGrants.revoke(tabId);
+  releasedTabs.add(tabId);
+  setTimeout(() => releasedTabs.delete(tabId), 10_000);
+  if (tabs.has(tabId)) detachTab(tabId, true);
+  await chrome.debugger.detach({ tabId }).catch(() => {});
+  showGrantIndicator(tabId);
+  publishTabGrants();
+  const service = grant && tellService ? await tellServiceGrant(grant.conversationId, null) : null;
+  return { grant, service };
+}
+
+async function lendTab({ tabId, conversationId, conversationTitle }) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) throw Object.assign(new Error('The tab is closed'), { reason: 'closed' });
+  await loadOwnedTabs();
+  await loadAgentPopups();
+  if (ownedTabs.has(tabId) || agentPopups.has(tabId)) throw Object.assign(new Error('This tab is already the agent\'s'), { reason: 'agentTab' });
+  const { grant, replaced, wasRefused } = await tabGrants.grant(tab, { conversationId, conversationTitle });
+  showGrantIndicator(tabId);
+  if (replaced) showGrantIndicator(replaced.tabId);
+  publishTabGrants();
+  const service = await tellServiceGrant(conversationId, grant);
+  // A service that cannot hold the grant would run turns without it. Undo it
+  // exactly: a tab taken back before stays refused, an earlier tab stays lent.
+  if (service?.granted !== true) {
+    await tabGrants.rollback(tabId, { wasRefused, replaced });
+    showGrantIndicator(tabId);
+    if (replaced) showGrantIndicator(replaced.tabId);
+    publishTabGrants();
+    throw Object.assign(new Error(service?.error || t('bg_grant_service_unavailable')), { reason: 'service' });
+  }
+  if (replaced) await takeBackTab(replaced.tabId, { tellService: false });
+  return { grant, service };
+}
+
+async function handleTabGrantMessage(msg) {
+  await tabGrants.load();
+  if (msg.action === 'list') return { grants: tabGrants.list() };
+  if (msg.action === 'grant') {
+    if (!Number.isInteger(msg.tabId) || typeof msg.conversationId !== 'string' || !msg.conversationId) throw new Error('A tab and a conversation are required');
+    return lendTab({ tabId: msg.tabId, conversationId: msg.conversationId, conversationTitle: typeof msg.conversationTitle === 'string' ? msg.conversationTitle : '' });
+  }
+  if (msg.action === 'revoke') {
+    const tabId = Number.isInteger(msg.tabId) ? msg.tabId : tabGrants.forConversation(String(msg.conversationId || ''))?.tabId;
+    if (!Number.isInteger(tabId)) return { grant: null, service: null };
+    return takeBackTab(tabId);
+  }
+  throw new Error('Unknown tab grant action');
 }
 
 // ---- settings + UX (cursor overlay, connection notifications) -------------
@@ -953,7 +1053,7 @@ function tabIdFromSession(sessionId) {
 // Chrome).
 function isPermanentAttachError(e) {
   const m = String((e && e.message) || e);
-  return /different extension|Cannot access a chrome:\/\/|must request permission|Cannot access contents|Cannot attach to (this|the) target/i.test(
+  return /different extension|Cannot access a chrome:\/\/|must request permission|Cannot access contents|Cannot attach to (this|the) target|took this tab back/i.test(
     m
   );
 }
@@ -1126,10 +1226,30 @@ function anyConnectedTab() {
   return it.done ? null : it.value;
 }
 
+// Refuse a command on a tab the user took back, or on a lent tab from any
+// relay session but the one of the conversation it was lent to. Synchronous
+// (tabGrants is loaded first), so it can run again right before each step.
+function guardTab(tabId, agentSession) {
+  if (tabId == null) return;
+  const refusal = tabGrants.refusal(tabId, agentSession);
+  if (refusal) throw new Error(refusal);
+}
+
+// Read-only reports about tabs; they name a tab without acting on it.
+const TAB_READS = new Set(['ABExt.inspectTab', 'ABExt.tabPresence', 'ABExt.state', 'ABExt.attachedTargets', 'ABExt.userTabMetadata']);
+
 async function handleForwardCdpCommand(msg) {
   const method = String(msg?.params?.method || '');
   const params = msg?.params?.params || undefined;
   const sessionId = typeof msg?.params?.sessionId === 'string' ? msg.params.sessionId : undefined;
+  // The relay session that sent this (CLI 1.5.221+), for lent tabs.
+  const agentSession = typeof msg?.params?.agentSession === 'string' ? msg.params.agentSession : '';
+  await tabGrants.load();
+  if (!TAB_READS.has(method)) {
+    if (sessionId) guardTab(resolveSessionTab(sessionId, sessionToTab, childSessionToTab), agentSession);
+    for (const key of ['targetId', 'sourceTargetId']) if (typeof params?.[key] === 'string') guardTab(tabForTarget(params[key]), agentSession);
+    if (Number.isInteger(params?.chromeTabId)) guardTab(params.chromeTabId, agentSession);
+  }
 
   // Non-CDP extension commands (ABExt.*) the daemon sends. `ungroupTab` removes a
   // tab from its per-session tab group so a `keep`-marked tab is left for the user
@@ -1291,6 +1411,7 @@ async function handleForwardCdpCommand(msg) {
         profileEmail: extra.profileEmail || null,
       };
     }
+    guardTab(match.id, agentSession);
     const entry = await attachTab(match.id); // attaches + announces attachedToTarget
     // Do NOT markOwned: an adopted tab is the USER'S — attach it for this session,
     // but never persist it into the re-attach set. Persisting would re-attach the
@@ -1486,6 +1607,7 @@ async function handleForwardCdpCommand(msg) {
       agentWindowId,
       agentWindowError,
       agentWindowRejected,
+      tabGrants: (await tabGrants.load(), tabGrants.list().map(({ tabId, conversationId }) => ({ tabId, conversationId }))),
       cursorEnabled,
       notifyEnabled,
       idleDetachMs,
@@ -1499,6 +1621,7 @@ async function handleForwardCdpCommand(msg) {
       (typeof params?.targetId === 'string' ? tabForTarget(params.targetId) : null) ??
       anyConnectedTab();
     if (tabId == null) throw new Error('no attached tab for ABExt.batchCommands');
+    guardTab(tabId, agentSession);
     const childSid =
       sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
         ? sessionId
@@ -1510,7 +1633,8 @@ async function handleForwardCdpCommand(msg) {
       const cmd = commands[i];
       if (!cmd || typeof cmd.method !== 'string') continue;
       try {
-        const res = await dispatchToTab(tabId, cmd.method, cmd.params, childSid);
+        // Each step: the user may take the tab back while the batch runs.
+        const res = await dispatchToTab(tabId, cmd.method, cmd.params, childSid, agentSession);
         results.push({ index: i, method: cmd.method, success: true, result: res });
       } catch (err) {
         results.push({
@@ -1558,6 +1682,9 @@ async function handleForwardCdpCommand(msg) {
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';
     const tabId = tid ? tabForTarget(tid) : null;
     if (!tabId) return { success: false };
+    // A tab the user lent stays theirs: the agent never closes it.
+    await tabGrants.load();
+    if (tabGrants.get(tabId)) throw new Error(LENT_TAB_CLOSE);
     try {
       await removeAgentTab(tabId, agentTabRemoval);
     } catch {
@@ -1597,6 +1724,7 @@ async function handleForwardCdpCommand(msg) {
     if (tabId == null) {
       throw new Error(`unknown sessionId ${sessionId} for ${method}`);
     }
+    guardTab(tabId, agentSession);
     if (!tabs.has(tabId)) {
       const recovered = await recoverSessionTab(sessionId);
       if (!recovered) {
@@ -1659,7 +1787,7 @@ async function handleForwardCdpCommand(msg) {
     if (!childSid) rememberReplayable(entry, method, params);
   }
   try {
-    return await dispatchToTab(tabId, method, params, childSid);
+    return await dispatchToTab(tabId, method, params, childSid, agentSession);
   } finally {
     if (entry) {
       entry.inflight = Math.max(0, entry.inflight - 1);
@@ -1668,7 +1796,10 @@ async function handleForwardCdpCommand(msg) {
   }
 }
 
-async function dispatchToTab(tabId, method, params, childSid) {
+async function dispatchToTab(tabId, method, params, childSid, agentSession = '') {
+  // Again here: recovery and earlier steps awaited Chrome, and the tab may
+  // have been taken back meanwhile.
+  guardTab(tabId, agentSession);
   // Re-enabling Runtime can leave a stale state; bounce it (matches upstream).
   if (method === 'Runtime.enable') {
     try {
@@ -1682,8 +1813,10 @@ async function dispatchToTab(tabId, method, params, childSid) {
   if (canUseBrowserNavigationFallback(method, params, childSid)) {
     return await navigateTabWithBrowserFallback(params, {
       navigateWithDebugger: () => sendCdpToTab(tabId, method, params),
-      updateTab: (url) =>
-        withRelayTimeout(chrome.tabs.update(tabId, { url }), 'chrome.tabs.update(Page.navigate)'),
+      updateTab: (url) => {
+        guardTab(tabId, agentSession);
+        return withRelayTimeout(chrome.tabs.update(tabId, { url }), 'chrome.tabs.update(Page.navigate)');
+      },
     });
   }
   return await sendCdpToTab(tabId, method, params, childSid);
@@ -1696,6 +1829,9 @@ async function dispatchToTab(tabId, method, params, childSid) {
 const attachTab = createTabAttachmentQueue(attachTabOnce);
 
 async function attachTabOnce(tabId, transactionIsActive) {
+  // A tab the user took back is never attached again, by any path.
+  await tabGrants.load();
+  if (tabGrants.isRefused(tabId)) throw new Error(TAKEN_BACK);
   const existing = tabs.get(tabId);
   if (existing && existing.attached !== false) return existing;
   if (existing) return await reattachTab(tabId, existing);
@@ -2215,6 +2351,11 @@ chrome.tabs.onCreated.addListener(
 chrome.tabs.onUpdated.addListener(
   (tabId, changeInfo, tab) =>
     void whenReady(async () => {
+      if (tabGrants.get(tabId) && (changeInfo.url || changeInfo.title || changeInfo.status)) {
+        // The grant stays with the tab across navigations; its page is shown.
+        if (await tabGrants.navigated(tabId, { url: tab?.url, title: tab?.title })) publishTabGrants();
+        showGrantIndicator(tabId);
+      }
       if (await isNativeDuplicateLifecycleEvent(tab)) return;
       const attached = tabs.get(tabId);
       if (attached) {
@@ -2245,6 +2386,13 @@ chrome.tabs.onReplaced.addListener(
       }
       // A confirmed agent pop-up stays one under its new id.
       await migrateAgentPopup(removedTabId, addedTabId);
+      // A lent tab stays lent (or refused) under its new id.
+      const moved = await tabGrants.replaced(removedTabId, addedTabId);
+      if (moved) {
+        showGrantIndicator(addedTabId);
+        publishTabGrants();
+        void tellServiceGrant(moved.conversationId, moved);
+      }
       // Ownership follows the tab, so the session may still drive (and close)
       // it under its new id.
       if (ownedTabs.has(removedTabId) || recentlyRemovedOwned.has(removedTabId)) {
@@ -2290,6 +2438,11 @@ chrome.tabs.onRemoved.addListener(
       }
       unmarkOwned(tabId);
       forgetTab(tabId);
+      void tabGrants.removed(tabId).then(grant => {
+        if (!grant) return;
+        publishTabGrants();
+        void tellServiceGrant(grant.conversationId, null);
+      });
     })
 );
 
@@ -2600,6 +2753,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     inspectController.start(null).then(
       () => sendResponse({ success: true }),
       error => sendResponse({ success: false, error: String(error.message || error) }),
+    );
+    return true;
+  }
+  if (msg?.type === 'ab-tab-grant') {
+    if (!isAgentPanelSender(_sender, chrome.runtime)) {
+      sendResponse({ success: false, error: 'Agent services require the packaged extension panel' });
+      return false;
+    }
+    handleTabGrantMessage(msg).then(
+      result => sendResponse({ success: true, ...result }),
+      error => sendResponse({ success: false, error: String(error.message || error), reason: error.reason || null }),
     );
     return true;
   }

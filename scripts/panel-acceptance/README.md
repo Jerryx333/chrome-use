@@ -68,6 +68,15 @@ checksum-verified from the GitHub release) and the v1.5.214 extension
 (`REAL_OPENCODE_BIN`) uses a private data directory holding a copy of
 `auth.json`, as `cli/src/agent_panel/fixtures/README.md` describes.
 
+## Tab modes
+
+`tab-modes-live.sh <chrome-use binary> [extension ref]` runs `tab-modes-live.mjs`:
+the panel opened as a tab next to the real side panel on one conversation,
+lending a user tab to the Codex fixture agent (a call without a tab handle and
+one naming `chrome-tab:<id>` both run in it), taking it back from the side
+panel (the next call is refused), and the grant following the tab across
+origins until the tab closes.
+
 ## Limits
 
 - Check 5's fault switch (skip the kill on stop timeout) does not exist in the
