@@ -1827,6 +1827,15 @@
   "panel_old_build_open": {
     "message": "打开"
   },
+  "panel_old_build_force_hint": {
+    "message": "也可以在终端运行下面的命令，停止旧版的所有对话，让新版直接接管："
+  },
+  "panel_copy_command": {
+    "message": "复制命令"
+  },
+  "panel_copied": {
+    "message": "已复制 ✓"
+  },
   "panel_old_build_stop": {
     "message": "停止它"
   },

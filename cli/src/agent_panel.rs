@@ -85,6 +85,11 @@ pub fn run_service(args: &[String]) -> Result<(), String> {
     service::run(args)
 }
 
+/// Stop every running panel service and its conversations (`upgrade --force`).
+pub(crate) fn force_stop_services() -> Result<Vec<String>, String> {
+    service::force_stop_all()
+}
+
 #[derive(Clone, Copy)]
 struct AgentSpec {
     id: &'static str,

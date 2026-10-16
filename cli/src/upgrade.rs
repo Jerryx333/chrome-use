@@ -962,6 +962,7 @@ pub fn run_upgrade(args: &[String]) {
     if json || check {
         run_check(json);
     }
+    let force = args.iter().any(|a| a == "--force" || a == "-f");
 
     let scan = SkillScan::from_env();
     let skills = detect_skills(&scan);
@@ -973,6 +974,9 @@ pub fn run_upgrade(args: &[String]) {
             println!("{NAME} {CURRENT_VERSION} is up to date");
             refresh_git_skills(&skills);
             refresh_other_skills(&skills, &scan, in_process_or_skip());
+            if force {
+                take_over_panel();
+            }
             return;
         }
         Ok(latest) => println!(
@@ -1022,6 +1026,10 @@ pub fn run_upgrade(args: &[String]) {
         if let Some(ref dir) = current_bin_dir() {
             cmd.env("AGENT_BROWSER_BIN_DIR", dir);
         }
+        // --force asks nothing: no guided extension setup on the terminal.
+        if force {
+            cmd.env("AGENT_BROWSER_NO_SETUP", "1");
+        }
         let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
         if !ok {
             eprintln!(
@@ -1050,6 +1058,27 @@ pub fn run_upgrade(args: &[String]) {
             InstallerRefresh::Ran
         };
         refresh_other_skills(&skills, &scan, installer);
+        if force {
+            take_over_panel();
+        }
+    }
+}
+
+/// `--force`: stop the side panel's running conversations and the panel
+/// service of the build that ran them, so the panel's next request starts the
+/// installed build instead of waiting for the old one to go idle.
+fn take_over_panel() {
+    match crate::agent_panel::force_stop_services() {
+        Ok(lines) if lines.is_empty() => println!("No side panel service was running"),
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+        }
+        Err(error) => eprintln!(
+            "{} could not stop the side panel service: {error}",
+            color::warning_indicator()
+        ),
     }
 }
 

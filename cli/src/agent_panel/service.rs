@@ -254,6 +254,77 @@ fn busy_conversations(list: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether `conversation` is one an older build is still busy with.
+fn keeps_busy(list: &Value, conversation: &str) -> bool {
+    busy_conversations(list)
+        .iter()
+        .any(|(id, _)| id == conversation)
+}
+
+/// A conversation a running older build is still working on stays with that
+/// build: answering its prompts, reading its screenshots and lending it a tab
+/// reach it instead of being refused until the user stops the very turn they
+/// are watching. Everything else still waits for the replacement in `ensure`.
+fn older_build_owning(directory: &Path, profile: &str, params: &Value) -> Option<Endpoint> {
+    let conversation = params["conversationId"].as_str()?;
+    let binary_hash = BINARY_HASH.as_ref().ok()?;
+    let existing = endpoint(directory, profile).ok()?;
+    let health = exchange(&existing, "health", json!({})).ok()?;
+    if health["binaryHash"] == *binary_hash || health["active"].as_u64() == Some(0) {
+        return None;
+    }
+    let list = exchange(&existing, "conversationList", json!({})).ok()?;
+    keeps_busy(&list, conversation).then_some(existing)
+}
+
+/// `chrome-use upgrade --force`: stop every conversation of every running
+/// panel service, then the services themselves, without asking, so the next
+/// panel request starts the build just installed. One line per profile.
+pub(super) fn force_stop_all() -> Result<Vec<String>, String> {
+    let context = DiscoveryContext::current()?;
+    let root = data_root(&context)?;
+    let Ok(entries) = std::fs::read_dir(root.join("profiles")) else {
+        return Ok(Vec::new());
+    };
+    let mut report = Vec::new();
+    for entry in entries.flatten() {
+        let Some(profile) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let Ok(existing) = endpoint(&entry.path(), &profile) else {
+            continue;
+        };
+        if exchange(&existing, "health", json!({})).is_err() {
+            continue;
+        }
+        let busy = exchange(&existing, "conversationList", json!({}))
+            .map(|list| busy_conversations(&list))
+            .unwrap_or_default();
+        for (id, _) in &busy {
+            let _ = exchange(&existing, "conversationStop", json!({"conversationId": id}));
+        }
+        // A stop takes effect once the agent process exits; serviceStop is
+        // refused until then.
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let outcome = loop {
+            match exchange(&existing, "serviceStop", json!({})) {
+                Ok(_) => break Ok(()),
+                Err(error) if Instant::now() > deadline => break Err(error),
+                Err(_) => std::thread::sleep(Duration::from_millis(300)),
+            }
+        };
+        report.push(match outcome {
+            Ok(()) if busy.is_empty() => format!("profile {profile}: panel service stopped"),
+            Ok(()) => format!(
+                "profile {profile}: stopped {} conversation(s) and the panel service",
+                busy.len()
+            ),
+            Err(error) => format!("profile {profile}: panel service still running ({error})"),
+        });
+    }
+    Ok(report)
+}
+
 /// The refusal names the conversations to answer or stop. The trailing
 /// `[blocking:<ids>]` lets the panel offer to open or stop them; older panels
 /// show the sentence as is.
@@ -606,6 +677,9 @@ pub(super) fn call(
                 return exchange(&existing, operation, params.clone());
             }
         }
+    }
+    if let Some(existing) = older_build_owning(&directory, profile, params) {
+        return exchange(&existing, operation, params.clone());
     }
     let endpoint = ensure(&directory, &root, profile)?;
     exchange(
@@ -6242,5 +6316,16 @@ mod old_build_tests {
         assert!(text.contains("\u{201c}Follow up\u{201d}"));
         assert!(text.ends_with("[blocking:12b6a0cd-eca8-4462-a809-16db0688704c]"));
         assert!(!old_build_busy(&[]).contains("[blocking:"));
+    }
+
+    #[test]
+    fn only_conversations_the_old_build_is_busy_with_stay_on_it() {
+        let list = json!({"conversations":[
+            {"id":"12b6a0cd-eca8-4462-a809-16db0688704c","title":"Working","phase":"running"},
+            {"id":"700bb4d2-c4c8-49b9-9fbe-5a3a6a11245e","title":"Idle one","phase":"idle"}
+        ]});
+        assert!(keeps_busy(&list, "12b6a0cd-eca8-4462-a809-16db0688704c"));
+        assert!(!keeps_busy(&list, "700bb4d2-c4c8-49b9-9fbe-5a3a6a11245e"));
+        assert!(!keeps_busy(&list, "e0c1b7f5-0000-4000-8000-000000000000"));
     }
 }

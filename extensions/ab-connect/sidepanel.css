@@ -436,3 +436,6 @@ html[data-mode="tab"] .conversation-menu { left:auto; right:auto; width:min(calc
 .work-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 2px 2px 8px; border-radius:10px; background:var(--surface); color:var(--muted); }
 .work-chip svg { flex:none; }
 .work-chip select { field-sizing:content; width:auto; padding:0 2px; border:0; background:transparent; font-size:12px; color:var(--ink); cursor:pointer; }
+.force-takeover { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; margin-top:6px; }
+.force-takeover > div { flex-basis:100%; }
+.force-takeover code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; padding:2px 6px; border-radius:6px; background:var(--bg); color:var(--ink); user-select:all; }
