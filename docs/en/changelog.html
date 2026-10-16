@@ -83,6 +83,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.226</strong> (October 16, 2026): Stop always ends the agent's whole process group on macOS and Linux; before, depending on timing, child processes were sometimes left running and the turn ended as outcome unknown. Windows already ended the whole job. Works with extension 0.5.65. Contributors: @leeguooooo.</li>
         <li><strong>v1.5.225</strong> (October 16, 2026): A redesigned Agents &amp; models view (card lists, status badges, configuration under its agent, editors closed until needed); the project folder is a visible chip in the composer, "No project folder" or the folder you chose. Works with extension 0.5.65. Contributors: @leeguooooo.</li>
         <li><strong>v1.5.224</strong> (October 16, 2026): Lending fixes: an automatic lend no longer goes to a conversation you switched to meanwhile; a tab taken back in a panel tab is not lent again by the side panel; moving a conversation while its old panel is sending no longer leaves two panels on it. Works with extension 0.5.64. Contributors: @leeguooooo.</li>
         <li><strong>v1.5.223</strong> (October 16, 2026): One side panel and conversation per tab; the side-panel agent works in the tab it sits beside by default (AI badge, take back any time) instead of opening a window; slash completion anywhere in a message, including plugin skills; no raw text keys; an update blocked by an old conversation offers Open and Stop it. Works with extension 0.5.63. Contributors: @leeguooooo.</li>
