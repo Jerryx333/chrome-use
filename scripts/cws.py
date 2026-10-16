@@ -4,6 +4,7 @@
     python3 scripts/cws.py status            # what the store has, as JSON
     python3 scripts/cws.py publish [--draft] # upload extensions/ab-connect.zip and submit
     python3 scripts/cws.py publish --if-new  # ... unless the store already has that version
+    python3 scripts/cws.py cancel            # withdraw the version in review (to submit a newer one)
 
 Credentials come from the environment, or from .secrets/ when run locally:
 
@@ -201,8 +202,20 @@ def cmd_publish(token, draft, if_new):
     print(f"✓ ab-connect {ver} submitted to the Chrome Web Store")
 
 
+def cmd_cancel(token):
+    """Withdraw the version in review, so a newer one can be submitted instead."""
+    name = item_name()
+    have = store_versions(call("GET", f"{API}/v2/{name}:fetchStatus", token))
+    if have.get("submitted_state") != "PENDING_REVIEW":
+        print(f"nothing in review ({have}); nothing to cancel")
+        return
+    call("POST", f"{API}/v2/{name}:cancelSubmission", token)
+    print(f"✓ withdrew ab-connect {have.get('submitted')} from review")
+    cmd_status(token)
+
+
 def main(argv):
-    if not argv or argv[0] not in ("status", "publish"):
+    if not argv or argv[0] not in ("status", "publish", "cancel"):
         print(__doc__.strip())
         sys.exit(2)
     load_local_env()
@@ -211,6 +224,8 @@ def main(argv):
     print(f"(auth: {how})", file=sys.stderr)
     if argv[0] == "status":
         cmd_status(token)
+    elif argv[0] == "cancel":
+        cmd_cancel(token)
     else:
         cmd_publish(token, "--draft" in argv, "--if-new" in argv)
 

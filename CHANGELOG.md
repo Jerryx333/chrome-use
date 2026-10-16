@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.223
+## 1.5.224
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.64 (no CLI change; this release ships the extension's consent fixes).
+
+### Bug Fixes
+
+- **A tab is never lent to a conversation you did not lend it to.** When a tab's panel lent its tab automatically while you switched to another conversation, the tab could go to that other conversation and flip it to "this tab". The lend now goes only to the conversation it was started for.
+- **A take-back holds in every view.** Taking a tab back from a conversation opened in a full-page tab now also stops the side panel from lending it again by itself.
+- **Two panels never keep one conversation.** Moving a conversation to another tab while its old tab's panel was sending left both panels on it; the old panel now follows once the send ends.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.223
+
 Works with extension ab-connect 0.5.63 (the per-tab panel and working in your tab need it). Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -19,7 +34,6 @@ Works with extension ab-connect 0.5.63 (the per-tab panel and working in your ta
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.222
 
