@@ -17,6 +17,18 @@ export function mainDomain(host) {
   const labels = clean.split('.');
   return labels.slice(secondLevel.has(labels.slice(-2).join('.')) ? -3 : -2).join('.');
 }
+// The `/word` being typed at the caret: at the start of the text or after
+// whitespace, so "fill it in with /profile-use" completes too. `start` is
+// the slash, `end` the caret.
+export function slashQuery(text, caret = String(text || '').length) {
+  const before = String(text || '').slice(0, caret);
+  const match = /(^|\s)\/([^\s/]*)$/.exec(before);
+  return match ? { query: match[2], start: before.length - match[2].length - 1, end: before.length } : null;
+}
+// Every `/name` in a message, where it starts and what it names.
+// Punctuation right after a name ("/profile-use," or "/profile-use。") is not part of it.
+function slashTokens(text) { return [...String(text || '').matchAll(/(^|\s)\/([^\s/]+)(?=\s|$)/g)].map(m => ({ name: m[2].replace(/[.,;:!?)\]，。；：！？）]+$/, ''), start: m.index + m[1].length })).filter(token => token.name); }
+
 // The host names a conversation "New conversation" until its first message;
 // that default is shown in the panel's language, a real title as it is.
 const HOST_DEFAULT_TITLE = 'New conversation';
@@ -1399,24 +1411,45 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       return row;
     }));
   }
+  // A message that starts with `/name` must name one skill. A `/name` later
+  // in the text uses a skill when exactly one enabled skill has that name; any
+  // other later `/word` (a path, a URL part) is plain text.
   function chosenSkill(text) {
-    const match = /^\/([^\s]+)(?:\s|$)/.exec(text);
-    if (!match || !panelSupport?.skillLibrary) return null;
-    if (skillChoice?.name === match[1] && skillChoice.enabled) return skillChoice;
-    const matches = skillCatalog.filter(skill => skill.enabled && skill.name === match[1]);
-    if (matches.length !== 1) throw new Error(matches.length ? t('panel_skill_ambiguous') : t('panel_skill_unknown'));
-    return matches[0];
+    if (!panelSupport?.skillLibrary) return null;
+    const tokens = slashTokens(text);
+    if (skillChoice?.enabled && tokens.some(token => token.name === skillChoice.name)) return skillChoice;
+    const named = name => skillCatalog.filter(skill => skill.enabled && skill.name === name);
+    const first = tokens[0]?.start === 0 ? tokens[0] : null;
+    if (first) {
+      const matches = named(first.name);
+      if (matches.length !== 1) throw new Error(matches.length ? t('panel_skill_ambiguous') : t('panel_skill_unknown'));
+      return matches[0];
+    }
+    for (const token of tokens) { const matches = named(token.name); if (matches.length === 1) return matches[0]; }
+    return null;
+  }
+  function caretQuery() { return slashQuery(nodes.message.value, Number.isInteger(nodes.message.selectionStart) ? nodes.message.selectionStart : undefined); }
+  // Put `/name ` in place of the `/word` at the caret, keeping the text around it.
+  function insertSkill(skill) {
+    const value = nodes.message.value, query = caretQuery() || { start: 0, end: value.length };
+    const after = value.slice(query.end).replace(/^[^\s]*/, '');
+    const inserted = `/${skill.name} `;
+    nodes.message.value = value.slice(0, query.start) + inserted + after.replace(/^\s/, '');
+    const caret = query.start + inserted.length;
+    try { nodes.message.setSelectionRange?.(caret, caret); } catch {}
+    skillChoice = skill; nodes.skillPicker.hidden = true; nodes.message.focus?.();
   }
   function renderSkillPicker() {
-    const match = /^\/([^\s]*)$/.exec(nodes.message.value);
-    // Built-in commands come first and open their own view when chosen.
-    const builtins = match && panelSupport?.sessionResume && RESUME_TEXT.command.startsWith(match[1].toLowerCase()) ? [{ name: RESUME_TEXT.command, source: 'chrome-use', description: RESUME_TEXT.commandHint, builtin: true }] : [];
-    const skills = match ? [...builtins, ...skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match[1].toLowerCase()))].slice(0, 12) : [];
+    const match = caretQuery();
+    // Built-in commands come first and open their own view when chosen; they
+    // are commands only at the start of the message.
+    const builtins = match && match.start === 0 && nodes.message.value.slice(match.end).trim() === '' && panelSupport?.sessionResume && RESUME_TEXT.command.startsWith(match.query.toLowerCase()) ? [{ name: RESUME_TEXT.command, source: 'chrome-use', description: RESUME_TEXT.commandHint, builtin: true }] : [];
+    const skills = match ? [...builtins, ...skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match.query.toLowerCase()))].slice(0, 12) : [];
     visibleSkills = skills; skillPickerIndex = Math.min(skillPickerIndex,Math.max(0,skills.length-1));
     nodes.skillPicker.hidden = !skills.length;
     nodes.skillPicker.replaceChildren(...skills.map(skill => button(`${skill.name} · ${skill.source} · ${skill.description}`, async () => {
       if (skill.builtin) { await openResume(); return; }
-      skillChoice = skill; nodes.message.value = `/${skill.name} `; nodes.skillPicker.hidden = true; nodes.message.focus?.();
+      insertSkill(skill);
     })));
   }
   function skillPickerKey(event) {
@@ -1431,11 +1464,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       const skill = visibleSkills[skillPickerIndex]; if(!skill)return false;
       event.preventDefault();
       if (skill.builtin) { void openResume().catch(error); return true; }
-      skillChoice=skill; nodes.message.value=`/${skill.name} `;nodes.skillPicker.hidden=true;return true;
+      insertSkill(skill);return true;
     }
     return false;
   }
   nodes.message.addEventListener('input', () => {skillPickerIndex=0;renderSkillPicker();});
+  // Moving the caret onto or off a `/word` shows or hides the choices.
+  nodes.message.addEventListener('click', () => renderSkillPicker());
+  nodes.message.addEventListener('keyup', event => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) renderSkillPicker(); });
   nodes.reloadSkills.addEventListener('click', () => void loadSkills().catch(error));
   nodes.saveSkill.addEventListener('click', () => void (async () => {
     await api('skillSave', { agentId: skillAgent(), name: nodes.skillName.value.trim(), content: nodes.skillContent.value }); await loadSkills();

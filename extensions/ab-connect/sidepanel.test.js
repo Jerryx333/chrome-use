@@ -1,7 +1,8 @@
-import './test-i18n.js';
+import { loadMessages } from './test-i18n.js';
+const en = loadMessages('en');
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createPanel } from './sidepanel.js';
+import { createPanel, slashQuery } from './sidepanel.js';
 
 // A deliberately small DOM fixture: controller tests verify asynchronous
 // conversation identity, not browser layout or extension API compatibility.
@@ -971,5 +972,63 @@ test('a title given in another view shows in this one', async () => {
   const f = await fixture({ conversationRead: async params => ({ success: true, result: { conversation: { ...chat(params.conversationId), title: 'Renamed elsewhere' }, journal: { events: [], cursor: 0, more: false } } }) }, { ab_panel_conversation: 'b' });
   await settle();
   assert.equal(f.nodes.get('conversationTitle').textContent, 'Renamed elsewhere');
+  f.panel.close();
+});
+
+// ---- Slash completion anywhere in the text (0.5.63) ----------------------------
+
+test('the `/word` at the caret is found after whitespace, not inside other words', () => {
+  assert.deepEqual(slashQuery('/prof'), { query: 'prof', start: 0, end: 5 });
+  assert.deepEqual(slashQuery('所有信息在 /profile'), { query: 'profile', start: 6, end: 14 });
+  assert.deepEqual(slashQuery('use /'), { query: '', start: 4, end: 5 });
+  assert.equal(slashQuery('see a/b'), null);
+  assert.equal(slashQuery('https://x.example/pa'), null);
+  assert.equal(slashQuery('/prof then more'), null, 'the caret is past the word');
+  assert.deepEqual(slashQuery('/prof then more', 3), { query: 'pr', start: 0, end: 3 });
+});
+
+test('a skill completes in the middle of a message, by keyboard, and is used when sent', async () => {
+  const skills = [
+    { id: 'p', name: 'profile-use', source: 'user', description: 'Profile', enabled: true },
+    { id: 'm', name: 'mail-use', source: 'user', description: 'Mail', enabled: true },
+  ];
+  const f = await fixture({ status: () => ({ connected: true, agentPanel: { ...fullSupport, skillLibrary: true } }), skillList: async () => ({ success: true, result: { skills } }),
+    conversationSkillSelect: async params => ({ success: true, result: { skill: { id: `snap-${params.skillId}`, name: 'x' } } }),
+    conversationSend: async params => ({ success: true, result: { conversation: chat('b'), message: { id: params.messageId, accepted: true, replayed: false } } }) }, { ab_panel_conversation: 'b' });
+  await settle();
+  const message = f.nodes.get('message'), picker = f.nodes.get('skillPicker');
+  message.value = '所有信息在 /us'; message.fire('input');
+  assert.equal(picker.hidden, false);
+  assert.deepEqual(picker.children.map(node => node.textContent.split(' · ')[0]), ['profile-use', 'mail-use']);
+  message.fire('keydown', { key: 'ArrowDown' }); message.fire('keydown', { key: 'ArrowUp' });
+  message.fire('keydown', { key: 'Tab' });
+  assert.equal(message.value, '所有信息在 /profile-use ');
+  assert.equal(picker.hidden, true);
+  // Esc closes the list without changing the text.
+  message.value = '所有信息在 /profile-use 和 /ma'; message.fire('input');
+  assert.equal(picker.hidden, false);
+  message.fire('keydown', { key: 'Escape' });
+  assert.equal(picker.hidden, true);
+  assert.equal(message.value, '所有信息在 /profile-use 和 /ma');
+  // Enter picks while the list is open, and does not send.
+  message.fire('input'); message.fire('keydown', { key: 'Enter' });
+  assert.equal(message.value, '所有信息在 /profile-use 和 /mail-use ');
+  assert.equal(f.calls.filter(c => c.operation === 'conversationSend').length, 0);
+  // Sent: the skill picked last is the one used; other `/words` stay text.
+  message.value = '所有信息在 /profile-use, see /usr/bin'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.deepEqual(f.calls.filter(c => c.operation === 'conversationSkillSelect').map(c => c.params.skillId), ['p']);
+  assert.equal(f.calls.find(c => c.operation === 'conversationSend').params.skillId, 'snap-p');
+  f.panel.close();
+});
+
+test('an unknown `/word` in the middle of a message is plain text, at the start it is refused', async () => {
+  const f = await fixture({ status: () => ({ connected: true, agentPanel: { ...fullSupport, skillLibrary: true } }), skillList: async () => ({ success: true, result: { skills: [] } }),
+    conversationSend: async params => ({ success: true, result: { conversation: chat('b'), message: { id: params.messageId, accepted: true, replayed: false } } }) }, { ab_panel_conversation: 'b' });
+  await settle();
+  f.nodes.get('message').value = 'open /etc/hosts please'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(f.calls.find(c => c.operation === 'conversationSend').params.skillId, undefined);
+  f.nodes.get('message').value = '/nothing here'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(f.nodes.get('notice').textContent, en.panel_skill_unknown.message);
+  assert.equal(f.calls.filter(c => c.operation === 'conversationSend').length, 1);
   f.panel.close();
 });
