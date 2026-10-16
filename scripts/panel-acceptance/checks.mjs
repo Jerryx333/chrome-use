@@ -189,20 +189,24 @@ export const checks = [
         want(ev.controlChanges.find(c => c.to === 'stopped')?.sequence > exited?.sequence, 'control becomes stopped only after exited');
         // Release build, part 2: the leader exits on Stop while its child
         // runs. The service still kills the group before reaping the leader,
-        // so the child is gone and the exit is confirmed.
+        // so the child is gone and nothing is left unconfirmed.
         const d = await stuck('deadLeader', { exitOnInterrupt: true });
-        // The fixture may confirm the interrupt before it exits, so the turn
-        // can end before the process does: wait for both.
         await h.turnEnd(d.conv.id, d.messageId, 40000);
-        const de = await h.waitFor(async () => { const e = await h.events(d.conv.id); return e.some(x => ['exited', 'processUnconfirmed'].includes(x.kind)) ? e : null; }, { timeout: 40000, label: 'deadLeader process end' });
-        const dr = ev.deadLeader = {};
+        // The fixture may confirm the interrupt before it exits; the turn then
+        // ends first, the generation retires and its exit is not journaled.
+        // Wait for the group itself instead.
+        const pgid = h.kinds(await h.events(d.conv.id), 'ready').at(-1)?.data.pgid;
+        const groupGone = () => { try { process.kill(-pgid, 0); return false; } catch (e) { return e.code === 'ESRCH'; } };
+        const dr = ev.deadLeader = { pgid };
+        dr.groupGone = !!pgid && await h.waitFor(async () => !alive(d.child) && groupGone(), { timeout: 20000, label: 'deadLeader group gone' }).catch(() => false);
+        dr.childAlive = alive(d.child);
+        const de = await h.events(d.conv.id);
         dr.exited = h.kinds(de, 'exited').at(-1)?.data;
         dr.processUnconfirmed = h.kinds(de, 'processUnconfirmed').length;
-        dr.childAlive = alive(d.child);
         const ds = (await h.journal(d.conv.id)).conversation;
         dr.control = ds.control; dr.phase = ds.phase;
-        want(dr.exited?.processExitConfirmed === true && dr.processUnconfirmed === 0, 'deadLeader: the exit is confirmed');
-        want(dr.childAlive === false, 'deadLeader: the child of the exited leader is gone');
+        want(dr.groupGone && dr.childAlive === false, 'deadLeader: the child of the exited leader and its group are gone');
+        want(dr.processUnconfirmed === 0 && (!dr.exited || dr.exited.processExitConfirmed === true), 'deadLeader: no unconfirmed exit');
         want(ds.control === 'stopped', 'deadLeader: control is stopped');
         if (dr.childAlive) { try { process.kill(d.child, 'SIGKILL'); } catch {} }
         if (failures.length) throw new Error(failures.join('; '));
