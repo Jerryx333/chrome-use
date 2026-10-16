@@ -201,9 +201,9 @@ test('a key Chrome has no text for falls back to the bundled English, never the 
     assert.equal(t('panel_access_full'), en.panel_access_full.message);
     assert.equal(t('panel_grant_active', 'Cart', 'https://shop.example'), 'The agent can use your tab: Cart · https://shop.example');
     assert.equal(expandMessage({ message: 'a $$ b $X$', placeholders: { x: { content: '$1' } } }, ['1']), 'a $ b 1');
-    const element = { getAttribute: () => 'sidepanel_send', textContent: 'Send?' };
+    const element = { getAttribute: () => 'sidepanel_message_keys', textContent: 'Keys?' };
     applyI18n({ documentElement: {}, querySelectorAll: selector => selector === '[data-i18n]' ? [element] : [] });
-    assert.equal(element.textContent, en.sidepanel_send.message);
+    assert.equal(element.textContent, en.sidepanel_message_keys.message);
     // Real Chrome text still wins.
     globalThis.chrome.i18n = { getMessage: key => key === 'panel_access_full' ? 'Chrome text' : '' };
     assert.equal(t('panel_access_full'), 'Chrome text');

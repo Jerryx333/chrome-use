@@ -1906,14 +1906,17 @@
   "panel_project_manual_hint": {
     "message": "This computer has no folder picker. Type the folder's full path."
   },
+  "panel_project_none_hint": {
+    "message": "The agent works in a private folder for this conversation. Choose a project folder to let it read and edit your project."
+  },
   "panel_project_other": {
-    "message": "Other…"
+    "message": "Choose a folder…"
   },
   "panel_project_pi": {
     "message": "Pi works in its private folder."
   },
   "panel_project_private": {
-    "message": "Private folder (default)"
+    "message": "No project folder"
   },
   "panel_project_remember": {
     "message": "Use this project for $SITE$ from now on?",
@@ -3033,9 +3036,6 @@
   },
   "sidepanel_scope_this_site": {
     "message": "This site"
-  },
-  "sidepanel_send": {
-    "message": "Send"
   },
   "sidepanel_send_message": {
     "message": "Send message"

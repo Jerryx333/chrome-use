@@ -53,6 +53,7 @@ const ops = {
     { id: 'lib:compare-plans', name: 'compare-plans', source: 'library', enabled: true, editable: true, description: 'Read every pricing tier on the page and return a comparison table with prices, limits and the cheapest fit.' },
     { id: 'lib:triage-inbox', name: 'triage-inbox', source: 'library', enabled: false, editable: true, description: 'Sort unread notifications into reply, read later and ignore.' },
     { id: 'codex:release-notes', name: 'release-notes', source: 'codex', enabled: true, editable: false, description: 'Draft release notes from merged pull requests.' }] }),
+  conversationProjectList: () => ({ projects: [{ path: '/Users/me/code/acme-site' }, { path: '/Users/me/code/billing-api' }] }),
   skillRead: () => ({ skill: { instructions: '---\nname: compare-plans\ndescription: Compare pricing tiers\n---\n\nRead every plan on the page and return a table.' } }),
   scheduleList: () => ({ schedules: [
     { id: 's1', name: 'Morning GitHub digest', enabled: true, agentId: 'claude', lastResult: 'completed', lastChat: 'c2', nextRun: now + 5 * 3600e3, rule: { kind: 'weekdays', time: '09:00' }, prompt: 'Summarize my GitHub notifications', options: {} },
@@ -63,7 +64,7 @@ const ops = {
   configPlan: () => ({ configuration: { agentId: 'codex', planId: 'p', files: [{ changes: [{ path: ['effort'], before: { value: 'high' }, after: { value: 'xhigh' } }] }] } }),
 }
 const status = { connected: true, tabCount: 3, agentPanel: { schemaVersion: 1, mode: 'full', chatAgents: ['codex', 'claude', 'opencode', 'pi'],
-  fullAccess: true, pageContext: true, modelInspection: true, conversationDelete: true, skillLibrary: q.get('lib') !== '0', schedules: q.get('lib') !== '0' } }
+  fullAccess: true, pageContext: true, modelInspection: true, conversationDelete: true, projectDirectory: 1, imageAttachments: true, recording: 1, skillLibrary: q.get('lib') !== '0', schedules: q.get('lib') !== '0' } }
 function reply(m) {
   if (m.type === 'ab-status') return status
   const f = ops[m.operation]
@@ -94,6 +95,7 @@ globalThis.chrome = {
 }
 if (q.has('agents')) setTimeout(() => document.getElementById('agentsTab').click(), 300)
 if (q.has('config')) setTimeout(() => document.querySelector('.agent-row button')?.click(), 700)
+if (q.has('proj')) setTimeout(() => { const s = document.getElementById('project'); s.value = '/Users/me/code/acme-site'; s.dispatchEvent(new Event('change')) }, 800)
 if (q.has('tab')) setTimeout(() => document.getElementById(`${q.get('tab')}SettingsTab`)?.click(), 500)
 if (q.has('edit')) setTimeout(() => [...document.querySelectorAll(q.get('tab') === 'skills' ? '#skillEntries button' : '#scheduleEntries button')].find(b => /Edit|编辑/.test(b.textContent))?.click(), 900)
 if (q.has('plan')) setTimeout(() => {

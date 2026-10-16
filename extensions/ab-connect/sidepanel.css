@@ -387,8 +387,12 @@ button.pill.danger-text { color:var(--error); border-color:transparent; backgrou
 .imported-message.assistant .content { white-space:normal; }
 .resume-picker .resume-head select { width:auto; max-width:40%; }
 /* The project folder: a chip when creating, a label once fixed. */
-.chip.project { max-width:170px; min-width:0; }
-.chip.project select { width:100%; text-overflow:ellipsis; color:var(--muted); }
+.chip.project { max-width:190px; min-width:0; display:inline-flex; align-items:center; gap:2px; padding-left:8px; border:1px dashed var(--line); border-radius:999px; color:var(--muted); }
+.chip.project:has(select[data-chosen="1"]) { border-style:solid; border-color:color-mix(in srgb, var(--accent) 45%, var(--line)); background:var(--accent-soft); color:var(--accent); }
+.chip.project svg { flex:none; }
+.chip.project select { width:100%; text-overflow:ellipsis; color:inherit; padding-left:2px; }
+.chip.project select:hover { background:transparent; }
+.chip.project:hover { border-color:var(--muted); }
 .project-path { color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; max-width:50%; }
 .project-host > div { margin:8px 12px 0; padding:8px 10px; border:1px solid var(--line); border-radius:10px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12px; }
 .project-host > div[hidden] { display:none; }

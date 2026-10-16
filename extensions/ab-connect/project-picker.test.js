@@ -4,7 +4,7 @@ import test from 'node:test';
 import { createProjectChoice, folderLabel, siteOf, PRIVATE } from './project-picker.js';
 
 class Node {
-  constructor(tag = 'div') { this.tag = tag; this.children = []; this.listeners = {}; this.textContent = ''; this.hidden = false; this.value = ''; this.title = ''; this.disabled = false; }
+  constructor(tag = 'div') { this.tag = tag; this.children = []; this.listeners = {}; this.textContent = ''; this.hidden = false; this.value = ''; this.title = ''; this.disabled = false; this.dataset = {}; }
   append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   addEventListener(type, listener) { this.listeners[type] = listener; }
@@ -43,7 +43,8 @@ test('a site\'s remembered project is preselected until the user picks another',
   assert.deepEqual(f.calls.find(([op]) => op === 'inspectProject')[1], { origin: 'http://localhost:3000', pagePath: '/app/settings' });
   assert.equal(f.choice.value(), '/work/site');
   assert.equal(f.select.children[0].value, PRIVATE, 'the private folder stays first');
-  assert.match(text(f.select), /Other…/);
+  assert.match(text(f.select), /Choose a folder…/);
+  assert.equal(f.select.dataset.chosen, '1', 'a project in use is shown as set');
   f.select.value = '/work/app'; f.select.fire('change');
   await f.choice.refresh(page);
   assert.equal(f.choice.value(), '/work/app', 'a refresh keeps the user\'s choice');
@@ -51,6 +52,7 @@ test('a site\'s remembered project is preselected until the user picks another',
   f.choice.setAgent('pi');
   assert.equal(f.choice.value(), PRIVATE);
   assert.equal(f.select.disabled, true);
+  assert.equal(f.select.dataset.chosen, '', 'Pi shows no project as set');
 });
 
 test('Other… opens the folder picker; a cancel keeps the previous choice; no picker asks for a path', async () => {

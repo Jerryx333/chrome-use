@@ -1906,14 +1906,17 @@
   "panel_project_manual_hint": {
     "message": "这台电脑没有文件夹选择器，请输入文件夹的完整路径。"
   },
+  "panel_project_none_hint": {
+    "message": "agent 在这个会话的私有文件夹里工作。选一个项目文件夹，它就能在你的项目里读写文件。"
+  },
   "panel_project_other": {
-    "message": "其他…"
+    "message": "选择文件夹…"
   },
   "panel_project_pi": {
     "message": "Pi 只能在私有文件夹中工作。"
   },
   "panel_project_private": {
-    "message": "私有文件夹（默认）"
+    "message": "不选工作目录"
   },
   "panel_project_remember": {
     "message": "以后在 $SITE$ 上都用这个项目吗？",
@@ -3033,9 +3036,6 @@
   },
   "sidepanel_scope_this_site": {
     "message": "本站"
-  },
-  "sidepanel_send": {
-    "message": "发送"
   },
   "sidepanel_send_message": {
     "message": "发送消息"

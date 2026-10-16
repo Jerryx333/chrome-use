@@ -72,7 +72,7 @@
         <div id="attachmentDrafts" class="attachment-images" hidden></div>
         <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" multiple hidden>
         <label class="sr-only" for="message" data-i18n="sidepanel_message_label">Message</label>
-        <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line" data-i18n-placeholder="sidepanel_message_placeholder" data-i18n-title="sidepanel_message_keys"></textarea>
+        <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" data-i18n-placeholder="sidepanel_message_placeholder"></textarea>
         <div class="composer-controls">
           <button id="attachImages" class="quiet" type="button" data-i18n="sidepanel_attach_images" hidden>Attach images</button>
           <span id="newOptions" class="new-options" aria-label="New conversation options" data-i18n-aria-label="sidepanel_new_conversation_options">
@@ -87,7 +87,7 @@
               </div>
             </details>
             <label class="chip"><span class="sr-only" data-i18n="sidepanel_agent">Agent</span><select id="agent"><option value="codex">Codex</option><option value="claude">Claude Code</option></select></label>
-            <label id="projectChip" class="chip project" hidden><span class="sr-only" data-i18n="panel_project_label">Project folder</span><select id="project"></select></label>
+            <label id="projectChip" class="chip project" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="sr-only" data-i18n="panel_project_label">Project folder</span><select id="project"></select></label>
           </span>
           <button id="access" class="access" type="button" hidden aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg><span id="accessLabel" data-i18n="sidepanel_full_access">Full access</span></button>
           <details id="turnOptions" class="more" hidden>
@@ -107,7 +107,7 @@
             <button id="resume" class="quiet" type="button" data-i18n="sidepanel_resume_queue" hidden>Resume queue</button>
             <button id="sendDirect" class="quiet" type="button" data-i18n="sidepanel_stop_and_send" hidden>Stop &amp; send</button>
             <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop" data-i18n-title="sidepanel_stop" data-i18n-aria-label="sidepanel_stop">■</button>
-            <button id="send" class="primary send" type="submit" title="Send" aria-label="Send message" data-i18n-title="sidepanel_send" data-i18n-aria-label="sidepanel_send_message">↑</button>
+            <button id="send" class="primary send" type="submit" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line" aria-label="Send message" data-i18n-title="sidepanel_message_keys" data-i18n-aria-label="sidepanel_send_message">↑</button>
           </span>
         </div>
       </div>
