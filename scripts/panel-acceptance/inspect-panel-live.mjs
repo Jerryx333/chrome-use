@@ -1,5 +1,5 @@
 // Live end-to-end check of Inspect & Ask → side-panel chat (ab-connect
-// 0.5.67) through the real picker, input frame and side panel (build host
+// 0.5.68) through the real picker, input frame and side panel (build host
 // only; one browser run per host at a time):
 //   HOST_BIN=<chrome-use> CHROME=<Chrome for Testing> EXT_DIR=<extension with host_permissions> node inspect-panel-live.mjs
 // The extension copy needs host_permissions in place of the activeTab grant

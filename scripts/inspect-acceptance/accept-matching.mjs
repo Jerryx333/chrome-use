@@ -64,7 +64,7 @@ results.chrome = b.version;
 const A = api(b);
 const sw = await A.worker();
 // These scenarios cover the terminal destination (ocs); the side-panel
-// destination, the default since 0.5.67, has its own live check.
+// destination, the default since 0.5.68, has its own live check.
 const terminalFor = tabId => `(async () => {
   let origin = null;
   for (let i = 0; i < 50 && !origin; i++) {

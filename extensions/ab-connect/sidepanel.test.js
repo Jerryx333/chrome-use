@@ -1196,7 +1196,7 @@ test('an update blocked by an older build names its conversations; Open finds on
   f.panel.close();
 });
 
-// ---- Inspect & Ask → side-panel chat (0.5.67) ---------------------------------
+// ---- Inspect & Ask → side-panel chat (0.5.68) ---------------------------------
 
 const pickedChip = (id, selector, extra = {}) => ({ id, documentId: 'd1', pageUrl: 'https://shop.example/21', label: `button "${id}"`, component: null, selector, frames: [], shadowHosts: [], foreignFrame: null, text: id, source: null, note: '', html: '', rect: null, image: null, stale: false, addedAt: 1, ...extra });
 
