@@ -376,6 +376,12 @@ button.pill.danger-text { color:var(--error); border-color:transparent; backgrou
 .resume-picker .hint { margin:0; font-size:11px; color:var(--muted); }
 .resume-item .badge { display:inline-block; margin-top:2px; margin-right:6px; font-size:10px; padding:1px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
 .resume-item .badge.running { border-color:var(--error); color:var(--error); }
+.resume-project { display:flex; align-items:center; gap:6px; width:100%; margin-top:6px; padding:4px 2px; border:0; background:none; color:inherit; font-size:12px; font-weight:600; text-align:left; cursor:pointer; }
+.resume-project .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.resume-project .caret, .resume-project .count { color:var(--muted); font-weight:400; font-size:11px; }
+.resume-project .badge { font-size:10px; font-weight:400; padding:1px 6px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+.resume-picker .resume-items .resume-item { padding-left:18px; }
+.resume-picker .resume-more { display:block; margin:0 0 4px 18px; font-size:11px; }
 .imported-history { margin:4px 0 10px; padding:8px 10px; border:1px dashed var(--line); border-radius:10px; }
 .imported-history > .hint { margin:0 0 4px; font-size:11px; color:var(--muted); }
 .imported-history summary { cursor:pointer; font-size:12px; color:var(--muted); }

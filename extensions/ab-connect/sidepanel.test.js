@@ -748,13 +748,13 @@ test('/resume is a built-in command: it opens the session picker instead of a sk
   f.nodes.get('message').value = '/resume login bug'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
   assert.equal(lists.length, 1);
   assert.equal(lists[0].query, 'login bug');
-  assert.equal(lists[0].limit, 50);
+  assert.equal(lists[0].limit, 100);
   assert.ok(!f.calls.some(c => ['conversationSkillSelect', 'conversationSend', 'conversationCreate'].includes(c.operation)));
   assert.equal(f.nodes.get('message').value, '', 'the command is consumed');
   const host = f.nodes.get('resumeHost');
   const rows = walk(host, n => typeof n.className === 'string' && n.className.split(' ').includes('resume-item'));
   assert.equal(rows.length, 2);
-  assert.match(textOf(rows[0]), /Session s1 Codex · project/);
+  assert.match(textOf(rows[0]), /Session s1/);
   assert.match(textOf(rows[1]), /Active elsewhere/);
   f.panel.close();
 });

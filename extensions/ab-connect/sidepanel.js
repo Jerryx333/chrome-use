@@ -127,6 +127,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     document, api, onError: error, relativeTime, schedule, cancel,
     agents: () => (panelSupport?.chatAgents || ['codex', 'claude']).filter(id => chatAgents.has(id)).map(id => ({ id, name: agentNames[id] })),
     preferredAgent: () => conversation?.agentId || nodes.agent.value || preferredAgent,
+    // The project this site remembered goes first.
+    preferredProject: () => projectChoice?.binding?.root || '',
     executable: agentId => agentId === nodes.agent.value ? nodes.executable.value.trim() : '',
     onResumed: async (resumed, existing, refused) => {
       await list(); rememberAgent(conversations.find(c => c.id === resumed.id)?.agentId || preferredAgent); select(resumed.id);

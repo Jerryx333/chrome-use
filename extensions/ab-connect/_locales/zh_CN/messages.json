@@ -2217,11 +2217,22 @@
   "panel_resume_open": {
     "message": "已在面板中"
   },
+  "panel_resume_other": {
+    "message": "其他"
+  },
   "panel_resume_ownership": {
     "message": "在这里继续会话后，请不要同时在终端里继续使用它。"
   },
   "panel_resume_project_refused": {
     "message": "该会话的文件夹 $FOLDER$ 是系统文件夹或主目录，所以这个会话改在私有文件夹中工作。",
+    "placeholders": {
+      "folder": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_project_toggle": {
+    "message": "显示或隐藏 $FOLDER$ 里的会话",
     "placeholders": {
       "folder": {
         "content": "$1"
@@ -2236,6 +2247,20 @@
   },
   "panel_resume_search": {
     "message": "搜索会话"
+  },
+  "panel_resume_show_less": {
+    "message": "收起"
+  },
+  "panel_resume_show_more": {
+    "message": "展开显示另外 $COUNT$ 个",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_site_project": {
+    "message": "本站"
   },
   "panel_resume_title": {
     "message": "继续已有会话"
