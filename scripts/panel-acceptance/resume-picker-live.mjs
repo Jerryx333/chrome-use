@@ -1,5 +1,5 @@
-// Live check of the grouped `/resume` picker (ab-connect 0.5.65, CLI
-// 1.5.225) through the real side panel (build host only; one browser run per
+// Live check of the grouped `/resume` picker (ab-connect 0.5.66, CLI
+// 1.5.227) through the real side panel (build host only; one browser run per
 // host at a time):
 //   HOST_BIN=<chrome-use> CHROME=<Chrome for Testing> EXT_DIR=<extension> node resume-picker-live.mjs
 // The isolated HOME's ~/.codex holds sessions shaped like a real one after
@@ -80,10 +80,6 @@ const rig = await startRig({ dir, work, hostBin: process.env.HOST_BIN, chrome: p
 evidence.chrome = rig.chromeVersion; evidence.extension = rig.extensionVersion;
 const A = rig.cdp, b = rig.browser;
 try {
-  // The site remembers app as its project.
-  const bound = await rig.service.call('inspectProjectBind', { origin: rig.site, pathScope: '/', root: app, replaces: null });
-  step('site bound to app', { binding: bound.binding });
-
   const site = await openTab(rig, rig.site + '/');
   const win = await rig.ev('chrome.windows.getLastFocused()');
   const opener = await A.openPage(`chrome-extension://${EXT_ID}/sidepanel.html?opener=1`);
@@ -99,7 +95,12 @@ try {
   failState = async () => { await shot('fail').catch(() => {}); evidence.failure = await panel(`({ notice: document.getElementById('notice').textContent, picker: document.querySelector('.resume-picker')?.innerText })`).catch(e => String(e)); };
   evidence.uiLanguage = await panel('chrome.i18n.getUILanguage()');
   await waitFor(() => panel(`document.getElementById('connection').classList.contains('ok') && document.getElementById('pageTitle')?.textContent.length > 0 && !document.getElementById('projectChip').hidden`), { timeout: 30000, label: 'panel connected with its project chip' });
-  // The site's project is known once the chip has loaded it.
+  // The site remembers app as its project (through the extension, as the
+  // panel's Remember does); a new conversation loads it into the chip.
+  const bound = await panel(`chrome.runtime.sendMessage({ type: 'ab-agent-request', operation: 'inspectProjectBind', params: { origin: ${JSON.stringify(rig.site)}, pathScope: '/', root: ${JSON.stringify(app)}, replaces: null } })`);
+  step('site bound to app', { bound });
+  check(bound?.success, 'the site binding was saved');
+  await panel(`document.getElementById('newChat').click()`);
   await waitFor(() => panel(`document.getElementById('project').value === ${JSON.stringify(app)}`), { timeout: 20000, label: 'site project preselected' });
 
   // 1. /resume, grouped.
