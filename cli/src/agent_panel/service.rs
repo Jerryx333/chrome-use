@@ -4475,7 +4475,11 @@ mod schedule_tests {
         );
         // A folder that no longer exists is listed as recorded.
         let gone = tempfile::tempdir().unwrap();
-        claude_session(gone.path(), &gone.path().join("removed"), Duration::from_secs(3600));
+        claude_session(
+            gone.path(),
+            &gone.path().join("removed"),
+            Duration::from_secs(3600),
+        );
         let listed = dispatch(
             &resume_engine(gone.path()),
             "conversationSessionList",
@@ -4483,7 +4487,10 @@ mod schedule_tests {
         )
         .await
         .unwrap();
-        assert_eq!(listed["sessions"][0]["cwd"], json!(gone.path().join("removed")));
+        assert_eq!(
+            listed["sessions"][0]["cwd"],
+            json!(gone.path().join("removed"))
+        );
         let resumed = dispatch(
             &engine,
             "conversationResume",
