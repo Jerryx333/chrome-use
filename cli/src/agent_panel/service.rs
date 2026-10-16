@@ -954,8 +954,12 @@ impl Engine {
                 grant.validate_grant()?;
                 // Like a message's page, the agent and the journal get the
                 // URL without credentials or token parameters.
+                // A title may repeat the URL (a page without one) or carry a
+                // token of its own; both are masked.
+                let url = redact::url(&grant.url);
                 let grant = PageContext {
-                    url: redact::url(&grant.url),
+                    title: redact::text_for_compare(&grant.title.replace(&grant.url, &url)),
+                    url,
                     ..grant
                 };
                 let changed = self
@@ -4146,6 +4150,20 @@ mod schedule_tests {
         let held = engine.lock().await.tab_grants[&id].clone();
         assert!(!held.url.contains("SYNTH_GRANT_TOKEN") && held.url.contains("access_token="));
         assert!(!held.grant_preface().contains("SYNTH_GRANT_TOKEN"));
+        // A title that is the URL itself is masked the same way.
+        let untitled = json!({"tabId":7,"url":"https://shop.example/cart?access_token=SYNTH_TITLE_TOKEN","title":"https://shop.example/cart?access_token=SYNTH_TITLE_TOKEN"});
+        dispatch(
+            &engine,
+            "conversationTabGrant",
+            &json!({"conversationId":id,"grant":untitled}),
+        )
+        .await
+        .unwrap();
+        let held = engine.lock().await.tab_grants[&id].clone();
+        assert!(
+            !held.title.contains("SYNTH_TITLE_TOKEN")
+                && !held.grant_preface().contains("SYNTH_TITLE_TOKEN")
+        );
         let journal = dispatch(
             &engine,
             "conversationRead",

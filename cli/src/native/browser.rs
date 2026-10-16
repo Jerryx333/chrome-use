@@ -7977,7 +7977,11 @@ impl BrowserManager {
         };
         let ok = self
             .client
-            .send_command_typed::<_, Value>("ABRelay.setGroup", &json!({ "group": group }), None)
+            .send_command_typed::<_, Value>(
+                "ABRelay.setGroup",
+                &json!({ "group": group, "session": self.session_name() }),
+                None,
+            )
             .await
             .is_ok();
         self.relay_scoped = ok;

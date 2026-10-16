@@ -67,6 +67,12 @@ pub struct RelayState {
     /// daemon) is absent here and gets the full, UNSCOPED target list — so this
     /// is fully backward-compatible.
     client_groups: HashMap<ClientId, String>,
+    /// clientId -> the daemon's own session name (`AGENT_BROWSER_SESSION`),
+    /// announced with its group. Forwarded with each command as
+    /// `agentSession`, so the extension can keep a tab the user lent to one
+    /// panel conversation away from every other session. The group is a
+    /// display title and can change; the session name cannot.
+    client_sessions: HashMap<ClientId, String>,
     /// targetId -> group name. Created and duplicated tabs are tagged from the
     /// command's `agentGroup`; an explicitly adopted tab is tagged to the adopter;
     /// a pop-up inherits its opener's group.
@@ -202,6 +208,7 @@ impl RelayState {
         }
         self.pending.retain(|_, (cid, _)| *cid != client_id);
         self.client_groups.remove(&client_id);
+        self.client_sessions.remove(&client_id);
     }
 
     /// Route a raw CDP command `{id, method, params?, sessionId?}` from a
@@ -236,6 +243,11 @@ impl RelayState {
                 if let Some(g) = params.get("group").and_then(|g| g.as_str()) {
                     if !g.is_empty() {
                         self.client_groups.insert(client_id, g.to_string());
+                    }
+                }
+                if let Some(s) = params.get("session").and_then(|s| s.as_str()) {
+                    if !s.is_empty() {
+                        self.client_sessions.insert(client_id, s.to_string());
                     }
                 }
                 ClientRoute::Local(json!({ "id": id, "result": {} }))
@@ -333,11 +345,15 @@ impl RelayState {
                         }
                     }
                 }
-                ClientRoute::Forward(json!({
+                let mut forward = json!({
                     "id": gid,
                     "method": "forwardCDPCommand",
                     "params": { "method": method, "params": params, "sessionId": session_id },
-                }))
+                });
+                if let Some(session) = self.client_sessions.get(&client_id) {
+                    forward["params"]["agentSession"] = json!(session);
+                }
+                ClientRoute::Forward(forward)
             }
         }
     }
@@ -1111,6 +1127,34 @@ mod tests {
                     "targetId": tid, "type": "page", "url": "about:blank", "attached": true } } } }),
             "",
         );
+    }
+
+    #[test]
+    fn commands_carry_the_session_their_daemon_announced() {
+        let mut s = RelayState::new();
+        s.route_client_command(
+            1,
+            &json!({ "id": 1, "method": "ABRelay.setGroup", "params": { "group": "Orders", "session": "panel-c1" } }),
+        );
+        s.route_client_command(
+            2,
+            &json!({ "id": 1, "method": "ABRelay.setGroup", "params": { "group": "agent-b" } }),
+        );
+        let forwarded = |s: &mut RelayState, client| {
+            match s.route_client_command(
+            client,
+            &json!({ "id": 9, "method": "Runtime.evaluate", "sessionId": "cb-tab-7", "params": {} }),
+        ) {
+            ClientRoute::Forward(env) => env,
+            _ => panic!("must forward"),
+        }
+        };
+        assert_eq!(forwarded(&mut s, 1)["params"]["agentSession"], "panel-c1");
+        // A daemon that names no session (an older build) is forwarded without one.
+        assert!(forwarded(&mut s, 2)["params"].get("agentSession").is_none());
+        assert!(forwarded(&mut s, 3)["params"].get("agentSession").is_none());
+        s.drop_client(1);
+        assert!(forwarded(&mut s, 1)["params"].get("agentSession").is_none());
     }
 
     #[test]

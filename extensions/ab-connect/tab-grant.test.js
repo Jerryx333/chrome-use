@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTabGrants, grantRefusal, originOf, GRANTS_KEY, TAKEN_BACK } from './tab-grant.js';
+import { createTabGrants, grantRefusal, originOf, sessionFor, GRANTS_KEY, LENT_ELSEWHERE, TAKEN_BACK } from './tab-grant.js';
 
 function memory(initial = {}) {
   const data = { ...initial };
@@ -71,4 +71,46 @@ test('a grant follows a replaced tab and keeps its page up to date', async () =>
   assert.equal(grants.isRefused(40), false);
   const closed = await grants.removed(41);
   assert.equal(closed, null);
+});
+
+test('a grant names the one relay session that may use the tab', async () => {
+  const grants = createTabGrants({ storage: memory() });
+  assert.equal(sessionFor('c1'), 'panel-c1');
+  await grants.grant(tab(7), { conversationId: 'A' });
+  assert.equal(grants.refusal(7, 'panel-A'), null);
+  for (const other of ['panel-B', 'default', '', undefined]) assert.equal(grants.refusal(7, other), LENT_ELSEWHERE);
+  assert.equal(grants.refusal(8, 'anything'), null);
+  await grants.revoke(7);
+  assert.equal(grants.refusal(7, 'panel-A'), TAKEN_BACK);
+  // Lent again to B: A's session is refused, not let back in.
+  await grants.grant(tab(7), { conversationId: 'B' });
+  assert.equal(grants.refusal(7, 'panel-A'), LENT_ELSEWHERE);
+  assert.equal(grants.refusal(7, 'panel-B'), null);
+});
+
+test('a grant the service refused is undone exactly', async () => {
+  const grants = createTabGrants({ storage: memory() });
+  await grants.grant(tab(7), { conversationId: 'A' });
+  await grants.revoke(7);
+  const again = await grants.grant(tab(7), { conversationId: 'A' });
+  assert.equal(again.wasRefused, true);
+  await grants.rollback(7, again);
+  assert.equal(grants.get(7), null);
+  assert.equal(grants.isRefused(7), true, 'the take-back protection is back');
+  // An earlier tab of the conversation is lent again.
+  await grants.grant(tab(9), { conversationId: 'C' });
+  const moved = await grants.grant(tab(10), { conversationId: 'C' });
+  assert.equal(moved.replaced.tabId, 9);
+  assert.equal(grants.isRefused(9), true);
+  await grants.rollback(10, moved);
+  assert.equal(grants.get(9).conversationId, 'C');
+  assert.equal(grants.isRefused(9), false);
+  assert.equal(grants.get(10), null);
+  assert.equal(grants.isRefused(10), false);
+});
+
+test('an untitled tab keeps an empty title, never its raw URL', async () => {
+  const grants = createTabGrants({ storage: memory() });
+  const { grant } = await grants.grant({ id: 3, url: 'https://shop.example/?access_token=SECRET' }, { conversationId: 'A' });
+  assert.equal(grant.title, '');
 });

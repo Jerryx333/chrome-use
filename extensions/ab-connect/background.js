@@ -743,18 +743,21 @@ async function lendTab({ tabId, conversationId, conversationTitle }) {
   await loadOwnedTabs();
   await loadAgentPopups();
   if (ownedTabs.has(tabId) || agentPopups.has(tabId)) throw Object.assign(new Error('This tab is already the agent\'s'), { reason: 'agentTab' });
-  const { grant, replaced } = await tabGrants.grant(tab, { conversationId, conversationTitle });
-  if (replaced) await takeBackTab(replaced.tabId, { tellService: false });
+  const { grant, replaced, wasRefused } = await tabGrants.grant(tab, { conversationId, conversationTitle });
   showGrantIndicator(tabId);
+  if (replaced) showGrantIndicator(replaced.tabId);
   publishTabGrants();
   const service = await tellServiceGrant(conversationId, grant);
-  // A service that cannot hold the grant would run turns without it.
+  // A service that cannot hold the grant would run turns without it. Undo it
+  // exactly: a tab taken back before stays refused, an earlier tab stays lent.
   if (service?.granted !== true) {
-    await tabGrants.removed(tabId);
+    await tabGrants.rollback(tabId, { wasRefused, replaced });
     showGrantIndicator(tabId);
+    if (replaced) showGrantIndicator(replaced.tabId);
     publishTabGrants();
     throw Object.assign(new Error(service?.error || t('bg_grant_service_unavailable')), { reason: 'service' });
   }
+  if (replaced) await takeBackTab(replaced.tabId, { tellService: false });
   return { grant, service };
 }
 
@@ -1223,10 +1226,30 @@ function anyConnectedTab() {
   return it.done ? null : it.value;
 }
 
+// Refuse a command on a tab the user took back, or on a lent tab from any
+// relay session but the one of the conversation it was lent to. Synchronous
+// (tabGrants is loaded first), so it can run again right before each step.
+function guardTab(tabId, agentSession) {
+  if (tabId == null) return;
+  const refusal = tabGrants.refusal(tabId, agentSession);
+  if (refusal) throw new Error(refusal);
+}
+
+// Read-only reports about tabs; they name a tab without acting on it.
+const TAB_READS = new Set(['ABExt.inspectTab', 'ABExt.tabPresence', 'ABExt.state', 'ABExt.attachedTargets', 'ABExt.userTabMetadata']);
+
 async function handleForwardCdpCommand(msg) {
   const method = String(msg?.params?.method || '');
   const params = msg?.params?.params || undefined;
   const sessionId = typeof msg?.params?.sessionId === 'string' ? msg.params.sessionId : undefined;
+  // The relay session that sent this (CLI 1.5.221+), for lent tabs.
+  const agentSession = typeof msg?.params?.agentSession === 'string' ? msg.params.agentSession : '';
+  await tabGrants.load();
+  if (!TAB_READS.has(method)) {
+    if (sessionId) guardTab(resolveSessionTab(sessionId, sessionToTab, childSessionToTab), agentSession);
+    for (const key of ['targetId', 'sourceTargetId']) if (typeof params?.[key] === 'string') guardTab(tabForTarget(params[key]), agentSession);
+    if (Number.isInteger(params?.chromeTabId)) guardTab(params.chromeTabId, agentSession);
+  }
 
   // Non-CDP extension commands (ABExt.*) the daemon sends. `ungroupTab` removes a
   // tab from its per-session tab group so a `keep`-marked tab is left for the user
@@ -1388,6 +1411,7 @@ async function handleForwardCdpCommand(msg) {
         profileEmail: extra.profileEmail || null,
       };
     }
+    guardTab(match.id, agentSession);
     const entry = await attachTab(match.id); // attaches + announces attachedToTarget
     // Do NOT markOwned: an adopted tab is the USER'S — attach it for this session,
     // but never persist it into the re-attach set. Persisting would re-attach the
@@ -1597,8 +1621,7 @@ async function handleForwardCdpCommand(msg) {
       (typeof params?.targetId === 'string' ? tabForTarget(params.targetId) : null) ??
       anyConnectedTab();
     if (tabId == null) throw new Error('no attached tab for ABExt.batchCommands');
-    await tabGrants.load();
-    if (tabGrants.isRefused(tabId)) throw new Error(TAKEN_BACK);
+    guardTab(tabId, agentSession);
     const childSid =
       sessionId && tabIdFromSession(sessionId) == null && childSessionToTab.has(sessionId)
         ? sessionId
@@ -1610,7 +1633,8 @@ async function handleForwardCdpCommand(msg) {
       const cmd = commands[i];
       if (!cmd || typeof cmd.method !== 'string') continue;
       try {
-        const res = await dispatchToTab(tabId, cmd.method, cmd.params, childSid);
+        // Each step: the user may take the tab back while the batch runs.
+        const res = await dispatchToTab(tabId, cmd.method, cmd.params, childSid, agentSession);
         results.push({ index: i, method: cmd.method, success: true, result: res });
       } catch (err) {
         results.push({
@@ -1700,8 +1724,7 @@ async function handleForwardCdpCommand(msg) {
     if (tabId == null) {
       throw new Error(`unknown sessionId ${sessionId} for ${method}`);
     }
-    await tabGrants.load();
-    if (tabGrants.isRefused(tabId)) throw new Error(TAKEN_BACK);
+    guardTab(tabId, agentSession);
     if (!tabs.has(tabId)) {
       const recovered = await recoverSessionTab(sessionId);
       if (!recovered) {
@@ -1764,7 +1787,7 @@ async function handleForwardCdpCommand(msg) {
     if (!childSid) rememberReplayable(entry, method, params);
   }
   try {
-    return await dispatchToTab(tabId, method, params, childSid);
+    return await dispatchToTab(tabId, method, params, childSid, agentSession);
   } finally {
     if (entry) {
       entry.inflight = Math.max(0, entry.inflight - 1);
@@ -1773,7 +1796,10 @@ async function handleForwardCdpCommand(msg) {
   }
 }
 
-async function dispatchToTab(tabId, method, params, childSid) {
+async function dispatchToTab(tabId, method, params, childSid, agentSession = '') {
+  // Again here: recovery and earlier steps awaited Chrome, and the tab may
+  // have been taken back meanwhile.
+  guardTab(tabId, agentSession);
   // Re-enabling Runtime can leave a stale state; bounce it (matches upstream).
   if (method === 'Runtime.enable') {
     try {
@@ -1787,8 +1813,10 @@ async function dispatchToTab(tabId, method, params, childSid) {
   if (canUseBrowserNavigationFallback(method, params, childSid)) {
     return await navigateTabWithBrowserFallback(params, {
       navigateWithDebugger: () => sendCdpToTab(tabId, method, params),
-      updateTab: (url) =>
-        withRelayTimeout(chrome.tabs.update(tabId, { url }), 'chrome.tabs.update(Page.navigate)'),
+      updateTab: (url) => {
+        guardTab(tabId, agentSession);
+        return withRelayTimeout(chrome.tabs.update(tabId, { url }), 'chrome.tabs.update(Page.navigate)');
+      },
     });
   }
   return await sendCdpToTab(tabId, method, params, childSid);

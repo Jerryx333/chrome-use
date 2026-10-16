@@ -15,6 +15,14 @@ export const TAKEN_BACK = 'The user took this tab back from the agent in the chr
 
 export const LENT_TAB_CLOSE = 'This is the user\'s own tab, lent to the agent from the chrome-use side panel; the agent cannot close it. Leave it open.';
 
+// A lent tab belongs to one conversation's relay session: the daemon of a
+// panel conversation runs as AGENT_BROWSER_SESSION=panel-<conversation id> and
+// the relay forwards that name with each command (`agentSession`). Any other
+// session, a terminal one included, is refused.
+export const LENT_ELSEWHERE = 'The user lent this tab to another chrome-use side panel conversation; this session cannot use it. Continue in your own tab.';
+
+export function sessionFor(conversationId) { return `panel-${conversationId}`; }
+
 /** Why a page cannot be lent to the agent: 'notWeb', 'webStore', or null. */
 export function grantRefusal(url) {
   let parsed;
@@ -52,8 +60,18 @@ export function createTabGrants({ storage, now = () => Date.now() }) {
     list() { return [...grants.values()]; },
     forConversation(conversationId) { return [...grants.values()].find(grant => grant.conversationId === conversationId) || null; },
     isRefused(tabId) { return refused.has(tabId); },
-    /** Lend `tab` to a conversation. Returns { grant, replaced } where
-     *  `replaced` is the conversation's earlier tab, now taken back. */
+    /** The refusal for `agentSession` acting on `tabId`, or null. Synchronous:
+     *  call load() first. */
+    refusal(tabId, agentSession) {
+      if (refused.has(tabId)) return TAKEN_BACK;
+      const grant = grants.get(tabId);
+      if (grant && agentSession !== sessionFor(grant.conversationId)) return LENT_ELSEWHERE;
+      return null;
+    },
+    /** Lend `tab` to a conversation. Returns { grant, replaced, wasRefused }:
+     *  `replaced` is the conversation's earlier tab, now taken back, and
+     *  `wasRefused` whether this tab had been taken back before. Until the
+     *  caller confirms the grant, rollback() undoes it exactly. */
     async grant(tab, { conversationId, conversationTitle = '' }) {
       await this.load();
       if (!Number.isInteger(tab?.id)) throw new Error('No such tab');
@@ -69,11 +87,22 @@ export function createTabGrants({ storage, now = () => Date.now() }) {
         refused.add(previous.tabId);
         replaced = previous;
       }
-      const grant = { tabId: tab.id, conversationId, conversationTitle: String(conversationTitle).slice(0, 200), url: String(tab.url).slice(0, 8192), title: String(tab.title || tab.url).slice(0, 1024), at: now() };
+      // No fallback to the URL: a title is shown and sent as it is, a URL
+      // only after the service redacted it.
+      const grant = { tabId: tab.id, conversationId, conversationTitle: String(conversationTitle).slice(0, 200), url: String(tab.url).slice(0, 8192), title: String(tab.title || '').slice(0, 1024), at: now() };
+      const wasRefused = refused.delete(tab.id);
       grants.set(tab.id, grant);
-      refused.delete(tab.id);
       await save();
-      return { grant, replaced };
+      return { grant, replaced, wasRefused };
+    },
+    /** Undo a grant the service did not accept: the tab is refused again if
+     *  it was, and the conversation's earlier tab is lent again. */
+    async rollback(tabId, { wasRefused = false, replaced = null } = {}) {
+      await this.load();
+      grants.delete(tabId);
+      if (wasRefused) refused.add(tabId);
+      if (replaced) { grants.set(replaced.tabId, replaced); refused.delete(replaced.tabId); }
+      await save();
     },
     /** Take a tab back. Returns the grant it ended, or null. */
     async revoke(tabId) {
@@ -112,7 +141,7 @@ export function createTabGrants({ storage, now = () => Date.now() }) {
       const grant = grants.get(tabId);
       if (!grant || (grant.url === url && (title === undefined || grant.title === title))) return null;
       if (typeof url === 'string' && url) grant.url = url.slice(0, 8192);
-      if (typeof title === 'string' && title) grant.title = title.slice(0, 1024);
+      if (typeof title === 'string') grant.title = title.slice(0, 1024);
       await save();
       return grant;
     },
