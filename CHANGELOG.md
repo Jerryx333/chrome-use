@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.225
+## 1.5.226
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.65 (no extension change).
+
+### Bug Fixes
+
+- **Stop always ends the agent's whole process group on macOS and Linux.** When an agent exited on Stop, its child processes were sometimes left running and the turn ended as "outcome unknown", and sometimes killed, depending on a few microseconds of timing. The service now ends the owned group every time, so Stop is deterministic and leaves no orphans (Windows already ended the whole job).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.225
+
 Works with extension ab-connect 0.5.65 (no CLI change; this release ships the redesigned settings view and folder chip). Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -13,7 +26,6 @@ Works with extension ab-connect 0.5.65 (no CLI change; this release ships the re
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.224
 

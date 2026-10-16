@@ -121,7 +121,7 @@ async function runTurn(text, emit, mcp, control) {
   log({ event: 'turn', scenario: scenario.name, conversation: mcp?.conversation });
   control.ignoreInterrupt = !!scenario.ignoreInterrupt;
   // exitOnInterrupt: the leader exits at once on Stop while children it
-  // spawned keep running in its process group (a dead leader, live group).
+  // spawned still run in its process group, which the service must end.
   if (scenario.exitOnInterrupt) setInterval(() => { if (control.interrupted) { log({ event: 'exitOnInterrupt' }); process.exit(0); } }, 50);
   const saved = control.saved;
   const inflight = new Set();

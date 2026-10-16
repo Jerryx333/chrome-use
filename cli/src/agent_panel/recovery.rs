@@ -1087,7 +1087,7 @@ mod tests {
             }
         }
 
-        /// The usual unconfirmed case: leader reaped, children keep the group.
+        /// An unconfirmed exit: leader reaped, children keep the group.
         fn orphaned_group() -> ProcessRecord {
             let record = session_group("sleep 60 & sleep 60 & exit 0");
             let pgid = record.pgid.unwrap();
