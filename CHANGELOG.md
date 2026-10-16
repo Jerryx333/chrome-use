@@ -1,8 +1,28 @@
 # Changelog
 
-## 1.5.222
+## 1.5.223
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.63 (the per-tab panel and working in your tab need it). Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **One side panel per tab.** Each tab has its own panel and conversation, and its own open or closed state. Switching tabs shows that tab's conversation, or no panel if you never opened one there; closing a tab keeps its conversation in history.
+- **The agent works in your tab.** A side-panel conversation lends the agent the tab it sits beside on the first message (AI badge, grant bar, "Take back the tab"), instead of opening its own window. Chrome and Web Store pages, a failed lend or a take-back fall back to the agent's own window, and the panel says so. "Agent works in: this tab / its own window" is in Options and per conversation. When the conversation's browser session restarts, it takes the lent tab back instead of opening a blank tab.
+- **Slash completion anywhere in the message,** including skills from enabled Claude Code plugins; ↑↓, Tab or Enter to choose, Esc to close.
+
+### Bug Fixes
+
+- **No raw text keys in the panel.** Text without a translation falls back to English.
+- **An update blocked by an old conversation** now offers Open and Stop it for each conversation that keeps the older build running.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.222
+
 Works with extension ab-connect 0.5.62 (no extension change).
 
 ### Bug Fixes
@@ -12,7 +32,6 @@ Works with extension ab-connect 0.5.62 (no extension change).
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.221
 
