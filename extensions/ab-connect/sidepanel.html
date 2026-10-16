@@ -17,7 +17,7 @@
       <button id="deleteChat" class="icon" type="button" title="Delete conversation" aria-label="Delete conversation" data-i18n-title="sidepanel_delete_conversation" data-i18n-aria-label="sidepanel_delete_conversation" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>
       <button id="openInTab" class="icon" type="button" title="Open in a tab" aria-label="Open in a tab" data-i18n-title="sidepanel_open_in_tab" data-i18n-aria-label="sidepanel_open_in_tab" hidden><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>
       <button id="refresh" class="icon" type="button" title="Refresh" aria-label="Refresh" data-i18n-title="sidepanel_refresh" data-i18n-aria-label="sidepanel_refresh"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></button>
-      <button id="agentsTab" class="icon" type="button" title="Agents &amp; models" aria-label="Agents and models" data-i18n-title="sidepanel_agents_and_models_title" data-i18n-aria-label="sidepanel_agents_and_models_label" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg></button>
+      <button id="agentsTab" class="icon" type="button" title="Agents &amp; models" aria-label="Agents and models" data-i18n-title="sidepanel_agents_and_models_title" data-i18n-aria-label="sidepanel_agents_and_models_label" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg></button>
     </header>
     <div id="conversationMenu" class="conversation-menu" hidden>
       <div class="scope" role="tablist" aria-label="Which conversations" data-i18n-aria-label="sidepanel_conversation_scope">
@@ -65,16 +65,18 @@
     </section>
     <form id="composer" class="composer">
       <div class="input-box">
+        <div class="context-row">
         <div id="pageChip" class="page-chip" hidden><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg><span id="pageLabel" class="page-label" data-i18n="sidepanel_page_from_window" hidden>Page:</span><span id="pageTitle"></span><label class="sr-only" for="pagePicker" data-i18n="sidepanel_page_picker">Which tab of this window</label><select id="pagePicker" hidden></select><button id="pageDetach" type="button" title="Don't send this page" aria-label="Don't send this page" data-i18n-title="sidepanel_page_detach" data-i18n-aria-label="sidepanel_page_detach">×</button></div>
         <button id="grantTab" class="grant-tab quiet" type="button" hidden>Let the agent use this tab</button>
-        <div id="workRow" class="work-row" hidden><label><span data-i18n="sidepanel_work_in">Agent works in</span><select id="workIn"><option value="tab" data-i18n="sidepanel_work_in_tab">This tab</option><option value="window" data-i18n="sidepanel_work_in_window">Its own window</option></select></label><span id="workNote" class="hint" hidden></span></div>
+        <div id="workRow" class="work-row" hidden><label class="work-chip" title="Agent works in" data-i18n-title="sidepanel_work_in"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg><span class="sr-only" data-i18n="sidepanel_work_in">Agent works in</span><select id="workIn"><option value="tab" data-i18n="sidepanel_work_in_tab">This tab</option><option value="window" data-i18n="sidepanel_work_in_window">Its own window</option></select></label><span id="workNote" class="hint" hidden></span></div>
+        </div>
         <div id="skillPicker" class="skill-picker" role="listbox" aria-label="Skills" data-i18n-aria-label="sidepanel_skills" hidden></div>
         <div id="attachmentDrafts" class="attachment-images" hidden></div>
         <input id="imageFiles" type="file" accept="image/png,image/jpeg,image/webp,image/heic,image/heif,.heic,.heif" multiple hidden>
         <label class="sr-only" for="message" data-i18n="sidepanel_message_label">Message</label>
         <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" data-i18n-placeholder="sidepanel_message_placeholder"></textarea>
         <div class="composer-controls">
-          <button id="attachImages" class="quiet" type="button" data-i18n="sidepanel_attach_images" hidden>Attach images</button>
+          <button id="attachImages" class="tool" type="button" title="Attach images" aria-label="Attach images" data-i18n-title="sidepanel_attach_images" data-i18n-aria-label="sidepanel_attach_images" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></button>
           <span id="newOptions" class="new-options" aria-label="New conversation options" data-i18n-aria-label="sidepanel_new_conversation_options">
             <details class="more">
               <summary title="More options" aria-label="More options" data-i18n-title="sidepanel_more_options" data-i18n-aria-label="sidepanel_more_options">＋</summary>
@@ -91,7 +93,7 @@
           </span>
           <button id="access" class="access" type="button" hidden aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg><span id="accessLabel" data-i18n="sidepanel_full_access">Full access</span></button>
           <details id="turnOptions" class="more" hidden>
-            <summary data-i18n="sidepanel_conversation_options">Conversation options</summary>
+            <summary title="Conversation options" aria-label="Conversation options" data-i18n-title="sidepanel_conversation_options" data-i18n-aria-label="sidepanel_conversation_options"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg></summary>
             <div class="more-body">
               <label><span data-i18n="sidepanel_allowed_tools">Allowed tools</span><select id="turnAccess"><option value="" data-i18n="sidepanel_follow_permission_switch">Follow permission switch</option></select></label>
               <label id="turnEffortLabel"><span data-i18n="sidepanel_reasoning_effort">Reasoning effort</span><select id="turnEffort"><option value="" data-i18n="sidepanel_cli_default">CLI default</option></select></label>
@@ -100,12 +102,12 @@
               <button id="saveTurnOptions" class="quiet" type="button" data-i18n="sidepanel_save_conversation_options">Save conversation options</button>
             </div>
           </details>
-          <label id="recordTaskLabel" class="chip record" title="Record the agent's browser tab for this message only. The recording stays on this computer." data-i18n-title="sidepanel_record_task_hint" hidden><input id="recordTask" type="checkbox"><span data-i18n="sidepanel_record_task">Record this task</span></label>
+          <label id="recordTaskLabel" class="chip record" title="Record the agent's browser tab for this message only. The recording stays on this computer." data-i18n-title="sidepanel_record_task_hint" hidden><input id="recordTask" class="sr-only" type="checkbox"><span class="record-dot" aria-hidden="true"></span><span data-i18n="sidepanel_record_task">Record this task</span></label>
           <span id="queue" class="hint"></span>
           <label id="modelChip" class="chip model"><span class="sr-only" data-i18n="sidepanel_model">Model</span><select id="model"><option value="" data-i18n="sidepanel_default_model">Default model</option></select></label>
           <span class="composer-send">
             <button id="resume" class="quiet" type="button" data-i18n="sidepanel_resume_queue" hidden>Resume queue</button>
-            <button id="sendDirect" class="quiet" type="button" data-i18n="sidepanel_stop_and_send" hidden>Stop &amp; send</button>
+            <button id="sendDirect" class="pill" type="button" data-i18n="sidepanel_stop_and_send" hidden>Stop &amp; send</button>
             <button id="stop" class="stop" type="button" disabled title="Stop" aria-label="Stop" data-i18n-title="sidepanel_stop" data-i18n-aria-label="sidepanel_stop">■</button>
             <button id="send" class="primary send" type="submit" title="Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line" aria-label="Send message" data-i18n-title="sidepanel_message_keys" data-i18n-aria-label="sidepanel_send_message">↑</button>
           </span>

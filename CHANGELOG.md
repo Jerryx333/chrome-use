@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.227
+## 1.5.228
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.67 (the new composer layout needs it; nothing changed in the CLI).
+
+### Improvements
+
+- **A tidier side panel composer.** The attached page and "Agent works in" sit on one row above the message as matching chips instead of two differently styled lines. Attach images and Conversation options are icon buttons, Full access, recording and Stop & send share one style, and recording is a dot toggle that turns red when on.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.227
+
 Works with extension ab-connect 0.5.66 (the grouped picker needs it; the session times are fixed for every extension).
 
 ### New Features
@@ -16,7 +29,6 @@ Works with extension ab-connect 0.5.66 (the grouped picker needs it; the session
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.226
 
