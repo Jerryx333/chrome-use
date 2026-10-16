@@ -57,7 +57,9 @@ export function createProjectChoice({ document, api, select, host, supported, ca
     select.value = current;
     const pi = agent === 'pi';
     select.disabled = pi;
-    select.title = pi ? t('panel_project_pi') : current ? current : t('panel_project_label');
+    select.title = pi ? t('panel_project_pi') : current ? current : t('panel_project_none_hint');
+    // A chosen project reads as set; no project reads as an open slot.
+    select.dataset.chosen = current && !pi ? '1' : '';
     if (binding && current === binding.root) select.title = t('panel_project_site_hint', siteName());
   }
   function siteName() { return binding?.pathScope && binding.pathScope !== '/' ? `${binding.origin}${binding.pathScope}` : site?.origin || ''; }

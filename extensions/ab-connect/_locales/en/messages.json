@@ -1906,14 +1906,17 @@
   "panel_project_manual_hint": {
     "message": "This computer has no folder picker. Type the folder's full path."
   },
+  "panel_project_none_hint": {
+    "message": "The agent works in a private folder for this conversation. Choose a project folder to let it read and edit your project."
+  },
   "panel_project_other": {
-    "message": "Other…"
+    "message": "Choose a folder…"
   },
   "panel_project_pi": {
     "message": "Pi works in its private folder."
   },
   "panel_project_private": {
-    "message": "Private folder (default)"
+    "message": "No project folder"
   },
   "panel_project_remember": {
     "message": "Use this project for $SITE$ from now on?",
@@ -2275,14 +2278,46 @@
   "panel_schedule_acknowledge": {
     "message": "Acknowledge unknown outcome"
   },
+  "panel_schedule_daily_at": {
+    "message": "Daily at $TIME$",
+    "placeholders": {
+      "time": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_schedule_delete": {
     "message": "Delete schedule"
   },
   "panel_schedule_disabled": {
     "message": "Disabled"
   },
+  "panel_schedule_editing": {
+    "message": "Edit “$NAME$”",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_schedule_enabled": {
     "message": "Enabled"
+  },
+  "panel_schedule_every": {
+    "message": "Every $MINUTES$ min",
+    "placeholders": {
+      "minutes": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_schedule_last": {
+    "message": "Last: $RESULT$",
+    "placeholders": {
+      "result": {
+        "content": "$1"
+      }
+    }
   },
   "panel_schedule_next": {
     "message": "Next: $TIME$",
@@ -2300,6 +2335,17 @@
   },
   "panel_schedule_run_now": {
     "message": "Run now"
+  },
+  "panel_schedule_weekdays_at": {
+    "message": "Weekdays at $TIME$",
+    "placeholders": {
+      "time": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_schedules_empty": {
+    "message": "No schedules yet. Add one to run a prompt on a timer."
   },
   "panel_scope_site": {
     "message": "This site"
@@ -2355,6 +2401,9 @@
   },
   "panel_skill_use": {
     "message": "Use"
+  },
+  "panel_skills_empty": {
+    "message": "No skills found for this agent."
   },
   "panel_speaker_assistant": {
     "message": "Assistant"
@@ -2721,8 +2770,8 @@
   "sidepanel_attach_images": {
     "message": "Attach images"
   },
-  "sidepanel_back": {
-    "message": "← Back"
+  "sidepanel_back_title": {
+    "message": "Back to the conversation"
   },
   "sidepanel_changes_to_apply": {
     "message": "Changes to apply"
@@ -2735,6 +2784,9 @@
   },
   "sidepanel_cli_default": {
     "message": "CLI default"
+  },
+  "sidepanel_close": {
+    "message": "Close"
   },
   "sidepanel_conversation_label": {
     "message": "Conversation"
@@ -2838,6 +2890,9 @@
   "sidepanel_local_agents": {
     "message": "Local agents"
   },
+  "sidepanel_local_agents_hint": {
+    "message": "Agent CLIs found on this computer. Configure edits the CLI's own settings."
+  },
   "sidepanel_message_keys": {
     "message": "Enter to send · Ctrl/⌘+Enter to stop and send · Shift+Enter for a new line"
   },
@@ -2940,6 +2995,9 @@
   "sidepanel_save_schedule": {
     "message": "Save schedule"
   },
+  "sidepanel_schedule_advanced": {
+    "message": "Model and tools"
+  },
   "sidepanel_schedule_automatic": {
     "message": "Allow permitted tools automatically"
   },
@@ -2979,9 +3037,6 @@
   "sidepanel_scope_this_site": {
     "message": "This site"
   },
-  "sidepanel_send": {
-    "message": "Send"
-  },
   "sidepanel_send_message": {
     "message": "Send message"
   },
@@ -2990,6 +3045,9 @@
   },
   "sidepanel_skill": {
     "message": "Skill"
+  },
+  "sidepanel_skill_editor": {
+    "message": "Write a library skill"
   },
   "sidepanel_skill_library": {
     "message": "Skill library"
