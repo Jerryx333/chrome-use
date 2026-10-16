@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.224
+## 1.5.225
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.65 (no CLI change; this release ships the redesigned settings view and folder chip). Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **A redesigned Agents & models view.** Agents, skills and schedules are card lists with status badges. Schedules show their cadence ("Weekdays at 09:00"), last result and next run, with Acknowledge highlighted when an outcome is unknown. An agent's configuration opens under its row instead of at the bottom of the page. The schedule and skill editors stay closed until New or Edit, model and tool options are folded away, and checkboxes are switches.
+- **The project folder is a visible chip in the composer.** "No project folder" until you choose one, then the folder's name; "Choose a folder…" opens the picker. The keyboard hint moved to the send button so it no longer covers these controls.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.224
+
 Works with extension ab-connect 0.5.64 (no CLI change; this release ships the extension's consent fixes).
 
 ### Bug Fixes
@@ -14,7 +28,6 @@ Works with extension ab-connect 0.5.64 (no CLI change; this release ships the ex
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.223
 
