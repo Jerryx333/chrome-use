@@ -453,7 +453,7 @@
     if (closed || !event.isTrusted || event.composedPath().includes(host)) return;
     if (event.key === 'Escape') {
       swallow(event);
-      if (mode === 'direct') { teardown('escape'); return; }
+      if (mode === 'direct') { stopDirect(); return; }
       if (picking && selected.length) { picking = false; hintVisible(false); showHover(null); return; }
       teardown('escape');
       return;
@@ -477,6 +477,14 @@
     ['click', onClick], ['auxclick', onClick], ['dblclick', onClick], ['contextmenu', onClick],
     ['keydown', onKey], ['scroll', onScroll], ['resize', onScroll],
   ];
+
+  // Esc while picking several: elements already picked keep their pending
+  // screenshots, so the picker stops picking and lets the background finish.
+  function stopDirect() {
+    if (!selected.length) { teardown('escape'); return; }
+    if (!finishing) finishDirect();
+    void send({ type: 'inspect:stop' }).catch(() => teardown('escape'));
+  }
 
   function detach() {
     for (const win of [window, ...frameWindows]) {
@@ -509,6 +517,11 @@
       requestAnimationFrame(() => requestAnimationFrame(answer));
       setTimeout(answer, 250);
       return true;
+    }
+    if (message.type === 'inspect:cancel' && mode === 'direct' && selected.length) {
+      if (!finishing) finishDirect();
+      sendResponse({ ok: true });
+      return false;
     }
     if (message.type === 'inspect:finish' || message.type === 'inspect:cancel') {
       // Let a confirmation flash finish before the overlay goes.

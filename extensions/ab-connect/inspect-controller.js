@@ -232,15 +232,25 @@ export class InspectController {
   }
 
   // The Pick button again, or Esc in the panel.
+  // Picking stops at once (the button and the page are released); the
+  // picker stays only until screenshots of elements already picked are in.
   async cancelDirect(tabId) {
     const instance = this.registry.get(tabId);
     if (instance?.mode === 'direct') {
-      void this.chrome.tabs.sendMessage(tabId, { type: 'inspect:cancel', instanceId: instance.id }, { frameId: 0 }).catch(() => {});
-      this.registry.revoke(instance, 'cancelled');
+      this.chrome.tabs.sendMessage(tabId, { type: 'inspect:cancel', instanceId: instance.id }, { frameId: 0 }).catch(() => this.registry.revoke(instance, 'cancelled'));
+      await this.stopDirect(instance);
     } else {
       await this.chrome.storage.session?.remove(inspectPickKey(tabId)).catch(() => {});
     }
     return { cancelled: true };
+  }
+
+  async stopDirect(instance) {
+    instance.final = true;
+    await this.chrome.storage.session?.remove(inspectPickKey(instance.tabId)).catch(() => {});
+    void (instance.captureChain || Promise.resolve()).then(() => {
+      if (!instance.revoked) return this.chrome.tabs.sendMessage(instance.tabId, { type: 'inspect:finish', instanceId: instance.id }, { frameId: 0, documentId: instance.topDocumentId });
+    }).catch(() => this.registry.revoke(instance, 'done'));
   }
 
   // A direct picker ended (pick done, Esc, cancel, navigation): the panel's
@@ -319,6 +329,11 @@ export class InspectController {
     if (type === 'inspect:selection') {
       void this.updateSelection(instance, message).then(sendResponse, error => sendResponse({ ok: false, error: String(error.message || error) }));
       return true;
+    }
+    if (type === 'inspect:stop' && instance.mode === 'direct') {
+      void this.stopDirect(instance);
+      sendResponse({ ok: true });
+      return false;
     }
     if (type === 'inspect:closed') {
       this.registry.revoke(instance, 'closed');

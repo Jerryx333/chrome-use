@@ -180,7 +180,8 @@ try {
   await shot(panel.sid, '08-panel-sent');
   step('sent', { selectors: items.map(c => c.selector), attachments: user?.data.attachments.length ?? 0 });
   for (const c of items) check(turn?.text.includes(c.selector), `the agent got ${c.selector}`);
-  check((user?.data.attachments.length ?? 0) === items.filter(c => c.image).length && items.some(c => c.image), 'the screenshots went with the message');
+  check(items.every(c => c.image), 'every picked element got its screenshot, Esc included');
+  check((user?.data.attachments.length ?? 0) === items.length, 'the screenshots went with the message');
 
   // 8. A chrome:// page.
   await rig.ev(`chrome.tabs.update(${X.tabId}, { url: 'chrome://version' })`);

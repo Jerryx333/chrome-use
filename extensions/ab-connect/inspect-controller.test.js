@@ -458,8 +458,11 @@ test('cancelling clears the active state and stops placeholders from waiting', a
   assert.equal(chrome.storage.session.data.ab_inspect_tab_7.items[0].pending.image, true);
   await controller.cancelDirect(7);
   await flush(); await flush(); await flush();
-  assert.equal(sent.at(-1).type, 'inspect:cancel');
-  assert.equal(chrome.storage.session.data.ab_inspect_pick_7, undefined);
+  assert.deepEqual(sent.map(m => m.type), ['inspect:cancel', 'inspect:finish'], 'picking stops; the picker leaves once captures are done');
+  assert.equal(chrome.storage.session.data.ab_inspect_pick_7, undefined, 'the button is released at once');
+  // The picker closes (finish): anything still waiting stops waiting.
+  controller.registry.revoke(instance, 'closed');
+  await flush(); await flush(); await flush();
   assert.deepEqual(chrome.storage.session.data.ab_inspect_tab_7.items[0].pending, { image: false, source: false });
 });
 
