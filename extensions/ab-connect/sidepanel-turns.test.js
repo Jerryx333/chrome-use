@@ -299,3 +299,95 @@ test('the v1.5.214 panel ignores imported history it does not know', async () =>
   assert.equal(byClass(f.transcript, 'imported-history').length, 0);
   f.panel.close();
 });
+
+test('messages sent while a turn runs stay in the queue area until their turn starts', async () => {
+  const busy = 'b0000000-0000-4000-8000-000000000000', ids = ['q1', 'q2', 'q3'].map((tag, i) => `${i + 1}${i + 1}000000-0000-4000-8000-00000000000${i}`);
+  const texts = ['david 不要，删掉', 'karlwong 也不行 gavin 可以', 'robot 给 admin 权限'];
+  const page = { tabId: 5, url: 'https://git.example/settings', title: 'Settings - Gogs' };
+  const events = [
+    { sequence: 1, kind: 'user', data: { messageId: busy, text: 'clean up the collaborators', page } },
+    { sequence: 2, kind: 'turnStarted', data: { v: 1, messageId: busy, generation: 1 } },
+    ...ids.map((messageId, i) => ({ sequence: 3 + i, kind: 'user', data: { messageId, text: texts[i], page } })),
+  ];
+  let queued = ids.map((id, i) => ({ id, text: texts[i], truncated: false }));
+  let conversation = { ...turnsJournal.conversation, phase: 'running', control: 'agent', activeMessageId: busy, queued: 3 };
+  const overrides = { conversationRead: async params => ({ success: true, result: { conversation, journal: { events: events.filter(e => e.sequence > params.after), cursor: events.at(-1).sequence, more: false }, queuedMessages: queued } }) };
+  const f = await panel({ events, conversation, overrides });
+  const visibleCards = () => byClass(f.transcript, 'turn-card').filter(card => !card.hidden);
+  const queueRows = () => byClass(f.nodes.get('queuedMessages'), 'queued-message');
+  assert.equal(queueRows().length, 3);
+  assert.equal(visibleCards().length, 1);
+  const shown = visibleCards().map(text).join(' ');
+  for (const message of texts) assert.doesNotMatch(shown, new RegExp(message));
+  assert.doesNotMatch(shown, /Checks not recorded/);
+  assert.match(f.nodes.get('queue').textContent, /3/);
+
+  // The busy turn ends and the first queued message starts.
+  events.push({ sequence: 6, kind: 'turnEnded', data: { messageId: busy, outcome: 'completed' } }, { sequence: 7, kind: 'turnStarted', data: { v: 1, messageId: ids[0], generation: 1 } });
+  queued = queued.slice(1); conversation = { ...conversation, activeMessageId: ids[0], queued: 2 };
+  await f.panel.refresh(); await settle();
+  assert.equal(queueRows().length, 2);
+  const cards = visibleCards();
+  assert.equal(cards.length, 2);
+  assert.match(text(cards[1]), /david 不要，删掉/);
+  assert.match(text(cards[1]), /Sent with: Settings - Gogs/);
+  assert.doesNotMatch(text(cards[1]), /Checks not recorded/);
+  for (const message of texts.slice(1)) assert.doesNotMatch(cards.map(text).join(' '), new RegExp(message));
+
+  // A removed message never becomes a turn; an edited one waits under its new id.
+  events.push({ sequence: 8, kind: 'queueRemoved', data: { messageId: ids[2] } }, { sequence: 9, kind: 'queueEdited', data: { messageId: ids[1], replacementId: 'edited', text: 'gavin only' } });
+  queued = [{ id: 'edited', text: 'gavin only', truncated: false }]; conversation = { ...conversation, queued: 1 };
+  await f.panel.refresh(); await settle();
+  assert.equal(queueRows().length, 1);
+  assert.equal(visibleCards().length, 2);
+  assert.doesNotMatch(visibleCards().map(text).join(' '), /robot|gavin only/);
+  events.push({ sequence: 10, kind: 'turnEnded', data: { messageId: ids[0], outcome: 'completed' } }, { sequence: 11, kind: 'turnStarted', data: { v: 1, messageId: 'edited', generation: 1 } });
+  queued = []; conversation = { ...conversation, activeMessageId: 'edited', queued: 0 };
+  await f.panel.refresh(); await settle();
+  assert.equal(queueRows().length, 0);
+  assert.equal(visibleCards().length, 3);
+  assert.match(text(visibleCards()[2]), /gavin only/);
+  assert.doesNotMatch(visibleCards().map(text).join(' '), /robot/);
+  f.panel.close();
+});
+
+test('stop and send keeps the direct message in the queue area until it starts', async () => {
+  const busy = 'b0000000-0000-4000-8000-000000000000', direct = 'd0000000-0000-4000-8000-000000000000';
+  const events = [
+    { sequence: 1, kind: 'user', data: { messageId: busy, text: 'long task' } },
+    { sequence: 2, kind: 'turnStarted', data: { v: 1, messageId: busy, generation: 1 } },
+    { sequence: 3, kind: 'user', data: { messageId: direct, text: 'stop, do this instead', direct: true } },
+  ];
+  let queued = [{ id: direct, text: 'stop, do this instead', truncated: false, direct: true }];
+  let conversation = { ...turnsJournal.conversation, phase: 'stopping', control: 'stopRequested', activeMessageId: busy, directMessageId: direct, queuePaused: true, queued: 1 };
+  const overrides = { conversationRead: async params => ({ success: true, result: { conversation, journal: { events: events.filter(e => e.sequence > params.after), cursor: events.at(-1).sequence, more: false }, queuedMessages: queued } }) };
+  const f = await panel({ events, conversation, overrides });
+  const visibleCards = () => byClass(f.transcript, 'turn-card').filter(card => !card.hidden);
+  assert.equal(visibleCards().length, 1);
+  assert.match(text(f.nodes.get('queuedMessages')), /stop, do this instead/);
+  events.push({ sequence: 4, kind: 'turnEnded', data: { messageId: busy, outcome: 'interrupted' } }, { sequence: 5, kind: 'turnStarted', data: { v: 1, messageId: direct, generation: 2, direct: true } });
+  queued = []; conversation = { ...conversation, phase: 'running', control: 'agent', activeMessageId: direct, directMessageId: null, queuePaused: false, queued: 0 };
+  await f.panel.refresh(); await settle();
+  assert.equal(visibleCards().length, 2);
+  assert.match(text(visibleCards()[1]), /stop, do this instead/);
+  assert.equal(byClass(f.nodes.get('queuedMessages'), 'queued-message').length, 0);
+  f.panel.close();
+});
+
+test('the flat view also leaves queued messages to the queue area', async () => {
+  const events = [
+    { sequence: 1, kind: 'user', data: { messageId: 'busy', text: 'long task' } },
+    { sequence: 2, kind: 'user', data: { messageId: 'next', text: 'queued follow-up' } },
+  ];
+  let queued = [{ id: 'next', text: 'queued follow-up', truncated: false }];
+  const conversation = { ...legacyJournal.conversation, phase: 'running' };
+  const overrides = { conversationRead: async params => ({ success: true, result: { conversation, journal: { events: events.filter(e => e.sequence > params.after), cursor: events.at(-1).sequence, more: false }, queuedMessages: queued } }) };
+  const f = await panel({ support: legacyJournal.capabilities, conversation, events, overrides });
+  const shown = () => all(f.transcript, node => !node.hidden && typeof node.className === 'string' && node.className.includes('message-row user')).map(text).join(' ');
+  assert.match(shown(), /long task/);
+  assert.doesNotMatch(shown(), /queued follow-up/);
+  queued = [];
+  await f.panel.refresh(); await settle();
+  assert.match(shown(), /queued follow-up/);
+  f.panel.close();
+});

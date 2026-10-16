@@ -118,6 +118,7 @@ export class PanelTimeline {
         }
         // The replacement is the message that runs; replay gives one turn for it.
         const turn = this.turns.get(data.messageId);
+        if (event.kind === 'queueRemoved' && turn) turn.queueRemoved = true;
         if (event.kind === 'queueEdited' && turn && data.replacementId && !this.turns.has(data.replacementId)) {
           this.turns.delete(data.messageId); turn.messageId = data.replacementId; this.turns.set(data.replacementId, turn);
           this.turnOrder[this.turnOrder.indexOf(data.messageId)] = data.replacementId;
@@ -184,6 +185,16 @@ export class PanelTimeline {
     const turn = this.turns.get(data.messageId ?? this.lastUser ?? '');
     if (turn && data.messageId == null) turn.notes.push(row.key); else this.turn(data.messageId, row.at).notes.push(row.key);
   }
+}
+
+// A message the user sent while the agent was busy is journaled when it is
+// accepted, long before its turn starts. Until then it belongs to the queue
+// area, not the transcript: `queued` is the host's current queue (the same
+// read as the journal), so old journals whose turns never recorded a start
+// still show every message.
+export function notStarted(turn, queued) {
+  if (turn.state === 'running' || turn.state === 'ended') return false;
+  return turn.queueRemoved === true || queued.has(turn.messageId);
 }
 
 // Wording is fixed here so every view says the same thing. The badge never

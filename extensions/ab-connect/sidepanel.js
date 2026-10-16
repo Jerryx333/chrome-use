@@ -1,4 +1,4 @@
-import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages } from './panel-state.js';
+import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages, notStarted } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
 import { oldBuildBlocking } from './panel-errors.js';
@@ -80,6 +80,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   let modelEpoch = 0, newFullAccess = true, page = null, pageDetached = false, scope = 'site';
   let pendingBinding = null, sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
   const rendered = new Map(), requestNodes = new Map(), queuedNodes = new Map();
+  // Ids in the host's queue as of the last read; those messages show in the
+  // queue area only, not as sent turns.
+  let queuedIds = new Set();
   // Nodes added after the id list; looked up apart so the list stays stable.
   const working = document.getElementById('working'), suggestions = document.getElementById('suggestions');
   // "Open in a tab": the same panel as a full-page tab. There is no page
@@ -499,7 +502,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     nodes.deleteConfirm.hidden = true;
     selected = id; skillChoice = null; renderImageDrafts(); selectionEpoch++; conversation = conversations.find(c => c.id === id) || null;
     void loadSkills().catch(error);
-    timeline = new PanelTimeline(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
+    timeline = new PanelTimeline(); queuedIds = new Set(); queuedNodes.clear(); nodes.queuedMessages.replaceChildren(); nodes.queuedMessages.hidden = true; rendered.clear(); requestNodes.clear(); nodes.requests.replaceChildren();
     toolTail = null; toolGroups.clear(); clearTurnView(); importedNode = null; importedCount = -1;
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     // A panel tab keeps its conversation in its own address, so opening one
@@ -580,7 +583,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     // A tool still open when the response ended is not running any more.
     const live = busyPhases.has(conversation?.phase);
     for (const row of timeline.rows) {
+      const waiting = row.type === 'user' && !row.queueStatus && queuedIds.has(row.messageId);
       let view = rendered.get(row.key);
+      if (!view && waiting) continue;
       if (!view) {
         if (row.type === 'tool') {
           view = toolView(row); const { container } = view;
@@ -590,6 +595,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
         } else view = messageView(row, row.type !== 'user' || !turnView());
         if (row.type !== 'tool') { toolTail = null; rendered.set(row.key, view); nodes.transcript.append(view.container); }
       }
+      view.container.hidden = waiting;
       updateRowView(view, row, live);
     }
     for (const group of toolGroups) renderToolGroup(group);
@@ -615,7 +621,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     if (row.detail) { const raw = element('details'); raw.append(element('summary', t('panel_details')), element('pre', row.detail)); container.append(raw); }
     if (row.type === 'note' && row.failed && conversation?.agentId) {
       const agentId = conversation.agentId;
-      const prompt = [...timeline.rows].reverse().find(r => r.type === 'user' && !r.queueStatus)?.text;
+      const prompt = [...timeline.rows].reverse().find(r => r.type === 'user' && !r.queueStatus && !queuedIds.has(r.messageId))?.text;
       // Only an explicitly chosen model can be dropped; a model from the
       // CLI's own configuration has to be changed there.
       if (conversation.requestedModel && prompt) container.append(button(t('panel_retry_default_model'), () => retryWithDefaultModel(agentId, prompt), 'retry'));
@@ -701,6 +707,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     for (const id of timeline.turnOrder) {
       const turn = timeline.turns.get(id);
       let card = turnCards.get(turn);
+      const waiting = notStarted(turn, queuedIds);
+      if (card) card.container.hidden = waiting;
+      if (waiting) continue;
       if (!card) { card = turnCard(turn); turnCards.set(turn, card); nodes.transcript.append(card.container); }
       renderTurn(card, turn, live && turn.messageId === conversation?.activeMessageId);
     }
@@ -1158,7 +1167,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
         // side panel) shows here too.
         const listed = conversations.find(chat => chat.id === id);
         if (listed && typeof conversation?.title === 'string' && listed.title !== conversation.title) { listed.title = conversation.title; conversationChoices(); }
-        renderTimeline(); renderRequests(); renderQueue(result.queuedMessages || []); controls();
+        const queued = result.queuedMessages || []; queuedIds = new Set(queued.map(message => message.id));
+        renderTimeline(); renderRequests(); renderQueue(queued); controls();
       }
       if (id === selected && epoch === selectionEpoch) void maybeAutoLend();
       const pending = pendingMessages.get(id);
