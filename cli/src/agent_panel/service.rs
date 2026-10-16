@@ -952,6 +952,12 @@ impl Engine {
         match grant {
             Some(grant) => {
                 grant.validate_grant()?;
+                // Like a message's page, the agent and the journal get the
+                // URL without credentials or token parameters.
+                let grant = PageContext {
+                    url: redact::url(&grant.url),
+                    ..grant
+                };
                 let changed = self
                     .tab_grants
                     .get(id)
@@ -2584,14 +2590,11 @@ async fn dispatch(
             e.chat(&p.conversation_id)?;
             let changed = e.set_tab_grant(&p.conversation_id, requested.clone())?;
             if changed {
-                e.record(
-                    &p.conversation_id,
-                    "tabGrant",
-                    match &requested {
-                        Some(g) => json!({"granted":true,"tabId":g.tab_id,"url":g.url}),
-                        None => json!({"granted":false}),
-                    },
-                )?;
+                let data = match e.tab_grants.get(&p.conversation_id) {
+                    Some(g) => json!({"granted":true,"tabId":g.tab_id,"url":g.url}),
+                    None => json!({"granted":false}),
+                };
+                e.record(&p.conversation_id, "tabGrant", data)?;
             }
             let profile = e.profile.clone();
             drop(e);
@@ -4131,6 +4134,27 @@ mod schedule_tests {
         assert_eq!(granted["tabGrant"]["adopted"], false);
         assert!(granted["tabGrant"]["error"].is_string());
         assert_eq!(engine.lock().await.tab_grants[&id].tab_id, 7);
+        // A token in the lent tab's URL reaches neither the prompt nor the journal.
+        let secret = json!({"tabId":7,"url":"https://shop.example/cart?access_token=SYNTH_GRANT_TOKEN&x=1","title":"Cart"});
+        dispatch(
+            &engine,
+            "conversationTabGrant",
+            &json!({"conversationId":id,"grant":secret}),
+        )
+        .await
+        .unwrap();
+        let held = engine.lock().await.tab_grants[&id].clone();
+        assert!(!held.url.contains("SYNTH_GRANT_TOKEN") && held.url.contains("access_token="));
+        assert!(!held.grant_preface().contains("SYNTH_GRANT_TOKEN"));
+        let journal = dispatch(
+            &engine,
+            "conversationRead",
+            &json!({"conversationId":id,"after":0}),
+        )
+        .await
+        .unwrap();
+        let text = journal["journal"].to_string();
+        assert!(text.contains("tabGrant") && !text.contains("SYNTH_GRANT_TOKEN"));
         // A message that says there is none takes it back; one that says
         // nothing about it leaves it alone.
         let mut send = json!({"conversationId":id,"messageId":uuid::Uuid::new_v4().to_string(),"text":"hello","tabGrant":grant});

@@ -222,3 +222,20 @@ test('a tab the user took back is never attached again, by any path (0.5.62)', a
   await context.attachTab(6)
   assert.equal(attaches, 1)
 })
+
+test('the agent cannot close a tab the user lent it (0.5.62)', async () => {
+  const removed = []
+  const context = {
+    tabGrants: { load: async () => {}, get: tabId => (tabId === 5 ? { tabId: 5, conversationId: 'c' } : null) },
+    LENT_TAB_CLOSE: 'the agent cannot close it',
+    tabForTarget: targetId => Number(targetId.slice(1)),
+    removeAgentTab: async tabId => { removed.push(tabId) },
+    agentTabRemoval: {},
+  }
+  vm.createContext(context)
+  vm.runInContext('globalThis.closeTarget = async function (params) { const method = "Target.closeTarget";\n' + section("if (method === 'Target.closeTarget') {", "if (method === 'Target.activateTarget')") + '}', context)
+  await assert.rejects(context.closeTarget({ targetId: 'T5' }), /cannot close it/)
+  assert.deepEqual(removed, [])
+  assert.equal(JSON.stringify(await context.closeTarget({ targetId: 'T6' })), '{"success":true}')
+  assert.deepEqual(removed, [6])
+})
