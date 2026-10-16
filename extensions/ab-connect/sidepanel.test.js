@@ -1157,3 +1157,29 @@ test('the first message of a new conversation in a tab\'s panel already runs in 
   assert.equal(f.session.data.ab_panel_tab_21, 'new');
   f.panel.close();
 });
+
+test('an update blocked by an older build names its conversations; Open finds one started on another site', async () => {
+  const id = '12b6a0cd-eca8-4462-a809-16db0688704c';
+  const listed = [{ ...chat('b'), site: 'shop.example' }, { ...chat(id, 'waitingInput'), title: 'Old approval', site: 'other.example' }];
+  const tabs = { async query() { return [{ id: 7, url: 'https://shop.example/cart', title: 'Cart' }]; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ tabs, status: () => ({ connected: true, agentPanel: { ...fullSupport, pageContext: true } }),
+    conversationList: async () => ({ success: true, result: { conversations: listed } }),
+    conversationRead: async params => ({ success: true, result: { conversation: listed.find(c => c.id === params.conversationId) || chat(params.conversationId), journal: { events: [], cursor: 0, more: false } } }),
+    conversationSend: async () => ({ success: false, error: `Another agent-panel build is running for this profile; stop its conversations before updating (still working or waiting for you: “Old approval”) [blocking:${id}]` }),
+    conversationStop: async () => ({ success: true, result: { conversation: chat(id, 'stopping') } }) }, { ab_panel_conversation: 'b' });
+  await settle();
+  f.nodes.get('message').value = 'go'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  const notice = f.nodes.get('notice');
+  assert.equal(notice.hidden, false);
+  assert.equal(notice.children[0].textContent, en.panel_old_build_busy.message);
+  const row = notice.children[1];
+  assert.match(row.textContent, /Old approval/);
+  const [open, stop] = row.children;
+  assert.deepEqual([open.textContent, stop.textContent], ['Open', 'Stop it']);
+  // This site's list does not show it; opening switches the list to all sites.
+  open.fire('click'); await settle(); await settle();
+  assert.equal(f.nodes.get('conversation').value, id);
+  assert.ok(f.writes.some(w => w.ab_panel_conversation_scope === 'all'));
+  assert.equal(notice.hidden, true);
+  f.panel.close();
+});

@@ -1821,6 +1821,15 @@
       }
     }
   },
+  "panel_old_build_busy": {
+    "message": "An older chrome-use build is still running for this profile, so the update cannot take over yet. Answer or stop the conversation below, then send again."
+  },
+  "panel_old_build_open": {
+    "message": "Open"
+  },
+  "panel_old_build_stop": {
+    "message": "Stop it"
+  },
   "panel_open_earlier_conversation": {
     "message": "Open the earlier conversation"
   },

@@ -1821,6 +1821,15 @@
       }
     }
   },
+  "panel_old_build_busy": {
+    "message": "这个 profile 上还有旧版 chrome-use 在运行，新版暂时接管不了。请先回应或停止下面的对话，然后重新发送。"
+  },
+  "panel_old_build_open": {
+    "message": "打开"
+  },
+  "panel_old_build_stop": {
+    "message": "停止它"
+  },
   "panel_open_earlier_conversation": {
     "message": "打开之前的会话"
   },

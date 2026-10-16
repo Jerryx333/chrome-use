@@ -1,6 +1,7 @@
 import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
+import { oldBuildBlocking } from './panel-errors.js';
 import { t, messageMap, applyI18n, i18nReady } from './i18n.js';
 import { renderReplies, validReplies } from './inspect-replies.js';
 import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } from './resume-picker.js';
@@ -174,7 +175,31 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (className) node.className = className;
     return node;
   }
-  function error(error) { nodes.notice.textContent = String(error?.message || error); nodes.notice.hidden = false; }
+  function error(error) {
+    const text = String(error?.message || error);
+    const blocking = oldBuildBlocking(text);
+    if (!blocking) { nodes.notice.textContent = text; nodes.notice.hidden = false; return; }
+    // An older build keeps its service while one of its conversations works
+    // or waits for the user; name them and offer to open or stop each.
+    const title = id => titleOf(conversations.find(c => c.id === id), 'panel_conversation_untitled');
+    nodes.notice.replaceChildren(element('div', t('panel_old_build_busy')));
+    for (const id of blocking) {
+      const row = element('div', `“${title(id)}” `);
+      row.append(button(t('panel_old_build_open'), async () => { clearError(); await openBlocking(id); }), button(t('panel_old_build_stop'), async () => {
+        try { await api('conversationStop', { conversationId: id }); clearError(); } catch (failure) { error(failure); }
+      }));
+      nodes.notice.append(row);
+    }
+    nodes.notice.hidden = false;
+  }
+  // Open a conversation the error named, wherever it was started: the list
+  // switches to all sites when this site's list does not show it.
+  async function openBlocking(id) {
+    if (!conversations.some(c => c.id === id)) await list().catch(() => {});
+    const domain = currentDomain(), chat = conversations.find(c => c.id === id);
+    if (scope === 'site' && domain && !(chat?.site && mainDomain(chat.site) === domain)) setScope('all');
+    select(id);
+  }
   function clearError() { nodes.notice.hidden = true; nodes.notice.textContent = ''; }
   async function api(operation, params = {}) {
     if (!runtime?.sendMessage) throw new Error(t('panel_error_open_from_extension'));
