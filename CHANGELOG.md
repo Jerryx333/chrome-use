@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.220
+## 1.5.221
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.62 (the tab modes need it; older extensions keep working without them). Chrome Web Store publication follows Google review.
+
+### New Features
+
+- **Open a conversation in a tab.** "Open in a tab" shows the panel as a full-page tab with a centred column. It stays in sync with the side panel when both show the same conversation; each message is sent once. "This page" in a tab means the window's last web tab.
+- **Lend the agent a tab.** In a conversation you can let the agent use one of your tabs. The tab is marked with an "AI" toolbar badge and the panel shows a grant bar; the agent works in that tab with your login, and cannot close it. "Take back" (or Stop, deleting the conversation, closing the tab) ends it immediately and later calls are refused. Chrome pages and Web Store pages cannot be lent; one tab per conversation. The agent's own window stays the default.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.220
+
 Works with extension ab-connect 0.5.61 (the new side panel features need it; older extensions keep working without them). Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -20,7 +34,6 @@ Works with extension ab-connect 0.5.61 (the new side panel features need it; old
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.219
 
