@@ -77,6 +77,15 @@ one naming `chrome-tab:<id>` both run in it), taking it back from the side
 panel (the next call is refused), and the grant following the tab across
 origins until the tab closes.
 
+## Per-tab panels
+
+`per-tab-live.sh <chrome-use binary> [extension ref]` runs `per-tab-live.mjs`:
+two tabs each get their own panel (opened as the toolbar button opens it),
+each conversation's first message lends its tab by itself and the agent's
+call without a tab handle runs there with no tab of its own, skills complete
+in the middle of a message, a take-back moves the conversation to the
+agent's window, and a closed tab keeps its conversation in the history.
+
 ## Limits
 
 - Check 5's fault switch (skip the kill on stop timeout) does not exist in the
