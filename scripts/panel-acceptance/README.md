@@ -96,3 +96,20 @@ agent's window, and a closed tab keeps its conversation in the history.
   VP8 encoder, put first on the MCP server's `PATH`.
 - Claude Code and Pi are not installed on the build host; their protocols run
   only as fixture backends.
+
+## Store extension compatibility
+
+The Chrome Web Store build can lag the CLI. `compat-058-live.mjs` runs the
+store build (ab-connect 0.5.58, `git archive v1.5.219 extensions/ab-connect`)
+against a CLI binary: the panel starts without an exception, Agents & models
+lists the agents with its Skills and Schedules tabs, "← Back" returns to the
+chat and a fixture conversation gets its reply. `compat-upgrade-live.mjs` uses
+the panel with `OLD_BIN`, leaves a conversation running (`BUSY=0` leaves none)
+and switches the native host to `NEW_BIN` while the old service keeps running,
+as `chrome-use upgrade` does, then repeats those checks. Both record panel and
+worker exceptions and treat an unresponsive panel as a failure.
+
+```sh
+HOST_BIN=<chrome-use> CHROME=<Chrome for Testing> EXT_DIR=<0.5.58 dir> node compat-058-live.mjs
+OLD_BIN=<old> NEW_BIN=<new> CHROME=<Chrome for Testing> EXT_DIR=<0.5.58 dir> node compat-upgrade-live.mjs
+```
