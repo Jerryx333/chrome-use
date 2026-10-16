@@ -176,6 +176,7 @@ try {
   check(tool && !tool.isError && String(tool.result).includes('Save order') && String(tool.result).includes('Inner action') && String(tool.result).includes('Pay now') && !String(tool.result).includes('MISSING'), 'every element resolved in the lent tab');
   check(afterSend.hidden && afterSend.chips.length === 0, 'sent chips leave the composer');
   check(reply, 'the reply shows in the panel');
+  check(userEvent?.data.attachments.length === 3, 'the three screenshots went with the message');
   evidence.attachments = userEvent?.data.attachments?.length ?? null;
 
   // 5. Panel open, conversation there: a new pick adds a chip, sends nothing;
