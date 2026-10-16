@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Inspect &amp; Ask · chrome-use docs</title>
-  <meta name="description" content="Click an element on a page, write one line about what should change, and hand it with its source location and a screenshot to the Claude Code, Codex or Pi session working on that project." />
+  <meta name="description" content="Click an element on a page and ask about it in this tab's side-panel chat, or write one line about what should change and hand it with its source location and a screenshot to the Claude Code, Codex or Pi session working on that project." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -47,21 +47,37 @@
       </div>
 
       <p class="du-lede">
-        Press <code>Alt+Shift+C</code>, click an element, write what should change, and press Enter.
-        chrome-use sends your words, the element's <span class="mark">source file and line</span>, a screenshot
-        and its styles through <code>ocs</code> to the Claude Code, Codex or Pi session already working on that
-        project, and that agent edits the code. It works on local dev servers and on test-environment domains,
+        Press <code>Alt+Shift+C</code>, click an element, and click <strong>Add to chat</strong>.
+        The element becomes a chip in the composer of <span class="mark">this tab's side-panel chat</span>; ask your question,
+        and once you send it the panel's agent has the element's selector, place, source file and screenshot, and can act on it in this tab.
+        Or switch to <strong>Terminal session (ocs)</strong>: write what should change, and chrome-use sends your words, the element's
+        source file and line, a screenshot and its styles through <code>ocs</code> to the Claude Code, Codex or Pi session already working
+        on that project, and that agent edits the code. It works on local dev servers and on test-environment domains,
         in the Chrome you are already logged in to.
       </p>
 
       <h2 id="start">Getting started</h2>
       <ol>
-        <li>Install chrome-use and the extension (extension 0.5.57 or later and CLI 1.5.214 or later for path scopes, claims and tab-only targets).</li>
-        <li>Install <a href="https://github.com/leeguooooo/open-cross-session">ocs</a> and keep a Claude Code, Codex or Pi session open in the project folder. Without ocs the panel shows the install command and keeps your draft.</li>
-        <li>Press <code>Alt+Shift+C</code> on the page, or click <strong>Inspect element</strong> in the toolbar popup. The first time it asks you to enable the feature. Change the shortcut at <code>chrome://extensions/shortcuts</code>.</li>
+        <li>Install chrome-use and the extension. The side-panel chat needs extension 0.5.68 or later and CLI 1.5.223 or later; a terminal session needs extension 0.5.57 or later and CLI 1.5.214 or later (for path scopes, claims and tab-only targets).</li>
+        <li>Only for a terminal session: install <a href="https://github.com/leeguooooo/open-cross-session">ocs</a> and keep a Claude Code, Codex or Pi session open in the project folder. Without ocs the panel shows the install command and keeps your draft.</li>
+        <li>Press <code>Alt+Shift+C</code> on the page, or click <strong>Inspect element</strong> in the toolbar popup. For a terminal session, the first time it asks you to enable the feature. Change the shortcut at <code>chrome://extensions/shortcuts</code>.</li>
         <li>Click an element. <kbd>Shift</kbd>+click or drag a box to select several (up to 8); <kbd>↑</kbd>/<kbd>↓</kbd> move to the parent or child; <kbd>P</kbd> pauses page animations so moving things are easy to hit; <kbd>Esc</kbd> exits.</li>
-        <li>Write the change in the panel. Each element can carry its own note, and you can draw on its screenshot. <kbd>Enter</kbd> or <strong>Send</strong> sends; <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line.</li>
+        <li>At the top of the panel, choose where it goes: <strong>Side panel chat</strong> (the default) or <strong>Terminal session (ocs)</strong>; the choice is remembered per site. Each element can carry its own note, and you can draw on its screenshot.
+          For the side-panel chat, optionally write a question and press <kbd>Enter</kbd> or <strong>Add to chat</strong> (see the next section);
+          for a terminal session, write the change and press <kbd>Enter</kbd> or <strong>Send</strong>. <kbd>Shift</kbd>+<kbd>Enter</kbd> adds a line.</li>
       </ol>
+
+      <h2 id="panel">Into the side-panel chat (default)</h2>
+      <ul>
+        <li><strong>Add to chat</strong> opens this tab's own side panel (or adds to it if it is open), puts the elements above its composer as chips, and puts the question from the picker into its message box. Nothing is sent, and a conversation already running in the panel is not touched.</li>
+        <li>Pick as often as you like: chips add up to 8; picking the same element again replaces its chip. <strong>×</strong> on a chip removes it.</li>
+        <li>When you send, the message carries each element's context: selector, page address, which iframe or shadow DOM it is in, a JavaScript expression that finds it from the top document, the source location when one was found, its text, an HTML snippet and your note; screenshots go as image attachments (at most 5 together with your own images). The panel's agent works in this tab by default, so it can read or click the element by its selector. The transcript shows your words, with the element context folded under "N picked elements".</li>
+        <li>If the page navigates or reloads after picking, the chip stays and is marked "page changed"; the agent is told the element may no longer be there. Closing the tab clears its chips.</li>
+        <li>Elements inside open shadow roots and same-origin iframes can be picked. A cross-origin iframe is picked as a whole, without its content; a closed shadow root only offers its host element.</li>
+        <li>Chips live only in the extension's session storage (gone when the browser closes), out of the page's reach; once picking ends the page keeps no element, attribute or global from it.</li>
+      </ul>
+
+      <h2 id="terminal">Into a terminal session (ocs)</h2>
       <p>
         The first send on a site asks two things: which project folder the site belongs to, and which session gets the request.
         Candidates come from the local dev server's process folder, the working folders of ocs sessions, and which projects actually contain the source files the page names.
