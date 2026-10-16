@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.226
+## 1.5.227
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.66 (the grouped picker needs it; the session times are fixed for every extension).
+
+### New Features
+
+- **/resume groups sessions by project.** The picker lists project folders, most recently active first, each with its latest sessions and "Show more"; sessions without a folder are under "Other". The project remembered for the current site comes first. Search matches titles, project names and paths and keeps the grouping.
+
+### Bug Fixes
+
+- **/resume no longer shows every Codex session as "just now" and "active elsewhere".** Codex Desktop rewrites session files when it imports Claude Code sessions, which made their file time look new. Sessions are now dated by their own records, and a session counts as active only when it wrote very recently or has an unfinished turn (or, for Claude Code, a live process). Codex subagent threads are no longer listed.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.226
+
 Works with extension ab-connect 0.5.65 (no extension change).
 
 ### Bug Fixes
@@ -12,7 +29,6 @@ Works with extension ab-connect 0.5.65 (no extension change).
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.225
 
