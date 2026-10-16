@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startRig, cleanup } from './rig.mjs';
+import { startRig, cleanup, openTab } from './rig.mjs';
 import { waitFor, sleep } from './lib.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
@@ -30,13 +30,17 @@ evidence.chrome = rig.chromeVersion; evidence.extension = rig.extensionVersion;
 const A = rig.cdp, b = rig.browser;
 const shot = async (sid, name) => { const s = await b.send('Page.captureScreenshot', { format: 'png' }, sid); fs.writeFileSync(path.join(out, `${name}.png`), Buffer.from(s.data, 'base64')); };
 try {
-  await rig.ev(`chrome.windows.create({ url: chrome.runtime.getURL('popup.html'), focused: true })`);
+  // The panel of one tab, opened the way the toolbar button does: a trusted
+  // click in a window of its own.
+  const tab = await openTab(rig, rig.site + '/a');
+  const win = await rig.ev(`chrome.windows.create({ url: chrome.runtime.getURL('popup.html'), focused: true })`);
   const opener = await waitFor(async () => (await b.send('Target.getTargets')).targetInfos.find(t => t.url.endsWith('/popup.html') && t.type === 'page'), { label: 'opener page' });
   const osid = await A.attach(opener.targetId);
   await waitFor(() => A.evaluate(osid, 'document.readyState === "complete"'), { label: 'opener load' });
-  await A.evaluate(osid, `(() => { const b = document.createElement('button'); b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => chrome.windows.getCurrent().then(w => chrome.sidePanel.open({ windowId: w.id })); document.body.append(b); return true; })()`);
+  await A.evaluate(osid, `(() => { const b = document.createElement('button'); b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => { chrome.sidePanel.setOptions({ tabId: ${tab.tabId}, path: 'sidepanel.html?tab=${tab.tabId}', enabled: true }); chrome.sidePanel.open({ tabId: ${tab.tabId} }); }; document.body.append(b); return true; })()`);
   await A.click(osid, 50, 40);
-  const target = await waitFor(async () => (await b.send('Target.getTargets')).targetInfos.find(t => /\/sidepanel\.html(\?|$)/.test(t.url)), { timeout: 15000, label: 'side panel' });
+  const target = await waitFor(async () => (await b.send('Target.getTargets')).targetInfos.find(t => t.url.endsWith(`/sidepanel.html?tab=${tab.tabId}`)), { timeout: 15000, label: 'side panel' });
+  await rig.ev(`chrome.windows.remove(${win.id})`);
   const sid = await A.attach(target.targetId);
   b.listeners.push(m => { if (m.sessionId === sid && m.method === 'Runtime.exceptionThrown') evidence.exceptions.push(m.params.exceptionDetails?.exception?.description || m.params.exceptionDetails?.text); });
   await b.send('Runtime.enable', {}, sid);
