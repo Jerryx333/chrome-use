@@ -993,6 +993,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         const result = await api('conversationRead', { conversationId: id, after: timeline.cursor });
         if (id !== selected || epoch !== selectionEpoch) break;
         timeline.apply(result.journal.events, result.journal.cursor); conversation = result.conversation; more = result.journal.more === true;
+        // A title set by a message sent from another view (a panel tab, the
+        // side panel) shows here too.
+        const listed = conversations.find(chat => chat.id === id);
+        if (listed && typeof conversation?.title === 'string' && listed.title !== conversation.title) { listed.title = conversation.title; conversationChoices(); }
         renderTimeline(); renderRequests(); renderQueue(result.queuedMessages || []); controls();
       }
       const pending = pendingMessages.get(id);

@@ -966,3 +966,10 @@ test('a refused grant is explained in the panel\'s language', async () => {
   assert.equal(f.nodes.get('grantBar').hidden, true);
   f.panel.close();
 });
+
+test('a title given in another view shows in this one', async () => {
+  const f = await fixture({ conversationRead: async params => ({ success: true, result: { conversation: { ...chat(params.conversationId), title: 'Renamed elsewhere' }, journal: { events: [], cursor: 0, more: false } } }) }, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('conversationTitle').textContent, 'Renamed elsewhere');
+  f.panel.close();
+});

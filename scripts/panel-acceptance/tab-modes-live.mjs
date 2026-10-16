@@ -94,8 +94,10 @@ try {
   const users = first.events.filter(e => e.kind === 'user');
   await waitFor(() => inPanel(`document.getElementById('transcript').textContent.includes('Hello from the fixture.')`), { timeout: 20000, label: 'side panel shows the answer' });
   await waitFor(() => inTab(`document.getElementById('transcript').textContent.includes('Hello from the fixture.')`), { timeout: 20000, label: 'panel tab shows the answer' });
-  step('message from the panel tab', { users: users.length, outcome: first.outcome });
+  const titles = { tab: await inTab(`document.getElementById('conversationTitle').textContent`), panel: await waitFor(async () => { const t = await inPanel(`document.getElementById('conversationTitle').textContent`); return t.includes('tm-hello') && t; }, { timeout: 20000, label: 'side panel title' }) };
+  step('message from the panel tab', { users: users.length, outcome: first.outcome, titles });
   check(users.length === 1 && first.outcome === 'completed', 'one message, one turn');
+  check(titles.tab === titles.panel, 'both views show the title the message gave');
 
   // 3. Lend the user's tab from the panel tab.
   await waitFor(() => inTab(`!document.getElementById('grantTab').hidden && !document.getElementById('grantTab').disabled`), { timeout: 20000, label: 'grant button' });
@@ -176,4 +178,6 @@ try {
   save();
   cleanup(rig);
   console.log(`evidence: ${out}`);
+  // The rig's proxy and service sockets keep the event loop alive.
+  setTimeout(() => process.exit(evidence.passed ? 0 : 1), 1000).unref();
 }
