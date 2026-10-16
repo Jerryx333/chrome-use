@@ -230,6 +230,55 @@ fn exchange_within(
         .ok_or_else(|| "Agent service reply has no result".into())
 }
 
+/// Conversations an older build is still working on (or waiting on the
+/// user for), which keep it from being replaced: `(id, title)`.
+fn busy_conversations(list: &Value) -> Vec<(String, String)> {
+    list["conversations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| {
+            matches!(
+                c["phase"].as_str(),
+                Some("starting" | "running" | "waitingInput" | "stopping")
+            )
+        })
+        .filter_map(|c| {
+            let id = c["id"].as_str()?;
+            uuid::Uuid::parse_str(id).ok()?;
+            Some((
+                id.to_string(),
+                c["title"].as_str().unwrap_or("").to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// The refusal names the conversations to answer or stop. The trailing
+/// `[blocking:<ids>]` lets the panel offer to open or stop them; older panels
+/// show the sentence as is.
+fn old_build_busy(busy: &[(String, String)]) -> String {
+    let mut text = String::from("Another agent-panel build is running for this profile; stop its conversations before updating");
+    if !busy.is_empty() {
+        let titles: Vec<String> = busy
+            .iter()
+            .map(|(_, title)| {
+                format!(
+                    "\u{201c}{}\u{201d}",
+                    title.chars().take(60).collect::<String>()
+                )
+            })
+            .collect();
+        let ids: Vec<&str> = busy.iter().map(|(id, _)| id.as_str()).collect();
+        text = format!(
+            "{text} (still working or waiting for you: {}) [blocking:{}]",
+            titles.join(", "),
+            ids.join(",")
+        );
+    }
+    text
+}
+
 /// Reuse only a health-confirmed service of the exact binary. A different
 /// build's active conversations are never killed or silently rebound. Idle
 /// builds are replaced only after endpoint removal and OS lock release.
@@ -256,7 +305,10 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
                 return Ok(existing);
             }
             if health["active"].as_u64() != Some(0) {
-                return Err("Another agent-panel build is running for this profile; stop its conversations before updating".into());
+                let busy = exchange(&existing, "conversationList", json!({}))
+                    .map(|list| busy_conversations(&list))
+                    .unwrap_or_default();
+                return Err(old_build_busy(&busy));
             }
             // The old service rechecks busy state under its own lock. Wait for
             // both endpoint removal and OS ownership release, never a PID.
@@ -6134,5 +6186,26 @@ mod turn_tests {
         c.notice("terminal", json!({"status":"completed","error":null}))
             .await;
         assert_eq!(c.kinds("generationRetired").await[0]["reason"], "openTool");
+    }
+}
+
+#[cfg(test)]
+mod old_build_tests {
+    use super::*;
+
+    #[test]
+    fn the_refusal_names_the_conversations_that_keep_the_old_build() {
+        let list = json!({"conversations":[
+            {"id":"12b6a0cd-eca8-4462-a809-16db0688704c","title":"Follow up","phase":"waitingInput"},
+            {"id":"700bb4d2-c4c8-49b9-9fbe-5a3a6a11245e","title":"Idle one","phase":"idle"},
+            {"id":"not-a-uuid","title":"Bad","phase":"running"}
+        ]});
+        let busy = busy_conversations(&list);
+        assert_eq!(busy.len(), 1);
+        let text = old_build_busy(&busy);
+        assert!(text.starts_with("Another agent-panel build is running for this profile"));
+        assert!(text.contains("\u{201c}Follow up\u{201d}"));
+        assert!(text.ends_with("[blocking:12b6a0cd-eca8-4462-a809-16db0688704c]"));
+        assert!(!old_build_busy(&[]).contains("[blocking:"));
     }
 }
