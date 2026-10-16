@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.230
+## 1.5.231
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.69 (no CLI change; this release ships the extension's element picking).
+
+### New Features
+
+- **Pick an element straight into the side-panel chat.** A "Pick element" button in the composer: click it, click something on the page, and the element lands in the message box as a chip at once, with its screenshot and, when the project's source is found, its file and line. Shift picks several; Esc cancels. Elements inside shadow DOM and same-origin iframes can be picked. The agent receives each element's selector and a way to locate it, so it can act on it in the tab.
+- **Inspect & Ask goes to the side-panel chat by default.** Sending to a terminal session over ocs is the second choice, remembered per site.
+- **One permission prompt instead of one per site.** Picking from the side panel asks Chrome for access to a site the first time; "Allow element picking on all sites" in Options asks once for all of them.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.230
+
 Works with extension ab-connect 0.5.68 (no extension change).
 
 ### Bug Fixes
@@ -13,7 +28,6 @@ Works with extension ab-connect 0.5.68 (no extension change).
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.229
 
