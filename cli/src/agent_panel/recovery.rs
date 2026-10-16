@@ -231,20 +231,26 @@ mod unix {
 
     /// Whether `pid` has exited and only waits to be reaped. A zombie cannot
     /// act, but it keeps its process group in the kernel until its parent
-    /// (for an orphan, launchd or init) reaps it. `None` when unreadable.
+    /// (for an orphan, launchd or init) reaps it. A process already tearing
+    /// itself down counts too: the kernel no longer signals it. `None` when
+    /// unreadable or gone.
     pub(super) fn zombie(pid: i32) -> Option<bool> {
         #[cfg(target_os = "linux")]
         {
-            linux_stat(pid).map(|s| s.state == 'Z')
+            linux_stat(pid).map(|s| matches!(s.state, 'Z' | 'X'))
         }
         #[cfg(target_os = "macos")]
         {
             // proc_pidinfo serves no record for a zombie (ESRCH); the
             // kern.proc.pid sysctl does. `kinfo_proc` is 648 bytes with
             // `kp_proc.p_stat` (a char) at offset 36 (xnu sys/sysctl.h,
-            // sys/proc.h; checked with offsetof on macOS 26).
+            // sys/proc.h; checked with offsetof on macOS 26), after
+            // `kp_proc.p_flag` (an int) at 32.
             const KINFO_PROC_SIZE: usize = 648;
+            const P_FLAG_OFFSET: usize = 32;
             const P_STAT_OFFSET: usize = 36;
+            /// `P_WEXIT`: the process is exiting.
+            const P_WEXIT: i32 = 0x0000_2000;
             let mut info = [0u8; KINFO_PROC_SIZE];
             let mut length = KINFO_PROC_SIZE;
             let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
@@ -259,8 +265,12 @@ mod unix {
                 )
             };
             // A pid that no longer exists returns success with length 0.
-            (status == 0 && length == KINFO_PROC_SIZE)
-                .then(|| u32::from(info[P_STAT_OFFSET]) == libc::SZOMB)
+            (status == 0 && length == KINFO_PROC_SIZE).then(|| {
+                let mut flag = [0u8; 4];
+                flag.copy_from_slice(&info[P_FLAG_OFFSET..P_FLAG_OFFSET + 4]);
+                u32::from(info[P_STAT_OFFSET]) == libc::SZOMB
+                    || i32::from_ne_bytes(flag) & P_WEXIT != 0
+            })
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
@@ -302,7 +312,9 @@ mod unix {
         for pid in pids {
             match zombie(pid) {
                 Some(true) => zombies += 1,
-                // Unreadable or gone: kept, the caller re-checks the session.
+                // Reaped since it was listed.
+                None if unsafe { libc::kill(pid, 0) } != 0 && errno() == libc::ESRCH => {}
+                // Unreadable: kept, the caller re-checks the session.
                 _ => live.push(pid),
             }
         }
