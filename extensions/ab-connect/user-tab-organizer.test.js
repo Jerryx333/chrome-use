@@ -5,11 +5,11 @@ function fixture() {
   let rows = [1,2,3].map((id,index)=>({id,index,windowId:10,url:`https://example.test/${id}`,title:`Page ${id}`,active:id===3,pinned:false,audible:false,incognito:false,groupId:-1}));
   const log=[];let stored={};let next=100;const groups=new Map();
   const env={
-    storage:{get:async()=>structuredClone(stored),set:async value=>{stored=structuredClone(value);}},
+    storage:{get:async()=>structuredClone(stored),set:async value=>{stored={...stored,...structuredClone(value)};}},
     isAgent:id=>id===99,isAgentWindow:id=>id===99,
     tabs:{
       get:async id=>{const t=rows.find(x=>x.id===id);if(!t)throw Error('missing');return {...t};},
-      group:async ({tabIds})=>{log.push(['group',tabIds]);const id=next++;groups.set(id,{id});for(const t of rows)if(tabIds.includes(t.id))t.groupId=id;return id;},
+      group:async ({tabIds,groupId,createProperties})=>{log.push(['group',tabIds,groupId,createProperties?.windowId]);const id=groupId??next++;if(!groups.has(id))groups.set(id,{id,windowId:createProperties?.windowId??rows.find(t=>t.id===tabIds[0]).windowId});for(const t of rows)if(tabIds.includes(t.id))t.groupId=id;return id;},
       ungroup:async id=>{log.push(['ungroup',id]);rows.find(t=>t.id===id).groupId=-1;},
       move:async (id,{index})=>{log.push(['move',id,index]);const [t]=rows.splice(rows.findIndex(t=>t.id===id),1);rows.splice(index,0,t);rows.forEach((x,i)=>x.index=i);},
     },
@@ -64,4 +64,40 @@ test('a failed API reply is unconfirmed and is never replayed after worker resta
  const f=fixture();const group=f.env.tabs.group;f.env.tabs.group=async params=>{await group(params);throw Error('reply lost');};
  const result=await f.organizer.organize(f.request);assert.ok(result.results.every(x=>x.status==='unconfirmed'));
  await createUserTabOrganizer(f.env).organize(f.request);assert.equal(f.log.filter(x=>x[0]==='group').length,1);
+});
+
+test('a later batch joins the group this organizer made instead of adding a duplicate',async()=>{
+ const f=fixture();
+ f.request.groups[0].tabs=f.request.groups[0].tabs.slice(0,1);
+ await f.organizer.organize(f.request);
+ assert.equal(f.rows[0].groupId,100);assert.deepEqual(f.log[0].slice(3),[10],'new groups stay in the tabs\' window');
+ f.rows[2].active=false;
+ const second={version:1,id:'test-request-2',reviewed:true,groups:[{name:'Research',color:'blue',groupId:100,
+   tabs:[f.rows[2]].map(({id,index,windowId,url,title})=>({id,index,windowId,url,title}))}]};
+ const r=await f.organizer.organize(second);
+ assert.deepEqual(r.results,[{tabId:3,groupId:100,status:'grouped'}]);
+ assert.equal(f.groups.size,1,'no second group');
+ const undone=await f.organizer.undo({version:1,id:'test-request-2',reviewed:true});
+ assert.deepEqual(undone.undoResults.map(x=>x.status),['restored']);assert.equal(f.rows.find(t=>t.id===1).groupId,100,'the first batch keeps its group');
+});
+test('a group the organizer did not make is never joined, whatever its title',async()=>{
+ const f=fixture();
+ // e.g. a chrome-use agent session group titled like the reviewed group
+ f.groups.set(7,{id:7,windowId:10,title:'Research',color:'blue'});
+ f.request.groups[0].groupId=7;
+ const r=await f.organizer.organize(f.request);
+ assert.deepEqual(r.results.map(x=>x.status),['grouped','grouped']);
+ assert.equal(f.rows[0].groupId,100,'a new group, not the foreign one');assert.equal(f.groups.get(7).title,'Research');
+});
+test('a renamed or moved group is not joined',async()=>{
+ for(const patch of [{title:'Renamed'},{windowId:11}]){
+   const f=fixture();
+   f.request.groups[0].tabs=f.request.groups[0].tabs.slice(0,1);
+   await f.organizer.organize(f.request);Object.assign(f.groups.get(100),patch);
+   f.rows[2].active=false;
+   const second={version:1,id:'test-request-2',reviewed:true,groups:[{name:'Research',color:'blue',groupId:100,
+     tabs:[f.rows[2]].map(({id,index,windowId,url,title})=>({id,index,windowId,url,title}))}]};
+   const r=await f.organizer.organize(second);
+   assert.equal(r.results[0].groupId,101,JSON.stringify(patch));
+ }
 });

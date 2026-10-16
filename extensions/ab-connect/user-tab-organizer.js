@@ -2,8 +2,14 @@
 // API continues to refuse foreign-tab mutations. This door groups only unchanged, ordinary,
 // ungrouped background tabs and keeps a durable, idempotent undo record in this profile.
 export const USER_TAB_GROUPS_VERSION = 1;
+// Reported alongside the version (kept at 1 so existing callers still match): a group may name
+// `groupId`, a group this organizer created earlier, to add tabs to it.
+export const USER_TAB_GROUPS_JOIN = true;
 const COLORS = new Set(['grey','blue','red','yellow','green','pink','purple','cyan','orange']);
 const KEY = 'thermo_tab_organizer_v1';
+// Native groups this organizer created. Only these can be joined, so a chrome-use agent group
+// (or any group the user made) is never a target, whatever its title.
+const CREATED = 'thermo_tab_organizer_groups_v1';
 const UUID = /^[a-zA-Z0-9_-]{8,100}$/;
 
 function validate(request) {
@@ -15,6 +21,8 @@ function validate(request) {
   for (const group of request.groups) {
     if (typeof group.name !== 'string' || !group.name.trim() || group.name.length > 100 || !COLORS.has(group.color))
       throw Error('organizeTabs: invalid group name or color');
+    if (group.groupId !== undefined && (!Number.isInteger(group.groupId) || group.groupId < 0))
+      throw Error('organizeTabs: invalid groupId');
     if (!Array.isArray(group.tabs) || !group.tabs.length) throw Error('organizeTabs: empty group');
     let window;
     for (const tab of group.tabs) {
@@ -55,6 +63,18 @@ export function createUserTabOrganizer(env) {
     }
     await env.storage.set({[KEY]: records});
   };
+  const created = async () => new Set((await env.storage.get(CREATED))?.[CREATED] || []);
+  const remember = async id => {
+    const ids = [...(await created()), id];
+    await env.storage.set({[CREATED]: ids.slice(-1000)});
+  };
+  // The group to add to: one this organizer made, still in the tabs' window with the reviewed
+  // title. Anything else means a new group.
+  const joinable = async (group, windowId) => {
+    if (group.groupId === undefined || !(await created()).has(group.groupId)) return undefined;
+    let info; try { info = await env.groups.get(group.groupId); } catch {}
+    return info && info.windowId === windowId && info.title === group.name ? info : undefined;
+  };
   const response = record => ({version:1,id:record.id,phase:record.phase,results:record.results || [],undoResults:record.undoResults || []});
   return {
     organize(request) { return serial(async () => {
@@ -88,14 +108,28 @@ export function createUserTabOrganizer(env) {
         await save(records); // original positions survive worker termination
         let groupId;
         try {
-          groupId = await env.tabs.group({tabIds:fresh.map(t=>t.id)});
-          for (const original of record.originals.filter(t=>fresh.some(x=>x.id===t.id))) original.newGroupId = groupId;
+          const existing = await joinable(group, fresh[0].windowId);
+          if (existing) {
+            groupId = existing.id;
+            await env.tabs.group({groupId, tabIds:fresh.map(t=>t.id)});
+          } else {
+            // windowId keeps the group in the tabs' own window; without it Chrome builds the group
+            // in the focused window and moves the tabs there.
+            groupId = await env.tabs.group({tabIds:fresh.map(t=>t.id), createProperties:{windowId:fresh[0].windowId}});
+            await remember(groupId);
+          }
+          for (const original of record.originals.filter(t=>fresh.some(x=>x.id===t.id))) {
+            original.newGroupId = groupId;
+            // Undo checks the group still looks the way this batch left it.
+            if (existing) original.groupColor = existing.color;
+          }
           await save(records);
-          await env.groups.update(groupId,{title:group.name,color:group.color,collapsed:false});
+          if (!existing) await env.groups.update(groupId,{title:group.name,color:group.color,collapsed:false});
           const info = await env.groups.get(groupId);
+          const color = existing ? existing.color : group.color;
           for (const expected of fresh) {
             let tab; try { tab=await env.tabs.get(expected.id); } catch {}
-            const verified = tab && sameIdentity(tab,expected) && tab.groupId === groupId && info.title === group.name && info.color === group.color;
+            const verified = tab && sameIdentity(tab,expected) && tab.groupId === groupId && info.title === group.name && info.color === color;
             record.results.push({tabId:expected.id,groupId,status:verified?'grouped':'unconfirmed'});
           }
         } catch {

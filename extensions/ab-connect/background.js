@@ -83,7 +83,7 @@ import {
 } from './update-check.js';
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
-import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION } from './user-tab-organizer.js';
+import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION, USER_TAB_GROUPS_JOIN } from './user-tab-organizer.js';
 import { createTabGrants, LENT_TAB_CLOSE } from './tab-grant.js';
 import { bindingsFrom, openTabPanel, panelTabKey, PANEL_TAB_PREFIX, tabForConversation } from './panel-tabs.js';
 import {
@@ -1628,6 +1628,7 @@ async function handleForwardCdpCommand(msg) {
       relayHealth: getRelayHealth(),
       policy: policySummary(),
       userTabGroupsVersion: USER_TAB_GROUPS_VERSION,
+      userTabGroupsJoin: USER_TAB_GROUPS_JOIN,
       connected: port != null,
       attachedTargets: attachedTargetsFrom(tabs.entries()),
       ownedTabs: [...ownedTabs],
