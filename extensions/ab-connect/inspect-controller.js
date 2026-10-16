@@ -9,10 +9,15 @@ import { InspectRegistry, INSPECT_PORT_NAME, isLocalOrigin } from './inspect-reg
 import { inspectProbe, validateProbeResult } from './inspect-probe.js';
 import { captureVerdict, cropScreenshots } from './inspect-capture.js';
 import { chooseSource, formatAnnotation, sourceLabel, NOTE_MAX, INSTRUCTION_MAX } from './inspect-format.js';
+import { inspectChipsKey, chipsFromAnnotations, mergeChips, markStale, QUESTION_MAX } from './inspect-chips.js';
 
 export const INSPECT_COMMAND = 'inspect-element';
 const SETTINGS_KEY = 'inspectSettings';
 const DRAFTS_KEY = 'inspectDrafts';
+// Where picked elements go, per site: the tab's side-panel chat (default) or
+// a terminal session over ocs. Only sites that chose the terminal are kept.
+const DESTINATIONS_KEY = 'inspectDestinations';
+const MAX_DESTINATIONS = 200;
 const MAX_ELEMENTS = 8;
 const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -89,6 +94,10 @@ export function validPair(pair) {
   return { root: pair.root, sourceRoots: [...pair.sourceRoots], sessionId: pair.sessionId, sessionCwd: pair.sessionCwd, sessionLabel: str(pair.sessionLabel, 200) ? pair.sessionLabel : null, pathScope: pair.pathScope, fingerprint: pair.fingerprint };
 }
 
+export function normalizeDestination(value) {
+  return value === 'terminal' ? 'terminal' : 'panel';
+}
+
 export function tabTargetPayload(target) {
   return { root: target.root, sourceRoots: target.sourceRoots, sessionId: target.sessionId, sessionCwd: target.sessionCwd, fingerprint: target.fingerprint };
 }
@@ -119,7 +128,7 @@ export class InspectController {
     c.runtime.onConnect.addListener(port => {
       if (port.name === INSPECT_PORT_NAME) this.acceptPort(port);
     });
-    c.tabs.onRemoved.addListener(tabId => this.registry.revokeTab(tabId, 'closed'));
+    c.tabs.onRemoved.addListener(tabId => { this.registry.revokeTab(tabId, 'closed'); void c.storage.session?.remove(inspectChipsKey(tabId)).catch(() => {}); });
     c.tabs.onActivated.addListener(({ tabId, windowId }) => { this.registry.bumpWindow(windowId); this.registry.bump(tabId); });
     c.tabs.onZoomChange?.addListener(({ tabId }) => this.registry.bump(tabId));
     c.windows?.onRemoved?.addListener(windowId => this.registry.bumpWindow(windowId));
@@ -128,6 +137,7 @@ export class InspectController {
     // resolve again and the user re-checks what is selected.
     c.webNavigation.onHistoryStateUpdated?.addListener(details => {
       if (details.frameId !== 0) return;
+      void this.staleChips(details.tabId, { pageUrl: details.url });
       const instance = this.registry.get(details.tabId);
       if (!instance) return;
       instance.tabTarget = null;
@@ -137,7 +147,34 @@ export class InspectController {
       if (details.frameId !== 0) return;
       this.registry.bump(details.tabId);
       if (details.documentId) this.registry.revokeDocument(details.tabId, details.documentId);
+      void this.staleChips(details.tabId, { documentId: details.documentId || null, pageUrl: details.url });
     });
+  }
+
+  // Chips waiting in a tab's panel stay after the page moves on, marked
+  // stale: the agent is told they may no longer be there.
+  async staleChips(tabId, where) {
+    const session = this.chrome.storage.session;
+    if (!session) return;
+    try {
+      const key = inspectChipsKey(tabId);
+      const next = markStale((await session.get(key))?.[key], where);
+      if (next) await session.set({ [key]: next });
+    } catch {}
+  }
+
+  async destination(origin) {
+    const stored = (await this.chrome.storage.local.get(DESTINATIONS_KEY))?.[DESTINATIONS_KEY] || {};
+    return normalizeDestination(stored[origin]);
+  }
+
+  async saveDestination(origin, value) {
+    const stored = { ...((await this.chrome.storage.local.get(DESTINATIONS_KEY))?.[DESTINATIONS_KEY] || {}) };
+    delete stored[origin];
+    if (normalizeDestination(value) === 'terminal') stored[origin] = 'terminal';
+    const kept = Object.fromEntries(Object.entries(stored).slice(-MAX_DESTINATIONS));
+    await this.chrome.storage.local.set({ [DESTINATIONS_KEY]: kept });
+    return normalizeDestination(value);
   }
 
   async settings() {
@@ -170,9 +207,12 @@ export class InspectController {
     if (type === 'inspect:hello') {
       const handed = this.registry.handSecret(sender);
       if (!handed) { sendResponse({ ok: false }); return false; }
-      void this.settings().then(settings => sendResponse({
+      // The panel needs no setup: only the terminal destination asks to be
+      // enabled first, so only then does the input frame open at once.
+      const instance = this.registry.forPickerSender(sender, handed.instanceId);
+      void Promise.all([this.settings(), this.destination(instance?.origin)]).then(([settings, destination]) => sendResponse({
         ok: true, ...handed, frameUrl: this.chrome.runtime.getURL('inspect-frame.html'),
-        frameOrigin: `chrome-extension://${this.chrome.runtime.id}`, enabled: settings.enabled,
+        frameOrigin: `chrome-extension://${this.chrome.runtime.id}`, enabled: settings.enabled || destination === 'panel',
       }));
       return true;
     }
@@ -347,6 +387,7 @@ export class InspectController {
       type: 'authorized', origin: instance.origin, pageUrl: sanitizedPageUrl(instance.pageUrl),
       env: isLocalOrigin(instance.origin) ? 'local' : 'test', settings,
       draft: fresh ? draft : null, hostConnected: this.hostReady(),
+      destination: await this.destination(instance.origin), tabId: instance.tabId,
     });
     this.pushAnnotations(instance);
   }
@@ -439,6 +480,10 @@ export class InspectController {
         if (!instance.annotations.length) throw new Error(t('inspect_error_nothing_selected'));
         await this.queueCapture(instance);
         return answer({ ok: true });
+      case 'destination':
+        return answer({ destination: await this.saveDestination(instance.origin, message.destination) });
+      case 'toPanel':
+        return answer({ result: await this.toPanel(instance, message) });
       case 'copyText':
         return answer({ revision: instance.selectionRevision || 0, annotations: instance.annotations.map((a, i) => formatAnnotation(a, i + 1)) });
       case 'deliver':
@@ -460,6 +505,25 @@ export class InspectController {
       default:
         throw new Error('Unknown inspect frame request');
     }
+  }
+
+  // The frame opened the tab's panel from the user's click; this puts the
+  // reviewed selection into that panel's composer. Nothing is sent.
+  async toPanel(instance, message) {
+    const session = this.chrome.storage.session;
+    if (!session) throw new Error(t('inspect_panel_unavailable'));
+    if (message.revision !== (instance.selectionRevision || 0)) throw new Error(t('inspect_error_selection_changed_sending'));
+    if (!instance.annotations.length) throw new Error(t('inspect_error_select_first'));
+    const notes = {}, images = {};
+    instance.annotations.forEach((a, i) => { if (typeof message.notes?.[a.id] === 'string') notes[i] = message.notes[a.id]; });
+    for (const item of Array.isArray(message.images) ? message.images.slice(0, MAX_ELEMENTS) : []) {
+      if (Number.isInteger(item?.index) && instance.annotations[item.index] && typeof item.dataUrl === 'string') images[item.index] = item.dataUrl;
+    }
+    const chips = chipsFromAnnotations(instance.annotations, { documentId: instance.topDocumentId, pageUrl: (await this.pageNow(instance)).pageUrl, notes, images });
+    const key = inspectChipsKey(instance.tabId);
+    const record = mergeChips((await session.get(key))?.[key], chips, String(message.question || '').slice(0, QUESTION_MAX));
+    await session.set({ [key]: record });
+    return { added: chips.length, waiting: record.items.length };
   }
 
   async deliver(instance, message) {

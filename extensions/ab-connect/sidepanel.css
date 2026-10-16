@@ -158,6 +158,14 @@ details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .page-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; margin:0; padding:2px 4px 2px 8px; border-radius:10px; background:var(--surface); color:var(--muted); font-size:12px; }
 .page-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .page-chip button { border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
+/* Elements picked with Inspect & Ask, waiting for the next send. */
+.inspect-chips { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 4px; }
+.inspect-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; padding:2px 2px 2px 8px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--ink); font-size:12px; }
+.inspect-chip .inspect-chip-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; }
+.inspect-chip .inspect-chip-tag { flex:none; color:var(--muted); font-size:11px; }
+.inspect-chip .inspect-chip-tag.stale { color:var(--warning); }
+.inspect-chip.stale .inspect-chip-label { opacity:.6; text-decoration:line-through; text-decoration-thickness:1px; }
+.inspect-chip button { border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
 .page-ref { font-size:11px; color:var(--muted); margin-top:3px; max-width:88%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .page-ref::before { content:"↳ "; }
 

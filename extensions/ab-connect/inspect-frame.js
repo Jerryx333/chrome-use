@@ -29,7 +29,12 @@ const state = {
   // Agent replies to the batch in `deliveryId`; `null` until the host says
   // it keeps them, `false` when it does not.
   replies: null,
+  // 'panel': elements go into this tab's side-panel chat (the default);
+  // 'terminal': they go to a terminal session over ocs. Remembered per site.
+  destination: 'panel', tabId: null, question: '',
 };
+
+const toTerminal = () => state.destination === 'terminal';
 
 let bgPort = null;
 let pickerPort = null;
@@ -103,7 +108,7 @@ function onBackground(message) {
       state.edited.clear();
       state.attach.clear();
       restoreNotes();
-      if (state.settings?.enabled && !state.status && !state.statusError) void refreshStatus();
+      if (toTerminal() && state.settings?.enabled && !state.status && !state.statusError) void refreshStatus();
       render();
       return;
     case 'images':
@@ -116,6 +121,7 @@ function onBackground(message) {
     case 'pageChanged':
       focusEpoch++;
       state.tabTarget = null;
+      if (!toTerminal()) return;
       state.notice = { tone: 'warn', text: t('inspect_page_moved') };
       void refreshStatus();
       return;
@@ -154,6 +160,8 @@ function observeHeight() {
 async function onAuthorized(message) {
   state.ctx = { origin: message.origin, pageUrl: message.pageUrl, env: message.env, hostConnected: message.hostConnected };
   state.settings = message.settings;
+  state.destination = message.destination === 'terminal' ? 'terminal' : 'panel';
+  state.tabId = Number.isInteger(message.tabId) ? message.tabId : null;
   // A confirmed batch (sent/stored) is finished; a new picker starts clean.
   // Only an unconfirmed or unknown outcome is carried over, so it is checked
   // before anything else is sent.
@@ -169,7 +177,7 @@ async function onAuthorized(message) {
   $('env').className = 'badge ' + (message.env === 'local' ? '' : 'test');
   $('connecting').hidden = true;
   view.hidden = false;
-  if (state.settings?.enabled) await refreshStatus();
+  if (toTerminal() && state.settings?.enabled) await refreshStatus();
   render();
   watchReplies();
 }
@@ -234,16 +242,17 @@ function render() {
   if (!state.authorized) return;
   view.replaceChildren();
   if (state.ended) { view.append(h('div', { class: 'pad muted', text: state.ended })); return; }
-  if (!state.settings?.enabled) { view.append(enableView()); return; }
+  if (toTerminal() && !state.settings?.enabled) { view.append(h('div', { class: 'pad stack' }, destinationView(), enableView())); return; }
   // Where it goes, then what is selected, then what to change.
   const body = h('div', { class: 'pad stack' });
-  body.append(...[targetView(), setupView(), cardsView(), composerView(), deliveryView()].filter(Boolean));
+  const parts = toTerminal() ? [targetView(), setupView(), cardsView(), composerView(), deliveryView()] : [cardsView(), panelComposerView()];
+  body.append(...[destinationView(), ...parts].filter(Boolean));
   if (state.notice) body.append(h('div', { class: `notice small ${state.notice.tone}`, text: state.notice.text }));
   view.append(body);
 }
 
 function enableView() {
-  return h('div', { class: 'pad stack' },
+  return h('div', { class: 'stack' },
     h('div', { text: t('inspect_enable_intro') }),
     h('ul', { class: 'small muted' },
       h('li', { text: t('inspect_enable_point_shortcut') }),
@@ -257,6 +266,106 @@ function enableView() {
         await refreshStatus();
       } }, t('inspect_enable_button')),
       h('button', { onclick: () => pickerPort?.postMessage({ type: 'close' }) }, t('inspect_not_now'))));
+}
+
+// The two destinations, side by side. Switching is remembered for this site.
+function destinationView() {
+  const option = (value, label) => h('button', {
+    class: 'seg' + (state.destination === value ? ' on' : ''), 'aria-pressed': String(state.destination === value), disabled: state.busy,
+    onclick: () => guarded(async () => {
+      if (state.destination === value) return;
+      const { destination } = await request('destination', { destination: value });
+      state.destination = destination;
+      if (toTerminal() && state.settings?.enabled && !state.status) await refreshStatus();
+    }),
+  }, label);
+  return h('div', { class: 'segmented', role: 'group', 'aria-label': t('inspect_destination_label') },
+    option('panel', t('inspect_destination_panel')), option('terminal', t('inspect_destination_terminal')));
+}
+
+// Panel destination: an optional question and "Add to chat". The elements
+// and the question go into this tab's side-panel composer; the user sends
+// from there, so nothing leaves the browser from this frame.
+function panelComposerView() {
+  const area = h('textarea', { id: 'question', rows: '2', placeholder: t('inspect_question_placeholder'), disabled: state.busy });
+  area.value = state.question;
+  area.addEventListener('input', () => { state.question = area.value; });
+  area.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
+      event.preventDefault();
+      addToPanel(event);
+    }
+  });
+  setTimeout(() => { if (document.activeElement !== area && state.annotations.length) area.focus(); }, 0);
+  return h('div', { class: 'composer' }, area,
+    h('div', { class: 'composer-bar' },
+      h('button', { class: 'ghost', title: t('inspect_add_element_title'), onclick: () => pickerPort?.postMessage({ type: 'pick' }) }, t('inspect_add_element')),
+      h('span', { class: 'grow' }),
+      h('span', { class: 'hint', text: t('inspect_add_to_chat_hint') }),
+      h('button', { id: 'toPanel', class: 'primary', title: t('inspect_add_to_chat_title'), disabled: state.busy || !state.annotations.length, onclick: addToPanel }, t('inspect_add_to_chat'))));
+}
+
+// Opening the side panel needs the user's gesture, so it is asked for first,
+// in the click (or Enter) itself; the elements follow. The panel picks them
+// up whether it was open already or opens now.
+function addToPanel(event) {
+  if (!event?.isTrusted || state.busy || !state.annotations.length) return;
+  let opened = Promise.reject(new Error('no tab'));
+  if (Number.isInteger(state.tabId) && chrome.sidePanel?.open) {
+    const tabId = state.tabId;
+    const enabling = chrome.sidePanel.setOptions({ tabId, path: `sidepanel.html?tab=${tabId}`, enabled: true });
+    opened = Promise.all([enabling, chrome.sidePanel.open({ tabId })]);
+  }
+  opened.catch(() => {});
+  const selection = state.selection;
+  for (const input of document.querySelectorAll('input[data-annotation]')) {
+    const a = state.annotations.find(x => x.id === input.dataset.annotation);
+    if (a) a.note = input.value;
+  }
+  const notes = Object.fromEntries(state.annotations.map(a => [a.id, a.note || '']));
+  const shots = state.annotations.map((_, i) => (state.attach.get(i) === false ? null : state.edited.get(i) || state.images[i] || null));
+  const question = $('question')?.value ?? state.question;
+  state.busy = true;
+  state.notice = null;
+  render();
+  void (async () => {
+    try {
+      const images = [];
+      for (const [index, dataUrl] of shots.entries()) if (dataUrl) images.push({ index, dataUrl: await shrink(dataUrl) });
+      await request('toPanel', { revision: selection, notes, images, question });
+      const shown = await opened.then(() => true, () => false);
+      state.question = '';
+      if (shown) { pickerPort?.postMessage({ type: 'close' }); return; }
+      state.notice = { tone: 'warn', text: t('inspect_added_open_panel') };
+    } catch (error) {
+      state.notice = { tone: 'bad', text: error.message };
+    }
+    state.busy = false;
+    render();
+  })();
+}
+
+// Screenshots wait in session storage until sent: large ones are scaled
+// down and stored as JPEG.
+const SHRINK_OVER = 400 * 1024;
+function shrink(dataUrl) {
+  if (dataUrl.length <= SHRINK_OVER) return Promise.resolve(dataUrl);
+  return new Promise(resolve => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, 1200 / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = h('canvas', {});
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.85));
+    };
+    image.onerror = () => resolve(dataUrl);
+    image.src = dataUrl;
+  });
 }
 
 function hasMarks() {
@@ -483,8 +592,9 @@ function consentCard(kind) {
 }
 
 function cardsView() {
-  if (!state.annotations.length) return h('div', { class: 'empty small muted', text: t('inspect_pick_hint') });
-  const root = state.status?.binding?.root;
+  if (!state.annotations.length) return h('div', { class: 'empty small muted', text: t(toTerminal() ? 'inspect_pick_hint' : 'inspect_pick_hint_panel') });
+  const root = toTerminal() ? state.status?.binding?.root : null;
+  const frozen = toTerminal() && locked();
   const cards = h('div', { class: 'cards' }, state.annotations.map((a, i) => {
     const image = state.edited.get(i) || state.images[i] || null;
     const attach = state.attach.get(i) !== false;
@@ -501,7 +611,7 @@ function cardsView() {
           ? h('div', { class: 'small muted', text: t('inspect_no_source_location') })
           : h('div', { class: 'src' }, h('span', { class: 'mono ellipsis', title: a.source, text: tailPath(a.source, 30) }),
             link ? h('a', { href: link, class: 'small', onclick: event => { event.preventDefault(); openExternal(link); } }, t('inspect_open')) : null),
-        h('input', { type: 'text', 'data-annotation': a.id, disabled: state.busy || locked(), placeholder: t('inspect_note_placeholder'), value: a.note || '', oninput: event => { a.note = event.target.value; refreshSend(); syncNote(a); } }),
+        h('input', { type: 'text', 'data-annotation': a.id, disabled: state.busy || frozen, placeholder: t('inspect_note_placeholder'), value: a.note || '', oninput: event => { a.note = event.target.value; refreshSend(); syncNote(a); } }),
         image ? h('label', { class: 'small muted toggle' }, h('input', { type: 'checkbox', checked: attach, onchange: event => { state.attach.set(i, event.target.checked); event.target.closest('.card')?.querySelector('img.thumb')?.classList.toggle('detached', !event.target.checked); } }), t('inspect_attach_screenshot')) : null));
   }));
   const wrap = h('div', { class: 'stack' }, cards);

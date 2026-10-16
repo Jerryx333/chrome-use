@@ -58,6 +58,18 @@
   "inspect_add_element_title": {
     "message": "在页面上再选一个元素"
   },
+  "inspect_add_to_chat": {
+    "message": "加入对话"
+  },
+  "inspect_add_to_chat_hint": {
+    "message": "⏎ 加入 · ⇧⏎ 换行"
+  },
+  "inspect_add_to_chat_title": {
+    "message": "把这些元素放进这个标签页的侧边栏对话。在那边点发送之前，什么都不会发出去。"
+  },
+  "inspect_added_open_panel": {
+    "message": "已加入。从工具栏打开 chrome-use 侧边栏就能看到。"
+  },
   "inspect_agree_setup": {
     "message": "同意，让我的 agent 来配置"
   },
@@ -370,6 +382,15 @@
       }
     }
   },
+  "inspect_destination_label": {
+    "message": "点选的元素发到哪里"
+  },
+  "inspect_destination_panel": {
+    "message": "侧边栏对话"
+  },
+  "inspect_destination_terminal": {
+    "message": "终端会话（ocs）"
+  },
   "inspect_draw_clear": {
     "message": "清除"
   },
@@ -573,11 +594,17 @@
       }
     }
   },
+  "inspect_panel_unavailable": {
+    "message": "这个 Chrome 用不了侧边栏。"
+  },
   "inspect_pause_title": {
     "message": "暂停动画 (P)"
   },
   "inspect_pick_hint": {
     "message": "点页面上的元素开始。Shift+点击或拖选可以选多个。"
+  },
+  "inspect_pick_hint_panel": {
+    "message": "点页面上的元素，把它加入这个标签页的对话。Shift+点击或拖选可以选多个。"
   },
   "inspect_picker_hint": {
     "message": "点选元素 · Shift+点击或拖选多个 · ↑/↓ 父/子元素 · P 暂停动画 · Esc 退出"
@@ -593,6 +620,9 @@
   },
   "inspect_project_path_placeholder": {
     "message": "或者输入项目目录路径"
+  },
+  "inspect_question_placeholder": {
+    "message": "想问这些元素什么（可选）…"
   },
   "inspect_reason_port_moved": {
     "message": "这个端口上的 dev server 现在从另一个目录运行。请重新选择请求发到哪里。"
@@ -1716,6 +1746,38 @@
   },
   "panel_image_unavailable": {
     "message": "已保存的图片不可用"
+  },
+  "panel_inspect_chip_foreign_frame": {
+    "message": "跨站 iframe"
+  },
+  "panel_inspect_chip_in_frame": {
+    "message": "在 iframe 里"
+  },
+  "panel_inspect_chip_in_shadow": {
+    "message": "在 Shadow DOM 里"
+  },
+  "panel_inspect_chip_remove": {
+    "message": "移除这个元素"
+  },
+  "panel_inspect_chip_shot": {
+    "message": "+ 截图"
+  },
+  "panel_inspect_chip_stale": {
+    "message": "页面已变"
+  },
+  "panel_inspect_chip_stale_title": {
+    "message": "点选之后页面变了；会告诉 agent 它可能已经不在了。"
+  },
+  "panel_inspect_chip_title": {
+    "message": "$PAGE$ 上的 $SELECTOR$",
+    "placeholders": {
+      "selector": {
+        "content": "$1"
+      },
+      "page": {
+        "content": "$2"
+      }
+    }
   },
   "panel_keep_going": {
     "message": "继续"
@@ -2908,6 +2970,9 @@
   },
   "sidepanel_import_source_placeholder": {
     "message": "绝对路径或仓库地址"
+  },
+  "sidepanel_inspect_chips": {
+    "message": "点选的元素"
   },
   "sidepanel_inspect_replies": {
     "message": "agent 的回复"

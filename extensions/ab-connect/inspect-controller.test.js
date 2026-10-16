@@ -14,7 +14,10 @@ function fakeChrome() {
     windows: { onRemoved: on('wremoved') },
     webNavigation: { onCommitted: on('committed'), onHistoryStateUpdated: on('history'), getFrame: async () => ({ documentId: 'doc' }) },
     scripting: { injected: [], executeScript: async args => { chrome.scripting.injected.push(args); return [{ result: [] }]; } },
-    storage: { local: { get: async key => ({ [key]: store[key] }), set: async value => Object.assign(store, value) } },
+    storage: {
+      local: { get: async key => ({ [key]: store[key] }), set: async value => Object.assign(store, value) },
+      session: { data: {}, async get(key) { return { [key]: this.data[key] }; }, async set(value) { Object.assign(this.data, value); }, async remove(key) { delete this.data[key]; } },
+    },
   };
   return { chrome, store, listeners };
 }
@@ -50,7 +53,18 @@ test('start injects the extractor and picker into the top frame only', async () 
   assert.deepEqual(chrome.scripting.injected[0], { target: { tabId: 7, frameIds: [0] }, files: ['inspect-extract.js', 'inspect-picker.js'] });
   assert.equal(hello.ok, true);
   assert.equal(hello.frameOrigin, 'chrome-extension://ext');
+  assert.equal(hello.enabled, true, 'the side-panel destination needs no enable step');
+});
+
+test('a site that chose the terminal still asks to be enabled first', async () => {
+  const { chrome, store, listeners } = fakeChrome();
+  store.inspectDestinations = { 'http://localhost:5173': 'terminal' };
+  const controller = new InspectController({ chrome, hostReady: () => true, request: async () => ({}) });
+  controller.install();
+  await controller.start({ id: 7, windowId: 1, url: 'http://localhost:5173/orders' });
+  const hello = await new Promise(resolve => controller.onPickerMessage({ type: 'inspect:hello' }, { id: 'ext', tab: { id: 7 }, frameId: 0, documentId: 'doc' }, resolve));
   assert.equal(hello.enabled, false);
+  void listeners;
 });
 
 test('only the frame holding the secret is authorized; others are disconnected', async () => {
@@ -327,4 +341,59 @@ test('the frame reads its batch replies only from a host that keeps them', async
   real.msg[0]({ type: 'replies', requestId: 43, deliveryId: '../x' });
   await flush();
   assert.equal(real.sent.find(m => m.requestId === 43).type, 'error');
+});
+
+test('the destination is remembered per site and only the terminal is stored', async () => {
+  const { real, store } = await authorized();
+  assert.equal(real.sent.find(m => m.type === 'authorized').destination, 'panel');
+  assert.equal(real.sent.find(m => m.type === 'authorized').tabId, 7);
+  real.msg[0]({ type: 'destination', requestId: 1, destination: 'terminal' });
+  await flush(); await flush();
+  assert.equal(real.sent.find(m => m.requestId === 1).destination, 'terminal');
+  assert.deepEqual(store.inspectDestinations, { 'http://localhost:5173': 'terminal' });
+  real.msg[0]({ type: 'destination', requestId: 2, destination: 'anything' });
+  await flush(); await flush();
+  assert.equal(real.sent.find(m => m.requestId === 2).destination, 'panel');
+  assert.deepEqual(store.inspectDestinations, {});
+});
+
+test('toPanel puts the reviewed selection into the tab\'s chips, without sending', async () => {
+  const { real, instance, chrome, calls } = await authorized();
+  instance.selectionRevision = 2;
+  instance.annotations = [{ id: '2:0', element, probe: { component: 'SaveButton' }, note: '' }, { id: '2:1', element: { ...element, selector: 'a.more', label: 'a "More"', source: null, frames: [{ selector: 'iframe#pay', url: 'http://localhost:5173/pay', hosts: [] }] }, probe: null, note: '' }];
+  real.msg[0]({ type: 'toPanel', requestId: 1, revision: 2, notes: { '2:0': 'too dark' }, images: [{ index: 0, dataUrl: 'data:image/png;base64,iVBORw0KGgo=' }, { index: 1, dataUrl: 'data:text/html;base64,AAAA' }], question: 'Why is this gray?' });
+  await flush(); await flush(); await flush();
+  assert.deepEqual(real.sent.find(m => m.requestId === 1).result, { added: 2, waiting: 2 });
+  const record = chrome.storage.session.data.ab_inspect_tab_7;
+  assert.equal(record.question, 'Why is this gray?');
+  assert.equal(record.items[0].selector, 'button.save');
+  assert.equal(record.items[0].component, 'SaveButton');
+  assert.equal(record.items[0].note, 'too dark');
+  assert.equal(record.items[0].documentId, 'doc');
+  assert.equal(record.items[0].pageUrl, 'http://localhost:5173/orders');
+  assert.match(record.items[0].image, /^data:image\/png/);
+  assert.equal(record.items[1].image, null, 'only PNG or JPEG screenshots are kept');
+  assert.equal(record.items[1].frames[0].selector, 'iframe#pay');
+  assert.equal(calls.some(c => c[0] === 'inspectDeliver'), false, 'nothing goes to the host');
+  // A frame quoting an older selection is refused.
+  real.msg[0]({ type: 'toPanel', requestId: 2, revision: 1 });
+  await flush(); await flush();
+  assert.ok(real.sent.find(m => m.type === 'error' && m.requestId === 2));
+});
+
+test('chips go stale when the tab moves on and leave with the tab', async () => {
+  const { real, instance, chrome } = await authorized();
+  instance.annotations = [{ id: '0:0', element, probe: null, note: '' }];
+  real.msg[0]({ type: 'toPanel', requestId: 1, revision: 0 });
+  await flush(); await flush(); await flush();
+  const session = chrome.storage.session.data;
+  for (const fn of lastListeners.history) fn({ tabId: 7, frameId: 0, url: 'http://localhost:5173/orders?x=1' });
+  await flush(); await flush();
+  assert.equal(session.ab_inspect_tab_7.items[0].stale, false, 'same path, same document');
+  for (const fn of lastListeners.committed) fn({ tabId: 7, frameId: 0, documentId: 'doc2', url: 'http://localhost:5173/orders' });
+  await flush(); await flush();
+  assert.equal(session.ab_inspect_tab_7.items[0].stale, true);
+  for (const fn of lastListeners.removed) fn(7);
+  await flush();
+  assert.equal(session.ab_inspect_tab_7, undefined);
 });

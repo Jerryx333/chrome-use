@@ -58,6 +58,18 @@
   "inspect_add_element_title": {
     "message": "Pick another element on the page"
   },
+  "inspect_add_to_chat": {
+    "message": "Add to chat"
+  },
+  "inspect_add_to_chat_hint": {
+    "message": "⏎ add · ⇧⏎ new line"
+  },
+  "inspect_add_to_chat_title": {
+    "message": "Put these elements into this tab's side-panel chat. Nothing is sent until you send it there."
+  },
+  "inspect_added_open_panel": {
+    "message": "Added. Open the chrome-use side panel from the toolbar to see them."
+  },
   "inspect_agree_setup": {
     "message": "Agree, let my agent set it up"
   },
@@ -370,6 +382,15 @@
       }
     }
   },
+  "inspect_destination_label": {
+    "message": "Where picked elements go"
+  },
+  "inspect_destination_panel": {
+    "message": "Side panel chat"
+  },
+  "inspect_destination_terminal": {
+    "message": "Terminal session (ocs)"
+  },
   "inspect_draw_clear": {
     "message": "Clear"
   },
@@ -573,11 +594,17 @@
       }
     }
   },
+  "inspect_panel_unavailable": {
+    "message": "The side panel is not available in this Chrome."
+  },
   "inspect_pause_title": {
     "message": "Pause animations (P)"
   },
   "inspect_pick_hint": {
     "message": "Click an element on the page to start. Shift+click or drag to select several."
+  },
+  "inspect_pick_hint_panel": {
+    "message": "Click an element on the page to add it to this tab's chat. Shift+click or drag to select several."
   },
   "inspect_picker_hint": {
     "message": "Click an element · Shift+click or drag to select several · ↑/↓ parent/child · P pause animations · Esc exit"
@@ -593,6 +620,9 @@
   },
   "inspect_project_path_placeholder": {
     "message": "Or type a project folder path"
+  },
+  "inspect_question_placeholder": {
+    "message": "Ask about these elements (optional)…"
   },
   "inspect_reason_port_moved": {
     "message": "The dev server on this port now runs from another folder. Choose where requests go now."
@@ -1716,6 +1746,38 @@
   },
   "panel_image_unavailable": {
     "message": "Saved image unavailable"
+  },
+  "panel_inspect_chip_foreign_frame": {
+    "message": "other-site frame"
+  },
+  "panel_inspect_chip_in_frame": {
+    "message": "in a frame"
+  },
+  "panel_inspect_chip_in_shadow": {
+    "message": "in shadow DOM"
+  },
+  "panel_inspect_chip_remove": {
+    "message": "Remove this element"
+  },
+  "panel_inspect_chip_shot": {
+    "message": "+ screenshot"
+  },
+  "panel_inspect_chip_stale": {
+    "message": "page changed"
+  },
+  "panel_inspect_chip_stale_title": {
+    "message": "The page changed after this was picked; the agent is told it may no longer be there."
+  },
+  "panel_inspect_chip_title": {
+    "message": "$SELECTOR$ on $PAGE$",
+    "placeholders": {
+      "selector": {
+        "content": "$1"
+      },
+      "page": {
+        "content": "$2"
+      }
+    }
   },
   "panel_keep_going": {
     "message": "Keep going"
@@ -2908,6 +2970,9 @@
   },
   "sidepanel_import_source_placeholder": {
     "message": "Absolute path or repository URL"
+  },
+  "sidepanel_inspect_chips": {
+    "message": "Picked elements"
   },
   "sidepanel_inspect_replies": {
     "message": "Replies from agents"

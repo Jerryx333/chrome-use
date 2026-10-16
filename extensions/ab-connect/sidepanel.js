@@ -8,6 +8,7 @@ import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } fro
 import { createProjectChoice, folderLabel } from './project-picker.js';
 import { grantRefusal, originOf } from './tab-grant.js';
 import { panelTabKey, panelTabFrom } from './panel-tabs.js';
+import { inspectChipsKey, chipTitle, composeMessage, removeChip, withinLabel } from './inspect-chips.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -65,7 +66,7 @@ function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? 
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
 export function createPanel({ document, runtime, storage, tabs, windows, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
-  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
+  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'inspectChips', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -90,6 +91,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   const tabBound = !tabMode && Number.isInteger(panelTab);
   const openInTab = document.getElementById('openInTab'), pagePicker = document.getElementById('pagePicker'), pageLabel = document.getElementById('pageLabel');
   let ownTabId = null, pickedTabId = null;
+  // Inspect & Ask → chat: elements picked on this tab wait here as chips
+  // (written by the background under this tab's key) until the next send.
+  const chipKey = tabBound ? inspectChipsKey(panelTab) : null;
+  let chipRecord = { items: [], question: '' };
   // "Let the agent use this tab": grants live in the background (per tab,
   // per conversation); every view of a conversation shows the same ones.
   const grantBar = document.getElementById('grantBar'), grantText = document.getElementById('grantText'), grantNote = document.getElementById('grantNote'), grantRevoke = document.getElementById('grantRevoke'), grantTab = document.getElementById('grantTab');
@@ -1148,7 +1153,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         if (pendingMessages.get(id) === pending && status.message.known) {
           pendingMessages.delete(id);
           await savePending(id);
-          if (id === selected && epoch === selectionEpoch) { if (nodes.message.value === pending.text) { nodes.message.value = ''; imageDrafts.delete(id); renderImageDrafts(); } controls(); }
+          if (id === selected && epoch === selectionEpoch) { if (nodes.message.value === (pending.typed ?? pending.text)) { nodes.message.value = ''; imageDrafts.delete(id); renderImageDrafts(); } controls(); }
           if (drafts.get(id) === pending.text) drafts.delete(id);
         } else if (pendingMessages.get(id) === pending) {
           pending.unconfirmed = true;
@@ -1183,15 +1188,27 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   nodes.clearPending.addEventListener('click', () => void recoverPending(false).catch(error));
   async function send(direct = false) {
     if (panelSupport?.mode !== 'full') throw new Error(t('panel_error_cli_required'));
-    if (!connected || sending || convertingImages || pendingMessages.has(selected) || conversation?.phase === 'recoveryRequired' || !nodes.message.value.trim()) return;
+    const chips = [...chipRecord.items];
+    if (!connected || sending || convertingImages || pendingMessages.has(selected) || conversation?.phase === 'recoveryRequired' || (!nodes.message.value.trim() && !chips.length)) return;
     // A built-in command, looked up before skills.
     const command = parseResumeCommand(nodes.message.value);
     if (command) { await openResume(command.query); return; }
     if (direct && conversation?.directMessageId) throw new Error(t('panel_error_direct_waiting'));
-    const text = nodes.message.value, chosen = chosenSkill(text);
+    const typed = nodes.message.value, chosen = chosenSkill(typed);
     const images = [...(imageDrafts.get(selected) || [])];
     sending = true; clearError(); controls();
     try {
+      // Picked elements ride in the message: their context after the user's
+      // words, their screenshots after the user's own images.
+      const shots = [], imageNumbers = [];
+      if (panelSupport?.imageAttachments) {
+        for (const [index, chip] of chips.entries()) {
+          const match = chip.image && /^data:(image\/(?:png|jpeg));base64,(.+)$/.exec(chip.image);
+          if (!match || images.length + shots.length >= 5) continue;
+          try { shots.push(await encodeImage(new Blob([base64Bytes(match[2])], { type: match[1] }))); imageNumbers[index] = images.length + shots.length; } catch {}
+        }
+      }
+      const text = composeMessage(typed, chips, { tabId: panelTab, imageNumbers });
       if (!selected) {
         const options = { agentId: nodes.agent.value };
         const model = nodes.customModel.value.trim() || nodes.model.value;
@@ -1202,14 +1219,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         const project = panelSupport?.projectDirectory ? projectChoice.value() : '';
         if (project) options.project = project;
         const result = await api('conversationCreate', options); rememberAgent(options.agentId);
-        conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = typed;
         // Where it works was chosen before it existed; its first turn already
         // runs in this tab when it works here.
         if (tabBound) { await setWorkIn(result.conversation.id, workInFor('')); newWorkIn = null; await maybeAutoLend(); }
         // After selecting it: selecting another conversation hides the question.
         if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); }
       }
-      const id = selected, pending = { id: crypto.randomUUID(), text, direct };
+      const id = selected, pending = { id: crypto.randomUUID(), text, typed, direct };
       imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();
       const params = { conversationId: id, messageId: pending.id, text };
       const attached = attachedPage(); if (attached) params.page = attached;
@@ -1218,9 +1235,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       if (panelSupport?.tabGrant) { const grant = grantFor(id); params.tabGrant = grant ? { tabId: grant.tabId, url: grant.url.slice(0, 8192), title: (grant.title || grant.url).slice(0, 1024) } : null; }
       // Recording consent is per message; the host refuses to record without it.
       if (panelSupport?.recording && nodes.recordTask.checked) params.record = true;
-      if (images.length) {
+      if (images.length || shots.length) {
         params.attachments = [];
-        for (const image of images) {
+        for (const image of [...images, ...shots]) {
           const uploaded = await api('conversationAttachmentPut', { conversationId: id, data: image.data });
           params.attachments.push(uploaded.attachment);
         }
@@ -1229,13 +1246,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         const snapshot = await api('conversationSkillSelect', { conversationId: id, skillId: chosen.id });
         params.skillId = snapshot.skill.id;
       }
-      pending.params = { ...params }; delete pending.params.conversationId; delete pending.params.messageId; delete pending.params.text;
+      pending.params = { ...params }; delete pending.params.conversationId; delete pending.params.messageId; delete pending.params.text; delete pending.params.typed;
       pendingMessages.set(id, pending); controls();
       try { await savePending(id); } catch (failure) { pendingMessages.delete(id); throw failure; }
       const result = await api(direct ? 'conversationSendDirect' : 'conversationSend', params);
       pageDetached = false; renderPage(); nodes.recordTask.checked = false;
-      if (selected === id) { conversation = result.conversation; if (nodes.message.value === text) nodes.message.value = ''; }
+      if (selected === id) { conversation = result.conversation; if (nodes.message.value === typed) nodes.message.value = ''; }
       imageDrafts.delete(id); if (images.length) imageDrafts.delete(''); renderImageDrafts();
+      if (chips.length) await dropChips(chips.map(chip => chip.id));
       pendingMessages.delete(id); drafts.delete(id); await savePending(id); await list(); await poll();
     } finally { sending = false; controls(); applyPendingBinding(); }
   }
@@ -1647,6 +1665,45 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     try { await api('skillImport', { agentId: skillAgent(), kind: nodes.skillImportKind.value, source: nodes.skillImportSource.value.trim() }); await loadSkills(); }
     finally { nodes.importSkill.disabled = false; }
   })().catch(error));
+  // Chips, and a question typed in the picker: the question is put into the
+  // composer once and taken out of storage, so a reload does not add it again.
+  function applyChips(record) {
+    chipRecord = { items: Array.isArray(record?.items) ? record.items : [], question: '' };
+    const question = typeof record?.question === 'string' ? record.question.trim() : '';
+    if (question) {
+      const current = nodes.message.value.trimEnd();
+      nodes.message.value = current ? `${current}\n${question}` : question;
+      if (chipKey) void Promise.resolve(storage?.session?.set?.({ [chipKey]: { ...record, question: '' } })).catch(() => {});
+    }
+    renderChips();
+  }
+  async function writeChips(change) {
+    if (!chipKey) return;
+    const stored = (await Promise.resolve(storage?.session?.get?.(chipKey)).catch(() => null))?.[chipKey] || { items: [], question: '' };
+    const next = change(stored);
+    if (next.items.length || next.question) await storage?.session?.set?.({ [chipKey]: next }); else await storage?.session?.remove?.(chipKey);
+    chipRecord = { items: next.items, question: '' }; renderChips();
+  }
+  // Only the chips that were sent go: one added while sending stays.
+  function dropChips(ids) { return writeChips(record => ({ ...record, items: (record.items || []).filter(chip => !ids.includes(chip.id)) })).catch(() => {}); }
+  function renderChips() {
+    const items = chipRecord.items;
+    nodes.inspectChips.hidden = !items.length;
+    nodes.inspectChips.replaceChildren(...items.map(chip => {
+      const item = element('span', undefined, 'inspect-chip' + (chip.stale ? ' stale' : ''));
+      item.setAttribute('role', 'listitem');
+      item.title = t('panel_inspect_chip_title', chip.selector, chip.pageUrl) + (chip.stale ? `\n${t('panel_inspect_chip_stale_title')}` : '');
+      const where = withinLabel(chip);
+      item.append(element('span', chipTitle(chip), 'inspect-chip-label'));
+      if (where) item.append(element('span', t(where === 'frame' ? 'panel_inspect_chip_in_frame' : where === 'foreign' ? 'panel_inspect_chip_foreign_frame' : 'panel_inspect_chip_in_shadow'), 'inspect-chip-tag'));
+      if (chip.image) item.append(element('span', t('panel_inspect_chip_shot'), 'inspect-chip-tag'));
+      if (chip.stale) item.append(element('span', t('panel_inspect_chip_stale'), 'inspect-chip-tag stale'));
+      const remove = button('×', () => writeChips(record => removeChip(record, chip.id)), 'quiet inspect-chip-remove');
+      remove.title = t('panel_inspect_chip_remove'); remove.setAttribute('aria-label', t('panel_inspect_chip_remove'));
+      item.append(remove);
+      return item;
+    }));
+  }
   function renderImageDrafts() {
     const images = imageDrafts.get(selected) || [];
     nodes.attachmentDrafts.hidden = !images.length;
@@ -1755,6 +1812,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     // Another view changed where a conversation works (a take-back in a panel tab).
     if (changes.ab_panel_work_in && area !== 'session') { workInMap = changes.ab_panel_work_in.newValue || {}; renderGrant(); }
     if (!tabBound || area !== 'session') return;
+    if (chipKey && changes[chipKey]) applyChips(changes[chipKey].newValue);
     const change = changes[panelTabKey(panelTab)];
     if (!change || (change.newValue || '') === selected) return;
     // Applied once the send ends, so two panels never keep one conversation.
@@ -1771,7 +1829,11 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
       workInDefault = (await Promise.resolve(storage?.sync?.get?.({ ab_work_in: 'tab' })).catch(() => null))?.ab_work_in === 'window' ? 'window' : 'tab';
       workInMap = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
-      if (tabBound) { const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || ''; }
+      if (tabBound) {
+        const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || '';
+        const waiting = (await Promise.resolve(storage?.session?.get?.(chipKey)).catch(() => null))?.[chipKey];
+        if (waiting) applyChips(waiting);
+      }
       else selected = tabMode ? initialConversation : saved?.ab_panel_conversation || '';
       if (saved?.ab_panel_full_access === false) newFullAccess = false;
       for (const [id, messageId] of Object.entries(saved?.ab_panel_pending || {}).slice(0, 64)) {

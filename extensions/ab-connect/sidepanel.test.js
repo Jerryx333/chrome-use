@@ -1195,3 +1195,79 @@ test('an update blocked by an older build names its conversations; Open finds on
   assert.equal(notice.hidden, true);
   f.panel.close();
 });
+
+// ---- Inspect & Ask → side-panel chat (0.5.67) ---------------------------------
+
+const pickedChip = (id, selector, extra = {}) => ({ id, documentId: 'd1', pageUrl: 'https://shop.example/21', label: `button "${id}"`, component: null, selector, frames: [], shadowHosts: [], foreignFrame: null, text: id, source: null, note: '', html: '', rect: null, image: null, stale: false, addedAt: 1, ...extra });
+
+test('picked elements wait as chips in their tab\'s composer and ride in the next message', async () => {
+  const tabs = { async get(id) { return { id, url: `https://shop.example/${id}`, title: `Tab ${id}` }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const sent = [], put = [];
+  const f = await fixture({
+    panelTab: 21, tabs,
+    session: { ab_panel_tab_21: 'b', ab_inspect_tab_21: { items: [pickedChip('save', 'form > button.save', { image: 'data:image/png;base64,iVBORw0KGgo=', stale: true })], question: 'Why is it gray?' } },
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, pageContext: true, imageAttachments: true } }),
+    encodeImage: async blob => ({ name: 'Image', mediaType: blob.type, data: 'shot' }),
+    conversationAttachmentPut: async params => { put.push(params); return { success: true, result: { attachment: { id: `att${put.length}` } } }; },
+    conversationSend: async params => { sent.push(params); return { success: true, result: { conversation: chat('b') } }; },
+  });
+  await settle(); await settle();
+  const chips = f.nodes.get('inspectChips');
+  assert.equal(chips.hidden, false);
+  assert.equal(chips.children.length, 1);
+  assert.equal(f.nodes.get('message').value, 'Why is it gray?', 'the question from the picker goes into the composer');
+  assert.equal(f.session.data.ab_inspect_tab_21.question, '', 'and is taken out so a reload does not add it again');
+  // The panel was open already: a new pick adds a chip and sends nothing.
+  const record = { items: [...f.session.data.ab_inspect_tab_21.items, pickedChip('more', 'a.more')], question: '' };
+  f.session.data.ab_inspect_tab_21 = record;
+  f.storageChange({ ab_inspect_tab_21: { newValue: record } }); await settle();
+  assert.equal(chips.children.length, 2);
+  assert.equal(sent.length, 0);
+  // Removing one.
+  chips.children[1].querySelectorAll('button')[0].fire('click'); await settle(); await settle();
+  assert.deepEqual(f.session.data.ab_inspect_tab_21.items.map(c => c.id), ['save']);
+  assert.equal(chips.children.length, 1);
+  await f.panel.send(); await settle();
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.startsWith('Why is it gray?\n\n[Page elements the user picked'), sent[0].text);
+  assert.match(sent[0].text, /in tab "chrome-tab:21"/);
+  assert.match(sent[0].text, /selector: `form > button\.save`/);
+  assert.match(sent[0].text, /screenshot: attached image 1/);
+  assert.match(sent[0].text, /stale: picked before the page changed/);
+  assert.doesNotMatch(sent[0].text, /a\.more/);
+  assert.equal(sent[0].attachments.length, 1);
+  assert.equal(put[0].data, 'shot');
+  assert.equal(f.session.data.ab_inspect_tab_21, undefined, 'sent chips leave the composer');
+  assert.equal(chips.hidden, true);
+  assert.equal(f.nodes.get('message').value, '');
+  f.panel.close();
+});
+
+test('chips alone can be sent, and a failed send keeps them', async () => {
+  const tabs = { async get(id) { return { id, url: `https://shop.example/${id}`, title: `Tab ${id}` }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  let fail = true;
+  const sent = [];
+  const f = await fixture({
+    panelTab: 21, tabs,
+    session: { ab_panel_tab_21: 'b', ab_inspect_tab_21: { items: [pickedChip('save', 'form > button.save')], question: '' } },
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, pageContext: true } }),
+    conversationSend: async params => { sent.push(params); if (fail) throw new Error('lost'); return { success: true, result: { conversation: chat('b') } }; },
+  });
+  await settle(); await settle();
+  assert.equal(f.nodes.get('message').value, '');
+  await assert.rejects(f.panel.send());
+  assert.equal(f.session.data.ab_inspect_tab_21.items.length, 1, 'a failed send keeps the chips');
+  assert.match(sent[0].text, /^\[Page elements the user picked/);
+  f.panel.close();
+});
+
+test('another tab\'s chips never show here', async () => {
+  const tabs = { async get(id) { return { id, url: `https://shop.example/${id}`, title: `Tab ${id}` }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ panelTab: 21, tabs, hiddenNodes: ['inspectChips'], session: { ab_inspect_tab_30: { items: [pickedChip('x', '#x')], question: 'not mine' } } });
+  await settle();
+  assert.equal(f.nodes.get('inspectChips').hidden, true);
+  f.storageChange({ ab_inspect_tab_30: { newValue: { items: [pickedChip('y', '#y')], question: 'still not mine' } } }); await settle();
+  assert.equal(f.nodes.get('inspectChips').hidden, true);
+  assert.equal(f.nodes.get('message').value, '');
+  f.panel.close();
+});
