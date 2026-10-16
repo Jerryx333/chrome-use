@@ -65,7 +65,7 @@ results.logs = [];
 b.listeners.push(m => { if (m.method === 'Runtime.exceptionThrown') results.logs.push('EXC ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text)); if (m.method === 'Runtime.consoleAPICalled' && m.params.type !== 'debug') results.logs.push('LOG ' + m.params.args.map(a => a.value ?? a.description).join(' ').slice(0, 300)); });
 await b.send('Runtime.enable', {}, sw.sid);
 // These scenarios cover the terminal destination (ocs); the side-panel
-// destination, the default since 0.5.68, has its own live check.
+// destination, the default since 0.5.69, has its own live check.
 const terminalFor = tabId => `(async () => {
   let origin = null;
   for (let i = 0; i < 50 && !origin; i++) {

@@ -1197,7 +1197,7 @@ test('an update blocked by an older build names its conversations; Open finds on
   f.panel.close();
 });
 
-// ---- Inspect & Ask → side-panel chat (0.5.68) ---------------------------------
+// ---- Inspect & Ask → side-panel chat (0.5.69) ---------------------------------
 
 const pickedChip = (id, selector, extra = {}) => ({ id, documentId: 'd1', pageUrl: 'https://shop.example/21', label: `button "${id}"`, component: null, selector, frames: [], shadowHosts: [], foreignFrame: null, text: id, source: null, note: '', html: '', rect: null, image: null, stale: false, addedAt: 1, ...extra });
 
@@ -1273,7 +1273,7 @@ test('another tab\'s chips never show here', async () => {
   f.panel.close();
 });
 
-// ---- The Pick button (0.5.68) -----------------------------------------------------
+// ---- The Pick button (0.5.69) -----------------------------------------------------
 
 const pickTabs = url => ({ async get(id) { return { id, url, title: `Tab ${id}` }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } });
 

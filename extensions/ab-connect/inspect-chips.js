@@ -1,4 +1,4 @@
-// Inspect & Ask → side-panel chat (0.5.68). Elements picked on a page wait
+// Inspect & Ask → side-panel chat (0.5.69). Elements picked on a page wait
 // in that tab's panel composer as chips until the user sends. The background
 // writes them to storage.session under one key per tab (content scripts and
 // the page cannot read that area); the tab's panel shows them, lets the user

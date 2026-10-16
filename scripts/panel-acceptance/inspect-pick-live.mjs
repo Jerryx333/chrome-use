@@ -1,5 +1,5 @@
 // Live check and screenshots of the side panel's Pick element button
-// (ab-connect 0.5.68), build host only, one browser run per host at a time:
+// (ab-connect 0.5.69), build host only, one browser run per host at a time:
 //   HOST_BIN=<chrome-use> CHROME=<Chrome for Testing> EXT_DIR=<extension with host_permissions> THEME=light|dark node inspect-pick-live.mjs
 // The panel is laid out 380 px wide; THEME sets prefers-color-scheme on the
 // panel, the page and the input frame. Steps (each with screenshots in $OUT):
