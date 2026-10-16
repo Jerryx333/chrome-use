@@ -2261,6 +2261,7 @@ mod tests {
             continuation: None,
             record: false,
             preface: None,
+            tab_grant: None,
         };
         assert_eq!(
             message.fingerprint().unwrap(),
@@ -2358,6 +2359,7 @@ mod tests {
             continuation: None,
             record: false,
             preface: None,
+            tab_grant: None,
         })
         .unwrap();
         let next = e.begin(&fork_id).unwrap().unwrap();
