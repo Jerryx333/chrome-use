@@ -1141,7 +1141,7 @@ impl Engine {
             active.continuation = next.continuation;
             active.preface = next.preface.clone();
         }
-        next.tab_grant = self.tab_grants.get(id).cloned();
+        next.tab_grant = self.tab_grants.get(id).cloned().map(Box::new);
         let chat = self.chat(id)?;
         let direct = chat.active_direct;
         let (full_access, options) = (chat.full_access, chat.options.clone());

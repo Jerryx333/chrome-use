@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentPanelBridge, isAgentPanelSender } from './agent-panel-bridge.js';
@@ -138,14 +139,48 @@ test('only packaged extension pages may invoke native agent services', () => {
   assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('options.html') }, runtime), true);
   // options_ui.open_in_tab: the options page runs as the top frame of a tab.
   assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('options.html'), tab: { id: 7 }, frameId: 0 }, runtime), true);
+  // "Open in a tab": the panel as the top frame of a normal tab, with its
+  // conversation in the query.
+  assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('sidepanel.html') + '?mode=tab&conversation=c1', tab: { id: 9 }, frameId: 0 }, runtime), true);
+  assert.equal(isAgentPanelSender({ id: 'own', url: runtime.getURL('sidepanel.html') + '?mode=tab', tab: { id: 9 }, frameId: 0 }, runtime), true);
   for (const sender of [
     { id: 'other', url: runtime.getURL('sidepanel.html') },
+    { id: 'other', url: runtime.getURL('sidepanel.html') + '?mode=tab', tab: { id: 9 }, frameId: 0 },
     { id: 'own', url: 'https://example.com/' },
+    { id: 'own', url: 'https://example.com/sidepanel.html', tab: { id: 1 }, frameId: 0 },
+    // A frame inside a tab, or a tab sender that names no frame.
     { id: 'own', url: runtime.getURL('sidepanel.html'), tab: { id: 1 } },
-    { id: 'own', url: runtime.getURL('sidepanel.html') + '?spoof' },
+    { id: 'own', url: runtime.getURL('sidepanel.html') + '?mode=tab', tab: { id: 1 }, frameId: 2 },
     { id: 'own', url: runtime.getURL('options.html'), tab: { id: 7 }, frameId: 3 },
-    { id: 'own', url: runtime.getURL('options.html') + '#x', tab: { id: 7 }, frameId: 0 },
+    { id: 'own', url: runtime.getURL('popup.html'), tab: { id: 7 }, frameId: 0 },
+    { id: 'own', url: runtime.getURL('inspect-frame.html'), tab: { id: 7 }, frameId: 4 },
+    { id: 'own', url: 'not a url' },
   ]) assert.equal(isAgentPanelSender(sender, runtime), false);
+});
+
+test('the pages that reach agent services are not web-accessible, so no site can frame them', () => {
+  const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf8'));
+  const exposed = (manifest.web_accessible_resources || []).flatMap(entry => entry.resources);
+  for (const page of ['sidepanel.html', 'sidepanel.js', 'options.html']) assert.equal(exposed.includes(page), false, page);
+  assert.equal(exposed.some(resource => resource.includes('*')), false);
+});
+
+test('tab grant replies prove the outcome they report', async () => {
+  for (const [tabGrant, valid] of [
+    [{ granted: true, tabId: 7, adopted: true }, true],
+    [{ granted: true, tabId: 7, adopted: false, error: 'refused' }, true],
+    [{ granted: false }, true],
+    [{ granted: true, tabId: 7 }, false],
+    [{ granted: true, adopted: true }, false],
+    [{ granted: false, adopted: true }, false],
+    [{}, false],
+  ]) {
+    const { bridge, messages } = setup();
+    const pending = bridge.request('conversationTabGrant', { conversationId: 'chat', grant: null });
+    bridge.receive({ method: 'agentPanelReply', requestId: messages[0].requestId, result: { schemaVersion: 1, conversation: { id: 'chat', phase: 'idle' }, tabGrant } });
+    if (valid) assert.deepEqual((await pending).tabGrant, tabGrant);
+    else await assert.rejects(pending, /Malformed/);
+  }
 });
 
 test('configuration replies must match the requested operation and real outcome', async () => {

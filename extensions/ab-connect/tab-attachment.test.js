@@ -25,7 +25,7 @@ test('real attach workflow shares target discovery and announcement without repl
   let attaches = 0
   let announcements = 0
   const context = {
-    console, tabs, createTabAttachmentQueue,
+    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null },    console, tabs, createTabAttachmentQueue,
     chrome: {
       debugger: {
         attach: async () => { attaches++; await gate.promise },
@@ -136,7 +136,7 @@ test('real createTarget announces the requested group before replying even if vi
   const creatingTabGroups = new Map()
   let initialGroup
   const context = {
-    attachCreatedTab, creatingTabGroups, tabs: new Map(),
+    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null },    attachCreatedTab, creatingTabGroups, tabs: new Map(),
     chrome: { tabs: { create: async () => ({ id: 1 }), get: async () => ({ id: 1, groupId: -1 }) } },
     markOwned: async id => { assert.equal(creatingTabGroups.get(id), 'agent-a') },
     groupTabInto: async () => { throw new Error('Chrome visual grouping unavailable') },
@@ -166,7 +166,7 @@ test('real createTarget announces the requested group before replying even if vi
 function detachWorker(sequence) {
   let handler, operation, timers = 0, attaches = 0
   const context = {
-    console,
+    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null },    console,
     chrome: {
       debugger: { onDetach: { addListener: fn => { handler = fn } } },
       tabs: { get: async () => sequence.length > 1 ? sequence.shift() : sequence[0] },
@@ -196,4 +196,29 @@ test('a tab discarded during backoff is not attached; ordinary navigation still 
     { url: 'https://example.com', discarded: true },
   ]).run(), { timers: 1, attaches: 0 })
   assert.deepEqual(await detachWorker([{ url: 'https://example.com', discarded: false }]).run(), { timers: 1, attaches: 1 })
+})
+
+test('a tab the user took back is never attached again, by any path (0.5.62)', async () => {
+  let attaches = 0
+  const context = {
+    console, tabs: new Map(), createTabAttachmentQueue,
+    tabGrants: { load: async () => {}, isRefused: tabId => tabId === 5, removed: async () => null, get: () => null },
+    TAKEN_BACK: 'The user took this tab back',
+    chrome: { debugger: { attach: async () => { attaches++ }, getTargets: async () => [{ id: 'T6', tabId: 6 }] } },
+    withRelayTimeout: p => p,
+    targetInfoForTab: (targets, tabId) => ({ targetId: `T${tabId}` }),
+    tabScopeHints: async () => ({}),
+    removedTabs: new Set(), sessionToTab: new Map(),
+    newTabEntry: (tabId, sessionId, targetId) => ({ tabId, sessionId, targetId, attached: true, inflight: 0, replay: new Map() }),
+    rememberSessionTarget() {}, setBadge() {}, port: {},
+    announceAttachedTab: async () => 'announce',
+    trackedDebuggerCommand: async () => ({}),
+  }
+  vm.createContext(context)
+  vm.runInContext(section('const attachTab = createTabAttachmentQueue', 'function newTabEntry(') + '\nglobalThis.attachTab = attachTab;', context)
+  await assert.rejects(context.attachTab(5), /took this tab back/)
+  assert.equal(attaches, 0)
+  assert.equal(context.tabs.has(5), false)
+  await context.attachTab(6)
+  assert.equal(attaches, 1)
 })

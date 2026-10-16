@@ -1,4 +1,21 @@
 {
+  "bg_grant_action_title": {
+    "message": "chrome-use: the agent can use this tab (conversation \"$TITLE$\"). Open the side panel to take it back.",
+    "placeholders": {
+      "title": {
+        "content": "$1"
+      }
+    }
+  },
+  "bg_grant_badge": {
+    "message": "AI"
+  },
+  "bg_grant_service_unavailable": {
+    "message": "The local agent service did not accept the tab. Update chrome-use to 1.5.221 or later and check that it is connected."
+  },
+  "bg_grant_untitled": {
+    "message": "Untitled"
+  },
   "bg_notify_connected_message": {
     "message": "Bridged to your local CLI — ready to drive your tabs."
   },

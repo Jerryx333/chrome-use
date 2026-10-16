@@ -98,7 +98,7 @@ pub(super) struct Message {
     /// never part of the identity: a queued message follows the grant as
     /// it is when it runs, not as it was when it was sent.
     #[serde(skip)]
-    pub tab_grant: Option<PageContext>,
+    pub tab_grant: Option<Box<PageContext>>,
 }
 
 /// How a turn relates to the one before it.
@@ -1203,7 +1203,7 @@ mod tests {
         let mut m = message("Fill the form");
         m.page = Some(page.clone());
         let before = m.fingerprint().unwrap();
-        m.tab_grant = Some(page.clone());
+        m.tab_grant = Some(Box::new(page.clone()));
         let text = m.prompt_text();
         assert!(text.contains("let you use their own tab \"Cart\" (https://shop.example/cart)"));
         assert!(text.contains("tabId \"chrome-tab:7\" and force: true"));

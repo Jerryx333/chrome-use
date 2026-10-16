@@ -1,4 +1,21 @@
 {
+  "bg_grant_action_title": {
+    "message": "chrome-use：agent 可以使用这个标签页（对话“$TITLE$”）。打开侧栏可收回。",
+    "placeholders": {
+      "title": {
+        "content": "$1"
+      }
+    }
+  },
+  "bg_grant_badge": {
+    "message": "AI"
+  },
+  "bg_grant_service_unavailable": {
+    "message": "本机 agent 服务没有接受这个标签页。请把 chrome-use 更新到 1.5.221 或更高版本，并确认已连接。"
+  },
+  "bg_grant_untitled": {
+    "message": "未命名"
+  },
   "bg_notify_connected_message": {
     "message": "已连上本机 CLI，可以操作你的标签页了。"
   },
