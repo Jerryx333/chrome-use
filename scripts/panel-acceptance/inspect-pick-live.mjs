@@ -75,7 +75,7 @@ const panelView = panel => panel.run(`({
   overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth, message: document.getElementById('message').value, selected: document.getElementById('conversation').value,
 })`);
 // Records, in the panel's clock, when each chip first appears.
-const watchChips = panel => panel.run(`(() => { globalThis.__landed = {}; new MutationObserver(() => { for (const c of document.getElementById('inspectChips').children) { const k = c.getAttribute('aria-label'); if (!(k in globalThis.__landed)) globalThis.__landed[k] = Date.now(); } }).observe(document.getElementById('inspectChips'), { childList: true }); return true; })()`);
+const watchChips = panel => panel.run(`(() => { globalThis.__landed = {}; new MutationObserver(() => { for (const c of document.getElementById('inspectChips').children) { const k = c.getAttribute('aria-label'); if (!(k in globalThis.__landed)) globalThis.__landed[k] = { at: Date.now(), cls: c.className }; } }).observe(document.getElementById('inspectChips'), { childList: true }); return true; })()`);
 
 try {
   const X = await openTab(rig, rig.site + '/inspect');
@@ -116,14 +116,14 @@ try {
   const t0 = Date.now();
   await b.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: ps.x, y: ps.y, button: 'left', clickCount: 1 }, page.sid);
   await shot(page.sid, '04-page-flash');
-  const landed = await waitFor(async () => { const l = await panel.run('globalThis.__landed'); const k = Object.keys(l)[0]; return k && { label: k, at: l[k] }; }, { interval: 20, label: 'chip landed' });
+  const landed = await waitFor(async () => { const l = await panel.run('globalThis.__landed'); const k = Object.keys(l)[0]; return k && { label: k, at: l[k].at, cls: l[k].cls }; }, { interval: 20, label: 'chip landed' });
   await shot(panel.sid, '04-panel-chip-landed');
   const ended = await waitFor(async () => { const v = await panelView(panel); return v.pressed === 'false' && !v.hint && v; }, { timeout: 10000, label: 'picking ended' });
   const latency = landed.at - t0;
   step('picked one', { latency, ended });
   evidence.latencyMs = latency;
   check(latency < 300, `the chip appeared ${latency} ms after the click`);
-  check(/landed/.test(ended.chips[0].cls), 'the new chip is highlighted');
+  check(/landed/.test(landed.cls), 'the new chip is highlighted');
   check(ended.live.length > 0, 'the chip was announced');
 
   // 5. Screenshot and source fill in; details card.

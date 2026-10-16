@@ -1698,34 +1698,21 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   // Element chips sit with the page chip, one family: icon, short name, the
   // source file when one was found, a dot while a screenshot or source is
   // still coming. Hover or focus shows the details; Delete or × removes.
+  // Chips are kept by id and updated in place, so a chip's landing
+  // highlight keeps playing while its screenshot and source fill in.
+  const chipNodes = new Map();
   function renderChips() {
     const items = chipRecord.items;
     const fresh = shownChipIds ? items.filter(chip => !shownChipIds.has(chip.id)) : [];
     shownChipIds = new Set(items.map(chip => chip.id));
     nodes.inspectChips.hidden = !items.length;
-    nodes.inspectChips.replaceChildren(...items.map((chip, index) => {
-      const name = chipTitle(chip);
-      const item = element('span', undefined, 'page-chip inspect-chip' + (chip.stale ? ' stale' : '') + (fresh.includes(chip) ? ' landed' : ''));
-      item.setAttribute('role', 'listitem'); item.tabIndex = 0;
-      item.setAttribute('aria-label', t(chip.stale ? 'panel_inspect_chip_aria_stale' : 'panel_inspect_chip_aria', name));
-      const icon = element('span', undefined, 'inspect-chip-icon'); icon.setAttribute('aria-hidden', 'true'); item.append(icon);
-      item.append(element('span', name, 'inspect-chip-label'));
-      const source = sourceShort(chip.source);
-      if (source) item.append(element('span', source, 'inspect-chip-src'));
-      if (chip.pending?.image || chip.pending?.source) { const dot = element('span', undefined, 'inspect-chip-pending'); dot.title = t('panel_inspect_chip_pending'); item.append(dot); }
-      if (chip.stale) item.append(element('span', t('panel_inspect_chip_stale'), 'inspect-chip-tag stale'));
-      const drop = () => writeChips(record => removeChip(record, chip.id)).then(() => { announce(t('panel_inspect_removed_live', name)); hideCard(); (nodes.inspectChips.children[index] || nodes.message).focus?.(); });
-      const remove = button('×', drop, 'inspect-chip-remove');
-      remove.tabIndex = -1; remove.title = t('panel_inspect_chip_remove'); remove.setAttribute('aria-label', t('panel_inspect_chip_remove_named', name));
-      item.append(remove);
-      item.addEventListener('mouseenter', () => showCard(chip)); item.addEventListener('mouseleave', hideCard);
-      item.addEventListener('focus', () => showCard(chip)); item.addEventListener('blur', hideCard);
-      item.addEventListener('keydown', event => {
-        if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void drop().catch(error); }
-        else if (event.key === 'Escape') hideCard();
-      });
-      return item;
-    }));
+    for (const [id, node] of chipNodes) if (!shownChipIds.has(id)) { node.remove(); chipNodes.delete(id); }
+    items.forEach((chip, index) => {
+      let item = chipNodes.get(chip.id);
+      if (!item) { item = chipNode(chip.id); chipNodes.set(chip.id, item); if (fresh.includes(chip)) { item.dataset.landed = '1'; schedule(() => { delete item.dataset.landed; item.classList.remove?.('landed'); }, 1300); } }
+      fillChip(item, chip);
+      if (nodes.inspectChips.children[index] !== item) nodes.inspectChips.insertBefore(item, nodes.inspectChips.children[index] || null);
+    });
     if (fresh.length) {
       announce(t('panel_inspect_added_live', fresh.map(chipTitle).join(', ')));
       // A pick from the Pick button is done: the next step is typing.
@@ -1733,6 +1720,41 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     }
     if (cardChip && !items.some(chip => chip.id === cardChip)) hideCard();
     else if (cardChip) showCard(items.find(chip => chip.id === cardChip));
+  }
+  function chipNode(id) {
+    const item = element('span');
+    item.setAttribute('role', 'listitem'); item.tabIndex = 0;
+    const current = () => chipRecord.items.find(chip => chip.id === id);
+    const drop = () => {
+      const name = chipTitle(current() || { label: '' }), at = chipRecord.items.findIndex(chip => chip.id === id);
+      return writeChips(record => removeChip(record, id)).then(() => { announce(t('panel_inspect_removed_live', name)); hideCard(); (nodes.inspectChips.children[at] || nodes.inspectChips.children[at - 1] || nodes.message).focus?.(); });
+    };
+    item.drop = drop;
+    item.addEventListener('mouseenter', () => showCard(current())); item.addEventListener('mouseleave', hideCard);
+    item.addEventListener('focus', () => showCard(current())); item.addEventListener('blur', hideCard);
+    item.addEventListener('keydown', event => {
+      if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void drop().catch(error); }
+      else if (event.key === 'Escape') hideCard();
+    });
+    return item;
+  }
+  // Element chips sit with the page chip, one family: icon, short name, the
+  // source file when one was found, a dot while a screenshot or source is
+  // still coming. Hover or focus shows the details; Delete or × removes.
+  function fillChip(item, chip) {
+    const name = chipTitle(chip);
+    item.className = 'page-chip inspect-chip' + (chip.stale ? ' stale' : '') + (item.dataset.landed ? ' landed' : '');
+    item.setAttribute('aria-label', t(chip.stale ? 'panel_inspect_chip_aria_stale' : 'panel_inspect_chip_aria', name));
+    const icon = element('span', undefined, 'inspect-chip-icon'); icon.setAttribute('aria-hidden', 'true');
+    const parts = [icon, element('span', name, 'inspect-chip-label')];
+    const source = sourceShort(chip.source);
+    if (source) parts.push(element('span', source, 'inspect-chip-src'));
+    if (chip.pending?.image || chip.pending?.source) { const dot = element('span', undefined, 'inspect-chip-pending'); dot.title = t('panel_inspect_chip_pending'); parts.push(dot); }
+    if (chip.stale) parts.push(element('span', t('panel_inspect_chip_stale'), 'inspect-chip-tag stale'));
+    const remove = button('×', () => item.drop(), 'inspect-chip-remove');
+    remove.tabIndex = -1; remove.title = t('panel_inspect_chip_remove'); remove.setAttribute('aria-label', t('panel_inspect_chip_remove_named', name));
+    parts.push(remove);
+    item.replaceChildren(...parts);
   }
   function announce(text) { nodes.chipLive.textContent = text; }
   // Details card above the composer: screenshot (or its placeholder), the
