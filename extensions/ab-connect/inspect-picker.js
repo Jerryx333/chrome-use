@@ -216,7 +216,8 @@
     selectionSeq++;
     if (mode === 'direct' && !more && !keep) finishDirect();
     else drawBadges();
-    if (mode === 'direct') flash(nodes);
+    // The confirmation takes the hover label's place until the pointer moves.
+    if (mode === 'direct') { showHover(null); flash(nodes); }
     if (selected.length && mode !== 'direct') openPanel();
     void report().catch(() => {});
   }
