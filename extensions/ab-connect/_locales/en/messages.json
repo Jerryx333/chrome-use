@@ -2034,7 +2034,7 @@
     "message": "Couldn't start picking on this page."
   },
   "panel_pick_permission_denied": {
-    "message": "Picking needs access to this site. Allow it when Chrome asks, or press Alt+Shift+C on the page."
+    "message": "Picking needs access to this site. Allow it when Chrome asks, or press Alt+Shift+C on the page. To stop being asked per site, turn on \"Allow element picking on all sites\" in Options."
   },
   "panel_pick_title": {
     "message": "Pick element: click one on the page and it lands here (Shift for several)"
@@ -3426,5 +3426,11 @@
   },
   "timeline_verdict_page_not_recorded": {
     "message": "Page not recorded"
+  },
+  "options_pick_all_name": {
+    "message": "Allow element picking on all sites"
+  },
+  "options_pick_all_hint": {
+    "message": "Chrome asks once, instead of the first time you pick an element on each site. The extension still touches a page only when you pick an element there."
   }
 }

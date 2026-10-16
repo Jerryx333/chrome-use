@@ -2034,7 +2034,7 @@
     "message": "没能在这个页面上开始选择。"
   },
   "panel_pick_permission_denied": {
-    "message": "选择元素需要访问这个网站的权限。Chrome 询问时请允许，或者在页面上按 Alt+Shift+C。"
+    "message": "选择元素需要访问这个网站的权限。Chrome 询问时请允许，或者在页面上按 Alt+Shift+C。不想每个网站都问，可以在设置里打开「允许在所有网站选择元素」。"
   },
   "panel_pick_title": {
     "message": "选择元素：在页面上点一个，直接放进这里（按住 Shift 连选）"
@@ -3426,5 +3426,11 @@
   },
   "timeline_verdict_page_not_recorded": {
     "message": "未记录页面"
+  },
+  "options_pick_all_name": {
+    "message": "允许在所有网站选择元素"
+  },
+  "options_pick_all_hint": {
+    "message": "Chrome 只问一次，不用在每个网站第一次选择元素时再问。插件仍然只在你选择元素时才接触页面。"
   }
 }
