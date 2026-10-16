@@ -187,11 +187,26 @@ export const checks = [
         want(ev.childAlive === false, 'the child that outlived the leader is gone');
         want(summary.control === 'stopped', 'control is stopped');
         want(ev.controlChanges.find(c => c.to === 'stopped')?.sequence > exited?.sequence, 'control becomes stopped only after exited');
-        // Release build, part 2: the leader exits on Stop, its child keeps the
-        // group alive (plan 5.3's usual unconfirmed case), then recovery.
-        await recover('deadLeader', { exitOnInterrupt: true }, want, ev.deadLeader = {});
+        // Release build, part 2: the leader exits on Stop while its child
+        // runs. The service still kills the group before reaping the leader,
+        // so the child is gone and the exit is confirmed.
+        const d = await stuck('deadLeader', { exitOnInterrupt: true });
+        // The fixture may confirm the interrupt before it exits, so the turn
+        // can end before the process does: wait for both.
+        await h.turnEnd(d.conv.id, d.messageId, 40000);
+        const de = await h.waitFor(async () => { const e = await h.events(d.conv.id); return e.some(x => ['exited', 'processUnconfirmed'].includes(x.kind)) ? e : null; }, { timeout: 40000, label: 'deadLeader process end' });
+        const dr = ev.deadLeader = {};
+        dr.exited = h.kinds(de, 'exited').at(-1)?.data;
+        dr.processUnconfirmed = h.kinds(de, 'processUnconfirmed').length;
+        dr.childAlive = alive(d.child);
+        const ds = (await h.journal(d.conv.id)).conversation;
+        dr.control = ds.control; dr.phase = ds.phase;
+        want(dr.exited?.processExitConfirmed === true && dr.processUnconfirmed === 0, 'deadLeader: the exit is confirmed');
+        want(dr.childAlive === false, 'deadLeader: the child of the exited leader is gone');
+        want(ds.control === 'stopped', 'deadLeader: control is stopped');
+        if (dr.childAlive) { try { process.kill(d.child, 'SIGKILL'); } catch {} }
         if (failures.length) throw new Error(failures.join('; '));
-        return { status: 'pass', note: 'release build: kill path, and dead leader with a live group through review, terminate, fork and a service restart. The leader-alive path needs the e2e build: results-check5-e2e.json. The Windows half needs the Windows runner and was not run.' };
+        return { status: 'pass', note: 'release build: kill path, and a leader that exits on Stop has its child killed and its exit confirmed. A live group through review, terminate, fork and a service restart needs the e2e build: results-check5-e2e.json. The Windows half needs the Windows runner and was not run.' };
       }
       // e2e-tests build with CHROME_USE_E2E_SKIP_STOP_KILL=1: the leader itself stays alive.
       await recover('leaderAlive', { ignoreInterrupt: true }, want, ev.leaderAlive = {});

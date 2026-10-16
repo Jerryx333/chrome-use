@@ -765,9 +765,10 @@ Windows:
   information but never turn `unknown` into `exited`.
 
 Unix:
-- The backend leader is reaped by `child.wait()` before the group check (`backend.rs:281-310`),
-  so the usual unconfirmed case is a dead leader with a live group. A dead leader is never
-  treated as an exited tree.
+- The backend's group is killed before its leader is reaped by `child.wait()` and the group
+  check (`end_owned_group` in `backend.rs`), also when the leader already exited on its own, so
+  an unconfirmed exit leaves a dead leader with a group that `SIGKILL` did not empty within
+  5 s. A dead leader is never treated as an exited tree.
 - `kill(-pgid, 0)` returning `ESRCH` → `exited`.
 - Otherwise ownership must be proven before the group is called ours: enumerate the group's
   members (Linux `/proc/*/stat` fields 5 and 6; macOS `proc_listpids(PROC_PGRP_ONLY)` plus

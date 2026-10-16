@@ -427,48 +427,12 @@ async fn drive(
         *held = Some(owned_job);
         return Err(error);
     }
-    // Kill only the still-live owned process group, before reaping its PID.
-    #[cfg(not(windows))]
-    if child
-        .try_wait()
-        .map_err(|_| "Cannot inspect backend process")?
-        .is_none()
-    {
-        #[cfg(unix)]
-        {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-        }
-        child
-            .kill()
-            .await
-            .map_err(|_| "Backend termination could not be confirmed")?;
-    }
-    let waited = child.wait().await;
+    #[cfg(unix)]
+    end_owned_group(&mut child, pid).await?;
     #[cfg(windows)]
-    if waited.is_err() {
+    if child.wait().await.is_err() {
         *held = Some(owned_job);
         return Err("Backend exit could not be confirmed".into());
-    }
-    waited.map_err(|_| "Backend exit could not be confirmed")?;
-    #[cfg(unix)]
-    {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            if unsafe { libc::kill(-(pid as i32), 0) } < 0
-                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-            {
-                break;
-            }
-            if tokio::time::Instant::now() > deadline {
-                return Err(
-                    "Backend leader exited but its process group could not be confirmed empty"
-                        .into(),
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
     }
     #[cfg(windows)]
     if let Err(error) = owned_job.confirm_empty().await {
@@ -477,6 +441,36 @@ async fn drive(
     }
     *exit_confirmed = true;
     result
+}
+
+/// Kill the owned process group, reap the leader and confirm the group
+/// empty. The group is killed whether or not the leader still runs: a
+/// leader exiting on its own closes its output before it can be reaped, so
+/// checking it first would leave its children running or not by a race.
+/// Until the leader is reaped its PID, and so the group id, cannot be reused.
+#[cfg(unix)]
+async fn end_owned_group(child: &mut tokio::process::Child, pid: u32) -> Result<(), String> {
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+    child
+        .kill()
+        .await
+        .map_err(|_| "Backend termination could not be confirmed")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if unsafe { libc::kill(-(pid as i32), 0) } < 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err(
+                "Backend leader exited but its process group could not be confirmed empty".into(),
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 struct ProtocolContext<'a> {
@@ -1992,6 +1986,38 @@ mod tests {
         }
         let lines = fixture("opencode-mcp-timeout.jsonl");
         assert_eq!(lines[0]["result"]["agentInfo"]["version"], "2.0.25");
+    }
+
+    // A leader that exited on its own before the teardown (as one exiting on
+    // Stop does) still has its children killed, the same as a live leader.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_owned_group_ends_whether_or_not_the_leader_already_exited() {
+        for script in ["sleep 300 & exit 0", "sleep 300 & sleep 300"] {
+            let mut command = tokio::process::Command::new("/bin/sh");
+            command
+                .args(["-c", script])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0);
+            let mut child = command.spawn().unwrap();
+            let pid = child.id().unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            assert_eq!(
+                unsafe { libc::kill(-(pid as i32), 0) },
+                0,
+                "{script}: the child keeps the group"
+            );
+            end_owned_group(&mut child, pid)
+                .await
+                .unwrap_or_else(|error| panic!("{script}: {error}"));
+            assert!(
+                unsafe { libc::kill(-(pid as i32), 0) } < 0
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH),
+                "{script}: the group is gone"
+            );
+        }
     }
 
     #[cfg(all(feature = "e2e-tests", unix))]
