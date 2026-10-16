@@ -64,6 +64,9 @@ const sw = await A.worker();
 results.logs = [];
 b.listeners.push(m => { if (m.method === 'Runtime.exceptionThrown') results.logs.push('EXC ' + (m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text)); if (m.method === 'Runtime.consoleAPICalled' && m.params.type !== 'debug') results.logs.push('LOG ' + m.params.args.map(a => a.value ?? a.description).join(' ').slice(0, 300)); });
 await b.send('Runtime.enable', {}, sw.sid);
+// These scenarios cover the terminal destination (ocs); the side-panel
+// destination, the default since 0.5.67, has its own live check.
+const terminalFor = tabId => `chrome.tabs.get(${tabId}).then(t => chrome.storage.local.get('inspectDestinations').then(s => chrome.storage.local.set({ inspectDestinations: { ...(s.inspectDestinations || {}), [new URL(t.url).origin]: 'terminal' } })))`;
 const hook = expr => A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.${expr}`);
 await waitFor(() => hook('inspectState(-1)').then(s => s.hostReady), { timeout: 30000, label: 'native host with inspect capability' });
 results.extensionId = new URL(sw.target.url).host;
@@ -94,6 +97,7 @@ async function startOn(page) {
   const url = page.url;
   const tabId = await waitFor(() => A.evaluate(sw.sid, `chrome.tabs.query({}).then(ts => ts.find(t => t.url === ${JSON.stringify(url)} && t.status === 'complete')?.id)`), { label: 'tab for ' + url });
   assert.ok(tabId, 'tab id for ' + url);
+  await A.evaluate(sw.sid, terminalFor(tabId));
   const started = await A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.startInspect(${tabId}).then(r => JSON.stringify(r), e => 'ERR ' + e.message)`);
   assert.equal(started, '{"started":true}', 'startInspect: ' + started);
   await waitFor(() => A.evaluate(page.sid, '[...document.documentElement.children].some(e => /^[A-Z]{5}-[A-Z]{6}$/.test(e.tagName))'), { label: 'picker host element' }).catch(async error => {

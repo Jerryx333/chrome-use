@@ -63,6 +63,9 @@ process.on('exit', () => b.close());
 results.chrome = b.version;
 const A = api(b);
 const sw = await A.worker();
+// These scenarios cover the terminal destination (ocs); the side-panel
+// destination, the default since 0.5.67, has its own live check.
+const terminalFor = tabId => `chrome.tabs.get(${tabId}).then(t => chrome.storage.local.get('inspectDestinations').then(s => chrome.storage.local.set({ inspectDestinations: { ...(s.inspectDestinations || {}), [new URL(t.url).origin]: 'terminal' } })))`;
 const hook = expr => A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.${expr}`);
 await waitFor(() => hook('inspectState(-1)').then(s => s.hostReady), { timeout: 30000, label: 'native host' });
 results.resolveReady = await hook('inspectState(-1)').then(s => s.resolveReady);
@@ -100,6 +103,7 @@ async function pickOn(url, selector, existing) {
   // pre-bundling); retry on an error page instead of failing on that race.
   let started = null;
   for (let attempt = 0; attempt < 4; attempt++) {
+    await A.evaluate(sw.sid, terminalFor(tabId));
     started = await A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.startInspect(${tabId}).then(r => JSON.stringify(r), e => 'ERR ' + e.message)`);
     if (started === '{"started":true}' || !/error page|http\(s\) pages only/.test(started)) break;
     await sleep(1500);
@@ -154,6 +158,7 @@ await scenario('m14-new-extension-old-host', async () => {
   const page = await A.openPage('http://test.inspect.example/?legacy');
   opened.push(page);
   const tabId = await waitFor(() => A.evaluate(sw.sid, `chrome.tabs.query({}).then(ts => ts.find(t => (t.url || '').endsWith('?legacy') && t.status === 'complete')?.id)`), { label: 'tab' });
+  await A.evaluate(sw.sid, terminalFor(tabId));
   await A.evaluate(sw.sid, `globalThis.__chromeUseAcceptance.startInspect(${tabId})`);
   const c = await A.center(page.sid, '.save-button');
   await A.click(page.sid, c.x, c.y);
