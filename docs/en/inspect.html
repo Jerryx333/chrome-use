@@ -68,6 +68,13 @@
       </ol>
 
       <h2 id="panel">Into the side-panel chat (default)</h2>
+      <p>
+        The most direct way in is the side panel itself: the crosshair <strong>Pick element</strong> button at the start of the composer toolbar. Click it to start picking (the button lights up and the composer says "Click an element on the page · Shift+click for several · Esc cancels"),
+        then click an element on the page: it flashes "Added to chat" and appears as a chip in the composer at once; picking ends and the cursor is back in the message box. Hold <kbd>Shift</kbd> to pick several; click the button again, Cancel, or <kbd>Esc</kbd> to stop.
+        The screenshot and source location fill in afterwards (a small dot on the chip means they are still coming); a source found shows as <code>file:line</code>, none found shows nothing. The button is disabled on chrome:// and similar pages.
+        A click in the side panel does not grant activeTab the way the shortcut does, so on a site the extension cannot access yet Chrome asks you once to allow it.
+      </p>
+      <p>The in-page panel from <code>Alt+Shift+C</code> can send to the side panel too:</p>
       <ul>
         <li><strong>Add to chat</strong> opens this tab's own side panel (or adds to it if it is open), puts the elements above its composer as chips, and puts the question from the picker into its message box. Nothing is sent, and a conversation already running in the panel is not touched.</li>
         <li>Pick as often as you like: chips add up to 8; picking the same element again replaces its chip. <strong>×</strong> on a chip removes it.</li>
