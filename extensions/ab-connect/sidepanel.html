@@ -114,64 +114,101 @@
     </form>
   </main>
   <main id="agentsView" class="agents-view" hidden>
-    <header class="toolbar">
-      <button id="chatTab" class="quiet back" type="button" aria-pressed="true" data-i18n="sidepanel_back">← Back</button>
+    <header class="toolbar settings-bar">
+      <button id="chatTab" class="icon back" type="button" aria-pressed="true" title="Back to the conversation" aria-label="Back to the conversation" data-i18n-title="sidepanel_back_title" data-i18n-aria-label="sidepanel_back_title"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
       <h1 data-i18n="sidepanel_agents_and_models_title">Agents &amp; models</h1>
-      <button id="settings" class="quiet" type="button" data-i18n="sidepanel_extension_settings">Extension settings</button>
+      <button id="settings" class="icon" type="button" title="Extension settings" aria-label="Extension settings" data-i18n-title="sidepanel_extension_settings" data-i18n-aria-label="sidepanel_extension_settings"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
     </header>
+    <nav id="settingsTabs" class="scope settings-tabs" role="tablist" aria-label="Agent settings" data-i18n-aria-label="sidepanel_agent_settings">
+      <button id="agentsSettingsTab" type="button" role="tab" aria-selected="true" data-i18n="sidepanel_tab_agents">Agents</button>
+      <button id="skillsSettingsTab" type="button" role="tab" aria-selected="false" data-i18n="sidepanel_skills" hidden>Skills</button>
+      <button id="schedulesSettingsTab" type="button" role="tab" aria-selected="false" data-i18n="sidepanel_tab_schedules" hidden>Schedules</button>
+    </nav>
     <div class="agents-body">
-      <nav class="scope settings-tabs" role="tablist" aria-label="Agent settings" data-i18n-aria-label="sidepanel_agent_settings">
-        <button id="agentsSettingsTab" type="button" role="tab" aria-selected="true" data-i18n="sidepanel_tab_agents">Agents</button>
-        <button id="skillsSettingsTab" type="button" role="tab" aria-selected="false" data-i18n="sidepanel_skills" hidden>Skills</button>
-        <button id="schedulesSettingsTab" type="button" role="tab" aria-selected="false" data-i18n="sidepanel_tab_schedules" hidden>Schedules</button>
-      </nav>
-      <section id="localAgents">
-      <header class="section-heading"><h2 data-i18n="sidepanel_local_agents">Local agents</h2><button id="discover" class="quiet" type="button" data-i18n="sidepanel_find_again">Find again</button></header>
-      <div id="agentList"></div>
-      </section>
-      <section id="scheduleSettings" class="configuration" hidden>
-        <h2 data-i18n="sidepanel_scheduled_prompts">Scheduled prompts</h2>
-        <p class="hint" data-i18n="sidepanel_schedules_hint">Runs while the local agent service is running. Times use this host's local time zone. Missed periods run once. A run with an unknown outcome needs your review before another can start.</p>
-        <button id="reloadSchedules" class="quiet" type="button" data-i18n="sidepanel_refresh_schedules">Refresh schedules</button>
-        <div id="scheduleEntries"></div>
-        <input id="scheduleId" type="hidden">
-        <label><span data-i18n="sidepanel_schedule_name">Name</span><input id="scheduleName" maxlength="160"></label>
-        <label><span data-i18n="sidepanel_agent">Agent</span><select id="scheduleAgent"></select></label>
-        <label><span data-i18n="sidepanel_model">Model</span><input id="scheduleModel" placeholder="CLI default" data-i18n-placeholder="sidepanel_cli_default"></label>
-        <label><span data-i18n="sidepanel_reasoning_effort">Reasoning effort</span><input id="scheduleEffort" placeholder="CLI default; Codex or Claude only" data-i18n-placeholder="sidepanel_schedule_effort_placeholder"></label>
-        <label><span data-i18n="sidepanel_service_tier">Service tier</span><select id="scheduleTier"><option value="" data-i18n="sidepanel_cli_default">CLI default</option><option value="default" data-i18n="sidepanel_tier_standard_codex">Standard (Codex)</option><option value="priority" data-i18n="sidepanel_tier_priority_codex">Priority (Codex)</option></select></label>
-        <label><span data-i18n="sidepanel_allowed_tools">Allowed tools</span><select id="scheduleAccess"><option value="readFiles" data-i18n="sidepanel_access_read_files">Browser and file reads</option><option value="browserOnly" data-i18n="sidepanel_access_browser_only_claude_pi">Browser only (Claude or Pi)</option><option value="writeFiles" data-i18n="sidepanel_access_write_files">Browser, file reads and writes</option><option value="runCommands" data-i18n="sidepanel_access_run_commands">Browser, files and commands</option></select></label>
-        <label class="choice"><input id="scheduleAutomatic" type="checkbox"><span data-i18n="sidepanel_schedule_automatic">Allow permitted tools automatically</span></label>
-        <label><span data-i18n="sidepanel_schedule_when">When</span><select id="scheduleKind"><option value="interval" data-i18n="sidepanel_schedule_interval">Every N minutes</option><option value="daily" data-i18n="sidepanel_schedule_daily">Daily at HH:MM</option><option value="weekdays" data-i18n="sidepanel_schedule_weekdays">Weekdays at HH:MM</option><option value="cron" data-i18n="sidepanel_schedule_cron">Five-field cron</option></select><input id="scheduleTiming" value="60" placeholder="60, 09:00 or 0 9 * * 1-5" data-i18n-placeholder="sidepanel_schedule_timing_placeholder"></label>
-        <label><span data-i18n="sidepanel_skill">Skill</span><select id="scheduleSkill"><option value="" data-i18n="sidepanel_no_skill">No skill</option></select></label>
-        <label><span data-i18n="sidepanel_prompt">Prompt</span><textarea id="schedulePrompt" rows="5" maxlength="32768"></textarea></label>
-        <label class="choice"><input id="scheduleEnabled" type="checkbox" checked><span data-i18n="sidepanel_enabled">Enabled</span></label>
-        <button id="saveSchedule" class="quiet" type="button" data-i18n="sidepanel_save_schedule">Save schedule</button>
-        <button id="newSchedule" class="quiet" type="button" data-i18n="sidepanel_new_schedule">New schedule</button>
-      </section>
-      <section id="skillLibrary" class="configuration" hidden>
-        <h2 data-i18n="sidepanel_skill_library">Skill library</h2><p class="hint" data-i18n="sidepanel_skill_library_hint">Library entries are shared by agents in this Chrome profile. Your existing skills are read-only here.</p>
-        <button id="reloadSkills" class="quiet" type="button" data-i18n="sidepanel_refresh_skills">Refresh skills</button>
-        <div id="skillEntries"></div>
-        <label><span data-i18n="sidepanel_library_skill_name">Library skill name</span><input id="skillName" placeholder="lowercase-name" data-i18n-placeholder="sidepanel_skill_name_placeholder" autocomplete="off"></label>
-        <label>SKILL.md<textarea id="skillContent" rows="8" maxlength="98304"></textarea></label>
-        <button id="saveSkill" class="quiet" type="button" data-i18n="sidepanel_save_library_skill">Save library skill</button>
-        <label><span data-i18n="sidepanel_import_source">Import source</span><select id="skillImportKind"><option value="folder" data-i18n="sidepanel_import_folder">Local folder</option><option value="archive" data-i18n="sidepanel_import_archive">Local ZIP or .skill archive</option><option value="git" data-i18n="sidepanel_import_git">Git HTTPS URL</option></select><input id="skillImportSource" placeholder="Absolute path or repository URL" data-i18n-placeholder="sidepanel_import_source_placeholder"></label>
-        <button id="importSkill" class="quiet" type="button" data-i18n="sidepanel_import_skills">Import skills</button>
-      </section>
-      <section id="configuration" class="configuration" hidden>
-        <h2 id="configTitle" data-i18n="sidepanel_agent_configuration">Agent configuration</h2>
-        <p id="configPath" class="path"></p>
-        <p id="configWarnings" class="hint"></p>
-        <form id="configForm"><div id="configFields"></div><button class="primary" type="submit" data-i18n="sidepanel_preview_changes">Preview changes</button></form>
-        <section id="configPreview" class="config-preview" hidden>
-          <h3 data-i18n="sidepanel_changes_to_apply">Changes to apply</h3><div id="configDiff"></div>
-          <p class="hint" data-i18n="sidepanel_apply_config_hint">Updates this agent's settings on the machine. Running conversations keep their current configuration.</p>
-          <button id="applyConfig" class="primary" type="button" data-i18n="sidepanel_apply_configuration">Apply configuration</button>
-          <button id="discardConfig" class="quiet" type="button" data-i18n="sidepanel_discard_preview">Discard preview</button>
+      <section id="localAgents" class="settings-section">
+        <header class="section-heading">
+          <div><h2 data-i18n="sidepanel_local_agents">Local agents</h2><p class="hint" data-i18n="sidepanel_local_agents_hint">Agent CLIs found on this computer. Configure edits the CLI's own settings.</p></div>
+          <button id="discover" class="icon" type="button" title="Find again" aria-label="Find again" data-i18n-title="sidepanel_find_again" data-i18n-aria-label="sidepanel_find_again"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg></button>
+        </header>
+        <div id="agentList" class="list-card"></div>
+        <section id="configuration" class="inset-panel" hidden>
+          <header class="inset-head">
+            <div class="grow"><h3 id="configTitle" data-i18n="sidepanel_agent_configuration">Agent configuration</h3><p id="configPath" class="path"></p></div>
+            <button id="closeConfig" class="icon" type="button" title="Close" aria-label="Close" data-i18n-title="sidepanel_close" data-i18n-aria-label="sidepanel_close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </header>
+          <p id="configWarnings" class="hint warn"></p>
+          <form id="configForm"><div id="configFields" class="fields"></div><div class="form-actions"><button class="primary" type="submit" data-i18n="sidepanel_preview_changes">Preview changes</button></div></form>
+          <section id="configPreview" class="config-preview" hidden>
+            <h3 data-i18n="sidepanel_changes_to_apply">Changes to apply</h3><div id="configDiff"></div>
+            <p class="hint" data-i18n="sidepanel_apply_config_hint">Updates this agent's settings on the machine. Running conversations keep their current configuration.</p>
+            <div class="form-actions"><button id="discardConfig" class="quiet" type="button" data-i18n="sidepanel_discard_preview">Discard preview</button><button id="applyConfig" class="primary" type="button" data-i18n="sidepanel_apply_configuration">Apply configuration</button></div>
+          </section>
+          <button id="restoreConfig" class="quiet restore" type="button" data-i18n="sidepanel_restore_change" hidden>Restore this change</button>
+          <p id="configResult" role="status"></p>
         </section>
-        <button id="restoreConfig" class="quiet restore" type="button" data-i18n="sidepanel_restore_change" hidden>Restore this change</button>
-        <p id="configResult" role="status"></p>
+      </section>
+      <section id="skillLibrary" class="settings-section" hidden>
+        <header class="section-heading">
+          <div><h2 data-i18n="sidepanel_skill_library">Skill library</h2><p class="hint" data-i18n="sidepanel_skill_library_hint">Library entries are shared by agents in this Chrome profile. Your existing skills are read-only here.</p></div>
+          <button id="reloadSkills" class="icon" type="button" title="Refresh skills" aria-label="Refresh skills" data-i18n-title="sidepanel_refresh_skills" data-i18n-aria-label="sidepanel_refresh_skills"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg></button>
+        </header>
+        <div id="skillEntries" class="list-card"></div>
+        <details id="skillEditor" class="disclosure">
+          <summary data-i18n="sidepanel_skill_editor">Write a library skill</summary>
+          <div class="fields">
+            <label class="field"><span data-i18n="sidepanel_library_skill_name">Library skill name</span><input id="skillName" placeholder="lowercase-name" data-i18n-placeholder="sidepanel_skill_name_placeholder" autocomplete="off"></label>
+            <label class="field"><span>SKILL.md</span><textarea id="skillContent" class="mono" rows="8" maxlength="98304"></textarea></label>
+          </div>
+          <div class="form-actions"><button id="saveSkill" class="primary" type="button" data-i18n="sidepanel_save_library_skill">Save library skill</button></div>
+        </details>
+        <details id="skillImport" class="disclosure">
+          <summary data-i18n="sidepanel_import_skills">Import skills</summary>
+          <div class="fields">
+            <label class="field"><span data-i18n="sidepanel_import_source">Import source</span><select id="skillImportKind"><option value="folder" data-i18n="sidepanel_import_folder">Local folder</option><option value="archive" data-i18n="sidepanel_import_archive">Local ZIP or .skill archive</option><option value="git" data-i18n="sidepanel_import_git">Git HTTPS URL</option></select></label>
+            <input id="skillImportSource" placeholder="Absolute path or repository URL" aria-label="Absolute path or repository URL" data-i18n-placeholder="sidepanel_import_source_placeholder" data-i18n-aria-label="sidepanel_import_source_placeholder">
+          </div>
+          <div class="form-actions"><button id="importSkill" class="primary" type="button" data-i18n="sidepanel_import_skills">Import skills</button></div>
+        </details>
+      </section>
+      <section id="scheduleSettings" class="settings-section" hidden>
+        <header class="section-heading">
+          <div><h2 data-i18n="sidepanel_scheduled_prompts">Scheduled prompts</h2><p class="hint" data-i18n="sidepanel_schedules_hint">Runs while the local agent service is running. Times use this host's local time zone. Missed periods run once. A run with an unknown outcome needs your review before another can start.</p></div>
+          <button id="reloadSchedules" class="icon" type="button" title="Refresh schedules" aria-label="Refresh schedules" data-i18n-title="sidepanel_refresh_schedules" data-i18n-aria-label="sidepanel_refresh_schedules"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg></button>
+        </header>
+        <div id="scheduleEntries" class="list-card"></div>
+        <button id="newSchedule" class="add-button" type="button"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="sidepanel_new_schedule">New schedule</span></button>
+        <section id="scheduleEditor" class="inset-panel" hidden>
+          <header class="inset-head">
+            <h3 id="scheduleEditorTitle" class="grow" data-i18n="sidepanel_new_schedule">New schedule</h3>
+            <button id="cancelSchedule" class="icon" type="button" title="Close" aria-label="Close" data-i18n-title="sidepanel_close" data-i18n-aria-label="sidepanel_close"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+          </header>
+          <input id="scheduleId" type="hidden">
+          <div class="fields">
+            <label class="field"><span data-i18n="sidepanel_schedule_name">Name</span><input id="scheduleName" maxlength="160"></label>
+            <label class="field"><span data-i18n="sidepanel_prompt">Prompt</span><textarea id="schedulePrompt" rows="4" maxlength="32768"></textarea></label>
+            <div class="field"><span id="scheduleWhenLabel" data-i18n="sidepanel_schedule_when">When</span>
+              <div class="field-pair"><select id="scheduleKind" aria-labelledby="scheduleWhenLabel"><option value="interval" data-i18n="sidepanel_schedule_interval">Every N minutes</option><option value="daily" data-i18n="sidepanel_schedule_daily">Daily at HH:MM</option><option value="weekdays" data-i18n="sidepanel_schedule_weekdays">Weekdays at HH:MM</option><option value="cron" data-i18n="sidepanel_schedule_cron">Five-field cron</option></select><input id="scheduleTiming" class="mono" value="60" aria-labelledby="scheduleWhenLabel" placeholder="60, 09:00 or 0 9 * * 1-5" data-i18n-placeholder="sidepanel_schedule_timing_placeholder"></div>
+            </div>
+            <div class="field-grid">
+              <label class="field"><span data-i18n="sidepanel_agent">Agent</span><select id="scheduleAgent"></select></label>
+              <label class="field"><span data-i18n="sidepanel_skill">Skill</span><select id="scheduleSkill"><option value="" data-i18n="sidepanel_no_skill">No skill</option></select></label>
+            </div>
+            <label class="switch"><span data-i18n="sidepanel_enabled">Enabled</span><input id="scheduleEnabled" type="checkbox" role="switch" checked></label>
+          </div>
+          <details class="disclosure">
+            <summary data-i18n="sidepanel_schedule_advanced">Model and tools</summary>
+            <div class="fields">
+              <div class="field-grid">
+                <label class="field"><span data-i18n="sidepanel_model">Model</span><input id="scheduleModel" placeholder="CLI default" data-i18n-placeholder="sidepanel_cli_default"></label>
+                <label class="field"><span data-i18n="sidepanel_reasoning_effort">Reasoning effort</span><input id="scheduleEffort" placeholder="CLI default; Codex or Claude only" data-i18n-placeholder="sidepanel_schedule_effort_placeholder"></label>
+              </div>
+              <label class="field"><span data-i18n="sidepanel_service_tier">Service tier</span><select id="scheduleTier"><option value="" data-i18n="sidepanel_cli_default">CLI default</option><option value="default" data-i18n="sidepanel_tier_standard_codex">Standard (Codex)</option><option value="priority" data-i18n="sidepanel_tier_priority_codex">Priority (Codex)</option></select></label>
+              <label class="field"><span data-i18n="sidepanel_allowed_tools">Allowed tools</span><select id="scheduleAccess"><option value="readFiles" data-i18n="sidepanel_access_read_files">Browser and file reads</option><option value="browserOnly" data-i18n="sidepanel_access_browser_only_claude_pi">Browser only (Claude or Pi)</option><option value="writeFiles" data-i18n="sidepanel_access_write_files">Browser, file reads and writes</option><option value="runCommands" data-i18n="sidepanel_access_run_commands">Browser, files and commands</option></select></label>
+              <label class="switch"><span data-i18n="sidepanel_schedule_automatic">Allow permitted tools automatically</span><input id="scheduleAutomatic" type="checkbox" role="switch"></label>
+            </div>
+          </details>
+          <div class="form-actions"><button id="saveSchedule" class="primary" type="button" data-i18n="sidepanel_save_schedule">Save schedule</button></div>
+        </section>
       </section>
     </div>
   </main>

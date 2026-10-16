@@ -2275,14 +2275,46 @@
   "panel_schedule_acknowledge": {
     "message": "知道了，结果未知"
   },
+  "panel_schedule_daily_at": {
+    "message": "每天 $TIME$",
+    "placeholders": {
+      "time": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_schedule_delete": {
     "message": "删除定时任务"
   },
   "panel_schedule_disabled": {
     "message": "已停用"
   },
+  "panel_schedule_editing": {
+    "message": "编辑「$NAME$」",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_schedule_enabled": {
     "message": "已启用"
+  },
+  "panel_schedule_every": {
+    "message": "每 $MINUTES$ 分钟",
+    "placeholders": {
+      "minutes": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_schedule_last": {
+    "message": "上次：$RESULT$",
+    "placeholders": {
+      "result": {
+        "content": "$1"
+      }
+    }
   },
   "panel_schedule_next": {
     "message": "下次：$TIME$",
@@ -2300,6 +2332,17 @@
   },
   "panel_schedule_run_now": {
     "message": "立即运行"
+  },
+  "panel_schedule_weekdays_at": {
+    "message": "工作日 $TIME$",
+    "placeholders": {
+      "time": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_schedules_empty": {
+    "message": "还没有定时任务。新建一个，让提示按时自动运行。"
   },
   "panel_scope_site": {
     "message": "本站"
@@ -2355,6 +2398,9 @@
   },
   "panel_skill_use": {
     "message": "使用"
+  },
+  "panel_skills_empty": {
+    "message": "这个 agent 没有可用的技能。"
   },
   "panel_speaker_assistant": {
     "message": "助手"
@@ -2721,8 +2767,8 @@
   "sidepanel_attach_images": {
     "message": "添加图片"
   },
-  "sidepanel_back": {
-    "message": "← 返回"
+  "sidepanel_back_title": {
+    "message": "返回对话"
   },
   "sidepanel_changes_to_apply": {
     "message": "将要应用的改动"
@@ -2735,6 +2781,9 @@
   },
   "sidepanel_cli_default": {
     "message": "CLI 默认"
+  },
+  "sidepanel_close": {
+    "message": "关闭"
   },
   "sidepanel_conversation_label": {
     "message": "会话"
@@ -2838,6 +2887,9 @@
   "sidepanel_local_agents": {
     "message": "本地 agent"
   },
+  "sidepanel_local_agents_hint": {
+    "message": "在这台电脑上找到的 agent CLI。「配置」会修改 CLI 自己的设置。"
+  },
   "sidepanel_message_keys": {
     "message": "Enter 发送 · Ctrl/⌘+Enter 停止并发送 · Shift+Enter 换行"
   },
@@ -2940,6 +2992,9 @@
   "sidepanel_save_schedule": {
     "message": "保存定时任务"
   },
+  "sidepanel_schedule_advanced": {
+    "message": "模型与工具"
+  },
   "sidepanel_schedule_automatic": {
     "message": "自动允许范围内的工具"
   },
@@ -2990,6 +3045,9 @@
   },
   "sidepanel_skill": {
     "message": "技能"
+  },
+  "sidepanel_skill_editor": {
+    "message": "编写技能"
   },
   "sidepanel_skill_library": {
     "message": "技能库"

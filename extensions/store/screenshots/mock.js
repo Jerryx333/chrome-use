@@ -49,28 +49,53 @@ const ops = {
       account: agent.kind ? { status: 'reportedSignedIn', kind: agent.kind } : { status: 'reportedSignedOut' },
       models: agent.models.map(id => ({ id, label: id })) } }
   },
+  skillList: () => ({ skills: [
+    { id: 'lib:compare-plans', name: 'compare-plans', source: 'library', enabled: true, editable: true, description: 'Read every pricing tier on the page and return a comparison table with prices, limits and the cheapest fit.' },
+    { id: 'lib:triage-inbox', name: 'triage-inbox', source: 'library', enabled: false, editable: true, description: 'Sort unread notifications into reply, read later and ignore.' },
+    { id: 'codex:release-notes', name: 'release-notes', source: 'codex', enabled: true, editable: false, description: 'Draft release notes from merged pull requests.' }] }),
+  skillRead: () => ({ skill: { instructions: '---\nname: compare-plans\ndescription: Compare pricing tiers\n---\n\nRead every plan on the page and return a table.' } }),
+  scheduleList: () => ({ schedules: [
+    { id: 's1', name: 'Morning GitHub digest', enabled: true, agentId: 'claude', lastResult: 'completed', lastChat: 'c2', nextRun: now + 5 * 3600e3, rule: { kind: 'weekdays', time: '09:00' }, prompt: 'Summarize my GitHub notifications', options: {} },
+    { id: 's2', name: 'Check Acme pricing for changes', enabled: true, agentId: 'codex', lastResult: 'unconfirmed', nextRun: now + 40 * 60e3, rule: { kind: 'interval', minutes: 60 }, prompt: 'Compare the plans', options: {} },
+    { id: 's3', name: 'Weekly support ticket sweep', enabled: false, agentId: 'codex', lastResult: null, nextRun: now + 3 * 86400e3, rule: { kind: 'cron', expression: '0 8 * * 1' }, prompt: 'Draft replies', options: {} }] }),
   configRead: ({ agentId }) => ({ configuration: { agentId, path: '~/.codex/config.toml', warnings: [],
     fields: [{ id: 'model', value: 'gpt-5.5' }, { id: 'effort', value: 'high' }] } }),
   configPlan: () => ({ configuration: { agentId: 'codex', planId: 'p', files: [{ changes: [{ path: ['effort'], before: { value: 'high' }, after: { value: 'xhigh' } }] }] } }),
 }
 const status = { connected: true, tabCount: 3, agentPanel: { schemaVersion: 1, mode: 'full', chatAgents: ['codex', 'claude', 'opencode', 'pi'],
-  fullAccess: true, pageContext: true, modelInspection: true, conversationDelete: true } }
+  fullAccess: true, pageContext: true, modelInspection: true, conversationDelete: true, skillLibrary: q.get('lib') !== '0', schedules: q.get('lib') !== '0' } }
 function reply(m) {
   if (m.type === 'ab-status') return status
   const f = ops[m.operation]
   return f ? { success: true, result: f(m.params || {}) } : { success: false, error: 'no mock ' + m.operation }
 }
 const store = { ab_panel_conversation: s === 'empty' ? '' : 'c1' }
+// The real UI text: _locales/<lang>/messages.json, with Chrome's $NAME$ / $1 substitution.
+const lang = q.get('lang') || 'en'
+const messages = (() => { const x = new XMLHttpRequest(); x.open('GET', `../ab-connect/_locales/${lang}/messages.json`, false); x.send(); return JSON.parse(x.responseText) })()
+const i18n = {
+  getUILanguage: () => lang.replace('_', '-'),
+  getMessage(key, subs = []) {
+    const entry = messages[key]
+    if (!entry) return ''
+    const list = [].concat(subs)
+    const fill = text => text.replace(/\$(\d)/g, (_, n) => list[n - 1] ?? '')
+    return entry.message.replace(/\$([A-Za-z_]+)\$/g, (_, name) => fill(entry.placeholders?.[name.toLowerCase()]?.content || '')).replace(/\$\$/g, '$')
+  },
+}
 globalThis.chrome = {
+  i18n,
   runtime: {
     sendMessage(m, cb) { const r = reply(m); if (cb) { cb(r); return } return Promise.resolve(r) },
     onMessage: { addListener() {} }, openOptionsPage() {}, getManifest: () => ({ version: q.get('v') || '0.5.53' }),
   },
-  storage: { local: { async get() { return store }, async set() {} }, sync: { get(d, cb) { cb(d) }, set() {} } },
+  storage: { local: { async get() { return store }, async set() {} }, sync: { get(d, cb) { const v = typeof d === 'object' && d ? d : {}; if (cb) { cb(v); return } return Promise.resolve(v) }, async set() {} } },
   tabs: { async query() { return [{ id: 5, ...page }] }, create() {}, onActivated: { addListener() {} }, onUpdated: { addListener() {} } },
 }
 if (q.has('agents')) setTimeout(() => document.getElementById('agentsTab').click(), 300)
 if (q.has('config')) setTimeout(() => document.querySelector('.agent-row button')?.click(), 700)
+if (q.has('tab')) setTimeout(() => document.getElementById(`${q.get('tab')}SettingsTab`)?.click(), 500)
+if (q.has('edit')) setTimeout(() => [...document.querySelectorAll(q.get('tab') === 'skills' ? '#skillEntries button' : '#scheduleEntries button')].find(b => /Edit|编辑/.test(b.textContent))?.click(), 900)
 if (q.has('plan')) setTimeout(() => {
   const input = document.querySelector('#configFields input[data-field="effort"]')
   if (!input) return

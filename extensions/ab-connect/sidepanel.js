@@ -65,7 +65,7 @@ function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? 
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
 export function createPanel({ document, runtime, storage, tabs, windows, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
-  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
+  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -243,6 +243,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     nodes.agent.disabled = !writable; nodes.model.disabled = !writable; nodes.customModel.disabled = !writable; nodes.executable.disabled = !writable;
     nodes.skillsSettingsTab.hidden = !panelSupport?.skillLibrary;
     nodes.schedulesSettingsTab.hidden = !panelSupport?.schedules;
+    // One tab is no choice; the bar only appears when there is somewhere to go.
+    nodes.settingsTabs.hidden = !panelSupport?.skillLibrary && !panelSupport?.schedules;
     nodes.localAgents.hidden = settingsSection !== 'agents';
     nodes.skillLibrary.hidden = !panelSupport?.skillLibrary || settingsSection !== 'skills';
     nodes.scheduleSettings.hidden = !panelSupport?.schedules || settingsSection !== 'schedules';
@@ -1396,9 +1398,15 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     for (const agent of result.agents) {
       const row = element('div', undefined, 'agent-row'), info = element('div', undefined, 'agent-info'), line = element('div', undefined, 'agent-evidence');
       info.append(element('div', agent.name, 'agent-name'), line);
-      row.append(info, button(t('panel_agent_configure'), () => loadConfig(agent.id, agent.name))); nodes.agentList.append(row); agentRows.set(agent.id, row);
+      row.append(info, button(t('panel_agent_configure'), () => loadConfig(agent.id, agent.name), 'pill')); nodes.agentList.append(row); agentRows.set(agent.id, row);
       if (nodes.agentsView.hidden) line.textContent = agent.executable ? t('panel_agent_installed') : t('panel_agent_not_installed'); else void agentStatus(agent, line, epoch, row);
     }
+    // The open configuration sits under its agent's row; rebuilding the list detached it.
+    if (configuration && !nodes.configuration.hidden) agentRows.get(configuration.agentId)?.after?.(nodes.configuration);
+  }
+  function closeConfig() {
+    configEpoch++; preview = null; nodes.configuration.hidden = true;
+    for (const row of agentRows.values()) row.classList.toggle('selected', false);
   }
   async function loadConfig(agentId, name) {
     const epoch = ++configEpoch; const result = await api('configRead', { agentId }); if (epoch !== configEpoch) return;
@@ -1407,9 +1415,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     nodes.configWarnings.textContent = (configuration.warnings || []).join('\n'); nodes.configFields.replaceChildren(); nodes.configPreview.hidden = true; nodes.restoreConfig.hidden = true; nodes.configResult.textContent = '';
     for (const button of nodes.configForm.querySelectorAll('button')) button.disabled = panelSupport?.mode !== 'full';
     for (const [id, row] of agentRows) row.classList.toggle('selected', id === agentId);
+    agentRows.get(agentId)?.after?.(nodes.configuration);
     const modelInputs = [];
     for (const field of configuration.fields) {
-      const label = element('label', fieldLabels[field.id] || field.id); const input = element('input'); input.disabled = panelSupport?.mode !== 'full'; input.value = field.value || ''; input.placeholder = t('panel_cli_default'); input.dataset.field = field.id;
+      const label = element('label', undefined, 'field'); label.append(element('span', fieldLabels[field.id] || field.id)); const input = element('input'); input.disabled = panelSupport?.mode !== 'full'; input.value = field.value || ''; input.placeholder = t('panel_cli_default'); input.dataset.field = field.id;
       input.addEventListener('input', () => { input.dataset.changed = 'true'; preview = null; nodes.configPreview.hidden = true; });
       const choices = field.id === 'effort' ? choiceList(input, `config-${field.id}-choices`, effortChoices[agentId]) : null;
       if (modelFields.has(field.id)) modelInputs.push(input);
@@ -1481,25 +1490,43 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     const result=await api('scheduleList');
     if (epoch!==schedulesEpoch) return;
     schedules=result.schedules;
+
+    if (!schedules.length) { nodes.scheduleEntries.replaceChildren(element('p', t('panel_schedules_empty'), 'list-empty')); return; }
     nodes.scheduleEntries.replaceChildren(...schedules.map(task => {
-      const row=element('div',undefined,'skill-entry');
-      row.append(element('strong',task.name),element('small',[task.enabled?t('panel_schedule_enabled'):t('panel_schedule_disabled'),agentNames[task.agentId],task.lastResult || t('panel_schedule_not_run'),t('panel_schedule_next',new Date(task.nextRun).toLocaleString())].join(' · ')));
-      row.append(button(t('panel_edit'),async()=>editSchedule(task)),button(t('panel_schedule_run_now'),async()=>{await api('scheduleRun',{id:task.id});await loadSchedules();await list();}),button(task.enabled?t('panel_disable'):t('panel_enable'),async()=>{await api('scheduleSave',{id:task.id,enabled:!task.enabled});await loadSchedules();}));
-      if(task.lastChat) row.append(button(t('panel_schedule_open_run'),async()=>{await list();select(task.lastChat);view(false);}));
-      if(task.lastResult==='unconfirmed') row.append(button(t('panel_schedule_acknowledge'),async()=>{await api('scheduleSave',{id:task.id,acknowledgeUnconfirmed:true});await loadSchedules();}));
-      row.append(button(t('panel_schedule_delete'),async()=>{await api('scheduleDelete',{id:task.id});await loadSchedules();}));
+      const row=element('div',undefined,`list-entry schedule-entry${task.enabled?'':' off'}`);
+      const head=element('div',undefined,'entry-head');
+      head.append(element('strong',task.name),element('span',task.enabled?t('panel_schedule_enabled'):t('panel_schedule_disabled'),`badge ${task.enabled?'on':''}`));
+      const result=task.lastResult || t('panel_schedule_not_run'), tone=task.lastResult==='unconfirmed'?'warn':/^failed/.test(task.lastResult || '')?'bad':'';
+      row.append(head,element('div',[ruleText(task.rule),agentNames[task.agentId] || task.agentId].filter(Boolean).join(' · '),'entry-meta'),
+        element('div',[t('panel_schedule_last',result),task.enabled?t('panel_schedule_next',new Date(task.nextRun).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})):''].filter(Boolean).join(' · '),`entry-meta ${tone}`));
+      const actions=element('div',undefined,'entry-actions');
+      if(task.lastResult==='unconfirmed') actions.append(button(t('panel_schedule_acknowledge'),async()=>{await api('scheduleSave',{id:task.id,acknowledgeUnconfirmed:true});await loadSchedules();},'pill warn'));
+      actions.append(button(t('panel_schedule_run_now'),async()=>{await api('scheduleRun',{id:task.id});await loadSchedules();await list();},'pill'),button(t('panel_edit'),async()=>editSchedule(task),'pill'),button(task.enabled?t('panel_disable'):t('panel_enable'),async()=>{await api('scheduleSave',{id:task.id,enabled:!task.enabled});await loadSchedules();},'pill'));
+      if(task.lastChat) actions.append(button(t('panel_schedule_open_run'),async()=>{await list();select(task.lastChat);view(false);},'pill'));
+      actions.append(button(t('panel_schedule_delete'),async()=>{await api('scheduleDelete',{id:task.id});await loadSchedules();},'pill danger-text'));
+      row.append(actions);
       return row;
     }));
   }
+  function ruleText(rule) {
+    if (rule?.kind==='interval') return t('panel_schedule_every',rule.minutes);
+    if (rule?.kind==='daily') return t('panel_schedule_daily_at',rule.time);
+    if (rule?.kind==='weekdays') return t('panel_schedule_weekdays_at',rule.time);
+    return rule?.expression ? `cron ${rule.expression}` : '';
+  }
   function editSchedule(task) {
+    nodes.scheduleEditor.hidden=false;nodes.scheduleEditorTitle.textContent=task?t('panel_schedule_editing',task.name):t('sidepanel_new_schedule');
     nodes.scheduleId.value=task?.id || '';nodes.scheduleName.value=task?.name || '';nodes.schedulePrompt.value=task?.prompt || '';
     nodes.scheduleAgent.value=task?.agentId || skillAgent();nodes.scheduleModel.value=task?.model || '';nodes.scheduleEffort.value=task?.options?.effort || '';nodes.scheduleTier.value=task?.options?.serviceTier || '';
     nodes.scheduleAccess.value=task?.options?.toolAccess || (nodes.scheduleAgent.value==='opencode'?'runCommands':nodes.scheduleAgent.value==='codex'?'readFiles':'browserOnly');
     nodes.scheduleAutomatic.checked=nodes.scheduleAgent.value==='pi' || task?.fullAccess===true;nodes.scheduleAutomatic.disabled=nodes.scheduleAgent.value==='pi';nodes.scheduleEnabled.checked=task?.enabled!==false;
     nodes.scheduleKind.value=task?.rule?.kind || 'interval';nodes.scheduleTiming.value=task?.rule?.minutes || task?.rule?.time || task?.rule?.expression || '60';nodes.scheduleSkill.value=task?.skillId || '';
+    nodes.scheduleEditor.scrollIntoView?.({block:'nearest',behavior:'smooth'});
   }
+  function closeScheduleEditor() { editSchedule(null); nodes.scheduleEditor.hidden=true; }
   nodes.reloadSchedules.addEventListener('click',()=>void loadSchedules().catch(error));
-  nodes.newSchedule.addEventListener('click',()=>editSchedule(null));
+  nodes.newSchedule.addEventListener('click',()=>{editSchedule(null);nodes.scheduleName.focus?.();});
+  nodes.cancelSchedule.addEventListener('click',closeScheduleEditor);
   nodes.scheduleAgent.addEventListener('change',()=>{nodes.scheduleEffort.value='';nodes.scheduleTier.value='';nodes.scheduleModel.value='';nodes.scheduleAccess.value=nodes.scheduleAgent.value==='opencode'?'runCommands':nodes.scheduleAgent.value==='codex'?'readFiles':'browserOnly';nodes.scheduleAutomatic.disabled=nodes.scheduleAgent.value==='pi';nodes.scheduleAutomatic.checked=nodes.scheduleAgent.value==='pi';});
   nodes.saveSchedule.addEventListener('click',()=>void (async()=>{
     nodes.saveSchedule.disabled=true;
@@ -1507,7 +1534,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       const kind=nodes.scheduleKind.value, value=nodes.scheduleTiming.value.trim();
       const rule={kind,...(kind==='interval'?{minutes:Number(value)}:kind==='cron'?{expression:value}:{time:value})};
       await api('scheduleSave',{...(nodes.scheduleId.value?{id:nodes.scheduleId.value}:{}),name:nodes.scheduleName.value,prompt:nodes.schedulePrompt.value,agentId:nodes.scheduleAgent.value,model:nodes.scheduleModel.value.trim() || null,rule,enabled:nodes.scheduleEnabled.checked,fullAccess:nodes.scheduleAutomatic.checked,skillId:nodes.scheduleSkill.value || null,options:{toolAccess:nodes.scheduleAccess.value,effort:nodes.scheduleEffort.value.trim() || null,serviceTier:nodes.scheduleTier.value || null}});
-      editSchedule(null);await loadSchedules();
+      closeScheduleEditor();await loadSchedules();
     } finally {nodes.saveSchedule.disabled=false;}
   })().catch(error));
   function skillAgent() { return conversation?.agentId || nodes.agent.value; }
@@ -1523,21 +1550,26 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     nodes.scheduleSkill.value=skillCatalog.some(s=>s.id===skill)?skill:'';
   }
   function renderSkills() {
+    if (!skillCatalog.length) { nodes.skillEntries.replaceChildren(element('p', t('panel_skills_empty'), 'list-empty')); return; }
     nodes.skillEntries.replaceChildren(...skillCatalog.map(skill => {
-      const row = element('div', undefined, 'skill-entry'); row.append(element('strong', skill.name), element('small', [skill.source, !skill.enabled && t('panel_skill_disabled'), skill.description].filter(part => part !== false).join(' · ')));
-      row.append(button(t('panel_skill_use'), async () => { skillChoice = skill; nodes.message.value = `/${skill.name} `; view(false); renderSkillPicker(); }));
-      if (skill.editable) row.append(button(t('panel_edit'), async () => {
+      const row = element('div', undefined, `list-entry skill-entry${skill.enabled ? '' : ' off'}`), head = element('div', undefined, 'entry-head');
+      head.append(element('strong', skill.name), element('span', skill.source, 'badge'));
+      if (!skill.enabled) head.append(element('span', t('panel_skill_disabled'), 'badge'));
+      row.append(head);
+      if (skill.description) row.append(element('div', skill.description, 'entry-description'));
+      const actions = element('div', undefined, 'entry-actions');
+      actions.append(button(t('panel_skill_use'), async () => { skillChoice = skill; nodes.message.value = `/${skill.name} `; view(false); renderSkillPicker(); }, 'pill'));
+      if (skill.editable) actions.append(button(t('panel_edit'), async () => {
         const result = await api('skillRead', { agentId: skillAgent(), id: skill.id });
         nodes.skillName.value = skill.name; nodes.skillContent.value = result.skill.instructions;
-      }), button(skill.enabled ? t('panel_disable') : t('panel_enable'), async () => {
+        nodes.skillEditor.open = true; nodes.skillEditor.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      }, 'pill'), button(skill.enabled ? t('panel_disable') : t('panel_enable'), async () => {
         await api('skillSetEnabled', { agentId: skillAgent(), id: skill.id, enabled: !skill.enabled }); await loadSkills();
-      }));
+      }, 'pill'));
+      row.append(actions);
       return row;
     }));
   }
-  // A message that starts with `/name` must name one skill. A `/name` later
-  // in the text uses a skill when exactly one enabled skill has that name; any
-  // other later `/word` (a path, a URL part) is plain text.
   function chosenSkill(text) {
     if (!panelSupport?.skillLibrary) return null;
     const tokens = slashTokens(text);
@@ -1699,6 +1731,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   nodes.applyConfig.addEventListener('click', () => void applyConfig().catch(error));
   nodes.restoreConfig.addEventListener('click', () => void restoreConfig().catch(error));
   nodes.discardConfig.addEventListener('click', () => { preview = null; nodes.configPreview.hidden = true; });
+  nodes.closeConfig.addEventListener('click', closeConfig);
   if (runtime?.onMessage) runtime.onMessage.addListener(message => {
     if (message?.type === 'ab-tab-grants' && Array.isArray(message.grants)) { grants = message.grants; renderGrant(); }
     if (message?.type === 'ab-host-state') {
