@@ -1036,7 +1036,7 @@
     "message": "Do not show"
   },
   "options_inspect_enable_hint": {
-    "message": "Off by default. Nothing is injected into pages until you press the shortcut ($SHORTCUT$) or the popup button.",
+    "message": "Off by default. Adding elements to the side-panel chat needs no setup; this switch is for sending them to a terminal session over ocs. Nothing is injected into pages until you press the shortcut ($SHORTCUT$) or the popup button.",
     "placeholders": {
       "shortcut": {
         "content": "$1",
@@ -1045,13 +1045,13 @@
     }
   },
   "options_inspect_enable_name": {
-    "message": "Enable Inspect & Ask"
+    "message": "Allow sending to terminal sessions (ocs)"
   },
   "options_inspect_heading": {
     "message": "Inspect & Ask"
   },
   "options_inspect_lead": {
-    "message": "Press the shortcut, click an element, and send a change request with its source location and a screenshot to the coding session working on that project (via ocs)."
+    "message": "Press the shortcut and click elements: they go into this tab's side-panel chat, or, on a site set to Terminal session, to the coding session working on that project (via ocs) with their source location and a screenshot."
   },
   "options_inspect_revoke_dev": {
     "message": "Revoke dev consent"

@@ -1036,7 +1036,7 @@
     "message": "不显示"
   },
   "options_inspect_enable_hint": {
-    "message": "默认关闭。在你按下快捷键（$SHORTCUT$）或弹窗里的按钮之前，不会向页面注入任何东西。",
+    "message": "默认关闭。把元素加入侧边栏对话不需要设置；这个开关只管通过 ocs 发到终端会话。在你按下快捷键（$SHORTCUT$）或弹窗里的按钮之前，不会向页面注入任何东西。",
     "placeholders": {
       "shortcut": {
         "content": "$1",
@@ -1045,13 +1045,13 @@
     }
   },
   "options_inspect_enable_name": {
-    "message": "启用点选改代码"
+    "message": "允许发到终端会话（ocs）"
   },
   "options_inspect_heading": {
     "message": "点选改代码"
   },
   "options_inspect_lead": {
-    "message": "按下快捷键，点一下元素，就能把带源码位置和截图的修改请求，发给正在做这个项目的编程会话（通过 ocs）。"
+    "message": "按快捷键点选元素：元素会放进这个标签页的侧边栏对话；在设成「终端会话」的网站上，则连同源码位置和截图发给正在做这个项目的编程会话（通过 ocs）。"
   },
   "options_inspect_revoke_dev": {
     "message": "撤销开发版授权"
