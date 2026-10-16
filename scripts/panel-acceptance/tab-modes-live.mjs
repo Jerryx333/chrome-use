@@ -12,6 +12,7 @@
 //   3. "Let the agent use this tab" from the panel tab: both views show the
 //      grant, the tab carries the AI badge, and the agent's eval without a tab
 //      handle and with chrome-tab:<id> both run in the user's tab;
+//      another conversation's session is refused;
 //   4. "Take back the tab" from the side panel: both views drop it, the badge
 //      goes, the debugger lets go, and the agent's next call is refused;
 //   5. a grant follows the tab to another origin, says when the page cannot be
@@ -125,6 +126,18 @@ try {
   check(used.length === 2 && used.every(e => !e.isError), 'both calls ran');
   check(used[0].result.includes(`${rig.site}/a`), 'a call without a tab handle ran in the lent tab');
   check(used[1].result.includes('Page A'), 'a call naming chrome-tab:<id> ran in the lent tab');
+
+  // Another conversation's session cannot use a tab lent to this one.
+  const other = (await rig.service.call('conversationCreate', { agentId: 'codex', executable: rig.backend('codex') })).conversation.id;
+  scenario('tm-other', { steps: [
+    { tool: 'chrome_use_eval', args: { script: 'location.href', tabId: `chrome-tab:${site.tabId}`, force: true }, save: 'other' },
+    { say: 'Tried a tab lent elsewhere.' },
+  ] });
+  await rig.service.call('conversationSend', { conversationId: other, messageId: crypto.randomUUID(), text: 'run scenario tm-other' });
+  await turn(other, 1);
+  const elsewhere = backendLog().filter(e => e.event === 'tool' && e.scenario === 'tm-other');
+  step('another conversation refused', { elsewhere: elsewhere.map(e => ({ isError: e.isError, result: e.result.slice(0, 400) })) });
+  check(elsewhere.length === 1 && elsewhere[0].isError && elsewhere[0].result.includes('lent this tab to another'), 'a lent tab answers only its conversation');
 
   // 4. Take it back from the side panel.
   await inPanel(`document.getElementById('grantRevoke').click()`);
