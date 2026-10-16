@@ -16,6 +16,8 @@ const HTML_MAX = 1200;
 const IMAGE_MAX_CHARS = 1500 * 1024;
 
 export function inspectChipsKey(tabId) { return `${INSPECT_CHIPS_PREFIX}${tabId}`; }
+// Set while the side panel's Pick button has a picker running on the tab.
+export function inspectPickKey(tabId) { return `ab_inspect_pick_${tabId}`; }
 
 // Pure: origin + path, the part of a page address a chip remembers.
 export function pagePart(url) {
@@ -31,12 +33,12 @@ function strings(list, max, each) { return Array.isArray(list) ? list.filter(v =
 
 // Pure: one chip per picked element, from the controller's annotations.
 // Notes and images are the frame's snapshot, keyed by annotation index.
-export function chipsFromAnnotations(annotations, { documentId, pageUrl, notes = {}, images = {}, now = Date.now(), newId = () => crypto.randomUUID() }) {
+export function chipsFromAnnotations(annotations, { documentId, pageUrl, notes = {}, images = {}, now = Date.now(), newId = () => crypto.randomUUID(), ids = [], pending = null }) {
   return annotations.slice(0, MAX_CHIPS).map((a, i) => {
     const e = a.element || {};
     const source = chooseSource(e.source, a.probe);
     return {
-      id: newId(),
+      id: ids[i] || newId(),
       documentId: documentId || null,
       pageUrl: pagePart(pageUrl),
       label: str(e.label, 120) || 'element',
@@ -53,6 +55,9 @@ export function chipsFromAnnotations(annotations, { documentId, pageUrl, notes =
       image: validImage(images[i]),
       stale: false,
       addedAt: now,
+      // Slow parts still on their way: the chip shows a placeholder and is
+      // updated in place when they arrive (or are given up on).
+      pending: { image: !!pending?.image, source: !!pending?.source },
     };
   });
 }
@@ -86,6 +91,31 @@ export function markStale(record, { documentId = null, pageUrl = '' }) {
     return { ...chip, stale: true };
   });
   return changed ? { ...record, items } : null;
+}
+
+// Pure: the side panel's Pick button adds chips one by one and fills them
+// in later. A chip is updated where it stands; a chip this picker added
+// before that the user has since removed (`known`) is not brought back.
+export function upsertChips(record, chips, known = new Set()) {
+  const items = [...(record?.items || [])];
+  for (const chip of chips) {
+    const at = items.findIndex(item => item.id === chip.id);
+    if (at >= 0) items[at] = chip;
+    else if (!known.has(chip.id)) items.push(chip);
+  }
+  return { items: items.slice(-MAX_CHIPS), question: str(record?.question, QUESTION_MAX) };
+}
+
+// Pure: nothing more is coming for these chips (the picker ended).
+export function settlePending(record, ids) {
+  if (!record?.items?.some(chip => ids.includes(chip.id) && (chip.pending?.image || chip.pending?.source))) return null;
+  return { ...record, items: record.items.map(chip => (ids.includes(chip.id) ? { ...chip, pending: { image: false, source: false } } : chip)) };
+}
+
+// "Order.tsx:42" for the chip; the full path is in its details.
+export function sourceShort(source) {
+  if (!source?.path) return '';
+  return source.path.split(/[\\/]/).pop() + (source.line ? `:${source.line}` : '');
 }
 
 export function removeChip(record, id) {

@@ -8,7 +8,7 @@ import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } fro
 import { createProjectChoice, folderLabel } from './project-picker.js';
 import { grantRefusal, originOf } from './tab-grant.js';
 import { panelTabKey, panelTabFrom } from './panel-tabs.js';
-import { inspectChipsKey, chipTitle, composeMessage, removeChip, withinLabel, splitElementContext } from './inspect-chips.js';
+import { inspectChipsKey, inspectPickKey, chipTitle, composeMessage, removeChip, withinLabel, splitElementContext, sourceShort } from './inspect-chips.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -65,8 +65,8 @@ function pageName(target) { const host = hostOf(target?.url); let path = ''; try
 function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
-export function createPanel({ document, runtime, storage, tabs, windows, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
-  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'inspectChips', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
+export function createPanel({ document, runtime, storage, tabs, windows, permissions, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
+  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'inspectChips', 'pickElement', 'pickHint', 'pickCancel', 'chipCard', 'chipLive', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -95,6 +95,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   // (written by the background under this tab's key) until the next send.
   const chipKey = tabBound ? inspectChipsKey(panelTab) : null;
   let chipRecord = { items: [], question: '' };
+  // The Pick button's picker on this tab is running (set by the background
+  // under its own key; shown at once on click, before it confirms).
+  let picking = false, shownChipIds = null;
   // "Let the agent use this tab": grants live in the background (per tab,
   // per conversation); every view of a conversation shows the same ones.
   const grantBar = document.getElementById('grantBar'), grantText = document.getElementById('grantText'), grantNote = document.getElementById('grantNote'), grantRevoke = document.getElementById('grantRevoke'), grantTab = document.getElementById('grantTab');
@@ -1290,7 +1293,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (!(tabBound ? tabs?.get : tabs?.query)) return;
     const tab = tabMode ? await windowPage() : tabBound ? await Promise.resolve(tabs.get?.(panelTab)).catch(() => null) : (await tabs.query({ active: true, currentWindow: true }))[0];
     const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
-    if (tabBound) { panelTabUrl = tab?.url || tab?.pendingUrl || ''; pageRead = true; }
+    if (tabBound) { panelTabUrl = tab?.url || tab?.pendingUrl || ''; pageRead = true; renderPick(); }
     if (next?.tabId !== page?.tabId) pageDetached = false;
     const moved = next?.url !== page?.url;
     page = next; renderPage(); renderConversationMenu();
@@ -1692,24 +1695,97 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   }
   // Only the chips that were sent go: one added while sending stays.
   function dropChips(ids) { return writeChips(record => ({ ...record, items: (record.items || []).filter(chip => !ids.includes(chip.id)) })).catch(() => {}); }
+  // Element chips sit with the page chip, one family: icon, short name, the
+  // source file when one was found, a dot while a screenshot or source is
+  // still coming. Hover or focus shows the details; Delete or × removes.
   function renderChips() {
     const items = chipRecord.items;
+    const fresh = shownChipIds ? items.filter(chip => !shownChipIds.has(chip.id)) : [];
+    shownChipIds = new Set(items.map(chip => chip.id));
     nodes.inspectChips.hidden = !items.length;
-    nodes.inspectChips.replaceChildren(...items.map(chip => {
-      const item = element('span', undefined, 'inspect-chip' + (chip.stale ? ' stale' : ''));
-      item.setAttribute('role', 'listitem');
-      item.title = t('panel_inspect_chip_title', chip.selector, chip.pageUrl) + (chip.stale ? `\n${t('panel_inspect_chip_stale_title')}` : '');
-      const where = withinLabel(chip);
-      item.append(element('span', chipTitle(chip), 'inspect-chip-label'));
-      if (where) item.append(element('span', t(where === 'frame' ? 'panel_inspect_chip_in_frame' : where === 'foreign' ? 'panel_inspect_chip_foreign_frame' : 'panel_inspect_chip_in_shadow'), 'inspect-chip-tag'));
-      if (chip.image) item.append(element('span', t('panel_inspect_chip_shot'), 'inspect-chip-tag'));
+    nodes.inspectChips.replaceChildren(...items.map((chip, index) => {
+      const name = chipTitle(chip);
+      const item = element('span', undefined, 'page-chip inspect-chip' + (chip.stale ? ' stale' : '') + (fresh.includes(chip) ? ' landed' : ''));
+      item.setAttribute('role', 'listitem'); item.tabIndex = 0;
+      item.setAttribute('aria-label', t(chip.stale ? 'panel_inspect_chip_aria_stale' : 'panel_inspect_chip_aria', name));
+      const icon = element('span', undefined, 'inspect-chip-icon'); icon.setAttribute('aria-hidden', 'true'); item.append(icon);
+      item.append(element('span', name, 'inspect-chip-label'));
+      const source = sourceShort(chip.source);
+      if (source) item.append(element('span', source, 'inspect-chip-src'));
+      if (chip.pending?.image || chip.pending?.source) { const dot = element('span', undefined, 'inspect-chip-pending'); dot.title = t('panel_inspect_chip_pending'); item.append(dot); }
       if (chip.stale) item.append(element('span', t('panel_inspect_chip_stale'), 'inspect-chip-tag stale'));
-      const remove = button('×', () => writeChips(record => removeChip(record, chip.id)), 'quiet inspect-chip-remove');
-      remove.title = t('panel_inspect_chip_remove'); remove.setAttribute('aria-label', t('panel_inspect_chip_remove'));
+      const drop = () => writeChips(record => removeChip(record, chip.id)).then(() => { announce(t('panel_inspect_removed_live', name)); hideCard(); (nodes.inspectChips.children[index] || nodes.message).focus?.(); });
+      const remove = button('×', drop, 'inspect-chip-remove');
+      remove.tabIndex = -1; remove.title = t('panel_inspect_chip_remove'); remove.setAttribute('aria-label', t('panel_inspect_chip_remove_named', name));
       item.append(remove);
+      item.addEventListener('mouseenter', () => showCard(chip)); item.addEventListener('mouseleave', hideCard);
+      item.addEventListener('focus', () => showCard(chip)); item.addEventListener('blur', hideCard);
+      item.addEventListener('keydown', event => {
+        if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void drop().catch(error); }
+        else if (event.key === 'Escape') hideCard();
+      });
       return item;
     }));
+    if (fresh.length) {
+      announce(t('panel_inspect_added_live', fresh.map(chipTitle).join(', ')));
+      // A pick from the Pick button is done: the next step is typing.
+      if (!picking) nodes.message.focus?.();
+    }
+    if (cardChip && !items.some(chip => chip.id === cardChip)) hideCard();
+    else if (cardChip) showCard(items.find(chip => chip.id === cardChip));
   }
+  function announce(text) { nodes.chipLive.textContent = text; }
+  // Details card above the composer: screenshot (or its placeholder), the
+  // selector, where the element sits, its source and text.
+  let cardChip = null;
+  function showCard(chip) {
+    if (!chip) return;
+    cardChip = chip.id;
+    const card = nodes.chipCard, rows = [];
+    const head = element('div', chipTitle(chip), 'chip-card-title');
+    const shot = chip.image ? element('img', undefined, 'chip-card-shot') : element('div', t(chip.pending?.image ? 'panel_inspect_card_shot_pending' : 'panel_inspect_card_no_shot'), 'chip-card-shot empty' + (chip.pending?.image ? ' loading' : ''));
+    if (chip.image) { shot.src = chip.image; shot.alt = t('panel_inspect_card_shot_alt', chipTitle(chip)); }
+    const row = (label, value, mono = false) => { if (!value) return; const line = element('div', undefined, 'chip-card-row'); line.append(element('span', label, 'chip-card-key'), element('span', value, mono ? 'chip-card-value mono' : 'chip-card-value')); rows.push(line); };
+    row(t('panel_inspect_card_selector'), chip.selector, true);
+    const where = withinLabel(chip);
+    if (where) row(t('panel_inspect_card_inside'), `${t(where === 'frame' ? 'panel_inspect_chip_in_frame' : where === 'foreign' ? 'panel_inspect_chip_foreign_frame' : 'panel_inspect_chip_in_shadow')} · ${where === 'frame' ? chip.frames.map(f => f.selector).join(' › ') : where === 'foreign' ? chip.foreignFrame.url || chip.selector : chip.shadowHosts.join(' › ')}`);
+    row(t('panel_inspect_card_source'), chip.source ? `${chip.source.path}${chip.source.line ? `:${chip.source.line}` : ''}` : chip.pending?.source ? t('panel_inspect_card_source_pending') : '', true);
+    row(t('panel_inspect_card_text'), chip.text);
+    row(t('panel_inspect_card_page'), chip.pageUrl, true);
+    card.replaceChildren(head, shot, ...rows);
+    if (chip.stale) card.append(element('div', t('panel_inspect_chip_stale_title'), 'chip-card-stale'));
+    card.hidden = false;
+  }
+  function hideCard() { cardChip = null; nodes.chipCard.hidden = true; }
+  // The Pick button: shown in a tab's panel, usable on web pages only.
+  function renderPick() {
+    const button = nodes.pickElement;
+    button.hidden = !tabBound;
+    const pickable = /^https?:/.test(panelTabUrl);
+    button.disabled = !picking && pageRead && !pickable;
+    button.setAttribute('aria-pressed', String(picking));
+    button.classList.toggle('active', picking);
+    const label = picking ? t('panel_pick_cancel_title') : button.disabled ? t('panel_pick_unavailable') : t('panel_pick_title');
+    button.title = label; button.setAttribute('aria-label', label);
+    nodes.pickHint.hidden = !picking;
+  }
+  async function togglePick(event) {
+    if (!tabBound) return;
+    if (picking) { picking = false; renderPick(); await runtime.sendMessage({ type: 'ab-inspect-pick-cancel', tabId: panelTab }); return; }
+    const keep = !!event?.shiftKey;
+    picking = true; renderPick(); hideCard();
+    try {
+      let reply = await runtime.sendMessage({ type: 'ab-inspect-pick', tabId: panelTab, keep });
+      // A site the extension may not script yet: Chrome asks the user once.
+      if (reply?.success && reply.needsPermission) {
+        const granted = await Promise.resolve(permissions?.request?.({ origins: [reply.needsPermission] })).catch(() => false);
+        if (!granted) throw new Error(t('panel_pick_permission_denied'));
+        reply = await runtime.sendMessage({ type: 'ab-inspect-pick', tabId: panelTab, keep });
+      }
+      if (!reply?.success || !reply.started) throw new Error(reply?.error || t('panel_pick_failed'));
+    } catch (failure) { picking = false; renderPick(); throw failure; }
+  }
+  function cancelPick() { if (picking) void togglePick().catch(error); }
   function renderImageDrafts() {
     const images = imageDrafts.get(selected) || [];
     nodes.attachmentDrafts.hidden = !images.length;
@@ -1729,6 +1805,11 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     } finally { convertingImages = false; nodes.imageFiles.value = ''; controls(); }
   }
   nodes.attachImages.addEventListener('click', () => nodes.imageFiles.click());
+  nodes.pickElement.addEventListener('click', event => void togglePick(event).catch(error));
+  nodes.pickCancel.addEventListener('click', cancelPick);
+  // Esc cancels picking from the panel too (focus stays here while the
+  // pointer works on the page).
+  document.addEventListener?.('keydown', event => { if (event.key === 'Escape' && picking) { event.preventDefault?.(); cancelPick(); nodes.pickElement.focus?.(); } });
   nodes.imageFiles.addEventListener('change', () => void addImages([...nodes.imageFiles.files]).catch(error));
   nodes.message.addEventListener('paste', event => {
     const files = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith('image/') || isHeif(file));
@@ -1819,6 +1900,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (changes.ab_panel_work_in && area !== 'session') { workInMap = changes.ab_panel_work_in.newValue || {}; renderGrant(); }
     if (!tabBound || area !== 'session') return;
     if (chipKey && changes[chipKey]) applyChips(changes[chipKey].newValue);
+    if (tabBound && changes[inspectPickKey(panelTab)]) { picking = !!changes[inspectPickKey(panelTab)].newValue; renderPick(); }
     const change = changes[panelTabKey(panelTab)];
     if (!change || (change.newValue || '') === selected) return;
     // Applied once the send ends, so two panels never keep one conversation.
@@ -1839,6 +1921,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || '';
         const waiting = (await Promise.resolve(storage?.session?.get?.(chipKey)).catch(() => null))?.[chipKey];
         if (waiting) applyChips(waiting);
+        // Chips already waiting when the panel opens are not "new".
+        shownChipIds = new Set(chipRecord.items.map(chip => chip.id));
+        picking = !!(await Promise.resolve(storage?.session?.get?.(inspectPickKey(panelTab))).catch(() => null))?.[inspectPickKey(panelTab)];
+        renderPick();
       }
       else selected = tabMode ? initialConversation : saved?.ab_panel_conversation || '';
       if (saved?.ab_panel_full_access === false) newFullAccess = false;
@@ -1851,7 +1937,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       await refresh();
       projectChoice.setAgent(nodes.agent.value); refreshProjects();
     } catch (failure) { error(failure); }
-  }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
+  }, refresh, select, send, togglePick, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
 // The English fallback loads first, so the first render has no raw keys.
@@ -1861,7 +1947,7 @@ if (typeof document !== 'undefined') void i18nReady.then(() => {
   const mode = query.get('mode') === 'tab' ? 'tab' : 'panel';
   document.documentElement.dataset.mode = mode;
   const setLocation = id => { try { globalThis.history.replaceState(null, '', `?mode=tab${id ? `&conversation=${encodeURIComponent(id)}` : ''}`); } catch {} };
-  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, mode, initialConversation: query.get('conversation') || '', panelTab: panelTabFrom(globalThis.location?.search), setLocation });
+  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, permissions: globalThis.chrome?.permissions, mode, initialConversation: query.get('conversation') || '', panelTab: panelTabFrom(globalThis.location?.search), setLocation });
   void panel.start();
   globalThis.addEventListener('pagehide', () => panel.close());
 });

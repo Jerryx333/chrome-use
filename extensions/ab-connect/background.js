@@ -2790,6 +2790,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     );
     return true;
   }
+  // The side panel's Pick button: a picker on the panel's own tab.
+  if (msg?.type === 'ab-inspect-pick' || msg?.type === 'ab-inspect-pick-cancel') {
+    if (!isAgentPanelSender(_sender, chrome.runtime) || !Number.isInteger(msg.tabId)) {
+      sendResponse({ success: false, error: 'Picking starts from the extension panel' });
+      return false;
+    }
+    (msg.type === 'ab-inspect-pick' ? inspectController.startDirect(msg.tabId, { keep: msg.keep === true }) : inspectController.cancelDirect(msg.tabId)).then(
+      result => sendResponse({ success: true, ...result }),
+      error => sendResponse({ success: false, error: String(error.message || error) }),
+    );
+    return true;
+  }
   if (msg?.type === 'ab-tab-grant') {
     if (!isAgentPanelSender(_sender, chrome.runtime)) {
       sendResponse({ success: false, error: 'Agent services require the packaged extension panel' });

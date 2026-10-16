@@ -606,8 +606,14 @@
   "inspect_pick_hint_panel": {
     "message": "点页面上的元素，把它加入这个标签页的对话。Shift+点击或拖选可以选多个。"
   },
+  "inspect_picker_added": {
+    "message": "已加入对话"
+  },
   "inspect_picker_hint": {
     "message": "点选元素 · Shift+点击或拖选多个 · ↑/↓ 父/子元素 · P 暂停动画 · Esc 退出"
+  },
+  "inspect_picker_hint_direct": {
+    "message": "点一个元素加入对话 · Shift+点击可连选 · Esc 取消"
   },
   "inspect_plugin_change_dependency": {
     "message": "把 code-inspector-plugin 加为 devDependency"
@@ -1747,6 +1753,62 @@
   "panel_image_unavailable": {
     "message": "已保存的图片不可用"
   },
+  "panel_inspect_added_live": {
+    "message": "已加入消息：$NAMES$",
+    "placeholders": {
+      "names": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_card_inside": {
+    "message": "位于"
+  },
+  "panel_inspect_card_no_shot": {
+    "message": "没有截图"
+  },
+  "panel_inspect_card_page": {
+    "message": "页面"
+  },
+  "panel_inspect_card_selector": {
+    "message": "选择器"
+  },
+  "panel_inspect_card_shot_alt": {
+    "message": "$NAME$ 的截图",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_card_shot_pending": {
+    "message": "正在截图…"
+  },
+  "panel_inspect_card_source": {
+    "message": "源码"
+  },
+  "panel_inspect_card_source_pending": {
+    "message": "查找中…"
+  },
+  "panel_inspect_card_text": {
+    "message": "文字"
+  },
+  "panel_inspect_chip_aria": {
+    "message": "已选元素 $NAME$。按 Delete 移除。",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_chip_aria_stale": {
+    "message": "已选元素 $NAME$，页面之后变了。按 Delete 移除。",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_inspect_chip_foreign_frame": {
     "message": "跨站 iframe"
   },
@@ -1756,11 +1818,19 @@
   "panel_inspect_chip_in_shadow": {
     "message": "在 Shadow DOM 里"
   },
+  "panel_inspect_chip_pending": {
+    "message": "截图和源码位置还在获取"
+  },
   "panel_inspect_chip_remove": {
     "message": "移除这个元素"
   },
-  "panel_inspect_chip_shot": {
-    "message": "+ 截图"
+  "panel_inspect_chip_remove_named": {
+    "message": "移除 $NAME$",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
   },
   "panel_inspect_chip_stale": {
     "message": "页面已变"
@@ -1768,21 +1838,18 @@
   "panel_inspect_chip_stale_title": {
     "message": "点选之后页面变了；会告诉 agent 它可能已经不在了。"
   },
-  "panel_inspect_chip_title": {
-    "message": "$PAGE$ 上的 $SELECTOR$",
-    "placeholders": {
-      "selector": {
-        "content": "$1"
-      },
-      "page": {
-        "content": "$2"
-      }
-    }
-  },
   "panel_inspect_context_summary": {
     "message": "$COUNT$ 个点选的元素",
     "placeholders": {
       "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_removed_live": {
+    "message": "已移除 $NAME$",
+    "placeholders": {
+      "name": {
         "content": "$1"
       }
     }
@@ -1956,6 +2023,21 @@
   },
   "panel_phase_unknown": {
     "message": "响应状态未知"
+  },
+  "panel_pick_cancel_title": {
+    "message": "停止选择（Esc）"
+  },
+  "panel_pick_failed": {
+    "message": "没能在这个页面上开始选择。"
+  },
+  "panel_pick_permission_denied": {
+    "message": "选择元素需要访问这个网站的权限。Chrome 询问时请允许，或者在页面上按 Alt+Shift+C。"
+  },
+  "panel_pick_title": {
+    "message": "选择元素：在页面上点一个，直接放进这里（按住 Shift 连选）"
+  },
+  "panel_pick_unavailable": {
+    "message": "这个页面不能选择元素"
   },
   "panel_pointed_at": {
     "message": "浏览器工具指向：$PAGES$",
@@ -3047,6 +3129,15 @@
   },
   "sidepanel_phase_ready": {
     "message": "就绪"
+  },
+  "sidepanel_pick_cancel": {
+    "message": "取消"
+  },
+  "sidepanel_pick_element": {
+    "message": "选择元素"
+  },
+  "sidepanel_pick_hint": {
+    "message": "在页面上点一个元素 · Shift+点击可连选 · Esc 取消"
   },
   "sidepanel_preview_changes": {
     "message": "预览改动"

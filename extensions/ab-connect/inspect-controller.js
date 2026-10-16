@@ -7,9 +7,9 @@
 import { t } from './i18n.js';
 import { InspectRegistry, INSPECT_PORT_NAME, isLocalOrigin } from './inspect-registry.js';
 import { inspectProbe, validateProbeResult } from './inspect-probe.js';
-import { captureVerdict, cropScreenshots } from './inspect-capture.js';
+import { captureVerdict, cropScreenshots, shrinkForStorage } from './inspect-capture.js';
 import { chooseSource, formatAnnotation, sourceLabel, NOTE_MAX, INSTRUCTION_MAX } from './inspect-format.js';
-import { inspectChipsKey, chipsFromAnnotations, mergeChips, markStale, QUESTION_MAX } from './inspect-chips.js';
+import { inspectChipsKey, inspectPickKey, chipsFromAnnotations, mergeChips, upsertChips, settlePending, markStale, QUESTION_MAX } from './inspect-chips.js';
 
 export const INSPECT_COMMAND = 'inspect-element';
 const SETTINGS_KEY = 'inspectSettings';
@@ -118,7 +118,7 @@ export class InspectController {
     this.resolveReady = resolveReady;
     // Hosts that send as a reply-safe identity and keep agent replies.
     this.repliesReady = repliesReady;
-    this.registry = new InspectRegistry({ runtimeId: chrome.runtime.id });
+    this.registry = new InspectRegistry({ runtimeId: chrome.runtime.id, onRevoke: instance => { void this.directEnded(instance); } });
   }
 
   install() {
@@ -202,6 +202,101 @@ export class InspectController {
     return { started: true };
   }
 
+  // The side panel's Pick button: a picker on the panel's own tab whose picks
+  // go straight into that panel's composer. The click in the panel grants no
+  // activeTab, so a site the extension may not script yet answers with the
+  // host pattern the panel asks the user for, then the panel tries again.
+  async startDirect(tabId, { keep = false } = {}) {
+    const c = this.chrome;
+    const tab = await c.tabs.get(tabId);
+    if (!/^https?:/.test(tab?.url || '')) throw new Error(t('inspect_error_http_only'));
+    const frame = await c.webNavigation.getFrame({ tabId, frameId: 0 });
+    if (!frame?.documentId) throw new Error(t('inspect_error_no_document'));
+    const instance = this.registry.create({ tabId, windowId: tab.windowId, documentId: frame.documentId, url: tab.url, mode: 'direct', keep });
+    if (!instance) throw new Error(t('inspect_error_cannot_inspect'));
+    instance.chipIds = new Map();
+    instance.known = new Set();
+    instance.directImages = new Map();
+    instance.imagesSettled = new Set();
+    try {
+      await c.scripting.executeScript({ target: { tabId, frameIds: [0] }, files: ['inspect-extract.js', 'inspect-picker.js'] });
+    } catch (error) {
+      this.registry.revoke(instance, 'failed');
+      const message = String(error?.message || error);
+      if (/permission|Cannot access/i.test(message)) return { needsPermission: `${instance.origin}/*` };
+      throw error;
+    }
+    await c.storage.session?.set({ [inspectPickKey(tabId)]: { instanceId: instance.id, keep: instance.keep } });
+    return { started: true };
+  }
+
+  // The Pick button again, or Esc in the panel.
+  async cancelDirect(tabId) {
+    const instance = this.registry.get(tabId);
+    if (instance?.mode === 'direct') {
+      void this.chrome.tabs.sendMessage(tabId, { type: 'inspect:cancel', instanceId: instance.id }, { frameId: 0 }).catch(() => {});
+      this.registry.revoke(instance, 'cancelled');
+    } else {
+      await this.chrome.storage.session?.remove(inspectPickKey(tabId)).catch(() => {});
+    }
+    return { cancelled: true };
+  }
+
+  // A direct picker ended (pick done, Esc, cancel, navigation): the panel's
+  // button leaves its active state and placeholders stop waiting.
+  async directEnded(instance) {
+    if (instance.mode !== 'direct') return;
+    const session = this.chrome.storage.session;
+    if (!session) return;
+    try {
+      const pickKey = inspectPickKey(instance.tabId);
+      if ((await session.get(pickKey))?.[pickKey]?.instanceId === instance.id) await session.remove(pickKey);
+      const key = inspectChipsKey(instance.tabId);
+      const next = settlePending((await session.get(key))?.[key], [...(instance.chipIds?.values() || [])]);
+      if (next) await session.set({ [key]: next });
+    } catch {}
+  }
+
+  // Direct picks become chips at once (element facts the picker already
+  // sent); the framework probe and the screenshot update them in place.
+  async directChips(instance, elements, probes) {
+    const session = this.chrome.storage.session;
+    if (!session) return;
+    const keyOf = e => JSON.stringify([e.selector, e.frames || [], e.shadowHosts || []]);
+    const ids = elements.map(e => {
+      const k = keyOf(e);
+      if (!instance.chipIds.has(k)) instance.chipIds.set(k, crypto.randomUUID());
+      return instance.chipIds.get(k);
+    });
+    const annotations = elements.map((element, i) => ({ element, probe: probes?.[i] || null, note: '' }));
+    const chips = chipsFromAnnotations(annotations, { documentId: instance.topDocumentId, pageUrl: (await this.pageNow(instance)).pageUrl, ids }).map((chip, i) => ({
+      ...chip,
+      image: instance.directImages.get(chip.id) || null,
+      pending: { image: !instance.directImages.has(chip.id) && !instance.imagesSettled.has(chip.id), source: !probes && !elements[i].source },
+    }));
+    const key = inspectChipsKey(instance.tabId);
+    const record = upsertChips((await session.get(key))?.[key], chips, instance.known);
+    for (const id of ids) instance.known.add(id);
+    await session.set({ [key]: record });
+  }
+
+  // After a capture for a direct picker: screenshots go into their chips;
+  // chips the capture could not cover stop waiting for one. The last pick of
+  // a one-pick session then lets the picker leave.
+  async directCaptured(instance, selection, images) {
+    if (instance.revoked || instance.selectionRevision !== selection) return;
+    const keys = instance.annotations.map(a => JSON.stringify([a.element.selector, a.element.frames || [], a.element.shadowHosts || []]));
+    for (const [i, k] of keys.entries()) {
+      const id = instance.chipIds.get(k);
+      if (!id) continue;
+      if (images?.[i]) { try { instance.directImages.set(id, await shrinkForStorage(images[i])); } catch {} }
+      instance.imagesSettled.add(id);
+    }
+    if (instance.revoked || instance.selectionRevision !== selection) return;
+    await this.directChips(instance, instance.annotations.map(a => a.element), instance.annotations.map(a => a.probe));
+    if (instance.final) void this.chrome.tabs.sendMessage(instance.tabId, { type: 'inspect:finish', instanceId: instance.id }, { frameId: 0, documentId: instance.topDocumentId }).catch(() => this.registry.revoke(instance, 'done'));
+  }
+
   // Messages from the picker content script (frame 0 of the instance document).
   onPickerMessage(message, sender, sendResponse) {
     const type = message?.type;
@@ -213,7 +308,8 @@ export class InspectController {
       const instance = this.registry.forPickerSender(sender, handed.instanceId);
       void Promise.all([this.settings(), this.destination(instance?.origin)]).then(([settings, destination]) => sendResponse({
         ok: true, ...handed, frameUrl: this.chrome.runtime.getURL('inspect-frame.html'),
-        frameOrigin: `chrome-extension://${this.chrome.runtime.id}`, enabled: settings.enabled || destination === 'panel',
+        frameOrigin: `chrome-extension://${this.chrome.runtime.id}`, enabled: settings.enabled || destination === 'panel' || instance?.mode === 'direct',
+        mode: instance?.mode || 'frame', keep: !!instance?.keep,
       }));
       return true;
     }
@@ -235,10 +331,16 @@ export class InspectController {
   // Every selection gets a new revision. The probe, screenshots, notes and the
   // send are bound to it; a result that arrives after the selection changed is
   // dropped instead of being attached to different elements.
-  async updateSelection(instance, { elements, probeAttribute, layout, revision, selectionSeq }) {
+  async updateSelection(instance, { elements, probeAttribute, layout, revision, selectionSeq, final }) {
     if (!Array.isArray(elements) || elements.length > MAX_ELEMENTS) throw new Error('Too many elements');
     const selection = (instance.selectionRevision || 0) + 1;
     instance.selectionRevision = selection;
+    const direct = instance.mode === 'direct';
+    if (direct) {
+      instance.final = final === true;
+      // The chip comes first; nothing slow happens before it is written.
+      try { await this.directChips(instance, elements, null); } catch {}
+    }
     let probes = elements.map(() => null);
     if (typeof probeAttribute === 'string' && /^data-[a-z]{12}$/.test(probeAttribute) && elements.length) {
       try {
@@ -255,6 +357,7 @@ export class InspectController {
     instance.revision = typeof revision === 'string' && /^[A-Za-z0-9._-]{1,100}$/.test(revision) ? revision : null;
     instance.images = new Map();
     this.pushAnnotations(instance);
+    if (direct) { try { await this.directChips(instance, elements, probes); } catch {} }
     if (elements.length) this.queueCapture(instance);
     return { ok: true };
   }
@@ -276,7 +379,8 @@ export class InspectController {
   // over each other; each is bound to the selection revision it was made for.
   queueCapture(instance) {
     const selection = instance.selectionRevision;
-    instance.captureChain = (instance.captureChain || Promise.resolve()).then(() => this.capture(instance, selection)).catch(() => {});
+    instance.captureChain = (instance.captureChain || Promise.resolve()).then(() => this.capture(instance, selection)).catch(() => {})
+      .then(() => (instance.mode === 'direct' ? this.directCaptured(instance, selection, instance.lastImages?.selection === selection ? instance.lastImages.images : null) : null)).catch(() => {});
     return instance.captureChain;
   }
 
@@ -353,6 +457,7 @@ export class InspectController {
       if (!cropped.ok) return fail(cropped.reason);
       instance.images = new Map();
       cropped.images.forEach((image, i) => { if (image) instance.images.set(i, image); });
+      instance.lastImages = { selection, images: cropped.images };
       instance.port?.postMessage({ type: 'images', revision: selection, images: cropped.images, reason: cropped.images.some(x => !x) ? t('inspect_capture_outside_view') : null });
     } catch (error) {
       fail(t('inspect_capture_unavailable', String(error.message || error)));

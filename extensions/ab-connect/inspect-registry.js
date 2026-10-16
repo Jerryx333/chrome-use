@@ -33,8 +33,9 @@ export function isLocalOrigin(origin) {
 }
 
 export class InspectRegistry {
-  constructor({ runtimeId, now = () => Date.now(), randomId = () => crypto.randomUUID(), idleMs = IDLE_MS } = {}) {
+  constructor({ runtimeId, now = () => Date.now(), randomId = () => crypto.randomUUID(), idleMs = IDLE_MS, onRevoke = () => {} } = {}) {
     this.runtimeId = runtimeId;
+    this.onRevoke = onRevoke;
     this.now = now;
     this.randomId = randomId;
     this.idleMs = idleMs;
@@ -42,7 +43,9 @@ export class InspectRegistry {
   }
 
   // Called only from a trusted user gesture (keyboard command or popup click).
-  create({ tabId, windowId, documentId, url }) {
+  // `mode` 'direct': started from the side panel's Pick button; picks go
+  // straight into that panel's composer and no input frame is shown.
+  create({ tabId, windowId, documentId, url, mode = 'frame', keep = false }) {
     const origin = inspectOrigin(url);
     if (!Number.isInteger(tabId) || typeof documentId !== 'string' || !documentId || !origin) return null;
     this.revokeTab(tabId, 'replaced');
@@ -51,7 +54,7 @@ export class InspectRegistry {
       tabId, windowId, topDocumentId: documentId, origin, pageUrl: url,
       createdAt: this.now(), lastActive: this.now(), generation: 0,
       frameId: null, frameDocumentId: null, port: null, revoked: false, revokedReason: null,
-      annotations: [], images: new Map(),
+      annotations: [], images: new Map(), mode: mode === 'direct' ? 'direct' : 'frame', keep: keep === true,
     };
     this.byTab.set(tabId, instance);
     return instance;
@@ -143,6 +146,7 @@ export class InspectRegistry {
       try { port.postMessage({ type: 'revoked', reason }); } catch {}
       try { port.disconnect(); } catch {}
     }
+    try { this.onRevoke(instance, reason); } catch {}
   }
 
   revokeTab(tabId, reason) {

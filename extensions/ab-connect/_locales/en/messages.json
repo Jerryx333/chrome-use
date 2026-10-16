@@ -606,8 +606,14 @@
   "inspect_pick_hint_panel": {
     "message": "Click an element on the page to add it to this tab's chat. Shift+click or drag to select several."
   },
+  "inspect_picker_added": {
+    "message": "Added to chat"
+  },
   "inspect_picker_hint": {
     "message": "Click an element · Shift+click or drag to select several · ↑/↓ parent/child · P pause animations · Esc exit"
+  },
+  "inspect_picker_hint_direct": {
+    "message": "Click an element to add it to the chat · Shift+click for several · Esc cancels"
   },
   "inspect_plugin_change_dependency": {
     "message": "Add code-inspector-plugin as a devDependency"
@@ -1747,6 +1753,62 @@
   "panel_image_unavailable": {
     "message": "Saved image unavailable"
   },
+  "panel_inspect_added_live": {
+    "message": "Added to the message: $NAMES$",
+    "placeholders": {
+      "names": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_card_inside": {
+    "message": "Inside"
+  },
+  "panel_inspect_card_no_shot": {
+    "message": "No screenshot"
+  },
+  "panel_inspect_card_page": {
+    "message": "Page"
+  },
+  "panel_inspect_card_selector": {
+    "message": "Selector"
+  },
+  "panel_inspect_card_shot_alt": {
+    "message": "Screenshot of $NAME$",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_card_shot_pending": {
+    "message": "Taking a screenshot…"
+  },
+  "panel_inspect_card_source": {
+    "message": "Source"
+  },
+  "panel_inspect_card_source_pending": {
+    "message": "Looking…"
+  },
+  "panel_inspect_card_text": {
+    "message": "Text"
+  },
+  "panel_inspect_chip_aria": {
+    "message": "Picked element $NAME$. Delete removes it.",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_chip_aria_stale": {
+    "message": "Picked element $NAME$, page changed since. Delete removes it.",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_inspect_chip_foreign_frame": {
     "message": "other-site frame"
   },
@@ -1756,11 +1818,19 @@
   "panel_inspect_chip_in_shadow": {
     "message": "in shadow DOM"
   },
+  "panel_inspect_chip_pending": {
+    "message": "Screenshot and source are still coming"
+  },
   "panel_inspect_chip_remove": {
     "message": "Remove this element"
   },
-  "panel_inspect_chip_shot": {
-    "message": "+ screenshot"
+  "panel_inspect_chip_remove_named": {
+    "message": "Remove $NAME$",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
   },
   "panel_inspect_chip_stale": {
     "message": "page changed"
@@ -1768,21 +1838,18 @@
   "panel_inspect_chip_stale_title": {
     "message": "The page changed after this was picked; the agent is told it may no longer be there."
   },
-  "panel_inspect_chip_title": {
-    "message": "$SELECTOR$ on $PAGE$",
-    "placeholders": {
-      "selector": {
-        "content": "$1"
-      },
-      "page": {
-        "content": "$2"
-      }
-    }
-  },
   "panel_inspect_context_summary": {
     "message": "$COUNT$ picked elements",
     "placeholders": {
       "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_removed_live": {
+    "message": "Removed $NAME$",
+    "placeholders": {
+      "name": {
         "content": "$1"
       }
     }
@@ -1956,6 +2023,21 @@
   },
   "panel_phase_unknown": {
     "message": "Unknown response state"
+  },
+  "panel_pick_cancel_title": {
+    "message": "Stop picking (Esc)"
+  },
+  "panel_pick_failed": {
+    "message": "Couldn't start picking on this page."
+  },
+  "panel_pick_permission_denied": {
+    "message": "Picking needs access to this site. Allow it when Chrome asks, or press Alt+Shift+C on the page."
+  },
+  "panel_pick_title": {
+    "message": "Pick element: click one on the page and it lands here (Shift for several)"
+  },
+  "panel_pick_unavailable": {
+    "message": "Elements can't be picked on this page"
   },
   "panel_pointed_at": {
     "message": "Browser tools pointed at: $PAGES$",
@@ -3047,6 +3129,15 @@
   },
   "sidepanel_phase_ready": {
     "message": "Ready"
+  },
+  "sidepanel_pick_cancel": {
+    "message": "Cancel"
+  },
+  "sidepanel_pick_element": {
+    "message": "Pick element"
+  },
+  "sidepanel_pick_hint": {
+    "message": "Click an element on the page · Shift+click for several · Esc cancels"
   },
   "sidepanel_preview_changes": {
     "message": "Preview changes"

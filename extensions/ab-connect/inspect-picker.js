@@ -31,6 +31,12 @@
   let paused = null;
   let observer = null;
   let closed = false;
+  // 'direct': started from the side panel's Pick button. Each pick goes
+  // straight into the panel's composer; one pick ends the session unless
+  // Shift is held (or the panel asked to keep picking). No input frame.
+  let mode = 'frame';
+  let keep = false;
+  let finishing = false;
   let anchorRect = null;
   // Bumped on every selection change; travels with the selection report and
   // each screenshot layout so the background can tell which selection a
@@ -60,7 +66,7 @@
     tag = el('div', 'position:fixed;z-index:1;pointer-events:none;background:#111827;color:#f9fafb;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;padding:3px 7px;border-radius:4px;display:none;max-width:460px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;');
     marquee = el('div', 'position:fixed;z-index:1;pointer-events:none;border:1px dashed #2563eb;background:rgba(37,99,235,.06);display:none;');
     const hint = el('div', 'position:fixed;left:50%;top:12px;margin-left:-230px;width:460px;text-align:center;pointer-events:none;background:#111827;color:#f9fafb;font:12px/1.5 system-ui,sans-serif;padding:6px 10px;border-radius:6px;opacity:.92;',
-      t('inspect_picker_hint'));
+      t(mode === 'direct' ? 'inspect_picker_hint_direct' : 'inspect_picker_hint'));
     hint.dataset.role = 'hint';
     root.append(box, tag, marquee, hint);
     document.documentElement.append(host);
@@ -143,7 +149,9 @@
     if (!node) { box.style.display = 'none'; tag.style.display = 'none'; return; }
     const r = X.topRect(node);
     Object.assign(box.style, { display: 'block', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
-    const label = node.tagName.toLowerCase() + (sourceText(node) ? '  ' + sourceText(node) : '');
+    const id = node.id && node.id.length < 40 ? '#' + node.id : '';
+    const cls = !id && typeof node.className === 'string' ? node.className.trim().split(/\s+/).filter(c => c && c.length < 30)[0] : '';
+    const label = node.tagName.toLowerCase() + id + (cls ? '.' + cls : '') + '  ' + Math.round(r.width) + '×' + Math.round(r.height) + (sourceText(node) ? '  ' + sourceText(node) : '');
     tag.textContent = label;
     tag.style.display = 'block';
     tag.style.left = Math.max(4, Math.min(r.left, innerWidth - 470)) + 'px';
@@ -162,6 +170,20 @@
     });
   }
 
+  // A pick is confirmed where it happened: the element flashes green with
+  // "Added to chat", then fades. Only in the picker's own shadow root.
+  function flash(nodes) {
+    for (const node of nodes.slice(0, MAX)) {
+      const r = X.topRect(node);
+      const ring = el('div', `position:fixed;z-index:1;pointer-events:none;border:2px solid #16a34a;background:rgba(22,163,74,.16);border-radius:4px;box-sizing:border-box;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;transition:opacity .45s ease .35s;`);
+      const pill = el('div', `position:absolute;left:-2px;${r.top > 28 ? 'top:-26px' : 'bottom:-26px'};background:#16a34a;color:#fff;font:600 12px/22px system-ui,sans-serif;padding:0 9px;border-radius:11px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.2);`, '✓ ' + t('inspect_picker_added'));
+      ring.append(pill);
+      root.append(ring);
+      requestAnimationFrame(() => requestAnimationFrame(() => { ring.style.opacity = '0'; }));
+      setTimeout(() => ring.remove(), 1000);
+    }
+  }
+
   function layoutNow() {
     return { ...X.layout(window), selectionSeq, rects: selected.map(node => { const r = X.topRect(node); return { x: r.left, y: r.top, width: r.width, height: r.height }; }) };
   }
@@ -174,25 +196,43 @@
     selected.forEach((node, i) => node.setAttribute(attribute, String(i)));
     try {
       const revision = document.querySelector('meta[name="chrome-use-revision"]')?.getAttribute('content') || null;
-      await send({ type: 'inspect:selection', selectionSeq, elements, probeAttribute: attribute, layout: layoutNow(), revision });
+      await send({ type: 'inspect:selection', selectionSeq, elements, probeAttribute: attribute, layout: layoutNow(), revision, final: finishing });
     } finally {
       for (const node of selected) node.removeAttribute(attribute);
     }
   }
 
-  function setSelection(nodes, { add }) {
+  function setSelection(nodes, { add, more = false }) {
     let next = add ? [...selected] : [];
     for (const node of nodes) {
       const at = next.indexOf(node);
-      if (add && at >= 0) next.splice(at, 1);
+      // A direct pick never takes an element back out; chips are removed
+      // in the panel.
+      if (add && at >= 0 && mode !== 'direct') next.splice(at, 1);
       else if (at < 0) next.push(node);
     }
     next = next.filter(node => node.isConnected).slice(0, MAX);
     selected = next;
     selectionSeq++;
-    drawBadges();
-    if (selected.length) openPanel();
+    if (mode === 'direct' && !more && !keep) finishDirect();
+    else drawBadges();
+    if (mode === 'direct') flash(nodes);
+    if (selected.length && mode !== 'direct') openPanel();
     void report().catch(() => {});
+  }
+
+  // One pick done: the page is the user's again at once (listeners off,
+  // outlines gone); the flash plays out and the picker stays reachable only
+  // for the background's screenshot, then leaves.
+  function finishDirect() {
+    finishing = true;
+    picking = false;
+    detach();
+    hintVisible(false);
+    showHover(null);
+    for (const badge of badges) badge.remove();
+    badges = [];
+    setTimeout(() => teardown('done'), 5000);
   }
 
   function areaSelect(rect) {
@@ -392,12 +432,12 @@
     if (current.active) {
       const rect = { left: Math.min(current.x, p.x), top: Math.min(current.y, p.y), right: Math.max(current.x, p.x), bottom: Math.max(current.y, p.y) };
       const nodes = areaSelect(rect);
-      if (nodes.length) setSelection(nodes, { add: current.shift || !!frame });
+      if (nodes.length) setSelection(nodes, { add: current.shift || !!frame || mode === 'direct', more: current.shift });
     } else {
       const node = hovered || targetAt(p.x, p.y);
-      if (node) setSelection([node], { add: current.shift || !!frame });
+      if (node) setSelection([node], { add: current.shift || !!frame || mode === 'direct', more: current.shift });
     }
-    if (!current.shift) {
+    if (!current.shift && mode !== 'direct') {
       picking = false;
       hintVisible(false);
       showHover(null);
@@ -413,6 +453,7 @@
     if (closed || !event.isTrusted || event.composedPath().includes(host)) return;
     if (event.key === 'Escape') {
       swallow(event);
+      if (mode === 'direct') { teardown('escape'); return; }
       if (picking && selected.length) { picking = false; hintVisible(false); showHover(null); return; }
       teardown('escape');
       return;
@@ -422,7 +463,7 @@
     if (event.key === 'ArrowUp' && up && up !== document.body && up !== hovered.ownerDocument.body) { swallow(event); showHover(up); }
     else if (event.key === 'ArrowDown' && hovered?.firstElementChild) { swallow(event); showHover(hovered.firstElementChild); }
     else if ((event.key === 'p' || event.key === 'P') && !event.metaKey && !event.ctrlKey && !event.altKey) { swallow(event); setPaused(!paused); }
-    else if (event.key === 'Enter' && hovered) { swallow(event); setSelection([hovered], { add: event.shiftKey || !!frame }); }
+    else if (event.key === 'Enter' && hovered) { swallow(event); setSelection([hovered], { add: event.shiftKey || !!frame || mode === 'direct', more: event.shiftKey }); }
   }
 
   function onScroll() {
@@ -437,12 +478,16 @@
     ['keydown', onKey], ['scroll', onScroll], ['resize', onScroll],
   ];
 
-  function teardown(reason) {
-    if (closed) return;
-    closed = true;
+  function detach() {
     for (const win of [window, ...frameWindows]) {
       for (const [name, fn] of listeners) { try { win.removeEventListener(name, fn, true); } catch {} }
     }
+  }
+
+  function teardown(reason) {
+    if (closed) return;
+    closed = true;
+    detach();
     try { setPaused(false); } catch {}
     observer?.disconnect();
     try { framePort?.postMessage({ type: 'closing', reason }); framePort?.close(); } catch {}
@@ -465,6 +510,12 @@
       setTimeout(answer, 250);
       return true;
     }
+    if (message.type === 'inspect:finish' || message.type === 'inspect:cancel') {
+      // Let a confirmation flash finish before the overlay goes.
+      setTimeout(() => teardown(message.type === 'inspect:finish' ? 'done' : 'cancelled'), message.type === 'inspect:finish' ? 600 : 0);
+      sendResponse({ ok: true });
+      return false;
+    }
     if (message.type === 'inspect:finishCapture') {
       const layout = layoutNow();
       host.style.visibility = 'visible';
@@ -478,6 +529,8 @@
     const hello = await chrome.runtime.sendMessage({ type: 'inspect:hello' });
     if (!hello?.ok) return;
     instanceId = hello.instanceId;
+    mode = hello.mode === 'direct' ? 'direct' : 'frame';
+    keep = hello.keep === true;
     secret = hello.secret;
     frameUrl = hello.frameUrl;
     frameOrigin = hello.frameOrigin;

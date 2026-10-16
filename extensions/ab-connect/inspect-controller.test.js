@@ -397,3 +397,87 @@ test('chips go stale when the tab moves on and leave with the tab', async () => 
   await flush();
   assert.equal(session.ab_inspect_tab_7, undefined);
 });
+
+// ---- The side panel's Pick button (direct picks) ------------------------------
+
+async function direct({ inject } = {}) {
+  const { chrome, store, listeners } = fakeChrome();
+  lastListeners = listeners;
+  chrome.tabs.get = async id => ({ id, windowId: 1, url: 'http://localhost:5173/orders', active: true });
+  const sent = [];
+  chrome.tabs.sendMessage = async (tabId, message) => { sent.push(message); return { ok: true }; };
+  if (inject) chrome.scripting.executeScript = inject;
+  const controller = new InspectController({ chrome, hostReady: () => true, request: async () => ({}) });
+  controller.install();
+  controller.queueCapture = () => {};
+  return { chrome, store, controller, sent };
+}
+
+test('a direct pick shows its chip before the probe answers, then fills in the source', async () => {
+  const { chrome, controller } = await direct();
+  assert.deepEqual(await controller.startDirect(7), { started: true });
+  assert.equal(chrome.storage.session.data.ab_inspect_pick_7.keep, false);
+  const picker = { id: 'ext', tab: { id: 7 }, frameId: 0, documentId: 'doc' };
+  const hello = await new Promise(resolve => controller.onPickerMessage({ type: 'inspect:hello' }, picker, resolve));
+  assert.equal(hello.mode, 'direct');
+  assert.equal(hello.enabled, true);
+  let releaseProbe;
+  chrome.scripting.executeScript = () => new Promise(resolve => { releaseProbe = () => resolve([{ result: [{ index: 0, info: { framework: 'react', component: 'SaveButton', ancestors: [], source: { kind: 'react', path: 'src/Save.tsx', line: 9, column: null } } }] }]); });
+  const reply = new Promise(resolve => controller.onPickerMessage({ type: 'inspect:selection', instanceId: hello.instanceId, elements: [{ ...element, source: null }], probeAttribute: 'data-abcdefghijkl', selectionSeq: 1, final: true }, picker, resolve));
+  await flush(); await flush(); await flush();
+  const first = chrome.storage.session.data.ab_inspect_tab_7.items;
+  assert.equal(first.length, 1, 'the chip is there while the probe still runs');
+  assert.deepEqual(first[0].pending, { image: true, source: true });
+  releaseProbe();
+  await reply; await flush(); await flush();
+  const after = chrome.storage.session.data.ab_inspect_tab_7.items;
+  assert.equal(after.length, 1);
+  assert.equal(after[0].id, first[0].id, 'updated in place');
+  assert.equal(after[0].source.path, 'src/Save.tsx');
+  assert.equal(after[0].component, 'SaveButton');
+  assert.deepEqual(after[0].pending, { image: true, source: false });
+});
+
+test('the screenshot fills the chip and a one-pick session then lets the picker go', async () => {
+  const { chrome, controller, sent } = await direct();
+  await controller.startDirect(7);
+  const instance = controller.registry.get(7);
+  await controller.updateSelection(instance, { elements: [element], selectionSeq: 1, final: true });
+  await controller.directCaptured(instance, instance.selectionRevision, ['data:image/png;base64,iVBORw0KGgo=']);
+  const chip = chrome.storage.session.data.ab_inspect_tab_7.items[0];
+  assert.match(chip.image, /^data:image\/png/);
+  assert.deepEqual(chip.pending, { image: false, source: false }, 'a code-inspector mark needs no lookup');
+  assert.equal(sent.at(-1).type, 'inspect:finish');
+});
+
+test('cancelling clears the active state and stops placeholders from waiting', async () => {
+  const { chrome, controller, sent } = await direct();
+  await controller.startDirect(7, { keep: true });
+  const instance = controller.registry.get(7);
+  await controller.updateSelection(instance, { elements: [element], selectionSeq: 1 });
+  assert.equal(chrome.storage.session.data.ab_inspect_tab_7.items[0].pending.image, true);
+  await controller.cancelDirect(7);
+  await flush(); await flush(); await flush();
+  assert.equal(sent.at(-1).type, 'inspect:cancel');
+  assert.equal(chrome.storage.session.data.ab_inspect_pick_7, undefined);
+  assert.deepEqual(chrome.storage.session.data.ab_inspect_tab_7.items[0].pending, { image: false, source: false });
+});
+
+test('a removed chip is not brought back by the next pick of the same session', async () => {
+  const { chrome, controller } = await direct();
+  await controller.startDirect(7, { keep: true });
+  const instance = controller.registry.get(7);
+  await controller.updateSelection(instance, { elements: [element], selectionSeq: 1 });
+  chrome.storage.session.data.ab_inspect_tab_7 = { items: [], question: '' };
+  await controller.updateSelection(instance, { elements: [element, { ...element, selector: 'a.more' }], selectionSeq: 2 });
+  assert.deepEqual(chrome.storage.session.data.ab_inspect_tab_7.items.map(c => c.selector), ['a.more']);
+});
+
+test('a site the extension may not script asks the panel for that site\'s permission', async () => {
+  const { chrome, controller } = await direct({ inject: async () => { throw new Error('Cannot access contents of url "http://localhost:5173/orders". Extension manifest must request permission to access this host.'); } });
+  assert.deepEqual(await controller.startDirect(7), { needsPermission: 'http://localhost:5173/*' });
+  assert.equal(controller.registry.get(7), null);
+  assert.equal(chrome.storage.session.data.ab_inspect_pick_7, undefined);
+  chrome.tabs.get = async id => ({ id, windowId: 1, url: 'chrome://settings' });
+  await assert.rejects(controller.startDirect(7));
+});
