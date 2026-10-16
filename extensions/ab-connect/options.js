@@ -8,13 +8,13 @@ import { t, applyI18n } from './i18n.js'
 
 applyI18n(document)
 
-const DEFAULTS = { ab_notify: false, ab_turn_notify: true, ab_cursor: false, ab_idle_detach_secs: 0 }
+const DEFAULTS = { ab_notify: false, ab_turn_notify: true, ab_cursor: false, ab_idle_detach_secs: 0, ab_work_in: 'tab' }
 const hasChrome = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync
 
 // ---- elements ----
 const el = (id) => document.getElementById(id)
 const dot = el('dot'), statusLabel = el('statusLabel'), statusSub = el('statusSub'), tabPill = el('tabPill')
-const optNotify = el('optNotify'), optTurnNotify = el('optTurnNotify'), optCursor = el('optCursor'), optIdleSecs = el('optIdleSecs')
+const optWorkIn = el('optWorkIn'), optNotify = el('optNotify'), optTurnNotify = el('optTurnNotify'), optCursor = el('optCursor'), optIdleSecs = el('optIdleSecs')
 const saved = el('saved')
 
 // ---- settings ----
@@ -67,12 +67,14 @@ el('ver').textContent = hasChrome ? 'v' + chrome.runtime.getManifest().version :
 loadSettings((s) => {
   optNotify.checked = !!s.ab_notify
   optTurnNotify.checked = s.ab_turn_notify !== false
+  optWorkIn.value = s.ab_work_in === 'window' ? 'window' : 'tab'
   optCursor.checked = !!s.ab_cursor
   optIdleSecs.value = Number.isFinite(Number(s.ab_idle_detach_secs)) ? Number(s.ab_idle_detach_secs) : 0
 })
 
 optNotify.addEventListener('change', () => save({ ab_notify: optNotify.checked }))
 optTurnNotify.addEventListener('change', () => save({ ab_turn_notify: optTurnNotify.checked }))
+optWorkIn.addEventListener('change', () => save({ ab_work_in: optWorkIn.value === 'window' ? 'window' : 'tab' }))
 optCursor.addEventListener('change', () => save({ ab_cursor: optCursor.checked }))
 optIdleSecs.addEventListener('change', () => {
   const n = Math.max(0, Math.min(3600, Number(optIdleSecs.value) || 0))

@@ -1092,6 +1092,21 @@
   "options_turn_notify_name": {
     "message": "Notify when a task finishes"
   },
+  "options_work_in_heading": {
+    "message": "Side-panel agent"
+  },
+  "options_work_in_hint": {
+    "message": "This tab: a conversation in a tab's side panel works in that tab with your logins (it shows an AI badge, and you can take it back). Its own window: the agent opens its own tabs in a separate window. Each conversation can change this."
+  },
+  "options_work_in_name": {
+    "message": "Agent works in"
+  },
+  "options_work_in_tab": {
+    "message": "This tab"
+  },
+  "options_work_in_window": {
+    "message": "Its own window"
+  },
   "panel_a_tool": {
     "message": "A tool"
   },
@@ -2546,6 +2561,23 @@
       }
     }
   },
+  "panel_work_in_window_failed": {
+    "message": "The agent could not get this tab, so it works in its own window: $ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_work_in_window_page": {
+    "message": "The agent cannot use this page (a Chrome page or not a web page), so it works in its own window."
+  },
+  "panel_work_in_window_taken_back": {
+    "message": "You took the tab back. The agent works in its own window now."
+  },
+  "panel_work_in_window_web_store": {
+    "message": "Chrome does not let extensions use the Chrome Web Store, so the agent works in its own window."
+  },
   "panel_working": {
     "message": "Working"
   },
@@ -3000,6 +3032,15 @@
   },
   "sidepanel_turn_options_hint": {
     "message": "Applies to this conversation. Changes take effect on the next response without editing CLI settings."
+  },
+  "sidepanel_work_in": {
+    "message": "Agent works in"
+  },
+  "sidepanel_work_in_tab": {
+    "message": "This tab"
+  },
+  "sidepanel_work_in_window": {
+    "message": "Its own window"
   },
   "timeline_assessment_blocked": {
     "message": "Blocked"

@@ -65,7 +65,7 @@ async function fixture(overrides = {}, saved = {}) {
     async set(values) { Object.assign(this.data, values); },
     async remove(keys) { for (const key of [].concat(keys)) delete this.data[key]; } } : null;
   let storageChanged = null;
-  const panel = createPanel({ document, runtime, windows, mode: overrides.mode, initialConversation: overrides.initialConversation, panelTab: overrides.panelTab, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } }, ...(session ? { session, onChanged: { addListener(fn) { storageChanged = fn; } } } : {}) }, schedule() {}, cancel() {} });
+  const panel = createPanel({ document, runtime, windows, mode: overrides.mode, initialConversation: overrides.initialConversation, panelTab: overrides.panelTab, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } }, ...(overrides.sync ? { sync: { async get(defaults) { return { ...defaults, ...overrides.sync }; } } } : {}), ...(session ? { session, onChanged: { addListener(fn) { storageChanged = fn; } } } : {}) }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
   return { panel, nodes, calls, chats, writes, presence, locations, session, storageChange(changes) { storageChanged(changes, 'session'); }, grantUpdate(grants) { hostState({ type: 'ab-tab-grants', grants }); }, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
@@ -948,7 +948,7 @@ test('lending the page beside the panel, sending with it and taking it back', as
   f.panel.close();
 });
 
-test('every view follows grants made elsewhere, and Stop takes the tab back', async () => {
+test('every view follows grants made elsewhere, and Stop leaves the tab lent', async () => {
   const grantCalls = [];
   const f = await fixture({ status: () => grantSupport, tabGrant: request => { grantCalls.push(request); return { success: true, grants: [], grant: null }; },
     conversationStop: async () => ({ success: true, result: { conversation: chat('a', 'stopping') } }) }, { ab_panel_conversation: 'a' });
@@ -957,7 +957,8 @@ test('every view follows grants made elsewhere, and Stop takes the tab back', as
   assert.equal(f.nodes.get('grantBar').hidden, false);
   assert.equal(f.nodes.get('grantNote').hidden, false, 'a page the agent cannot use is named');
   f.nodes.get('stop').fire('click'); await settle(); await settle();
-  assert.ok(grantCalls.some(c => c.action === 'revoke' && c.conversationId === 'a'));
+  // Stopping a turn is not taking the tab back ("Take back the tab" is).
+  assert.ok(!grantCalls.some(c => c.action === 'revoke'));
   f.grantUpdate([]);
   assert.equal(f.nodes.get('grantBar').hidden, true);
   f.panel.close();
@@ -1068,5 +1069,91 @@ test('a panel opened on a new tab starts a new conversation', async () => {
   const f = await fixture({ panelTab: 44, tabs, session: { ab_panel_tab_21: 'b' } }, { ab_panel_conversation: 'b' });
   await settle();
   assert.equal(f.nodes.get('conversation').value, '');
+  f.panel.close();
+});
+
+// ---- The agent works in the panel's tab (0.5.63) ------------------------------
+
+function lendingFixture({ url = 'https://shop.example/cart', sync, grantsAtStart = [], conversationSend } = {}) {
+  const grantCalls = [], state = { grants: [...grantsAtStart] };
+  const tabs = { async get(id) { return { id, url, title: 'Cart' }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const tabGrant = request => {
+    grantCalls.push(request);
+    if (request.action === 'list') return { success: true, grants: state.grants };
+    if (request.action === 'grant') { const grant = { tabId: request.tabId, conversationId: request.conversationId, url, title: 'Cart' }; state.grants = [...state.grants.filter(g => g.tabId !== request.tabId), grant]; return { success: true, grant, service: { granted: true, tabId: request.tabId, adopted: true } }; }
+    state.grants = state.grants.filter(g => request.tabId !== undefined ? g.tabId !== request.tabId : g.conversationId !== request.conversationId);
+    return { success: true, grant: null, service: { granted: false } };
+  };
+  return { grantCalls, state, options: { panelTab: 21, tabs, sync, session: { ab_panel_tab_21: 'b' }, tabGrant, status: () => grantSupport, ...(conversationSend ? { conversationSend } : {}) } };
+}
+
+test('a tab\'s panel lends its tab to its conversation by itself, and a take-back moves it to its own window', async () => {
+  const l = lendingFixture();
+  const f = await fixture(l.options, {});
+  await settle(); await settle(); await settle();
+  assert.deepEqual(l.grantCalls.filter(c => c.action === 'grant'), [{ type: 'ab-tab-grant', action: 'grant', tabId: 21, conversationId: 'b', conversationTitle: 'b' }]);
+  assert.equal(f.nodes.get('grantBar').hidden, false);
+  assert.equal(f.nodes.get('workRow').hidden, false);
+  assert.equal(f.nodes.get('workIn').value, 'tab');
+  // Take back: revoked, the conversation now works in the agent's window, and
+  // later reads do not lend the tab again.
+  f.nodes.get('grantRevoke').fire('click'); await settle(); await settle(); await settle();
+  assert.ok(l.grantCalls.some(c => c.action === 'revoke' && c.conversationId === 'b'));
+  assert.deepEqual(f.writes.filter(w => w.ab_panel_work_in).at(-1).ab_panel_work_in, { b: 'window' });
+  assert.equal(f.nodes.get('workIn').value, 'window');
+  assert.equal(f.nodes.get('workNote').textContent, 'You took the tab back. The agent works in its own window now.');
+  await f.panel.refresh(); await settle(); await settle();
+  assert.equal(l.grantCalls.filter(c => c.action === 'grant').length, 1);
+  // Choosing "this tab" again lends it again.
+  f.nodes.get('workIn').value = 'tab'; f.nodes.get('workIn').fire('change'); await settle(); await settle(); await settle();
+  assert.equal(l.grantCalls.filter(c => c.action === 'grant').length, 2);
+  f.panel.close();
+});
+
+test('a page that cannot be lent leaves the agent in its own window and says so', async () => {
+  const l = lendingFixture({ url: 'chrome://settings/' });
+  const f = await fixture(l.options, {});
+  await settle(); await settle();
+  assert.equal(l.grantCalls.filter(c => c.action === 'grant').length, 0);
+  assert.equal(f.nodes.get('workNote').textContent, en.panel_work_in_window_page.message);
+  f.panel.close();
+  const store = lendingFixture({ url: 'https://chromewebstore.google.com/detail/x' });
+  const g = await fixture(store.options, {});
+  await settle(); await settle();
+  assert.equal(g.nodes.get('workNote').textContent, en.panel_work_in_window_web_store.message);
+  g.panel.close();
+});
+
+test('"its own window" in Options keeps the tab to the user until a conversation asks for it', async () => {
+  const l = lendingFixture({ sync: { ab_work_in: 'window' } });
+  const f = await fixture(l.options, {});
+  await settle(); await settle();
+  assert.equal(l.grantCalls.filter(c => c.action === 'grant').length, 0);
+  assert.equal(f.nodes.get('workIn').value, 'window');
+  assert.equal(f.nodes.get('workNote').hidden, true);
+  f.panel.close();
+});
+
+test('a tab still lent to the conversation it showed before is moved to the one it shows now', async () => {
+  const l = lendingFixture({ grantsAtStart: [{ tabId: 21, conversationId: 'a', url: 'https://shop.example/cart', title: 'Cart' }] });
+  const f = await fixture(l.options, {});
+  await settle(); await settle(); await settle();
+  const order = l.grantCalls.filter(c => c.action !== 'list').map(c => [c.action, c.tabId, c.conversationId]);
+  assert.deepEqual(order, [['revoke', 21, undefined], ['grant', 21, 'b']]);
+  f.panel.close();
+});
+
+test('the first message of a new conversation in a tab\'s panel already runs in that tab', async () => {
+  const l = lendingFixture({ conversationSend: async params => ({ success: true, result: { conversation: chat('new'), message: { id: params.messageId, accepted: true, replayed: false } } }) });
+  l.options.session = {};
+  l.options.conversationCreate = async () => ({ success: true, result: { conversation: { ...chat('new'), agentId: 'codex' } } });
+  const f = await fixture(l.options, {});
+  await settle();
+  f.nodes.get('message').value = 'fill the form'; await f.panel.send(); await settle();
+  const send = f.calls.find(c => c.operation === 'conversationSend');
+  assert.deepEqual(send.params.tabGrant, { tabId: 21, url: 'https://shop.example/cart', title: 'Cart' });
+  const grantIndex = f.calls.findIndex(c => c.action === 'grant'), sendIndex = f.calls.indexOf(send);
+  assert.ok(grantIndex >= 0 && grantIndex < sendIndex, 'lent before the first message');
+  assert.equal(f.session.data.ab_panel_tab_21, 'new');
   f.panel.close();
 });

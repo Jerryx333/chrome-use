@@ -84,7 +84,7 @@ import {
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
 import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION } from './user-tab-organizer.js';
-import { createTabGrants, LENT_TAB_CLOSE, TAKEN_BACK } from './tab-grant.js';
+import { createTabGrants, LENT_TAB_CLOSE } from './tab-grant.js';
 import { bindingsFrom, openTabPanel, panelTabKey, PANEL_TAB_PREFIX, tabForConversation } from './panel-tabs.js';
 import {
   followReplacement,
@@ -779,7 +779,7 @@ async function lendTab({ tabId, conversationId, conversationTitle }) {
   await loadOwnedTabs();
   await loadAgentPopups();
   if (ownedTabs.has(tabId) || agentPopups.has(tabId)) throw Object.assign(new Error('This tab is already the agent\'s'), { reason: 'agentTab' });
-  const { grant, replaced, wasRefused } = await tabGrants.grant(tab, { conversationId, conversationTitle });
+  const { grant, replaced, before } = await tabGrants.grant(tab, { conversationId, conversationTitle });
   showGrantIndicator(tabId);
   if (replaced) showGrantIndicator(replaced.tabId);
   publishTabGrants();
@@ -787,7 +787,7 @@ async function lendTab({ tabId, conversationId, conversationTitle }) {
   // A service that cannot hold the grant would run turns without it. Undo it
   // exactly: a tab taken back before stays refused, an earlier tab stays lent.
   if (service?.granted !== true) {
-    await tabGrants.rollback(tabId, { wasRefused, replaced });
+    await tabGrants.rollback(tabId, { before, replaced });
     showGrantIndicator(tabId);
     if (replaced) showGrantIndicator(replaced.tabId);
     publishTabGrants();
@@ -1865,9 +1865,6 @@ async function dispatchToTab(tabId, method, params, childSid, agentSession = '')
 const attachTab = createTabAttachmentQueue(attachTabOnce);
 
 async function attachTabOnce(tabId, transactionIsActive) {
-  // A tab the user took back is never attached again, by any path.
-  await tabGrants.load();
-  if (tabGrants.isRefused(tabId)) throw new Error(TAKEN_BACK);
   const existing = tabs.get(tabId);
   if (existing && existing.attached !== false) return existing;
   if (existing) return await reattachTab(tabId, existing);

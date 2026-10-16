@@ -44,34 +44,47 @@ export function originOf(url) {
  */
 export function createTabGrants({ storage, now = () => Date.now() }) {
   const grants = new Map();
-  const refused = new Set();
+  // tabId -> the relay sessions a take-back refuses on it ('*': all of them,
+  // from a 0.5.62 record that did not keep them). A command with no session
+  // (an older daemon) is refused whenever any refusal stands.
+  const refused = new Map();
   let loaded = null;
-  const save = () => storage.set({ [GRANTS_KEY]: { grants: [...grants.values()], refused: [...refused] } }).catch(() => {});
+  const save = () => storage.set({ [GRANTS_KEY]: { grants: [...grants.values()], refused: [...refused].map(([tabId, sessions]) => [tabId, [...sessions]]) } }).catch(() => {});
+  const refuse = (tabId, session) => { const sessions = refused.get(tabId) || new Set(); sessions.add(session); refused.set(tabId, sessions); };
   return {
     load() {
       loaded ??= Promise.resolve(storage.get(GRANTS_KEY)).then(stored => {
         const value = stored?.[GRANTS_KEY] || {};
         for (const grant of value.grants || []) if (Number.isInteger(grant?.tabId) && typeof grant.conversationId === 'string') grants.set(grant.tabId, grant);
-        for (const id of value.refused || []) if (Number.isInteger(id) && !grants.has(id)) refused.add(id);
+        for (const entry of value.refused || []) {
+          if (Number.isInteger(entry)) refused.set(entry, new Set(['*']));
+          else if (Array.isArray(entry) && Number.isInteger(entry[0]) && Array.isArray(entry[1])) refused.set(entry[0], new Set(entry[1].filter(s => typeof s === 'string')));
+        }
       }).catch(() => {});
       return loaded;
     },
     get(tabId) { return grants.get(tabId) || null; },
     list() { return [...grants.values()]; },
     forConversation(conversationId) { return [...grants.values()].find(grant => grant.conversationId === conversationId) || null; },
-    isRefused(tabId) { return refused.has(tabId); },
-    /** The refusal for `agentSession` acting on `tabId`, or null. Synchronous:
+    isRefused(tabId) { return (refused.get(tabId)?.size || 0) > 0; },
+    /** The relay sessions refused on `tabId`. */
+    refusedSessions(tabId) { return [...(refused.get(tabId) || [])]; },
+    /** The refusal for `agentSession` acting on `tabId`, or null. A lent tab
+     *  answers only its conversation's session; a tab taken back refuses the
+     *  sessions it was taken from (and any command that names none), while a
+     *  terminal session the user runs is let through as before. Synchronous:
      *  call load() first. */
     refusal(tabId, agentSession) {
-      if (refused.has(tabId)) return TAKEN_BACK;
       const grant = grants.get(tabId);
-      if (grant && agentSession !== sessionFor(grant.conversationId)) return LENT_ELSEWHERE;
+      if (grant) return agentSession === sessionFor(grant.conversationId) ? null : LENT_ELSEWHERE;
+      const sessions = refused.get(tabId);
+      if (sessions?.size && (!agentSession || sessions.has('*') || sessions.has(agentSession))) return TAKEN_BACK;
       return null;
     },
-    /** Lend `tab` to a conversation. Returns { grant, replaced, wasRefused }:
+    /** Lend `tab` to a conversation. Returns { grant, replaced, before }:
      *  `replaced` is the conversation's earlier tab, now taken back, and
-     *  `wasRefused` whether this tab had been taken back before. Until the
-     *  caller confirms the grant, rollback() undoes it exactly. */
+     *  `before` the tab's refusals until now. Until the caller confirms the
+     *  grant, rollback() undoes it exactly. */
     async grant(tab, { conversationId, conversationTitle = '' }) {
       await this.load();
       if (!Number.isInteger(tab?.id)) throw new Error('No such tab');
@@ -84,24 +97,33 @@ export function createTabGrants({ storage, now = () => Date.now() }) {
       let replaced = null;
       if (previous && previous.tabId !== tab.id) {
         grants.delete(previous.tabId);
-        refused.add(previous.tabId);
+        refuse(previous.tabId, sessionFor(conversationId));
         replaced = previous;
       }
       // No fallback to the URL: a title is shown and sent as it is, a URL
       // only after the service redacted it.
       const grant = { tabId: tab.id, conversationId, conversationTitle: String(conversationTitle).slice(0, 200), url: String(tab.url).slice(0, 8192), title: String(tab.title || '').slice(0, 1024), at: now() };
-      const wasRefused = refused.delete(tab.id);
+      // Sessions refused here stay refused; this conversation's is let in again.
+      const before = this.refusedSessions(tab.id);
+      const sessions = refused.get(tab.id);
+      sessions?.delete(sessionFor(conversationId));
+      if (sessions && !sessions.size) refused.delete(tab.id);
       grants.set(tab.id, grant);
       await save();
-      return { grant, replaced, wasRefused };
+      return { grant, replaced, before };
     },
-    /** Undo a grant the service did not accept: the tab is refused again if
-     *  it was, and the conversation's earlier tab is lent again. */
-    async rollback(tabId, { wasRefused = false, replaced = null } = {}) {
+    /** Undo a grant the service did not accept: the tab's refusals are what
+     *  they were, and the conversation's earlier tab is lent again. */
+    async rollback(tabId, { before = [], replaced = null } = {}) {
       await this.load();
       grants.delete(tabId);
-      if (wasRefused) refused.add(tabId);
-      if (replaced) { grants.set(replaced.tabId, replaced); refused.delete(replaced.tabId); }
+      if (before.length) refused.set(tabId, new Set(before)); else refused.delete(tabId);
+      if (replaced) {
+        grants.set(replaced.tabId, replaced);
+        const sessions = refused.get(replaced.tabId);
+        sessions?.delete(sessionFor(replaced.conversationId));
+        if (sessions && !sessions.size) refused.delete(replaced.tabId);
+      }
       await save();
     },
     /** Take a tab back. Returns the grant it ended, or null. */
@@ -110,11 +132,11 @@ export function createTabGrants({ storage, now = () => Date.now() }) {
       const grant = grants.get(tabId) || null;
       if (!grant) return null;
       grants.delete(tabId);
-      refused.add(tabId);
+      refuse(tabId, sessionFor(grant.conversationId));
       await save();
       return grant;
     },
-    /** The tab closed: its grant and its refusal end with it. */
+    /** The tab closed: its grant and its refusals end with it. */
     async removed(tabId) {
       await this.load();
       const grant = grants.get(tabId) || null;
@@ -126,9 +148,9 @@ export function createTabGrants({ storage, now = () => Date.now() }) {
     async replaced(fromId, toId) {
       await this.load();
       const grant = grants.get(fromId);
-      const wasRefused = refused.delete(fromId);
-      if (wasRefused) refused.add(toId);
-      if (!grant) { if (wasRefused) await save(); return null; }
+      const sessions = refused.get(fromId);
+      if (sessions) { refused.delete(fromId); refused.set(toId, sessions); }
+      if (!grant) { if (sessions) await save(); return null; }
       grants.delete(fromId);
       const moved = { ...grant, tabId: toId };
       grants.set(toId, moved);

@@ -1092,6 +1092,21 @@
   "options_turn_notify_name": {
     "message": "任务结束时通知"
   },
+  "options_work_in_heading": {
+    "message": "侧栏 agent"
+  },
+  "options_work_in_hint": {
+    "message": "这个标签页：标签页侧栏里的对话会用你的登录状态在该标签页中操作（显示 AI 徽标，可随时收回）。它自己的窗口：agent 在单独的窗口里打开自己的标签页。每个对话都可以单独修改。"
+  },
+  "options_work_in_name": {
+    "message": "agent 工作位置"
+  },
+  "options_work_in_tab": {
+    "message": "这个标签页"
+  },
+  "options_work_in_window": {
+    "message": "它自己的窗口"
+  },
   "panel_a_tool": {
     "message": "某个工具"
   },
@@ -2546,6 +2561,23 @@
       }
     }
   },
+  "panel_work_in_window_failed": {
+    "message": "agent 没能使用这个标签页，所以在它自己的窗口里工作：$ERROR$",
+    "placeholders": {
+      "error": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_work_in_window_page": {
+    "message": "agent 不能使用这个页面（Chrome 页面或非网页），所以在它自己的窗口里工作。"
+  },
+  "panel_work_in_window_taken_back": {
+    "message": "你已收回这个标签页，agent 现在在它自己的窗口里工作。"
+  },
+  "panel_work_in_window_web_store": {
+    "message": "Chrome 不允许扩展操作 Chrome 应用商店，所以 agent 在它自己的窗口里工作。"
+  },
   "panel_working": {
     "message": "工作中"
   },
@@ -3000,6 +3032,15 @@
   },
   "sidepanel_turn_options_hint": {
     "message": "只作用于这个会话。改动从下一次回复开始生效，不会修改 CLI 设置。"
+  },
+  "sidepanel_work_in": {
+    "message": "agent 工作位置"
+  },
+  "sidepanel_work_in_tab": {
+    "message": "这个标签页"
+  },
+  "sidepanel_work_in_window": {
+    "message": "它自己的窗口"
   },
   "timeline_assessment_blocked": {
     "message": "受阻"

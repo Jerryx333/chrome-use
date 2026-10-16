@@ -93,6 +93,25 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   // per conversation); every view of a conversation shows the same ones.
   const grantBar = document.getElementById('grantBar'), grantText = document.getElementById('grantText'), grantNote = document.getElementById('grantNote'), grantRevoke = document.getElementById('grantRevoke'), grantTab = document.getElementById('grantTab');
   let grants = [], grantBusy = false;
+  // "Agent works in" (0.5.63): in a tab's panel the agent works in that tab
+  // unless the conversation (or the default in Options) says its own window.
+  // The tab is lent automatically, with the same badge, bar and take-back as
+  // a manual lend; a page that cannot be lent, a take-back or a refused lend
+  // leaves the agent in its own window, and the panel says so.
+  const workRow = document.getElementById('workRow'), workInSelect = document.getElementById('workIn'), workNote = document.getElementById('workNote');
+  let workInDefault = 'tab', workInMap = {}, newWorkIn = null, autoNote = '', panelTabUrl = '', pageRead = false;
+  // Lends tried, by conversation, tab and origin, and the lend in flight for
+  // each, so a send waits for the lend a poll started.
+  const autoTried = new Map();
+  function workInFor(id) { return id ? workInMap[id] || workInDefault : newWorkIn || workInDefault; }
+  async function setWorkIn(id, value) {
+    if (!id) { newWorkIn = value; return; }
+    workInMap[id] = value;
+    // Merged with what other panels saved meanwhile.
+    const stored = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
+    workInMap = { ...stored, [id]: value };
+    await storage?.local?.set?.({ ab_panel_work_in: workInMap });
+  }
   const grantRefusedText = messageMap({ notWeb: 'panel_grant_refused_not_web', webStore: 'panel_grant_refused_web_store', otherConversation: 'panel_grant_refused_other', agentTab: 'panel_grant_refused_agent_tab', closed: 'panel_grant_refused_closed' });
   // Consecutive tool calls share one collapsible group; `toolTail` is the
   // group the next tool joins while nothing else has been rendered after it.
@@ -285,6 +304,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       grantRevoke.disabled = grantBusy;
     }
     grantTab.hidden = !supported || !selected || !page || pageDetached || grant?.tabId === page.tabId;
+    if (workRow) {
+      workRow.hidden = !tabBound || !supported;
+      workInSelect.value = workInFor(selected);
+      workInSelect.disabled = grantBusy;
+      workNote.hidden = !autoNote; workNote.textContent = autoNote;
+    }
     grantTab.textContent = grant ? t('panel_grant_switch') : t('panel_grant_use');
     grantTab.title = page ? t('panel_grant_use_title', page.url) : '';
     grantTab.disabled = grantBusy || !connected || !conversation;
@@ -302,6 +327,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   }
   async function grantPage() {
     if (!selected || !page || grantBusy) return;
+    if (tabBound && page.tabId === panelTab) { await setWorkIn(selected, 'tab'); autoNote = ''; }
     const id = selected, tabId = page.tabId;
     grantBusy = true; renderGrant();
     try {
@@ -320,6 +346,47 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       grants = grants.filter(g => g.conversationId !== id);
     } finally { grantBusy = false; renderGrant(); }
   }
+  // "Take back the tab" in a tab's panel also moves the conversation to the
+  // agent's own window, so the tab is not lent again behind the user's back.
+  async function takeBack() {
+    const id = selected;
+    await revokeGrant(id);
+    if (tabBound && id) { await setWorkIn(id, 'window'); if (id === selected) autoNote = t('panel_work_in_window_taken_back'); renderGrant(); }
+  }
+  // Lend this panel's tab to its conversation when it works in this tab.
+  async function maybeAutoLend() {
+    if (!tabBound || !panelSupport?.tabGrant || panelSupport?.mode !== 'full' || !connected || !selected || !conversation || grantBusy) return;
+    const id = selected;
+    if (workInFor(id) !== 'tab') { autoNote = ''; renderGrant(); return; }
+    if (grantFor(id)?.tabId === panelTab) { autoNote = ''; renderGrant(); return; }
+    // Until the tab was read there is nothing to decide.
+    if (!pageRead) return;
+    const refusal = panelTabUrl ? grantRefusal(panelTabUrl) : 'notWeb';
+    if (refusal || !page) { autoNote = refusal === 'webStore' ? t('panel_work_in_window_web_store') : t('panel_work_in_window_page'); renderGrant(); return; }
+    const key = `${id}:${panelTab}:${originOf(page.url)}`;
+    if (autoTried.has(key)) return autoTried.get(key);
+    const lending = autoLend(id);
+    autoTried.set(key, lending);
+    return lending;
+  }
+  async function autoLend(id) {
+    try {
+      // This tab may still be lent to the conversation it showed before.
+      const holder = grants.find(g => g.tabId === panelTab && g.conversationId !== id);
+      if (holder) { await grantMessage({ action: 'revoke', tabId: panelTab }); grants = grants.filter(g => g !== holder); }
+      await grantPage();
+      if (id === selected) autoNote = '';
+    } catch (failure) {
+      if (id === selected) autoNote = t('panel_work_in_window_failed', failure?.message || t('panel_no_answer'));
+    } finally { renderGrant(); }
+  }
+  workInSelect?.addEventListener('change', () => void (async () => {
+    const id = selected, value = workInSelect.value === 'window' ? 'window' : 'tab';
+    await setWorkIn(id, value);
+    if (value === 'window') { autoNote = ''; if (grantFor(id)?.tabId === panelTab) await revokeGrant(id); }
+    else { for (const key of [...autoTried.keys()]) if (key.startsWith(`${id}:`)) autoTried.delete(key); await maybeAutoLend(); }
+    renderGrant();
+  })().catch(error));
   function conversationChoices() {
     nodes.conversation.replaceChildren(element('option', t('panel_new_conversation')));
     nodes.conversation.firstElementChild.value = '';
@@ -1026,6 +1093,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         if (listed && typeof conversation?.title === 'string' && listed.title !== conversation.title) { listed.title = conversation.title; conversationChoices(); }
         renderTimeline(); renderRequests(); renderQueue(result.queuedMessages || []); controls();
       }
+      if (id === selected && epoch === selectionEpoch) void maybeAutoLend();
       const pending = pendingMessages.get(id);
       if (pending && id === selected && epoch === selectionEpoch) {
         const status = await api('conversationMessageStatus', { conversationId: id, messageId: pending.id });
@@ -1087,6 +1155,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         if (project) options.project = project;
         const result = await api('conversationCreate', options); rememberAgent(options.agentId);
         conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        // Where it works was chosen before it existed; its first turn already
+        // runs in this tab when it works here.
+        if (tabBound) { await setWorkIn(result.conversation.id, workInFor('')); newWorkIn = null; await maybeAutoLend(); }
         // After selecting it: selecting another conversation hides the question.
         if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); }
       }
@@ -1145,13 +1216,15 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     renderGrant();
   }
   async function refreshPage() {
-    if (!tabs?.query) return;
+    if (!(tabBound ? tabs?.get : tabs?.query)) return;
     const tab = tabMode ? await windowPage() : tabBound ? await Promise.resolve(tabs.get?.(panelTab)).catch(() => null) : (await tabs.query({ active: true, currentWindow: true }))[0];
     const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
+    if (tabBound) { panelTabUrl = tab?.url || tab?.pendingUrl || ''; pageRead = true; }
     if (next?.tabId !== page?.tabId) pageDetached = false;
     const moved = next?.url !== page?.url;
     page = next; renderPage(); renderConversationMenu();
     if (moved) refreshProjects();
+    if (moved || tabBound) void maybeAutoLend();
   }
   // In a panel tab: the web tab of this window the user picked, else the one
   // they were on last. The picker lists them all.
@@ -1546,7 +1619,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   nodes.pageDetach.addEventListener('click', () => { pageDetached = true; renderPage(); });
   pagePicker?.addEventListener('change', () => { pickedTabId = Number(pagePicker.value); pageDetached = false; void refreshPage().catch(() => {}); });
   grantTab?.addEventListener('click', () => void grantPage().catch(error));
-  grantRevoke?.addEventListener('click', () => void revokeGrant().catch(error));
+  grantRevoke?.addEventListener('click', () => void takeBack().catch(error));
   openInTab?.addEventListener('click', () => void tabs.create({ url: runtime.getURL(`sidepanel.html?mode=tab${selected ? `&conversation=${encodeURIComponent(selected)}` : ''}`) }).catch(error));
   if (tabs?.onRemoved) tabs.onRemoved.addListener(() => { if (tabMode) void refreshPage().catch(() => {}); });
   if (tabs?.onActivated) tabs.onActivated.addListener(() => void refreshPage().catch(() => {}));
@@ -1583,8 +1656,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     const result = await api(operation, { conversationId: id });
     if (id === selected && epoch === selectionEpoch) { conversation = result.conversation; controls(); }
   }
-  // Stop also takes back a lent tab: it is how the user halts the agent.
-  nodes.stop.addEventListener('click', () => void Promise.all([controlConversation('conversationStop'), revokeGrant()]).catch(error));
+  nodes.stop.addEventListener('click', () => void controlConversation('conversationStop').catch(error));
   nodes.resume.addEventListener('click', () => void controlConversation('conversationResumeQueue').catch(error));
   nodes.latest.addEventListener('click', () => { nodes.transcript.scrollTop = nodes.transcript.scrollHeight; nodes.latest.hidden = true; });
   nodes.configForm.addEventListener('submit', event => { event.preventDefault(); void previewConfig().catch(error); });
@@ -1614,6 +1686,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       if (Date.now() - Number(saved?.ab_panel_show_replies || 0) < 30000) replyBox.open = true;
       if (chatAgents.has(saved?.ab_panel_agent)) preferredAgent = saved.ab_panel_agent;
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
+      workInDefault = (await Promise.resolve(storage?.sync?.get?.({ ab_work_in: 'tab' })).catch(() => null))?.ab_work_in === 'window' ? 'window' : 'tab';
+      workInMap = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
       if (tabBound) { const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || ''; }
       else selected = tabMode ? initialConversation : saved?.ab_panel_conversation || '';
       if (saved?.ab_panel_full_access === false) newFullAccess = false;
