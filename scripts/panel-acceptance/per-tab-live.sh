@@ -1,6 +1,6 @@
 #!/bin/sh
 # Run per-tab-live.mjs on the build host against a branch build:
-#   ./tab-modes-live.sh <chrome-use binary> [extension git ref, default HEAD]
+#   ./per-tab-live.sh <chrome-use binary> [extension git ref, default HEAD]
 # Copies the binary under a fresh name (macOS kills a binary overwritten in
 # place), stages the extension from git, and runs the check. One browser run
 # per host at a time.
