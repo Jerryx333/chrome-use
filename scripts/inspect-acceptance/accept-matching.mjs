@@ -55,7 +55,8 @@ fs.mkdirSync(path.join(userDataDir, 'NativeMessagingHosts'));
 fs.writeFileSync(path.join(userDataDir, 'NativeMessagingHosts', 'com.agent_browser.connect.json'), JSON.stringify({ name: 'com.agent_browser.connect', description: 'acceptance', path: path.join(dir, 'nm-host.sh'), type: 'stdio', allowed_origins: ['chrome-extension://ciiljdlhdpfckdcfkphgmfalanpdejep/'] }));
 const b = await launch({
   chrome: process.env.CHROME, port: 9345, userDataDir,
-  args: ['--headless=new', `--load-extension=${path.join(dir, 'ext-acc')}`, `--disable-extensions-except=${path.join(dir, 'ext-acc')}`,
+  // English UI whatever the build host's language: scenarios match button text.
+  args: ['--headless=new', '--lang=en-US', '-AppleLanguages', '(en-US)', `--load-extension=${path.join(dir, 'ext-acc')}`, `--disable-extensions-except=${path.join(dir, 'ext-acc')}`,
     '--host-resolver-rules=MAP test.inspect.example 127.0.0.1:8899, MAP apps.inspect.example 127.0.0.1:8894, MAP *.wild.inspect.example 127.0.0.1:8893, MAP rev.inspect.example 127.0.0.1:8892'],
   env: { CHROME_USE_INSPECT_OCS: OCS },
 });
