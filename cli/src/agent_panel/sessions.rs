@@ -133,7 +133,105 @@ fn millis(time: SystemTime) -> u64 {
 }
 
 fn recent(last_active: u64) -> bool {
-    millis(SystemTime::now()).saturating_sub(last_active) < RUNNING_WINDOW.as_millis() as u64
+    within(last_active, RUNNING_WINDOW)
+}
+
+fn within(at: u64, window: Duration) -> bool {
+    millis(SystemTime::now()).saturating_sub(at) < window.as_millis() as u64
+}
+
+/// Milliseconds of an RFC 3339 time.
+fn stamp(value: &Value) -> Option<u64> {
+    let time = chrono::DateTime::parse_from_rfc3339(value.as_str()?).ok()?;
+    u64::try_from(time.timestamp_millis()).ok()
+}
+
+/// Milliseconds of a time in whole seconds since the epoch.
+fn seconds(value: &Value) -> Option<u64> {
+    value.as_u64()?.checked_mul(1000)
+}
+
+/// When a session last did something, from the times its own records carry.
+/// A file's mtime is not that: other programs rewrite session files (Codex
+/// Desktop imports other agents' sessions into new files and rewrites the
+/// meta line of idle threads), so it only bounds the answer from above.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Activity {
+    at: Option<u64>,
+    /// The newest turn started and did not finish.
+    open: bool,
+}
+
+impl Activity {
+    /// The time, never later than the file's last write.
+    fn last_active(self, modified: SystemTime) -> u64 {
+        let written = millis(modified);
+        self.at.map_or(written, |at| at.min(written))
+    }
+    /// Evidence that another program is working in the session now: a
+    /// record stamped within the running window, or a turn still open that
+    /// wrote recently (a long tool call writes nothing for a while).
+    fn running(self, modified: SystemTime) -> bool {
+        self.at.is_some_and(|_| {
+            let at = self.last_active(modified);
+            recent(at) || (self.open && within(at, OPEN_TURN_WINDOW))
+        })
+    }
+}
+
+/// An unfinished turn that wrote within this window counts as running.
+const OPEN_TURN_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+/// The newest record time of a Claude or Pi session.
+fn stamped_activity(records: &[Value]) -> Activity {
+    Activity {
+        at: records.iter().filter_map(|r| stamp(&r["timestamp"])).max(),
+        open: false,
+    }
+}
+
+/// A Codex session's activity. Turns carry their own times (`started_at`,
+/// `completed_at`, in seconds); other records only their write time, which
+/// for a turn Codex Desktop imported from another agent is the import, not
+/// the conversation. Older Codex versions write turns without their times.
+fn codex_activity(head: &[Value], tail: &[Value]) -> Activity {
+    let mut at: Option<u64> = None;
+    let (mut open, mut imported) = (false, false);
+    for record in tail {
+        let payload = &record["payload"];
+        if record["type"] == "session_meta" {
+            continue;
+        }
+        let event = payload["type"].as_str().unwrap_or("");
+        if record["type"] == "event_msg" && matches!(event, "task_started" | "task_complete") {
+            imported = payload["turn_id"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("external-import-"));
+            let time = if event == "task_started" {
+                seconds(&payload["started_at"])
+            } else {
+                seconds(&payload["completed_at"])
+            };
+            open = event == "task_started" && !imported;
+            if let Some(time) = time.or_else(|| stamp(&record["timestamp"])) {
+                at = Some(if imported { time } else { at.map_or(time, |a| a.max(time)) });
+            }
+        } else if !imported {
+            if let Some(time) = stamp(&record["timestamp"]) {
+                at = Some(at.map_or(time, |a| a.max(time)));
+            }
+        }
+    }
+    // A thread with no turns yet: when it was created.
+    let created = || {
+        head.iter()
+            .find(|r| r["type"] == "session_meta")
+            .and_then(|r| stamp(&r["payload"]["timestamp"]))
+    };
+    Activity {
+        at: at.or_else(created),
+        open,
+    }
 }
 
 /// Regular files directly in `directory` (no symlinks), with their mtimes.
@@ -345,8 +443,9 @@ fn read_claude(id: &str, path: &Path, modified: SystemTime, live: &[(String, i64
         })
         .map(String::from);
     let title = named.or_else(|| lines.iter().find_map(claude_record_user));
-    let last_active = millis(modified);
-    let running = recent(last_active)
+    let activity = stamped_activity(&tail_lines);
+    let last_active = activity.last_active(modified);
+    let running = activity.running(modified)
         || live
             .iter()
             .any(|(session, pid)| session == id && pid_alive(*pid));
@@ -425,6 +524,11 @@ fn read_codex(
     if meta.is_some_and(|m| m["id"].as_str().is_some_and(|m| m != id)) {
         return None;
     }
+    // A subagent's thread belongs to its parent's conversation; Codex's own
+    // picker leaves them out too.
+    if meta.is_some_and(|m| m["source"]["subagent"].is_object()) {
+        return None;
+    }
     let cwd = meta.and_then(|m| m["cwd"].as_str()).map(PathBuf::from);
     let title = names
         .get(id)
@@ -443,14 +547,14 @@ fn read_codex(
         })
         .filter(|m| !m.is_empty() && m.len() <= 256)
         .map(String::from);
-    let last_active = millis(modified);
+    let activity = codex_activity(&lines, &tail_lines);
     Some(Session {
         agent: "codex".into(),
         id: id.into(),
         title,
         cwd,
-        last_active,
-        running: recent(last_active),
+        last_active: activity.last_active(modified),
+        running: activity.running(modified),
         file: Some(path.into()),
         model,
     })
@@ -480,14 +584,14 @@ fn read_pi(id: &str, path: &Path, modified: SystemTime) -> Option<Session> {
                 .flatten()
         })
         .map(String::from);
-    let last_active = millis(modified);
+    let activity = stamped_activity(&tail_lines);
     Some(Session {
         agent: "pi".into(),
         id: id.into(),
         title: named.or_else(|| lines.iter().find_map(pi_record_user)),
         cwd: header["cwd"].as_str().map(PathBuf::from),
-        last_active,
-        running: recent(last_active),
+        last_active: activity.last_active(modified),
+        running: activity.running(modified),
         file: Some(path.into()),
         model: None,
     })
@@ -549,9 +653,9 @@ pub(super) fn matches(session: &Session, query: &str) -> bool {
             .is_some_and(|c| c.to_string_lossy().to_lowercase().contains(&query))
 }
 
-/// Recent sessions of a file-based agent, newest first. Sessions whose
-/// directory is inside `panel_root` belong to panel conversations and are
-/// left out.
+/// Recent sessions of a file-based agent, the most recently active first.
+/// Sessions whose directory is inside `panel_root` belong to panel
+/// conversations and are left out.
 pub(super) fn list_files(
     agent: &str,
     roots: &Roots,
@@ -560,8 +664,14 @@ pub(super) fn list_files(
     panel_root: &Path,
 ) -> Vec<Session> {
     let context = FileContext::new(agent, roots);
-    let mut found = Vec::new();
+    let mut found: Vec<Session> = Vec::new();
+    // Files come newest written first, and a session was never active after
+    // its file was written: once `limit` sessions are more recent than the
+    // next file's write, no later file can displace them.
     for (id, path, modified) in session_files(agent, roots).into_iter().take(MAX_FILES) {
+        if found.len() >= limit && found[limit - 1].last_active >= millis(modified) {
+            break;
+        }
         let Some(session) = read_file_session(agent, &id, &path, modified, &context) else {
             continue;
         };
@@ -574,16 +684,15 @@ pub(super) fn list_files(
             continue;
         }
         found.push(session);
-        if found.len() >= limit {
-            break;
-        }
+        found.sort_by_key(|s| std::cmp::Reverse(s.last_active));
     }
+    found.truncate(limit);
     found
 }
 
 /// Working directories of an agent's newest sessions with when each was
-/// last written, for the panel's list of recent project folders. Only the
-/// start of each file is read; the panel's own sessions are left out.
+/// last active, for the panel's list of recent project folders. The panel's
+/// own sessions are left out.
 pub(super) fn recent_directories(agent: &str, roots: &Roots, limit: usize) -> Vec<(PathBuf, u64)> {
     session_files(agent, roots)
         .into_iter()
@@ -600,7 +709,12 @@ pub(super) fn recent_directories(agent: &str, roots: &Roots, limit: usize) -> Ve
                 }
                 _ => lines.iter().find_map(|r| r["cwd"].as_str()),
             }?;
-            Some((PathBuf::from(cwd), millis(modified)))
+            let (tail_lines, _, _) = tail(&path, TITLE_TAIL_BYTES);
+            let activity = match agent {
+                "codex" => codex_activity(&lines, &tail_lines),
+                _ => stamped_activity(&tail_lines),
+            };
+            Some((PathBuf::from(cwd), activity.last_active(modified)))
         })
         .collect()
 }
@@ -1172,7 +1286,10 @@ mod tests {
             s.title.as_deref(),
             Some("Remember the codeword PELICAN-42. Reply with just OK.")
         );
-        assert!(s.running, "a file written seconds ago counts as running");
+        // The file was written just now, but its records are from the day it
+        // was captured: that is when the session was last active.
+        assert_eq!(s.last_active, stamp(&json!("2026-10-15T14:49:34.549Z")).unwrap());
+        assert!(!s.running, "a rewritten file is not a running session");
         let history = file_history(&find_file("claude", &h.roots, CLAUDE_ID).unwrap());
         let texts: Vec<_> = history
             .turns
@@ -1480,6 +1597,110 @@ mod tests {
             &json!({"pid":std::process::id(),"sessionId":CLAUDE_ID}).to_string(),
         );
         assert!(list_files("claude", &h.roots, "", 10, Path::new("/panel"))[0].running);
+    }
+
+    fn codex_lines(lines: &[Value]) -> String {
+        lines.iter().map(|l| format!("{l}\n")).collect()
+    }
+    fn iso(at: SystemTime) -> String {
+        chrono::DateTime::<chrono::Utc>::from(at).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+    fn codex_at(h: &Home, day: &str, id: &str, text: &str) -> PathBuf {
+        let path = h.roots.codex.join(format!(
+            "sessions/2026/10/{day}/rollout-2026-10-{day}T12-07-07-{id}.jsonl"
+        ));
+        put(&path, text);
+        path
+    }
+
+    // Codex Desktop imports other agents' sessions into new rollout files:
+    // every record is stamped with the import, only the turn keeps its
+    // times. Seen on a real ~/.codex, 2026-10-16.
+    #[test]
+    fn an_imported_codex_session_is_as_old_as_its_turns() {
+        let h = home();
+        let now = iso(SystemTime::now());
+        let (started, completed) = (1_791_894_476u64, 1_791_896_732u64);
+        codex_at(&h, "16", CODEX_ID, &codex_lines(&[
+            json!({"timestamp":now,"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":now,"cwd":"/w/app","originator":"Codex Desktop","source":"vscode"}}),
+            json!({"timestamp":now,"type":"event_msg","payload":{"type":"task_started","turn_id":"external-import-turn-1","started_at":started}}),
+            json!({"timestamp":now,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the build"}]}}),
+            json!({"timestamp":now,"type":"event_msg","payload":{"type":"agent_message","message":"<EXTERNAL SESSION IMPORTED>"}}),
+            json!({"timestamp":now,"type":"event_msg","payload":{"type":"task_complete","turn_id":"external-import-turn-1","started_at":started,"completed_at":completed}}),
+        ]));
+        let s = &list_files("codex", &h.roots, "", 10, Path::new("/panel"))[0];
+        assert_eq!(s.last_active, completed * 1000);
+        assert!(!s.running);
+        assert_eq!(s.title.as_deref(), Some("Fix the build"));
+    }
+
+    // Codex rewrites the meta line of a thread that never had a turn; the
+    // thread is as old as the meta line's own time.
+    #[test]
+    fn a_codex_thread_without_turns_is_as_old_as_its_creation() {
+        let h = home();
+        let now = iso(SystemTime::now());
+        let created = "2026-10-16T02:32:52.380Z";
+        codex_at(&h, "16", CODEX_ID, &codex_lines(&[
+            json!({"timestamp":now,"ordinal":0,"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":created,"cwd":"/w/app","originator":"codex-tui","source":"vscode"}}),
+        ]));
+        let s = &list_files("codex", &h.roots, "", 10, Path::new("/panel"))[0];
+        assert_eq!(s.last_active, stamp(&json!(created)).unwrap());
+        assert!(!s.running);
+    }
+
+    #[test]
+    fn a_codex_turn_in_progress_is_running_and_a_finished_old_one_is_not() {
+        let h = home();
+        let now = SystemTime::now();
+        let started = now - Duration::from_secs(5 * 60);
+        let started_s = started.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        // A long tool call: the turn is open, its last record minutes old.
+        codex_at(&h, "16", CODEX_ID, &codex_lines(&[
+            json!({"timestamp":iso(started),"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":iso(started),"cwd":"/w/app","originator":"codex-tui","source":"cli"}}),
+            json!({"timestamp":iso(started),"type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":started_s}}),
+            json!({"timestamp":iso(now - Duration::from_secs(120)),"type":"response_item","payload":{"type":"function_call","name":"shell"}}),
+        ]));
+        let s = &list_files("codex", &h.roots, "", 10, Path::new("/panel"))[0];
+        assert!(s.running, "an open turn that wrote two minutes ago");
+        assert_eq!(s.last_active / 1000, (now - Duration::from_secs(120)).duration_since(UNIX_EPOCH).unwrap().as_secs());
+        // The same turn, finished four minutes ago.
+        codex_at(&h, "16", CODEX_ID, &codex_lines(&[
+            json!({"timestamp":iso(started),"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":iso(started),"cwd":"/w/app","originator":"codex-tui","source":"cli"}}),
+            json!({"timestamp":iso(started),"type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":started_s}}),
+            json!({"timestamp":iso(now - Duration::from_secs(240)),"type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","completed_at":started_s + 60}}),
+        ]));
+        let s = &list_files("codex", &h.roots, "", 10, Path::new("/panel"))[0];
+        assert!(!s.running);
+        assert_eq!(s.last_active, (started_s + 60) * 1000);
+    }
+
+    #[test]
+    fn sessions_are_ordered_by_activity_and_subagent_threads_left_out() {
+        let h = home();
+        let meta = |id: &str, source: Value| json!({"timestamp":"2026-10-10T00:00:00Z","type":"session_meta","payload":{"id":id,"timestamp":"2026-10-10T00:00:00Z","cwd":"/w/a","originator":"codex-tui","source":source}});
+        let turn = |at: &str| json!({"timestamp":at,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}});
+        let (older, newer, child) = (
+            "01a1400d-f2f4-7563-85af-3b53be3105c1",
+            "01a1400d-f2f4-7563-85af-3b53be3105c2",
+            "01a1400d-f2f4-7563-85af-3b53be3105c3",
+        );
+        // Written last, active first: the order follows the records.
+        codex_at(&h, "14", newer, &codex_lines(&[meta(newer, json!("cli")), turn("2026-10-14T00:00:00Z")]));
+        codex_at(&h, "15", older, &codex_lines(&[meta(older, json!("cli")), turn("2026-10-12T00:00:00Z")]));
+        codex_at(&h, "15", child, &codex_lines(&[meta(child, json!({"subagent":{"thread_spawn":{"parent_thread_id":newer}}})), turn("2026-10-15T00:00:00Z")]));
+        let ids: Vec<_> = list_files("codex", &h.roots, "", 10, Path::new("/panel"))
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ids, vec![newer.to_string(), older.to_string()]);
+        let one: Vec<_> = list_files("codex", &h.roots, "", 1, Path::new("/panel"))
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(one, vec![newer.to_string()]);
+        let dirs = recent_directories("codex", &h.roots, 10);
+        assert!(dirs.iter().all(|(_, at)| *at <= stamp(&json!("2026-10-15T00:00:00Z")).unwrap()));
     }
 
     #[test]
