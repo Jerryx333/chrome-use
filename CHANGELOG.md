@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.221
+## 1.5.222
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.62 (no extension change).
+
+### Bug Fixes
+
+- **An update no longer gets stuck behind an old conversation without saying which.** When an older build's panel service still has a conversation running or waiting for your answer (for example a tool approval left open), the newer build cannot take over that profile and sending failed with "Another agent-panel build is running for this profile". The message now names those conversations, so you can open them to answer or stop them, then send again.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.221
+
 Works with extension ab-connect 0.5.62 (the tab modes need it; older extensions keep working without them). Chrome Web Store publication follows Google review.
 
 ### New Features
@@ -13,7 +26,6 @@ Works with extension ab-connect 0.5.62 (the tab modes need it; older extensions 
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.220
 

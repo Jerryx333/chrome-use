@@ -1138,6 +1138,8 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
             let result = if stop {
                 assert_eq!(active_for_server.load(Ordering::SeqCst), 0);
                 json!({"schemaVersion":1,"service":{"stopRequested":true}})
+            } else if request["operation"] == "conversationList" {
+                json!({"schemaVersion":1,"conversations":[{"id":"12b6a0cd-eca8-4462-a809-16db0688704c","title":"Waiting for approval","phase":"waitingInput"}]})
             } else {
                 assert_eq!(request["operation"], "health");
                 json!({"schemaVersion":1,"binaryHash":"synthetic-old-build","active":active_for_server.load(Ordering::SeqCst)})
@@ -1177,6 +1179,10 @@ fn upgrade_refuses_busy_old_service_and_replaces_it_only_after_owned_idle_shutdo
         .as_str()
         .unwrap()
         .contains("stop its conversations"));
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .ends_with("[blocking:12b6a0cd-eca8-4462-a809-16db0688704c]"));
     active.store(0, Ordering::SeqCst);
     let upgraded = panel_reply(&mut host, &rx, "idle-upgrade", "serviceHealth", json!({}));
     assert!(upgraded.get("error").is_none(), "{}", upgraded["error"]);
