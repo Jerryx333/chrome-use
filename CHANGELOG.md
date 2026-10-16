@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.231
+## 1.5.232
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.70 (no CLI change; this release ships the extension fix).
+
+### Bug Fixes
+
+- **Picking a button no longer clicks it.** With Pick element, the pick ended on mouse release and the click that followed reached the page, so picking a submit or search button submitted it. The picker now swallows the whole click.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.231
+
 Works with extension ab-connect 0.5.69 (no CLI change; this release ships the extension's element picking).
 
 ### New Features
@@ -14,7 +27,6 @@ Works with extension ab-connect 0.5.69 (no CLI change; this release ships the ex
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.230
 

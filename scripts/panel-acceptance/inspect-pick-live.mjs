@@ -127,6 +127,10 @@ try {
   check(latency < 300, `the chip appeared ${latency} ms after the click`);
   check(/landed/.test(landed.cls), 'the new chip is highlighted');
   check(ended.live.length > 0, 'the chip was announced');
+  // The click that picked the button must not reach it (a submit button would
+  // submit): the picker swallows the whole gesture, not only pointerup.
+  await sleep(800);
+  check(!(await A.evaluate(page.sid, 'window.__pageClicks || 0')), 'the picked button did not receive the click');
 
   // 5. Screenshot and source fill in; details card.
   await waitFor(async () => !(await panel.run(`!!document.querySelector('.inspect-chip-pending')`)), { timeout: 15000, label: 'placeholder gone' });

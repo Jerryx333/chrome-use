@@ -228,7 +228,8 @@
   function finishDirect() {
     finishing = true;
     picking = false;
-    detach();
+    if (consumed) detachAfterGesture = true;
+    else detach();
     hintVisible(false);
     showHover(null);
     for (const badge of badges) badge.remove();
@@ -404,11 +405,20 @@
   // dblclick that follow mouseup. `consumed` stays set until those trailing
   // events have passed, independent of whether picking has ended.
   let consumed = null;
-  const releaseConsumed = () => { consumed = null; };
+  // A direct pick ends on pointerup, but the click that pointerup produces
+  // (and mouseup) still have to be swallowed: the listeners come off only
+  // once that gesture is over, or a submit button under the pick would fire.
+  let detachAfterGesture = false;
+  const releaseConsumed = () => {
+    clearTimeout(consumed?.timer);
+    consumed = null;
+    if (detachAfterGesture) { detachAfterGesture = false; detach(); }
+  };
 
   function onDown(event) {
     if (closed || !event.isTrusted || event.composedPath().includes(host)) return;
-    if (!picking) return;
+    // A new gesture after the pick is the user's own: stop swallowing now.
+    if (!picking) { if (detachAfterGesture && event.type === 'pointerdown') releaseConsumed(); return; }
     swallow(event);
     if (event.type === 'pointerdown') {
       clearTimeout(consumed?.timer);
@@ -448,6 +458,9 @@
   function onClick(event) {
     if (closed || event.composedPath().includes(host)) return;
     if (consumed || picking || drag) swallow(event);
+    // The click that ended a direct pick has been swallowed; nothing of that
+    // gesture is left (a dblclick would follow within the consumed window).
+    if (detachAfterGesture && event.type === 'click' && consumed) { clearTimeout(consumed.timer); consumed.timer = setTimeout(releaseConsumed, 350); }
   }
 
   function onKey(event) {
