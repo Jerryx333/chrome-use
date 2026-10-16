@@ -2603,8 +2603,9 @@ mod tests {
                 .unwrap()
                 .into_value();
             // Debug build, about 7 MB/s on these trees; release is
-            // several times faster.
-            let limit = std::time::Duration::from_millis(300 + (input / 3000) as u64);
+            // several times faster. The bound only catches a pathological
+            // (quadratic) slowdown, so it leaves room for a busy CI runner.
+            let limit = std::time::Duration::from_millis(1000 + (input / 1000) as u64);
             assert!(
                 started.elapsed() < limit,
                 "round {round} slow: {input} bytes in, {:?}",

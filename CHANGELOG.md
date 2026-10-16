@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.229
+## 1.5.230
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.68 (no extension change).
+
+### Bug Fixes
+
+- **/resume pins the site's project when the session folder is a symlink or under /tmp.** Sessions are now listed with their folder resolved, as a site's remembered project is stored, so the two match. Resuming still uses the folder the session recorded.
+- **Recovery no longer calls a process group that is just exiting "another user's".** On macOS a killed group whose members were still exiting, or had just been reaped, read as foreign, so recovery reported the outcome as unknown instead of gone.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.229
+
 Works with extension ab-connect 0.5.68 (the copyable command needs it; the other fixes work with every extension).
 
 ### New Features
@@ -16,7 +30,6 @@ Works with extension ab-connect 0.5.68 (the copyable command needs it; the other
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.228
 

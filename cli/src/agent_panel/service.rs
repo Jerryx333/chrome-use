@@ -801,8 +801,15 @@ fn redacted_line(text: &str) -> Option<String> {
 }
 
 /// A picker row. Session text is redacted before it leaves the service.
+/// The folder is shown resolved (symlinks, `/tmp` on macOS) so it groups
+/// and matches a site's remembered project, which is stored resolved; a
+/// resume still uses the folder the session recorded.
 fn session_row(session: &sessions::Session, conversation: Option<&String>) -> Value {
-    json!({"sessionId":session.id,"agentId":session.agent,"title":session.title.as_deref().and_then(redacted_line),"cwd":session.cwd,"lastActive":session.last_active,"running":session.running,"resumable":true,"conversationId":conversation})
+    let cwd = session
+        .cwd
+        .as_ref()
+        .map(|c| c.canonicalize().unwrap_or_else(|_| c.clone()));
+    json!({"sessionId":session.id,"agentId":session.agent,"title":session.title.as_deref().and_then(redacted_line),"cwd":cwd,"lastActive":session.last_active,"running":session.running,"resumable":true,"conversationId":conversation})
 }
 
 struct Job {
@@ -4153,7 +4160,7 @@ mod schedule_tests {
         let row = &listed["sessions"][0];
         assert_eq!(row["sessionId"], EXTERNAL_SESSION);
         assert_eq!(row["running"], false);
-        assert_eq!(row["cwd"], json!(project));
+        assert_eq!(row["cwd"], json!(project.canonicalize().unwrap()));
         let title = row["title"].as_str().unwrap();
         assert!(title.starts_with("Deploy with key"), "{title}");
         assert!(!title.contains(SESSION_SECRET), "{title}");
@@ -4443,6 +4450,55 @@ mod schedule_tests {
         let id = resumed["conversation"]["id"].as_str().unwrap().to_string();
         let mut e = engine.lock().await;
         assert!(e.chat(&id).unwrap().project.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_session_folder_is_listed_resolved_and_resumed_as_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real-project");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = dir.path().join("linked-project");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        claude_session(dir.path(), &link, Duration::from_secs(3600));
+        let engine = resume_engine(dir.path());
+        let listed = dispatch(
+            &engine,
+            "conversationSessionList",
+            &json!({"agentId":"claude"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            listed["sessions"][0]["cwd"],
+            json!(real.canonicalize().unwrap())
+        );
+        // A folder that no longer exists is listed as recorded.
+        let gone = tempfile::tempdir().unwrap();
+        claude_session(
+            gone.path(),
+            &gone.path().join("removed"),
+            Duration::from_secs(3600),
+        );
+        let listed = dispatch(
+            &resume_engine(gone.path()),
+            "conversationSessionList",
+            &json!({"agentId":"claude"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            listed["sessions"][0]["cwd"],
+            json!(gone.path().join("removed"))
+        );
+        let resumed = dispatch(
+            &engine,
+            "conversationResume",
+            &json!({"agentId":"claude","sessionId":EXTERNAL_SESSION}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed["conversation"]["resumed"]["cwd"], json!(link));
     }
 
     #[tokio::test]
