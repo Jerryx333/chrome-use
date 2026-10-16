@@ -5128,7 +5128,7 @@ Examples:
             r##"
 chrome-use upgrade - Upgrade to the latest version
 
-Usage: chrome-use upgrade [--check] [--json]
+Usage: chrome-use upgrade [--check] [--json] [-f|--force]
 
 Re-runs the official install script (install.sh from the GitHub repo), which
 downloads the latest GitHub Release archive for this platform, verifies its
@@ -5147,6 +5147,12 @@ Options:
              `chrome-use <current> is up to date`, plus the skills found
   --json     Same as --check, as JSON: name, current, latest,
              update_available, skills[{channel, path, update}]
+  -f, --force
+             Ask nothing and take over: skip the guided extension setup, then
+             stop every side panel conversation still running on an older
+             build and that build's panel service, so the panel's next request
+             uses the installed build. Also does this when already up to date.
+             Stopped turns end as stopped; their history stays.
 
 Exit codes: 0 upgraded, already current, or a check that ran; 2 the check or
 download failed. An available update is not an error.
@@ -5168,6 +5174,7 @@ Examples:
   chrome-use upgrade
   chrome-use upgrade --check
   chrome-use upgrade --json
+  chrome-use upgrade -f
   AGENT_BROWSER_NO_SKILL=1 AGENT_BROWSER_NO_SETUP=1 chrome-use upgrade
 "##
         }

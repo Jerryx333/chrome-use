@@ -1827,6 +1827,15 @@
   "panel_old_build_open": {
     "message": "Open"
   },
+  "panel_old_build_force_hint": {
+    "message": "Or run this in a terminal to stop every conversation on the older build and let the update take over:"
+  },
+  "panel_copy_command": {
+    "message": "Copy command"
+  },
+  "panel_copied": {
+    "message": "Copied ✓"
+  },
   "panel_old_build_stop": {
     "message": "Stop it"
   },

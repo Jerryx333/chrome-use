@@ -1176,6 +1176,18 @@ test('an update blocked by an older build names its conversations; Open finds on
   assert.match(row.textContent, /Old approval/);
   const [open, stop] = row.children;
   assert.deepEqual([open.textContent, stop.textContent], ['Open', 'Stop it']);
+  // A terminal command takes over without answering or stopping each one.
+  const force = notice.children[2];
+  assert.equal(force.children[1].textContent, 'chrome-use upgrade -f');
+  let copied = '';
+  globalThis.navigator ??= {};
+  const clipboard = Object.getOwnPropertyDescriptor(globalThis.navigator, 'clipboard');
+  Object.defineProperty(globalThis.navigator, 'clipboard', { configurable: true, value: { async writeText(text) { copied = text; } } });
+  const copy = force.children[2];
+  copy.fire('click'); await settle();
+  assert.equal(copied, 'chrome-use upgrade -f');
+  assert.equal(copy.textContent, en.panel_copied.message);
+  if (clipboard) Object.defineProperty(globalThis.navigator, 'clipboard', clipboard); else delete globalThis.navigator.clipboard;
   // This site's list does not show it; opening switches the list to all sites.
   open.fire('click'); await settle(); await settle();
   assert.equal(f.nodes.get('conversation').value, id);

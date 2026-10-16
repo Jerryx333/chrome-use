@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.228
+## 1.5.229
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.68 (the copyable command needs it; the other fixes work with every extension).
+
+### New Features
+
+- **`chrome-use upgrade -f` takes over without asking.** It skips the guided extension setup, then stops every side panel conversation still running on an older build and that build's panel service, so the panel's next request uses the installed build. It does this even when the CLI is already up to date. The panel's "older build is still running" notice offers the command with a copy button.
+
+### Bug Fixes
+
+- **A conversation an older build is running keeps working in the panel.** While an older build's service was busy, the panel refused everything but listing, reading and stopping, including reading that conversation's screenshots, lending it a tab and answering its prompts, so the only way out was to stop the turn you were watching. Requests for a conversation the older build is busy with now go to that build.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.228
+
 Works with extension ab-connect 0.5.67 (the new composer layout needs it; nothing changed in the CLI).
 
 ### Improvements
@@ -12,7 +29,6 @@ Works with extension ab-connect 0.5.67 (the new composer layout needs it; nothin
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.227
 

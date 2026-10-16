@@ -192,6 +192,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       }));
       nodes.notice.append(row);
     }
+    // Or take over from a terminal: `upgrade -f` stops the old build's
+    // conversations and its service without asking.
+    const command = 'chrome-use upgrade -f', copy = button(t('panel_copy_command'), async () => {
+      await navigator.clipboard.writeText(command); copy.textContent = t('panel_copied');
+    });
+    const force = element('div', undefined, 'force-takeover');
+    force.append(element('div', t('panel_old_build_force_hint')), element('code', command), copy);
+    nodes.notice.append(force);
     nodes.notice.hidden = false;
   }
   // Open a conversation the error named, wherever it was started: the list
