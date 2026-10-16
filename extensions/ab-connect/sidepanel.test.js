@@ -1337,3 +1337,18 @@ test('a chip that lands is highlighted and announced; Delete on a focused chip r
   assert.equal(f.nodes.get('chipCard').hidden, true);
   f.panel.close();
 });
+
+test('the empty state says the agent works in this tab, or in its own window when set so', async () => {
+  const f = await fixture({ panelTab: 21, tabs: pickTabs('https://shop.example/21'), session: {} });
+  await settle(); await settle();
+  assert.match(f.nodes.get('emptyDetail').textContent, /works in this tab by default/);
+  f.panel.close();
+  const g = await fixture({ panelTab: 21, tabs: pickTabs('https://shop.example/21'), session: {}, sync: { ab_work_in: 'window' } });
+  await settle(); await settle();
+  assert.match(g.nodes.get('emptyDetail').textContent, /its own browser window/);
+  g.panel.close();
+  const h = await fixture({ mode: 'tab' });
+  await settle();
+  assert.match(h.nodes.get('emptyDetail').textContent, /its own browser window/);
+  h.panel.close();
+});

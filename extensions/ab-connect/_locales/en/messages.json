@@ -1600,6 +1600,12 @@
   "panel_conversation_untitled": {
     "message": "Conversation"
   },
+  "panel_copied": {
+    "message": "Copied ✓"
+  },
+  "panel_copy_command": {
+    "message": "Copy command"
+  },
   "panel_decline": {
     "message": "Decline"
   },
@@ -1644,6 +1650,9 @@
   },
   "panel_empty_answer": {
     "message": "The agent returned no answer text."
+  },
+  "panel_empty_detail_window": {
+    "message": "Describe a page or a task. The agent works in its own browser window and uses your local CLI login."
   },
   "panel_enable": {
     "message": "Enable"
@@ -1961,17 +1970,11 @@
   "panel_old_build_busy": {
     "message": "An older chrome-use build is still running for this profile, so the update cannot take over yet. Answer or stop the conversation below, then send again."
   },
-  "panel_old_build_open": {
-    "message": "Open"
-  },
   "panel_old_build_force_hint": {
     "message": "Or run this in a terminal to stop every conversation on the older build and let the update take over:"
   },
-  "panel_copy_command": {
-    "message": "Copy command"
-  },
-  "panel_copied": {
-    "message": "Copied ✓"
+  "panel_old_build_open": {
+    "message": "Open"
   },
   "panel_old_build_stop": {
     "message": "Stop it"
@@ -3017,7 +3020,7 @@
     "message": "Discard preview"
   },
   "sidepanel_empty_detail": {
-    "message": "Describe a page or a task. The agent works in its own browser session with your local CLI login."
+    "message": "Describe a page or a task. The agent works in this tab by default (take it back any time) and uses your local CLI login."
   },
   "sidepanel_empty_title": {
     "message": "What should the browser do?"

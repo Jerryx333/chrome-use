@@ -1600,6 +1600,12 @@
   "panel_conversation_untitled": {
     "message": "会话"
   },
+  "panel_copied": {
+    "message": "已复制 ✓"
+  },
+  "panel_copy_command": {
+    "message": "复制命令"
+  },
   "panel_decline": {
     "message": "拒绝"
   },
@@ -1644,6 +1650,9 @@
   },
   "panel_empty_answer": {
     "message": "agent 没有返回回答文本。"
+  },
+  "panel_empty_detail_window": {
+    "message": "描述一个页面或任务。agent 在它自己的浏览器窗口里工作，使用你本地 CLI 的登录。"
   },
   "panel_enable": {
     "message": "启用"
@@ -1961,17 +1970,11 @@
   "panel_old_build_busy": {
     "message": "这个 profile 上还有旧版 chrome-use 在运行，新版暂时接管不了。请先回应或停止下面的对话，然后重新发送。"
   },
-  "panel_old_build_open": {
-    "message": "打开"
-  },
   "panel_old_build_force_hint": {
     "message": "也可以在终端运行下面的命令，停止旧版的所有对话，让新版直接接管："
   },
-  "panel_copy_command": {
-    "message": "复制命令"
-  },
-  "panel_copied": {
-    "message": "已复制 ✓"
+  "panel_old_build_open": {
+    "message": "打开"
   },
   "panel_old_build_stop": {
     "message": "停止它"
@@ -3017,7 +3020,7 @@
     "message": "放弃预览"
   },
   "sidepanel_empty_detail": {
-    "message": "描述一个页面或任务。agent 会在自己的浏览器会话里工作，使用你本地 CLI 的登录。"
+    "message": "描述一个页面或任务。agent 默认在这个标签页里工作（随时可以收回），使用你本地 CLI 的登录。"
   },
   "sidepanel_empty_title": {
     "message": "想让浏览器做什么？"

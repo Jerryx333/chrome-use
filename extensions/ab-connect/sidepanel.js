@@ -113,8 +113,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   // each, so a send waits for the lend a poll started.
   const autoTried = new Map();
   function workInFor(id) { return id ? workInMap[id] || workInDefault : newWorkIn || workInDefault; }
+  // The empty state says where the agent will work: this tab (the default
+  // since 0.5.63) or, when set so or outside a tab's panel, its own window.
+  function renderEmptyDetail() {
+    const detail = document.getElementById('emptyDetail');
+    if (detail) detail.textContent = t(tabBound && workInFor('') === 'tab' ? 'sidepanel_empty_detail' : 'panel_empty_detail_window');
+  }
   async function setWorkIn(id, value) {
-    if (!id) { newWorkIn = value; return; }
+    if (!id) { newWorkIn = value; renderEmptyDetail(); return; }
     workInMap[id] = value;
     // Merged with what other panels saved meanwhile.
     const stored = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
@@ -1938,6 +1944,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
       if (chatAgents.has(saved?.ab_panel_agent)) preferredAgent = saved.ab_panel_agent;
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
       workInDefault = (await Promise.resolve(storage?.sync?.get?.({ ab_work_in: 'tab' })).catch(() => null))?.ab_work_in === 'window' ? 'window' : 'tab';
+      renderEmptyDetail();
       workInMap = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
       if (tabBound) {
         const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || '';
