@@ -1678,7 +1678,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (question) {
       const current = nodes.message.value.trimEnd();
       nodes.message.value = current ? `${current}\n${question}` : question;
-      if (chipKey) void Promise.resolve(storage?.session?.set?.({ [chipKey]: { ...record, question: '' } })).catch(() => {});
+      // Read again before writing: a chip added meanwhile must stay.
+      void writeChips(stored => ({ ...stored, question: stored.question === record.question ? '' : stored.question })).catch(() => {});
     }
     renderChips();
   }
