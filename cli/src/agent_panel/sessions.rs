@@ -214,7 +214,11 @@ fn codex_activity(head: &[Value], tail: &[Value]) -> Activity {
             };
             open = event == "task_started" && !imported;
             if let Some(time) = time.or_else(|| stamp(&record["timestamp"])) {
-                at = Some(if imported { time } else { at.map_or(time, |a| a.max(time)) });
+                at = Some(if imported {
+                    time
+                } else {
+                    at.map_or(time, |a| a.max(time))
+                });
             }
         } else if !imported {
             if let Some(time) = stamp(&record["timestamp"]) {
@@ -1288,7 +1292,10 @@ mod tests {
         );
         // The file was written just now, but its records are from the day it
         // was captured: that is when the session was last active.
-        assert_eq!(s.last_active, stamp(&json!("2026-10-15T14:49:34.549Z")).unwrap());
+        assert_eq!(
+            s.last_active,
+            stamp(&json!("2026-10-15T14:49:34.549Z")).unwrap()
+        );
         assert!(!s.running, "a rewritten file is not a running session");
         let history = file_history(&find_file("claude", &h.roots, CLAUDE_ID).unwrap());
         let texts: Vec<_> = history
@@ -1603,7 +1610,8 @@ mod tests {
         lines.iter().map(|l| format!("{l}\n")).collect()
     }
     fn iso(at: SystemTime) -> String {
-        chrono::DateTime::<chrono::Utc>::from(at).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        chrono::DateTime::<chrono::Utc>::from(at)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
     }
     fn codex_at(h: &Home, day: &str, id: &str, text: &str) -> PathBuf {
         let path = h.roots.codex.join(format!(
@@ -1621,13 +1629,18 @@ mod tests {
         let h = home();
         let now = iso(SystemTime::now());
         let (started, completed) = (1_791_894_476u64, 1_791_896_732u64);
-        codex_at(&h, "16", CODEX_ID, &codex_lines(&[
-            json!({"timestamp":now,"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":now,"cwd":"/w/app","originator":"Codex Desktop","source":"vscode"}}),
-            json!({"timestamp":now,"type":"event_msg","payload":{"type":"task_started","turn_id":"external-import-turn-1","started_at":started}}),
-            json!({"timestamp":now,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the build"}]}}),
-            json!({"timestamp":now,"type":"event_msg","payload":{"type":"agent_message","message":"<EXTERNAL SESSION IMPORTED>"}}),
-            json!({"timestamp":now,"type":"event_msg","payload":{"type":"task_complete","turn_id":"external-import-turn-1","started_at":started,"completed_at":completed}}),
-        ]));
+        codex_at(
+            &h,
+            "16",
+            CODEX_ID,
+            &codex_lines(&[
+                json!({"timestamp":now,"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":now,"cwd":"/w/app","originator":"Codex Desktop","source":"vscode"}}),
+                json!({"timestamp":now,"type":"event_msg","payload":{"type":"task_started","turn_id":"external-import-turn-1","started_at":started}}),
+                json!({"timestamp":now,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the build"}]}}),
+                json!({"timestamp":now,"type":"event_msg","payload":{"type":"agent_message","message":"<EXTERNAL SESSION IMPORTED>"}}),
+                json!({"timestamp":now,"type":"event_msg","payload":{"type":"task_complete","turn_id":"external-import-turn-1","started_at":started,"completed_at":completed}}),
+            ]),
+        );
         let s = &list_files("codex", &h.roots, "", 10, Path::new("/panel"))[0];
         assert_eq!(s.last_active, completed * 1000);
         assert!(!s.running);
@@ -1641,9 +1654,14 @@ mod tests {
         let h = home();
         let now = iso(SystemTime::now());
         let created = "2026-10-16T02:32:52.380Z";
-        codex_at(&h, "16", CODEX_ID, &codex_lines(&[
-            json!({"timestamp":now,"ordinal":0,"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":created,"cwd":"/w/app","originator":"codex-tui","source":"vscode"}}),
-        ]));
+        codex_at(
+            &h,
+            "16",
+            CODEX_ID,
+            &codex_lines(&[
+                json!({"timestamp":now,"ordinal":0,"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":created,"cwd":"/w/app","originator":"codex-tui","source":"vscode"}}),
+            ]),
+        );
         let s = &list_files("codex", &h.roots, "", 10, Path::new("/panel"))[0];
         assert_eq!(s.last_active, stamp(&json!(created)).unwrap());
         assert!(!s.running);
@@ -1656,20 +1674,36 @@ mod tests {
         let started = now - Duration::from_secs(5 * 60);
         let started_s = started.duration_since(UNIX_EPOCH).unwrap().as_secs();
         // A long tool call: the turn is open, its last record minutes old.
-        codex_at(&h, "16", CODEX_ID, &codex_lines(&[
-            json!({"timestamp":iso(started),"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":iso(started),"cwd":"/w/app","originator":"codex-tui","source":"cli"}}),
-            json!({"timestamp":iso(started),"type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":started_s}}),
-            json!({"timestamp":iso(now - Duration::from_secs(120)),"type":"response_item","payload":{"type":"function_call","name":"shell"}}),
-        ]));
+        codex_at(
+            &h,
+            "16",
+            CODEX_ID,
+            &codex_lines(&[
+                json!({"timestamp":iso(started),"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":iso(started),"cwd":"/w/app","originator":"codex-tui","source":"cli"}}),
+                json!({"timestamp":iso(started),"type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":started_s}}),
+                json!({"timestamp":iso(now - Duration::from_secs(120)),"type":"response_item","payload":{"type":"function_call","name":"shell"}}),
+            ]),
+        );
         let s = &list_files("codex", &h.roots, "", 10, Path::new("/panel"))[0];
         assert!(s.running, "an open turn that wrote two minutes ago");
-        assert_eq!(s.last_active / 1000, (now - Duration::from_secs(120)).duration_since(UNIX_EPOCH).unwrap().as_secs());
+        assert_eq!(
+            s.last_active / 1000,
+            (now - Duration::from_secs(120))
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        );
         // The same turn, finished four minutes ago.
-        codex_at(&h, "16", CODEX_ID, &codex_lines(&[
-            json!({"timestamp":iso(started),"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":iso(started),"cwd":"/w/app","originator":"codex-tui","source":"cli"}}),
-            json!({"timestamp":iso(started),"type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":started_s}}),
-            json!({"timestamp":iso(now - Duration::from_secs(240)),"type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","completed_at":started_s + 60}}),
-        ]));
+        codex_at(
+            &h,
+            "16",
+            CODEX_ID,
+            &codex_lines(&[
+                json!({"timestamp":iso(started),"type":"session_meta","payload":{"id":CODEX_ID,"timestamp":iso(started),"cwd":"/w/app","originator":"codex-tui","source":"cli"}}),
+                json!({"timestamp":iso(started),"type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":started_s}}),
+                json!({"timestamp":iso(now - Duration::from_secs(240)),"type":"event_msg","payload":{"type":"task_complete","turn_id":"t1","completed_at":started_s + 60}}),
+            ]),
+        );
         let s = &list_files("codex", &h.roots, "", 10, Path::new("/panel"))[0];
         assert!(!s.running);
         assert_eq!(s.last_active, (started_s + 60) * 1000);
@@ -1686,9 +1720,30 @@ mod tests {
             "01a1400d-f2f4-7563-85af-3b53be3105c3",
         );
         // Written last, active first: the order follows the records.
-        codex_at(&h, "14", newer, &codex_lines(&[meta(newer, json!("cli")), turn("2026-10-14T00:00:00Z")]));
-        codex_at(&h, "15", older, &codex_lines(&[meta(older, json!("cli")), turn("2026-10-12T00:00:00Z")]));
-        codex_at(&h, "15", child, &codex_lines(&[meta(child, json!({"subagent":{"thread_spawn":{"parent_thread_id":newer}}})), turn("2026-10-15T00:00:00Z")]));
+        codex_at(
+            &h,
+            "14",
+            newer,
+            &codex_lines(&[meta(newer, json!("cli")), turn("2026-10-14T00:00:00Z")]),
+        );
+        codex_at(
+            &h,
+            "15",
+            older,
+            &codex_lines(&[meta(older, json!("cli")), turn("2026-10-12T00:00:00Z")]),
+        );
+        codex_at(
+            &h,
+            "15",
+            child,
+            &codex_lines(&[
+                meta(
+                    child,
+                    json!({"subagent":{"thread_spawn":{"parent_thread_id":newer}}}),
+                ),
+                turn("2026-10-15T00:00:00Z"),
+            ]),
+        );
         let ids: Vec<_> = list_files("codex", &h.roots, "", 10, Path::new("/panel"))
             .into_iter()
             .map(|s| s.id)
@@ -1700,7 +1755,9 @@ mod tests {
             .collect();
         assert_eq!(one, vec![newer.to_string()]);
         let dirs = recent_directories("codex", &h.roots, 10);
-        assert!(dirs.iter().all(|(_, at)| *at <= stamp(&json!("2026-10-15T00:00:00Z")).unwrap()));
+        assert!(dirs
+            .iter()
+            .all(|(_, at)| *at <= stamp(&json!("2026-10-15T00:00:00Z")).unwrap()));
     }
 
     #[test]
