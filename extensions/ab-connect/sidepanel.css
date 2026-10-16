@@ -155,7 +155,7 @@ details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .queued-message .actions { display:flex; gap:8px; margin-top:4px; }
 
 /* Current page attached to the next message. */
-.page-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; margin:0 0 4px; padding:2px 4px 2px 8px; border-radius:10px; background:var(--surface); color:var(--muted); font-size:12px; }
+.page-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; margin:0; padding:2px 4px 2px 8px; border-radius:10px; background:var(--surface); color:var(--muted); font-size:12px; }
 .page-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .page-chip button { border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
 .page-ref { font-size:11px; color:var(--muted); margin-top:3px; max-width:88%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -330,8 +330,6 @@ button.pill.danger-text { color:var(--error); border-color:transparent; backgrou
 .recovery-block ul { margin:0; padding-left:18px; }
 .stall-banner .actions,.recovery-block .actions { display:flex; flex-wrap:wrap; gap:6px; }
 .conversation-status .control { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.chip.record { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--muted); }
-.chip.record input { width:auto; margin:0; }
 
 @media(prefers-color-scheme:dark) { :root { --bg:#1f1f1f; --page:#18181a; --surface:#2b2c2f; --bubble:#2a3a55; --ink:#e8eaed; --muted:#a8acb3; --line:#3c3f44; --accent:#8ab4f8; --accent-ink:#1f1f1f; --warning:#fdd663; --error:#f2b8b5; --error-bg:#3a2523; --full:#ff8a50; --ok:#81c995; --accent-soft:#25324a; } }
 @media(prefers-reduced-motion:reduce) { * { animation:none !important; transition:none !important; } }
@@ -351,13 +349,23 @@ button.pill.danger-text { color:var(--error); border-color:transparent; backgrou
 /* Send-side actions stay together at the right; when the row is too narrow
    they wrap as one group instead of leaving the send button alone below. */
 .composer-send { display:inline-flex; align-items:center; gap:4px; flex:none; margin-left:auto; }
-.composer-controls button.quiet, .composer-controls button.access, .composer-controls #turnOptions > summary { font-size:12px; line-height:1.4; }
 .composer-controls { gap:2px; }
-.composer-controls button.quiet, .composer-controls button.access { padding:3px 4px; }
+.composer-controls button.quiet { font-size:12px; line-height:1.4; padding:3px 4px; }
+/* Bottom-row tools share one look: muted, 28px tall, surface on hover.
+   Attach and options are icons; access and record keep a word for state. */
+button.tool,.composer-controls #turnOptions > summary { width:28px; height:28px; flex:none; padding:0; border:0; border-radius:50%; background:transparent; color:var(--muted); display:inline-grid; place-items:center; line-height:1; }
+button.tool:hover:not(:disabled),.composer-controls #turnOptions > summary:hover { background:var(--surface); color:var(--ink); }
 .composer-controls #turnOptions { display:inline-flex; align-items:center; }
-.composer-controls #turnOptions > summary { display:inline-flex; align-items:center; padding:0 6px; color:var(--accent); }
-.composer-controls #turnOptions { width:auto; height:auto; }
-.composer-controls #turnOptions > summary { width:auto; height:24px; padding:0 8px; white-space:nowrap; }
+.composer-controls #turnOptions[open] > summary { background:var(--surface); color:var(--ink); }
+.composer-controls button.access { height:28px; padding:0 8px; line-height:1; }
+.chip.record { display:inline-flex; align-items:center; gap:5px; height:28px; padding:0 8px; border-radius:14px; font-size:12px; color:var(--muted); cursor:pointer; user-select:none; }
+.chip.record:hover { background:var(--surface); }
+.chip.record:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:1px; }
+.record-dot { flex:none; width:9px; height:9px; border-radius:50%; border:1.5px solid currentColor; }
+.chip.record:has(input:checked) { color:var(--error); background:var(--error-bg); }
+.chip.record:has(input:checked) .record-dot { background:currentColor; }
+.composer-send button.pill { color:var(--muted); }
+.composer-send button.pill:hover:not(:disabled) { color:var(--ink); }
 .composer-controls .model { min-width:110px; max-width:160px; flex:1 1 110px; }
 
 .inspect-replies { margin: 4px 12px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; max-height: 40vh; overflow: auto; }
@@ -412,7 +420,7 @@ button.pill.danger-text { color:var(--error); border-color:transparent; backgrou
 .grant-body { flex:1; min-width:0; display:flex; flex-direction:column; }
 .grant-body > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .grant-bar button { flex:none; color:#7c3aed; font-weight:600; }
-.grant-tab { display:block; margin:0 0 4px; padding:2px 8px; font-size:12px; color:#7c3aed; }
+.grant-tab { display:block; margin:0; padding:2px 8px; font-size:12px; color:#7c3aed; }
 .page-chip select { width:auto; max-width:min(60vw,420px); padding:0 4px; border:0; background:transparent; font-size:12px; color:var(--ink); }
 .page-label { flex:none; }
 
@@ -420,6 +428,11 @@ button.pill.danger-text { color:var(--error); border-color:transparent; backgrou
 html[data-mode="tab"] body { align-items:center; background:var(--surface); }
 html[data-mode="tab"] main { width:min(100%, 880px); background:var(--bg); border-left:1px solid var(--line); border-right:1px solid var(--line); }
 html[data-mode="tab"] .conversation-menu { left:auto; right:auto; width:min(calc(100% - 16px), 560px); }
-.work-row { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; margin:0 0 4px; font-size:12px; color:var(--muted); }
-.work-row label { display:inline-flex; align-items:center; gap:4px; }
-.work-row select { width:auto; padding:0 4px; border:0; background:transparent; font-size:12px; color:var(--ink); }
+/* Page, tab grant and work-in sit on one line above the text, as matching chips. */
+.context-row { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin:0 0 4px; min-width:0; }
+.context-row:not(:has(> :not([hidden]))) { display:none; }
+.context-row .page-chip { min-width:0; max-width:65%; }
+.work-row { display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; font-size:12px; color:var(--muted); min-width:0; }
+.work-chip { display:inline-flex; align-items:center; gap:3px; padding:2px 2px 2px 8px; border-radius:10px; background:var(--surface); color:var(--muted); }
+.work-chip svg { flex:none; }
+.work-chip select { field-sizing:content; width:auto; padding:0 2px; border:0; background:transparent; font-size:12px; color:var(--ink); cursor:pointer; }
