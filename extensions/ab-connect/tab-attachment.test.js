@@ -198,31 +198,6 @@ test('a tab discarded during backoff is not attached; ordinary navigation still 
   assert.deepEqual(await detachWorker([{ url: 'https://example.com', discarded: false }]).run(), { timers: 1, attaches: 1 })
 })
 
-test('a tab the user took back is never attached again, by any path (0.5.62)', async () => {
-  let attaches = 0
-  const context = {
-    console, tabs: new Map(), createTabAttachmentQueue,
-    tabGrants: { load: async () => {}, isRefused: tabId => tabId === 5, removed: async () => null, get: () => null },
-    TAKEN_BACK: 'The user took this tab back',
-    chrome: { debugger: { attach: async () => { attaches++ }, getTargets: async () => [{ id: 'T6', tabId: 6 }] } },
-    withRelayTimeout: p => p,
-    targetInfoForTab: (targets, tabId) => ({ targetId: `T${tabId}` }),
-    tabScopeHints: async () => ({}),
-    removedTabs: new Set(), sessionToTab: new Map(),
-    newTabEntry: (tabId, sessionId, targetId) => ({ tabId, sessionId, targetId, attached: true, inflight: 0, replay: new Map() }),
-    rememberSessionTarget() {}, setBadge() {}, port: {},
-    announceAttachedTab: async () => 'announce',
-    trackedDebuggerCommand: async () => ({}),
-  }
-  vm.createContext(context)
-  vm.runInContext(section('const attachTab = createTabAttachmentQueue', 'function newTabEntry(') + '\nglobalThis.attachTab = attachTab;', context)
-  await assert.rejects(context.attachTab(5), /took this tab back/)
-  assert.equal(attaches, 0)
-  assert.equal(context.tabs.has(5), false)
-  await context.attachTab(6)
-  assert.equal(attaches, 1)
-})
-
 test('the agent cannot close a tab the user lent it (0.5.62)', async () => {
   const removed = []
   const context = {

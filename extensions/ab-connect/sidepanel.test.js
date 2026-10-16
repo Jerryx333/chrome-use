@@ -1,7 +1,8 @@
-import './test-i18n.js';
+import { loadMessages } from './test-i18n.js';
+const en = loadMessages('en');
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createPanel } from './sidepanel.js';
+import { createPanel, slashQuery } from './sidepanel.js';
 
 // A deliberately small DOM fixture: controller tests verify asynchronous
 // conversation identity, not browser layout or extension API compatibility.
@@ -59,9 +60,14 @@ async function fixture(overrides = {}, saved = {}) {
   for (const id of overrides.hiddenNodes || []) document.getElementById(id).hidden = true;
   const windows = overrides.presence || overrides.mode === 'tab' ? { async getCurrent() { return { id: 7 }; } } : undefined;
   const locations = [];
-  const panel = createPanel({ document, runtime, windows, mode: overrides.mode, initialConversation: overrides.initialConversation, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
+  const session = overrides.session ? { data: overrides.session, listeners: [],
+    async get(key) { return key === null ? { ...this.data } : key in this.data ? { [key]: this.data[key] } : {}; },
+    async set(values) { Object.assign(this.data, values); },
+    async remove(keys) { for (const key of [].concat(keys)) delete this.data[key]; } } : null;
+  let storageChanged = null;
+  const panel = createPanel({ document, runtime, windows, mode: overrides.mode, initialConversation: overrides.initialConversation, panelTab: overrides.panelTab, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } }, ...(overrides.sync ? { sync: { async get(defaults) { return { ...defaults, ...overrides.sync }; } } } : {}), ...(session ? { session, onChanged: { addListener(fn) { storageChanged = fn; } } } : {}) }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
-  return { panel, nodes, calls, chats, writes, presence, locations, grantUpdate(grants) { hostState({ type: 'ab-tab-grants', grants }); }, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
+  return { panel, nodes, calls, chats, writes, presence, locations, session, storageChange(changes) { storageChanged(changes, 'session'); }, grantUpdate(grants) { hostState({ type: 'ab-tab-grants', grants }); }, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
 
 test('a late stop acknowledgement cannot replace the selected conversation', async () => {
@@ -942,7 +948,7 @@ test('lending the page beside the panel, sending with it and taking it back', as
   f.panel.close();
 });
 
-test('every view follows grants made elsewhere, and Stop takes the tab back', async () => {
+test('every view follows grants made elsewhere, and Stop leaves the tab lent', async () => {
   const grantCalls = [];
   const f = await fixture({ status: () => grantSupport, tabGrant: request => { grantCalls.push(request); return { success: true, grants: [], grant: null }; },
     conversationStop: async () => ({ success: true, result: { conversation: chat('a', 'stopping') } }) }, { ab_panel_conversation: 'a' });
@@ -951,7 +957,8 @@ test('every view follows grants made elsewhere, and Stop takes the tab back', as
   assert.equal(f.nodes.get('grantBar').hidden, false);
   assert.equal(f.nodes.get('grantNote').hidden, false, 'a page the agent cannot use is named');
   f.nodes.get('stop').fire('click'); await settle(); await settle();
-  assert.ok(grantCalls.some(c => c.action === 'revoke' && c.conversationId === 'a'));
+  // Stopping a turn is not taking the tab back ("Take back the tab" is).
+  assert.ok(!grantCalls.some(c => c.action === 'revoke'));
   f.grantUpdate([]);
   assert.equal(f.nodes.get('grantBar').hidden, true);
   f.panel.close();
@@ -971,5 +978,208 @@ test('a title given in another view shows in this one', async () => {
   const f = await fixture({ conversationRead: async params => ({ success: true, result: { conversation: { ...chat(params.conversationId), title: 'Renamed elsewhere' }, journal: { events: [], cursor: 0, more: false } } }) }, { ab_panel_conversation: 'b' });
   await settle();
   assert.equal(f.nodes.get('conversationTitle').textContent, 'Renamed elsewhere');
+  f.panel.close();
+});
+
+// ---- Slash completion anywhere in the text (0.5.63) ----------------------------
+
+test('the `/word` at the caret is found after whitespace, not inside other words', () => {
+  assert.deepEqual(slashQuery('/prof'), { query: 'prof', start: 0, end: 5 });
+  assert.deepEqual(slashQuery('所有信息在 /profile'), { query: 'profile', start: 6, end: 14 });
+  assert.deepEqual(slashQuery('use /'), { query: '', start: 4, end: 5 });
+  assert.equal(slashQuery('see a/b'), null);
+  assert.equal(slashQuery('https://x.example/pa'), null);
+  assert.equal(slashQuery('/prof then more'), null, 'the caret is past the word');
+  assert.deepEqual(slashQuery('/prof then more', 3), { query: 'pr', start: 0, end: 3 });
+});
+
+test('a skill completes in the middle of a message, by keyboard, and is used when sent', async () => {
+  const skills = [
+    { id: 'p', name: 'profile-use', source: 'user', description: 'Profile', enabled: true },
+    { id: 'm', name: 'mail-use', source: 'user', description: 'Mail', enabled: true },
+  ];
+  const f = await fixture({ status: () => ({ connected: true, agentPanel: { ...fullSupport, skillLibrary: true } }), skillList: async () => ({ success: true, result: { skills } }),
+    conversationSkillSelect: async params => ({ success: true, result: { skill: { id: `snap-${params.skillId}`, name: 'x' } } }),
+    conversationSend: async params => ({ success: true, result: { conversation: chat('b'), message: { id: params.messageId, accepted: true, replayed: false } } }) }, { ab_panel_conversation: 'b' });
+  await settle();
+  const message = f.nodes.get('message'), picker = f.nodes.get('skillPicker');
+  message.value = '所有信息在 /us'; message.fire('input');
+  assert.equal(picker.hidden, false);
+  assert.deepEqual(picker.children.map(node => node.textContent.split(' · ')[0]), ['profile-use', 'mail-use']);
+  message.fire('keydown', { key: 'ArrowDown' }); message.fire('keydown', { key: 'ArrowUp' });
+  message.fire('keydown', { key: 'Tab' });
+  assert.equal(message.value, '所有信息在 /profile-use ');
+  assert.equal(picker.hidden, true);
+  // Esc closes the list without changing the text.
+  message.value = '所有信息在 /profile-use 和 /ma'; message.fire('input');
+  assert.equal(picker.hidden, false);
+  message.fire('keydown', { key: 'Escape' });
+  assert.equal(picker.hidden, true);
+  assert.equal(message.value, '所有信息在 /profile-use 和 /ma');
+  // Enter picks while the list is open, and does not send.
+  message.fire('input'); message.fire('keydown', { key: 'Enter' });
+  assert.equal(message.value, '所有信息在 /profile-use 和 /mail-use ');
+  assert.equal(f.calls.filter(c => c.operation === 'conversationSend').length, 0);
+  // Sent: the skill picked last is the one used; other `/words` stay text.
+  message.value = '所有信息在 /profile-use, see /usr/bin'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.deepEqual(f.calls.filter(c => c.operation === 'conversationSkillSelect').map(c => c.params.skillId), ['p']);
+  assert.equal(f.calls.find(c => c.operation === 'conversationSend').params.skillId, 'snap-p');
+  f.panel.close();
+});
+
+test('an unknown `/word` in the middle of a message is plain text, at the start it is refused', async () => {
+  const f = await fixture({ status: () => ({ connected: true, agentPanel: { ...fullSupport, skillLibrary: true } }), skillList: async () => ({ success: true, result: { skills: [] } }),
+    conversationSend: async params => ({ success: true, result: { conversation: chat('b'), message: { id: params.messageId, accepted: true, replayed: false } } }) }, { ab_panel_conversation: 'b' });
+  await settle();
+  f.nodes.get('message').value = 'open /etc/hosts please'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(f.calls.find(c => c.operation === 'conversationSend').params.skillId, undefined);
+  f.nodes.get('message').value = '/nothing here'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  assert.equal(f.nodes.get('notice').textContent, en.panel_skill_unknown.message);
+  assert.equal(f.calls.filter(c => c.operation === 'conversationSend').length, 1);
+  f.panel.close();
+});
+
+// ---- One panel per tab (0.5.63) -----------------------------------------------
+
+test('a tab\'s panel shows that tab\'s conversation and means that tab by this page', async () => {
+  const tabs = { async get(id) { return { id, url: `https://shop.example/${id}`, title: `Tab ${id}` }; }, async query() { throw new Error('a tab panel never asks for the active tab'); }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ panelTab: 21, presence: true, tabs, session: { ab_panel_tab_21: 'b', ab_panel_tab_30: 'a' }, status: () => ({ connected: true, agentPanel: { ...fullSupport, pageContext: true } }) }, { ab_panel_conversation: 'a' });
+  await settle(); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b', 'its own conversation, not the last one used anywhere');
+  assert.equal(f.nodes.get('pageTitle').textContent, 'Tab 21');
+  assert.equal(f.presence.posted.at(-1).tabId, 21);
+  // Choosing a conversation another tab shows moves it here.
+  f.panel.select('a'); await settle(); await settle();
+  assert.deepEqual(f.session.data, { ab_panel_tab_21: 'a' });
+  assert.ok(!f.writes.some(w => 'ab_panel_conversation' in w));
+  // A new conversation leaves the tab unbound until it exists.
+  f.panel.select(''); await settle();
+  assert.deepEqual(f.session.data, {});
+  // A notification bound a conversation to this tab while the panel was open.
+  f.storageChange({ ab_panel_tab_21: { newValue: 'b' } }); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b');
+  // Another tab's change is not this panel's business.
+  f.storageChange({ ab_panel_tab_30: { newValue: 'a' } }); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b');
+  f.panel.close();
+});
+
+test('a panel opened on a new tab starts a new conversation', async () => {
+  const tabs = { async get(id) { return { id, url: 'https://new.example/', title: 'New' }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ panelTab: 44, tabs, session: { ab_panel_tab_21: 'b' } }, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('conversation').value, '');
+  f.panel.close();
+});
+
+// ---- The agent works in the panel's tab (0.5.63) ------------------------------
+
+function lendingFixture({ url = 'https://shop.example/cart', sync, grantsAtStart = [], conversationSend } = {}) {
+  const grantCalls = [], state = { grants: [...grantsAtStart] };
+  const tabs = { async get(id) { return { id, url, title: 'Cart' }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const tabGrant = request => {
+    grantCalls.push(request);
+    if (request.action === 'list') return { success: true, grants: state.grants };
+    if (request.action === 'grant') { const grant = { tabId: request.tabId, conversationId: request.conversationId, url, title: 'Cart' }; state.grants = [...state.grants.filter(g => g.tabId !== request.tabId), grant]; return { success: true, grant, service: { granted: true, tabId: request.tabId, adopted: true } }; }
+    state.grants = state.grants.filter(g => request.tabId !== undefined ? g.tabId !== request.tabId : g.conversationId !== request.conversationId);
+    return { success: true, grant: null, service: { granted: false } };
+  };
+  return { grantCalls, state, options: { panelTab: 21, tabs, sync, session: { ab_panel_tab_21: 'b' }, tabGrant, status: () => grantSupport, ...(conversationSend ? { conversationSend } : {}) } };
+}
+
+test('a tab\'s panel lends its tab to its conversation by itself, and a take-back moves it to its own window', async () => {
+  const l = lendingFixture();
+  const f = await fixture(l.options, {});
+  await settle(); await settle(); await settle();
+  assert.deepEqual(l.grantCalls.filter(c => c.action === 'grant'), [{ type: 'ab-tab-grant', action: 'grant', tabId: 21, conversationId: 'b', conversationTitle: 'b' }]);
+  assert.equal(f.nodes.get('grantBar').hidden, false);
+  assert.equal(f.nodes.get('workRow').hidden, false);
+  assert.equal(f.nodes.get('workIn').value, 'tab');
+  // Take back: revoked, the conversation now works in the agent's window, and
+  // later reads do not lend the tab again.
+  f.nodes.get('grantRevoke').fire('click'); await settle(); await settle(); await settle();
+  assert.ok(l.grantCalls.some(c => c.action === 'revoke' && c.conversationId === 'b'));
+  assert.deepEqual(f.writes.filter(w => w.ab_panel_work_in).at(-1).ab_panel_work_in, { b: 'window' });
+  assert.equal(f.nodes.get('workIn').value, 'window');
+  assert.equal(f.nodes.get('workNote').textContent, 'You took the tab back. The agent works in its own window now.');
+  await f.panel.refresh(); await settle(); await settle();
+  assert.equal(l.grantCalls.filter(c => c.action === 'grant').length, 1);
+  // Choosing "this tab" again lends it again.
+  f.nodes.get('workIn').value = 'tab'; f.nodes.get('workIn').fire('change'); await settle(); await settle(); await settle();
+  assert.equal(l.grantCalls.filter(c => c.action === 'grant').length, 2);
+  f.panel.close();
+});
+
+test('a page that cannot be lent leaves the agent in its own window and says so', async () => {
+  const l = lendingFixture({ url: 'chrome://settings/' });
+  const f = await fixture(l.options, {});
+  await settle(); await settle();
+  assert.equal(l.grantCalls.filter(c => c.action === 'grant').length, 0);
+  assert.equal(f.nodes.get('workNote').textContent, en.panel_work_in_window_page.message);
+  f.panel.close();
+  const store = lendingFixture({ url: 'https://chromewebstore.google.com/detail/x' });
+  const g = await fixture(store.options, {});
+  await settle(); await settle();
+  assert.equal(g.nodes.get('workNote').textContent, en.panel_work_in_window_web_store.message);
+  g.panel.close();
+});
+
+test('"its own window" in Options keeps the tab to the user until a conversation asks for it', async () => {
+  const l = lendingFixture({ sync: { ab_work_in: 'window' } });
+  const f = await fixture(l.options, {});
+  await settle(); await settle();
+  assert.equal(l.grantCalls.filter(c => c.action === 'grant').length, 0);
+  assert.equal(f.nodes.get('workIn').value, 'window');
+  assert.equal(f.nodes.get('workNote').hidden, true);
+  f.panel.close();
+});
+
+test('a tab still lent to the conversation it showed before is moved to the one it shows now', async () => {
+  const l = lendingFixture({ grantsAtStart: [{ tabId: 21, conversationId: 'a', url: 'https://shop.example/cart', title: 'Cart' }] });
+  const f = await fixture(l.options, {});
+  await settle(); await settle(); await settle();
+  const order = l.grantCalls.filter(c => c.action !== 'list').map(c => [c.action, c.tabId, c.conversationId]);
+  assert.deepEqual(order, [['revoke', 21, undefined], ['grant', 21, 'b']]);
+  f.panel.close();
+});
+
+test('the first message of a new conversation in a tab\'s panel already runs in that tab', async () => {
+  const l = lendingFixture({ conversationSend: async params => ({ success: true, result: { conversation: chat('new'), message: { id: params.messageId, accepted: true, replayed: false } } }) });
+  l.options.session = {};
+  l.options.conversationCreate = async () => ({ success: true, result: { conversation: { ...chat('new'), agentId: 'codex' } } });
+  const f = await fixture(l.options, {});
+  await settle();
+  f.nodes.get('message').value = 'fill the form'; await f.panel.send(); await settle();
+  const send = f.calls.find(c => c.operation === 'conversationSend');
+  assert.deepEqual(send.params.tabGrant, { tabId: 21, url: 'https://shop.example/cart', title: 'Cart' });
+  const grantIndex = f.calls.findIndex(c => c.action === 'grant'), sendIndex = f.calls.indexOf(send);
+  assert.ok(grantIndex >= 0 && grantIndex < sendIndex, 'lent before the first message');
+  assert.equal(f.session.data.ab_panel_tab_21, 'new');
+  f.panel.close();
+});
+
+test('an update blocked by an older build names its conversations; Open finds one started on another site', async () => {
+  const id = '12b6a0cd-eca8-4462-a809-16db0688704c';
+  const listed = [{ ...chat('b'), site: 'shop.example' }, { ...chat(id, 'waitingInput'), title: 'Old approval', site: 'other.example' }];
+  const tabs = { async query() { return [{ id: 7, url: 'https://shop.example/cart', title: 'Cart' }]; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ tabs, status: () => ({ connected: true, agentPanel: { ...fullSupport, pageContext: true } }),
+    conversationList: async () => ({ success: true, result: { conversations: listed } }),
+    conversationRead: async params => ({ success: true, result: { conversation: listed.find(c => c.id === params.conversationId) || chat(params.conversationId), journal: { events: [], cursor: 0, more: false } } }),
+    conversationSend: async () => ({ success: false, error: `Another agent-panel build is running for this profile; stop its conversations before updating (still working or waiting for you: “Old approval”) [blocking:${id}]` }),
+    conversationStop: async () => ({ success: true, result: { conversation: chat(id, 'stopping') } }) }, { ab_panel_conversation: 'b' });
+  await settle();
+  f.nodes.get('message').value = 'go'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
+  const notice = f.nodes.get('notice');
+  assert.equal(notice.hidden, false);
+  assert.equal(notice.children[0].textContent, en.panel_old_build_busy.message);
+  const row = notice.children[1];
+  assert.match(row.textContent, /Old approval/);
+  const [open, stop] = row.children;
+  assert.deepEqual([open.textContent, stop.textContent], ['Open', 'Stop it']);
+  // This site's list does not show it; opening switches the list to all sites.
+  open.fire('click'); await settle(); await settle();
+  assert.equal(f.nodes.get('conversation').value, id);
+  assert.ok(f.writes.some(w => w.ab_panel_conversation_scope === 'all'));
+  assert.equal(notice.hidden, true);
   f.panel.close();
 });

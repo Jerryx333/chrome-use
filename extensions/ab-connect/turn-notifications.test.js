@@ -212,3 +212,28 @@ test('a reply notification opens the side panel at its replies', () => {
   assert.deepEqual(calls, [['store', ['ab_panel_show_replies']], ['open', { windowId: 4 }], ['focus', 4, { focused: true }], ['clear', 'inspect-reply:dm-a#4']]);
   assert.deepEqual(here.posted, [{ type: 'showReplies' }]);
 });
+
+test('with one panel per tab, a finished turn opens its conversation\'s own tab, else binds the tab the user is on', () => {
+  const calls = [];
+  const chrome = { storage: { local: { set: async value => calls.push(['store', Object.keys(value)]) } }, windows: { update: async (id, value) => calls.push(['focus', id, value]) }, notifications: { clear: async id => calls.push(['clear', id]) }, sidePanel: { open: async value => calls.push(['global-open', value]) } };
+  const bound = new Map([[21, ID]]);
+  const tabs = { tabFor: id => [...bound].find(([, c]) => c === id)?.[0] ?? null, activeTab: () => 30, bind: (tabId, id) => { calls.push(['bind', tabId, id]); bound.set(tabId, id); }, open: tabId => calls.push(['open', tabId]), show: tabId => calls.push(['show', tabId]) };
+  const there = { posted: [], postMessage(m) { this.posted.push(m); } }, other = { posted: [], postMessage(m) { this.posted.push(m); } };
+  const panels = new Map([[there, { windowId: 4, tabId: 21 }], [other, { windowId: 4, tabId: 30 }]]);
+  assert.equal(openFromNotification(`panel-turn:${ID}`, { windowId: 4, chrome, panels, tabs }), true);
+  // Synchronous, so open() still has the click's gesture.
+  assert.deepEqual(calls.slice(0, 2), [['show', 21], ['open', 21]]);
+  assert.deepEqual(there.posted, [{ type: 'select', conversationId: ID }]);
+  assert.deepEqual(other.posted, []);
+  assert.ok(!calls.some(call => call[0] === 'global-open'));
+  // A conversation no tab shows opens in the tab the user is on.
+  calls.length = 0; bound.clear();
+  const SECOND = 'aaaaaaaa-2222-4333-8444-555555555555';
+  openFromNotification(`schedule-run:${SECOND}`, { windowId: 4, chrome, panels, tabs });
+  assert.deepEqual(calls.slice(0, 2), [['bind', 30, SECOND], ['open', 30]]);
+  assert.deepEqual(other.posted, [{ type: 'select', conversationId: SECOND }]);
+  // Replies open the panel of the tab the user is on.
+  calls.length = 0;
+  openFromNotification('inspect-reply:dm-a#4', { windowId: 4, chrome, panels, tabs });
+  assert.deepEqual(calls.slice(0, 2), [['store', ['ab_panel_show_replies']], ['open', 30]]);
+});

@@ -9,18 +9,20 @@ test('toolbar entry is enabled only after Chrome confirms the behavior', async (
   const result = await configureAgentPanel({
     sidePanel: {
       async setPanelBehavior(value) { calls.push(value); },
-      async getPanelBehavior() { calls.push('readback'); return { openPanelOnActionClick: true }; },
+      async setOptions(value) { calls.push(['options', value]); },
+      async getPanelBehavior() { calls.push('readback'); return { openPanelOnActionClick: false }; },
     },
-    action: { async setPopup(value) { calls.push(value); } },
+    action: { async setPopup(value) { calls.push(value); }, onClicked: { addListener() {} } },
   });
-  assert.deepEqual(calls, [{ openPanelOnActionClick: true }, 'readback', { popup: '' }]);
+  // The button opens one tab's panel (background.js); no panel is global.
+  assert.deepEqual(calls, [{ openPanelOnActionClick: false }, ['options', { enabled: false }], 'readback', { popup: '' }]);
   assert.equal(result.ready, true);
 });
 
 test('unsupported or unconfirmed entry preserves the connection popup', async () => {
-  for (const sidePanel of [undefined, { async setPanelBehavior() {}, async getPanelBehavior() { return { openPanelOnActionClick: false }; } }]) {
+  for (const sidePanel of [undefined, { async setPanelBehavior() {}, async setOptions() {} }, { async setPanelBehavior() {}, async setOptions() {}, async getPanelBehavior() { return { openPanelOnActionClick: true }; } }]) {
     const calls = [];
-    const result = await configureAgentPanel({ sidePanel, action: { async setPopup(value) { calls.push(value); } } });
+    const result = await configureAgentPanel({ sidePanel, action: { async setPopup(value) { calls.push(value); }, onClicked: { addListener() {} } } });
     assert.equal(result.ready, false);
     assert.deepEqual(calls, [{ popup: 'popup.html' }]);
     assert.ok(result.error);

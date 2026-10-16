@@ -283,7 +283,7 @@ async function backgroundCleanupFixture() {
   const listeners = {}, events = []
   let pending
   const context = {
-    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null },    attachmentHealth: createAttachmentHealth(),
+    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null }, forgetTabPanel() {},    attachmentHealth: createAttachmentHealth(),
     tabs: new Map([[1, { sessionId: 'cb-tab-1', attached: true }]]),
     sessionToTab: new Map([['cb-tab-1', 1]]),
     childSessionToTab: new Map([['child', 1]]),

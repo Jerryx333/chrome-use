@@ -1,11 +1,13 @@
 import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
-import { t, messageMap, applyI18n } from './i18n.js';
+import { oldBuildBlocking } from './panel-errors.js';
+import { t, messageMap, applyI18n, i18nReady } from './i18n.js';
 import { renderReplies, validReplies } from './inspect-replies.js';
 import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } from './resume-picker.js';
 import { createProjectChoice, folderLabel } from './project-picker.js';
 import { grantRefusal, originOf } from './tab-grant.js';
+import { panelTabKey, panelTabFrom } from './panel-tabs.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -17,6 +19,18 @@ export function mainDomain(host) {
   const labels = clean.split('.');
   return labels.slice(secondLevel.has(labels.slice(-2).join('.')) ? -3 : -2).join('.');
 }
+// The `/word` being typed at the caret: at the start of the text or after
+// whitespace, so "fill it in with /profile-use" completes too. `start` is
+// the slash, `end` the caret.
+export function slashQuery(text, caret = String(text || '').length) {
+  const before = String(text || '').slice(0, caret);
+  const match = /(^|\s)\/([^\s/]*)$/.exec(before);
+  return match ? { query: match[2], start: before.length - match[2].length - 1, end: before.length } : null;
+}
+// Every `/name` in a message, where it starts and what it names.
+// Punctuation right after a name ("/profile-use," or "/profile-use。") is not part of it.
+function slashTokens(text) { return [...String(text || '').matchAll(/(^|\s)\/([^\s/]+)(?=\s|$)/g)].map(m => ({ name: m[2].replace(/[.,;:!?)\]，。；：！？）]+$/, ''), start: m.index + m[1].length })).filter(token => token.name); }
+
 // The host names a conversation "New conversation" until its first message;
 // that default is shown in the panel's language, a real title as it is.
 const HOST_DEFAULT_TITLE = 'New conversation';
@@ -50,7 +64,7 @@ function pageName(target) { const host = hostOf(target?.url); let path = ''; try
 function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
-export function createPanel({ document, runtime, storage, tabs, windows, mode = 'panel', initialConversation = '', setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
+export function createPanel({ document, runtime, storage, tabs, windows, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
   const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
@@ -71,12 +85,34 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   // beside it, so "this page" is a web tab of its window: the last one the
   // user was on, or the one they pick.
   const tabMode = mode === 'tab';
+  // One panel per tab (0.5.63): this panel belongs to `panelTab`, shows that
+  // tab's conversation and means that tab by "this page".
+  const tabBound = !tabMode && Number.isInteger(panelTab);
   const openInTab = document.getElementById('openInTab'), pagePicker = document.getElementById('pagePicker'), pageLabel = document.getElementById('pageLabel');
   let ownTabId = null, pickedTabId = null;
   // "Let the agent use this tab": grants live in the background (per tab,
   // per conversation); every view of a conversation shows the same ones.
   const grantBar = document.getElementById('grantBar'), grantText = document.getElementById('grantText'), grantNote = document.getElementById('grantNote'), grantRevoke = document.getElementById('grantRevoke'), grantTab = document.getElementById('grantTab');
   let grants = [], grantBusy = false;
+  // "Agent works in" (0.5.63): in a tab's panel the agent works in that tab
+  // unless the conversation (or the default in Options) says its own window.
+  // The tab is lent automatically, with the same badge, bar and take-back as
+  // a manual lend; a page that cannot be lent, a take-back or a refused lend
+  // leaves the agent in its own window, and the panel says so.
+  const workRow = document.getElementById('workRow'), workInSelect = document.getElementById('workIn'), workNote = document.getElementById('workNote');
+  let workInDefault = 'tab', workInMap = {}, newWorkIn = null, autoNote = '', panelTabUrl = '', pageRead = false;
+  // Lends tried, by conversation, tab and origin, and the lend in flight for
+  // each, so a send waits for the lend a poll started.
+  const autoTried = new Map();
+  function workInFor(id) { return id ? workInMap[id] || workInDefault : newWorkIn || workInDefault; }
+  async function setWorkIn(id, value) {
+    if (!id) { newWorkIn = value; return; }
+    workInMap[id] = value;
+    // Merged with what other panels saved meanwhile.
+    const stored = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
+    workInMap = { ...stored, [id]: value };
+    await storage?.local?.set?.({ ab_panel_work_in: workInMap });
+  }
   const grantRefusedText = messageMap({ notWeb: 'panel_grant_refused_not_web', webStore: 'panel_grant_refused_web_store', otherConversation: 'panel_grant_refused_other', agentTab: 'panel_grant_refused_agent_tab', closed: 'panel_grant_refused_closed' });
   // Consecutive tool calls share one collapsible group; `toolTail` is the
   // group the next tool joins while nothing else has been rendered after it.
@@ -139,7 +175,31 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (className) node.className = className;
     return node;
   }
-  function error(error) { nodes.notice.textContent = String(error?.message || error); nodes.notice.hidden = false; }
+  function error(error) {
+    const text = String(error?.message || error);
+    const blocking = oldBuildBlocking(text);
+    if (!blocking) { nodes.notice.textContent = text; nodes.notice.hidden = false; return; }
+    // An older build keeps its service while one of its conversations works
+    // or waits for the user; name them and offer to open or stop each.
+    const title = id => titleOf(conversations.find(c => c.id === id), 'panel_conversation_untitled');
+    nodes.notice.replaceChildren(element('div', t('panel_old_build_busy')));
+    for (const id of blocking) {
+      const row = element('div', `“${title(id)}” `);
+      row.append(button(t('panel_old_build_open'), async () => { clearError(); await openBlocking(id); }), button(t('panel_old_build_stop'), async () => {
+        try { await api('conversationStop', { conversationId: id }); clearError(); } catch (failure) { error(failure); }
+      }));
+      nodes.notice.append(row);
+    }
+    nodes.notice.hidden = false;
+  }
+  // Open a conversation the error named, wherever it was started: the list
+  // switches to all sites when this site's list does not show it.
+  async function openBlocking(id) {
+    if (!conversations.some(c => c.id === id)) await list().catch(() => {});
+    const domain = currentDomain(), chat = conversations.find(c => c.id === id);
+    if (scope === 'site' && domain && !(chat?.site && mainDomain(chat.site) === domain)) setScope('all');
+    select(id);
+  }
   function clearError() { nodes.notice.hidden = true; nodes.notice.textContent = ''; }
   async function api(operation, params = {}) {
     if (!runtime?.sendMessage) throw new Error(t('panel_error_open_from_extension'));
@@ -269,6 +329,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       grantRevoke.disabled = grantBusy;
     }
     grantTab.hidden = !supported || !selected || !page || pageDetached || grant?.tabId === page.tabId;
+    if (workRow) {
+      workRow.hidden = !tabBound || !supported;
+      workInSelect.value = workInFor(selected);
+      workInSelect.disabled = grantBusy;
+      workNote.hidden = !autoNote; workNote.textContent = autoNote;
+    }
     grantTab.textContent = grant ? t('panel_grant_switch') : t('panel_grant_use');
     grantTab.title = page ? t('panel_grant_use_title', page.url) : '';
     grantTab.disabled = grantBusy || !connected || !conversation;
@@ -286,6 +352,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   }
   async function grantPage() {
     if (!selected || !page || grantBusy) return;
+    if (tabBound && page.tabId === panelTab) { await setWorkIn(selected, 'tab'); autoNote = ''; }
     const id = selected, tabId = page.tabId;
     grantBusy = true; renderGrant();
     try {
@@ -304,6 +371,47 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       grants = grants.filter(g => g.conversationId !== id);
     } finally { grantBusy = false; renderGrant(); }
   }
+  // "Take back the tab" in a tab's panel also moves the conversation to the
+  // agent's own window, so the tab is not lent again behind the user's back.
+  async function takeBack() {
+    const id = selected;
+    await revokeGrant(id);
+    if (tabBound && id) { await setWorkIn(id, 'window'); if (id === selected) autoNote = t('panel_work_in_window_taken_back'); renderGrant(); }
+  }
+  // Lend this panel's tab to its conversation when it works in this tab.
+  async function maybeAutoLend() {
+    if (!tabBound || !panelSupport?.tabGrant || panelSupport?.mode !== 'full' || !connected || !selected || !conversation || grantBusy) return;
+    const id = selected;
+    if (workInFor(id) !== 'tab') { autoNote = ''; renderGrant(); return; }
+    if (grantFor(id)?.tabId === panelTab) { autoNote = ''; renderGrant(); return; }
+    // Until the tab was read there is nothing to decide.
+    if (!pageRead) return;
+    const refusal = panelTabUrl ? grantRefusal(panelTabUrl) : 'notWeb';
+    if (refusal || !page) { autoNote = refusal === 'webStore' ? t('panel_work_in_window_web_store') : t('panel_work_in_window_page'); renderGrant(); return; }
+    const key = `${id}:${panelTab}:${originOf(page.url)}`;
+    if (autoTried.has(key)) return autoTried.get(key);
+    const lending = autoLend(id);
+    autoTried.set(key, lending);
+    return lending;
+  }
+  async function autoLend(id) {
+    try {
+      // This tab may still be lent to the conversation it showed before.
+      const holder = grants.find(g => g.tabId === panelTab && g.conversationId !== id);
+      if (holder) { await grantMessage({ action: 'revoke', tabId: panelTab }); grants = grants.filter(g => g !== holder); }
+      await grantPage();
+      if (id === selected) autoNote = '';
+    } catch (failure) {
+      if (id === selected) autoNote = t('panel_work_in_window_failed', failure?.message || t('panel_no_answer'));
+    } finally { renderGrant(); }
+  }
+  workInSelect?.addEventListener('change', () => void (async () => {
+    const id = selected, value = workInSelect.value === 'window' ? 'window' : 'tab';
+    await setWorkIn(id, value);
+    if (value === 'window') { autoNote = ''; if (grantFor(id)?.tabId === panelTab) await revokeGrant(id); }
+    else { for (const key of [...autoTried.keys()]) if (key.startsWith(`${id}:`)) autoTried.delete(key); await maybeAutoLend(); }
+    renderGrant();
+  })().catch(error));
   function conversationChoices() {
     nodes.conversation.replaceChildren(element('option', t('panel_new_conversation')));
     nodes.conversation.firstElementChild.value = '';
@@ -359,10 +467,21 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     // A panel tab keeps its conversation in its own address, so opening one
     // never changes what the side panel shows next.
-    if (tabMode) setLocation(id); else storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
+    if (tabMode) setLocation(id); else if (tabBound) void bindTab(id).catch(() => {}); else storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
     if (!id) refreshProjects(); else projectChoice.hideQuestion();
     reportPresence();
     void poll().catch(error);
+  }
+  // This tab now shows `id`; a conversation is shown by one tab at a time, so
+  // another tab that showed it lets it go (its panel starts a new one).
+  async function bindTab(id) {
+    const key = panelTabKey(panelTab), session = storage?.session;
+    if (!session) return;
+    if (!id) { await session.remove(key); return; }
+    await session.set({ [key]: id });
+    const all = await session.get(null);
+    const others = Object.entries(all || {}).filter(([other, value]) => other !== key && other.startsWith('ab_panel_tab_') && value === id).map(([other]) => other);
+    if (others.length) await session.remove(others);
   }
   // Tell the background which conversation this panel shows, so a turn the
   // user is watching does not notify and its badge count clears.
@@ -371,7 +490,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (!presencePort || windowId === null) return;
     const visible = document.visibilityState !== 'hidden' && !nodes.chatView.hidden;
     const repliesShown = visible && replyCount > 0 && replyBox.open === true;
-    try { presencePort.postMessage({ type: 'presence', windowId, conversationId: selected, visible, ...(repliesShown ? { repliesShown } : {}) }); } catch {}
+    try { presencePort.postMessage({ type: 'presence', windowId, ...(tabBound ? { tabId: panelTab } : {}), conversationId: selected, visible, ...(repliesShown ? { repliesShown } : {}) }); } catch {}
   }
   // Inspect & Ask replies: agents answer batches sent from the page picker,
   // and hosts that report `inspectReplies` keep them for this list.
@@ -999,6 +1118,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         if (listed && typeof conversation?.title === 'string' && listed.title !== conversation.title) { listed.title = conversation.title; conversationChoices(); }
         renderTimeline(); renderRequests(); renderQueue(result.queuedMessages || []); controls();
       }
+      if (id === selected && epoch === selectionEpoch) void maybeAutoLend();
       const pending = pendingMessages.get(id);
       if (pending && id === selected && epoch === selectionEpoch) {
         const status = await api('conversationMessageStatus', { conversationId: id, messageId: pending.id });
@@ -1060,6 +1180,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         if (project) options.project = project;
         const result = await api('conversationCreate', options); rememberAgent(options.agentId);
         conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        // Where it works was chosen before it existed; its first turn already
+        // runs in this tab when it works here.
+        if (tabBound) { await setWorkIn(result.conversation.id, workInFor('')); newWorkIn = null; await maybeAutoLend(); }
         // After selecting it: selecting another conversation hides the question.
         if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); }
       }
@@ -1118,13 +1241,15 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     renderGrant();
   }
   async function refreshPage() {
-    if (!tabs?.query) return;
-    const tab = tabMode ? await windowPage() : (await tabs.query({ active: true, currentWindow: true }))[0];
+    if (!(tabBound ? tabs?.get : tabs?.query)) return;
+    const tab = tabMode ? await windowPage() : tabBound ? await Promise.resolve(tabs.get?.(panelTab)).catch(() => null) : (await tabs.query({ active: true, currentWindow: true }))[0];
     const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
+    if (tabBound) { panelTabUrl = tab?.url || tab?.pendingUrl || ''; pageRead = true; }
     if (next?.tabId !== page?.tabId) pageDetached = false;
     const moved = next?.url !== page?.url;
     page = next; renderPage(); renderConversationMenu();
     if (moved) refreshProjects();
+    if (moved || tabBound) void maybeAutoLend();
   }
   // In a panel tab: the web tab of this window the user picked, else the one
   // they were on last. The picker lists them all.
@@ -1399,24 +1524,45 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       return row;
     }));
   }
+  // A message that starts with `/name` must name one skill. A `/name` later
+  // in the text uses a skill when exactly one enabled skill has that name; any
+  // other later `/word` (a path, a URL part) is plain text.
   function chosenSkill(text) {
-    const match = /^\/([^\s]+)(?:\s|$)/.exec(text);
-    if (!match || !panelSupport?.skillLibrary) return null;
-    if (skillChoice?.name === match[1] && skillChoice.enabled) return skillChoice;
-    const matches = skillCatalog.filter(skill => skill.enabled && skill.name === match[1]);
-    if (matches.length !== 1) throw new Error(matches.length ? t('panel_skill_ambiguous') : t('panel_skill_unknown'));
-    return matches[0];
+    if (!panelSupport?.skillLibrary) return null;
+    const tokens = slashTokens(text);
+    if (skillChoice?.enabled && tokens.some(token => token.name === skillChoice.name)) return skillChoice;
+    const named = name => skillCatalog.filter(skill => skill.enabled && skill.name === name);
+    const first = tokens[0]?.start === 0 ? tokens[0] : null;
+    if (first) {
+      const matches = named(first.name);
+      if (matches.length !== 1) throw new Error(matches.length ? t('panel_skill_ambiguous') : t('panel_skill_unknown'));
+      return matches[0];
+    }
+    for (const token of tokens) { const matches = named(token.name); if (matches.length === 1) return matches[0]; }
+    return null;
+  }
+  function caretQuery() { return slashQuery(nodes.message.value, Number.isInteger(nodes.message.selectionStart) ? nodes.message.selectionStart : undefined); }
+  // Put `/name ` in place of the `/word` at the caret, keeping the text around it.
+  function insertSkill(skill) {
+    const value = nodes.message.value, query = caretQuery() || { start: 0, end: value.length };
+    const after = value.slice(query.end).replace(/^[^\s]*/, '');
+    const inserted = `/${skill.name} `;
+    nodes.message.value = value.slice(0, query.start) + inserted + after.replace(/^\s/, '');
+    const caret = query.start + inserted.length;
+    try { nodes.message.setSelectionRange?.(caret, caret); } catch {}
+    skillChoice = skill; nodes.skillPicker.hidden = true; nodes.message.focus?.();
   }
   function renderSkillPicker() {
-    const match = /^\/([^\s]*)$/.exec(nodes.message.value);
-    // Built-in commands come first and open their own view when chosen.
-    const builtins = match && panelSupport?.sessionResume && RESUME_TEXT.command.startsWith(match[1].toLowerCase()) ? [{ name: RESUME_TEXT.command, source: 'chrome-use', description: RESUME_TEXT.commandHint, builtin: true }] : [];
-    const skills = match ? [...builtins, ...skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match[1].toLowerCase()))].slice(0, 12) : [];
+    const match = caretQuery();
+    // Built-in commands come first and open their own view when chosen; they
+    // are commands only at the start of the message.
+    const builtins = match && match.start === 0 && nodes.message.value.slice(match.end).trim() === '' && panelSupport?.sessionResume && RESUME_TEXT.command.startsWith(match.query.toLowerCase()) ? [{ name: RESUME_TEXT.command, source: 'chrome-use', description: RESUME_TEXT.commandHint, builtin: true }] : [];
+    const skills = match ? [...builtins, ...skillCatalog.filter(skill => skill.enabled && skill.name.toLowerCase().includes(match.query.toLowerCase()))].slice(0, 12) : [];
     visibleSkills = skills; skillPickerIndex = Math.min(skillPickerIndex,Math.max(0,skills.length-1));
     nodes.skillPicker.hidden = !skills.length;
     nodes.skillPicker.replaceChildren(...skills.map(skill => button(`${skill.name} · ${skill.source} · ${skill.description}`, async () => {
       if (skill.builtin) { await openResume(); return; }
-      skillChoice = skill; nodes.message.value = `/${skill.name} `; nodes.skillPicker.hidden = true; nodes.message.focus?.();
+      insertSkill(skill);
     })));
   }
   function skillPickerKey(event) {
@@ -1431,11 +1577,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       const skill = visibleSkills[skillPickerIndex]; if(!skill)return false;
       event.preventDefault();
       if (skill.builtin) { void openResume().catch(error); return true; }
-      skillChoice=skill; nodes.message.value=`/${skill.name} `;nodes.skillPicker.hidden=true;return true;
+      insertSkill(skill);return true;
     }
     return false;
   }
   nodes.message.addEventListener('input', () => {skillPickerIndex=0;renderSkillPicker();});
+  // Moving the caret onto or off a `/word` shows or hides the choices.
+  nodes.message.addEventListener('click', () => renderSkillPicker());
+  nodes.message.addEventListener('keyup', event => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) renderSkillPicker(); });
   nodes.reloadSkills.addEventListener('click', () => void loadSkills().catch(error));
   nodes.saveSkill.addEventListener('click', () => void (async () => {
     await api('skillSave', { agentId: skillAgent(), name: nodes.skillName.value.trim(), content: nodes.skillContent.value }); await loadSkills();
@@ -1495,7 +1644,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   nodes.pageDetach.addEventListener('click', () => { pageDetached = true; renderPage(); });
   pagePicker?.addEventListener('change', () => { pickedTabId = Number(pagePicker.value); pageDetached = false; void refreshPage().catch(() => {}); });
   grantTab?.addEventListener('click', () => void grantPage().catch(error));
-  grantRevoke?.addEventListener('click', () => void revokeGrant().catch(error));
+  grantRevoke?.addEventListener('click', () => void takeBack().catch(error));
   openInTab?.addEventListener('click', () => void tabs.create({ url: runtime.getURL(`sidepanel.html?mode=tab${selected ? `&conversation=${encodeURIComponent(selected)}` : ''}`) }).catch(error));
   if (tabs?.onRemoved) tabs.onRemoved.addListener(() => { if (tabMode) void refreshPage().catch(() => {}); });
   if (tabs?.onActivated) tabs.onActivated.addListener(() => void refreshPage().catch(() => {}));
@@ -1532,8 +1681,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     const result = await api(operation, { conversationId: id });
     if (id === selected && epoch === selectionEpoch) { conversation = result.conversation; controls(); }
   }
-  // Stop also takes back a lent tab: it is how the user halts the agent.
-  nodes.stop.addEventListener('click', () => void Promise.all([controlConversation('conversationStop'), revokeGrant()]).catch(error));
+  nodes.stop.addEventListener('click', () => void controlConversation('conversationStop').catch(error));
   nodes.resume.addEventListener('click', () => void controlConversation('conversationResumeQueue').catch(error));
   nodes.latest.addEventListener('click', () => { nodes.transcript.scrollTop = nodes.transcript.scrollHeight; nodes.latest.hidden = true; });
   nodes.configForm.addEventListener('submit', event => { event.preventDefault(); void previewConfig().catch(error); });
@@ -1548,6 +1696,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       else if (connected) void poll().catch(error);
     }
   });
+  // Another tab took this tab's conversation, or a notification bound one here.
+  storage?.onChanged?.addListener?.((changes, area) => {
+    if (!tabBound || area !== 'session') return;
+    const change = changes[panelTabKey(panelTab)];
+    if (!change || (change.newValue || '') === selected || sending) return;
+    select(change.newValue || '');
+  });
   controls(); closeConversationMenu();
   return { async start() {
     try {
@@ -1556,7 +1711,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       if (Date.now() - Number(saved?.ab_panel_show_replies || 0) < 30000) replyBox.open = true;
       if (chatAgents.has(saved?.ab_panel_agent)) preferredAgent = saved.ab_panel_agent;
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
-      selected = tabMode ? initialConversation : saved?.ab_panel_conversation || '';
+      workInDefault = (await Promise.resolve(storage?.sync?.get?.({ ab_work_in: 'tab' })).catch(() => null))?.ab_work_in === 'window' ? 'window' : 'tab';
+      workInMap = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
+      if (tabBound) { const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || ''; }
+      else selected = tabMode ? initialConversation : saved?.ab_panel_conversation || '';
       if (saved?.ab_panel_full_access === false) newFullAccess = false;
       for (const [id, messageId] of Object.entries(saved?.ab_panel_pending || {}).slice(0, 64)) {
         if (typeof messageId === 'string' && messageId.length <= 80) pendingMessages.set(id, { id: messageId });
@@ -1570,13 +1728,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
-if (typeof document !== 'undefined') {
+// The English fallback loads first, so the first render has no raw keys.
+if (typeof document !== 'undefined') void i18nReady.then(() => {
   applyI18n(document);
   const query = new URLSearchParams(globalThis.location?.search || '');
   const mode = query.get('mode') === 'tab' ? 'tab' : 'panel';
   document.documentElement.dataset.mode = mode;
   const setLocation = id => { try { globalThis.history.replaceState(null, '', `?mode=tab${id ? `&conversation=${encodeURIComponent(id)}` : ''}`); } catch {} };
-  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, mode, initialConversation: query.get('conversation') || '', setLocation });
+  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, mode, initialConversation: query.get('conversation') || '', panelTab: panelTabFrom(globalThis.location?.search), setLocation });
   void panel.start();
   globalThis.addEventListener('pagehide', () => panel.close());
-}
+});

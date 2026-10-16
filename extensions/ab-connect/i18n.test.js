@@ -187,3 +187,29 @@ test('zh_CN: the options page renders in Chinese', async () => {
     Object.assign(globalThis, saved);
   }
 });
+
+test('a key Chrome has no text for falls back to the bundled English, never the raw key', async () => {
+  const { t, setFallbackMessages, expandMessage, applyI18n } = await import('./i18n.js');
+  const original = globalThis.chrome.i18n;
+  // Chrome answering '' for every key: a stale message cache after an
+  // unpacked reload, or a UI language with no file.
+  globalThis.chrome.i18n = { getMessage: () => '', getUILanguage: () => 'fr' };
+  try {
+    setFallbackMessages(null);
+    assert.equal(t('panel_access_full'), 'panel_access_full', 'without a fallback the key is all there is');
+    setFallbackMessages(en);
+    assert.equal(t('panel_access_full'), en.panel_access_full.message);
+    assert.equal(t('panel_grant_active', 'Cart', 'https://shop.example'), 'The agent can use your tab: Cart · https://shop.example');
+    assert.equal(expandMessage({ message: 'a $$ b $X$', placeholders: { x: { content: '$1' } } }, ['1']), 'a $ b 1');
+    const element = { getAttribute: () => 'sidepanel_send', textContent: 'Send?' };
+    applyI18n({ documentElement: {}, querySelectorAll: selector => selector === '[data-i18n]' ? [element] : [] });
+    assert.equal(element.textContent, en.sidepanel_send.message);
+    // Real Chrome text still wins.
+    globalThis.chrome.i18n = { getMessage: key => key === 'panel_access_full' ? 'Chrome text' : '' };
+    assert.equal(t('panel_access_full'), 'Chrome text');
+  } finally { globalThis.chrome.i18n = original; setFallbackMessages(null); }
+});
+
+test('the side panel waits for the English fallback before its first render', () => {
+  assert.match(read('sidepanel.js'), /void i18nReady\.then\(\(\) => \{\n  applyI18n\(document\);/);
+});

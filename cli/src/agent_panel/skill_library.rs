@@ -112,6 +112,34 @@ fn scan(
         }
     }
 }
+/// Install folders of the Claude Code plugins its settings enable, from
+/// `plugins/installed_plugins.json` (format 2: name -> installs). A plugin
+/// that is installed but not enabled is not listed.
+fn claude_plugin_roots(claude_home: &Path) -> Vec<PathBuf> {
+    let read = |path: PathBuf| -> Option<serde_json::Value> {
+        serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+    };
+    let Some(installed) = read(claude_home.join("plugins/installed_plugins.json")) else {
+        return Vec::new();
+    };
+    let enabled = read(claude_home.join("settings.json"))
+        .and_then(|settings| settings.get("enabledPlugins").cloned())
+        .unwrap_or_default();
+    let mut roots = Vec::new();
+    for (name, installs) in installed["plugins"].as_object().into_iter().flatten() {
+        if enabled.get(name).and_then(|v| v.as_bool()) != Some(true) {
+            continue;
+        }
+        for install in installs.as_array().into_iter().flatten().take(4) {
+            if let Some(path) = install["installPath"].as_str() {
+                roots.push(PathBuf::from(path));
+            }
+        }
+    }
+    roots.truncate(64);
+    roots
+}
+
 pub(super) fn catalog(directory: &Path, agent: &str) -> Result<Vec<Skill>, String> {
     let context = DiscoveryContext::current()?;
     let mut skills = BTreeMap::new();
@@ -137,6 +165,22 @@ pub(super) fn catalog(directory: &Path, agent: &str) -> Result<Vec<Skill>, Strin
             &mut skills,
             0,
         );
+    }
+    // Claude Code also loads the skills of its enabled plugins (invoked as
+    // `/plugin:skill`); a name already listed from a skills folder keeps
+    // that entry, so a name never becomes ambiguous.
+    if agent == "claude" {
+        if let Some(spec) = AGENTS.iter().find(|spec| spec.id == agent) {
+            let mut plugins = BTreeMap::new();
+            for root in claude_plugin_roots(&context.root(*spec)) {
+                scan(&root, "plugin", false, &mut plugins, 0);
+            }
+            for (id, skill) in plugins {
+                if !skills.values().any(|s: &Skill| s.name == skill.name) {
+                    skills.entry(id).or_insert(skill);
+                }
+            }
+        }
     }
     for root in crate::skills::panel_skill_dirs() {
         scan(&root, "bundled", false, &mut skills, 0);
@@ -332,6 +376,7 @@ pub(super) fn save(directory: &Path, name: &str, content: &str) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     #[tokio::test]
     async fn wrapped_skill_archives_import_assets_and_refuse_path_escape() {
         let root = tempfile::tempdir().unwrap();
@@ -379,6 +424,37 @@ mod tests {
         std::os::unix::fs::symlink(original, &link).unwrap();
         assert!(read_text(&link, MAX_TEXT).is_err());
     }
+    #[test]
+    fn only_enabled_claude_plugins_contribute_skill_folders() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = home.path();
+        std::fs::create_dir_all(claude.join("plugins")).unwrap();
+        std::fs::write(
+            claude.join("plugins/installed_plugins.json"),
+            json!({"version":2,"plugins":{
+                "profile-use@market":[{"installPath":"/p/profile-use/0.4.0"}],
+                "off@market":[{"installPath":"/p/off/1.0.0"}],
+                "broken@market":"not a list"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            claude_plugin_roots(claude).is_empty(),
+            "no settings: nothing enabled"
+        );
+        std::fs::write(
+            claude.join("settings.json"),
+            json!({"enabledPlugins":{"profile-use@market":true,"off@market":false,"broken@market":true}}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            claude_plugin_roots(claude),
+            vec![PathBuf::from("/p/profile-use/0.4.0")]
+        );
+        assert!(claude_plugin_roots(&claude.join("missing")).is_empty());
+    }
+
     #[test]
     fn library_saves_are_scoped_and_refs_cannot_escape() {
         let dir = tempfile::tempdir().unwrap();

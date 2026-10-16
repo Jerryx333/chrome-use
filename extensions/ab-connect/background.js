@@ -84,7 +84,8 @@ import {
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
 import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION } from './user-tab-organizer.js';
-import { createTabGrants, LENT_TAB_CLOSE, TAKEN_BACK } from './tab-grant.js';
+import { createTabGrants, LENT_TAB_CLOSE } from './tab-grant.js';
+import { bindingsFrom, openTabPanel, panelTabKey, PANEL_TAB_PREFIX, tabForConversation } from './panel-tabs.js';
 import {
   followReplacement,
   forgetReplacement,
@@ -170,9 +171,44 @@ const turnNotifications = new TurnNotifications({
     } catch {}
   },
 });
+// One panel per tab: which conversation each tab's panel shows, mirrored
+// from storage.session so a notification click can open the right panel
+// while its gesture lasts, and the active tab of each window.
+const panelTabs = new Map();
+const activeTabs = new Map();
+void chrome.storage.session.get(null).then(all => { for (const [tabId, id] of bindingsFrom(all)) if (!panelTabs.has(tabId)) panelTabs.set(tabId, id); }).catch(() => {});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'session') return;
+  for (const [key, change] of Object.entries(changes)) {
+    if (!key.startsWith(PANEL_TAB_PREFIX)) continue;
+    const tabId = Number(key.slice(PANEL_TAB_PREFIX.length));
+    if (typeof change.newValue === 'string' && change.newValue) panelTabs.set(tabId, change.newValue); else panelTabs.delete(tabId);
+  }
+});
+void chrome.tabs.query({ active: true }).then(list => { for (const tab of list) if (!activeTabs.has(tab.windowId)) activeTabs.set(tab.windowId, tab.id); }).catch(() => {});
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => activeTabs.set(windowId, tabId));
+// The toolbar button opens the panel of the tab it was clicked on.
+chrome.action.onClicked.addListener(tab => {
+  if (!Number.isInteger(tab?.id)) return;
+  void openTabPanel(tab.id, { sidePanel: chrome.sidePanel }).catch(error => console.warn('Open the side panel:', String(error?.message || error)));
+});
+// A closed tab's panel goes with it; its conversation stays in the history.
+function forgetTabPanel(tabId) {
+  panelTabs.delete(tabId);
+  void chrome.storage.session.remove(panelTabKey(tabId)).catch(() => {});
+}
+const notificationPanels = {
+  tabFor: conversationId => tabForConversation(panelTabs, conversationId),
+  activeTab: windowId => activeTabs.get(windowId) ?? null,
+  bind: (tabId, conversationId) => { panelTabs.set(tabId, conversationId); void chrome.storage.session.set({ [panelTabKey(tabId)]: conversationId }).catch(() => {}); },
+  open: tabId => openTabPanel(tabId, { sidePanel: chrome.sidePanel }),
+  show: tabId => { void chrome.tabs.update(tabId, { active: true }).catch(() => {}); },
+};
 async function panelShowing(conversationId) {
   for (const presence of panelPresence.values()) {
     if (presence.conversationId !== conversationId || !presence.visible) continue;
+    // A tab's panel is in view only while its tab is the active one.
+    if (Number.isInteger(presence.tabId) && activeTabs.get(presence.windowId) !== presence.tabId) continue;
     try { if ((await chrome.windows.get(presence.windowId)).focused) return true; } catch {}
   }
   return false;
@@ -197,7 +233,7 @@ chrome.runtime.onConnect.addListener(panelPort => {
   panelPort.onDisconnect.addListener(() => panelPresence.delete(panelPort));
   panelPort.onMessage.addListener(message => {
     if (message?.type !== 'presence' || !Number.isInteger(message.windowId)) return;
-    const presence = { windowId: message.windowId, conversationId: typeof message.conversationId === 'string' ? message.conversationId : '', visible: message.visible === true };
+    const presence = { windowId: message.windowId, tabId: Number.isInteger(message.tabId) ? message.tabId : null, conversationId: typeof message.conversationId === 'string' ? message.conversationId : '', visible: message.visible === true };
     panelPresence.set(panelPort, presence);
     // A panel opened from a notification may start before the stored selection lands.
     if (pendingPanelSelect && pendingPanelSelect.windowId === presence.windowId && Date.now() - pendingPanelSelect.at < 30000) {
@@ -220,7 +256,7 @@ try {
   });
 } catch {}
 chrome.notifications.onClicked.addListener(id => {
-  openFromNotification(id, { windowId: lastFocusedWindowId, chrome, panels: panelPresence, pending: selection => { pendingPanelSelect = selection; } });
+  openFromNotification(id, { windowId: lastFocusedWindowId, chrome, panels: panelPresence, pending: selection => { pendingPanelSelect = selection; }, tabs: agentPanelEntry.ready ? notificationPanels : null });
 });
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
 
@@ -743,7 +779,7 @@ async function lendTab({ tabId, conversationId, conversationTitle }) {
   await loadOwnedTabs();
   await loadAgentPopups();
   if (ownedTabs.has(tabId) || agentPopups.has(tabId)) throw Object.assign(new Error('This tab is already the agent\'s'), { reason: 'agentTab' });
-  const { grant, replaced, wasRefused } = await tabGrants.grant(tab, { conversationId, conversationTitle });
+  const { grant, replaced, before } = await tabGrants.grant(tab, { conversationId, conversationTitle });
   showGrantIndicator(tabId);
   if (replaced) showGrantIndicator(replaced.tabId);
   publishTabGrants();
@@ -751,7 +787,7 @@ async function lendTab({ tabId, conversationId, conversationTitle }) {
   // A service that cannot hold the grant would run turns without it. Undo it
   // exactly: a tab taken back before stays refused, an earlier tab stays lent.
   if (service?.granted !== true) {
-    await tabGrants.rollback(tabId, { wasRefused, replaced });
+    await tabGrants.rollback(tabId, { before, replaced });
     showGrantIndicator(tabId);
     if (replaced) showGrantIndicator(replaced.tabId);
     publishTabGrants();
@@ -1829,9 +1865,6 @@ async function dispatchToTab(tabId, method, params, childSid, agentSession = '')
 const attachTab = createTabAttachmentQueue(attachTabOnce);
 
 async function attachTabOnce(tabId, transactionIsActive) {
-  // A tab the user took back is never attached again, by any path.
-  await tabGrants.load();
-  if (tabGrants.isRefused(tabId)) throw new Error(TAKEN_BACK);
   const existing = tabs.get(tabId);
   if (existing && existing.attached !== false) return existing;
   if (existing) return await reattachTab(tabId, existing);
@@ -2438,6 +2471,7 @@ chrome.tabs.onRemoved.addListener(
       }
       unmarkOwned(tabId);
       forgetTab(tabId);
+      forgetTabPanel(tabId);
       void tabGrants.removed(tabId).then(grant => {
         if (!grant) return;
         publishTabGrants();
