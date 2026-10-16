@@ -77,7 +77,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   // agent's CLI is started on its own; others wait for an explicit check.
   let preferredAgent = '';
   let modelEpoch = 0, newFullAccess = true, page = null, pageDetached = false, scope = 'site';
-  let sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
+  let pendingBinding = null, sending = false, configuration = null, configEpoch = 0, preview = null, applied = null;
   const rendered = new Map(), requestNodes = new Map(), queuedNodes = new Map();
   // Nodes added after the id list; looked up apart so the list stays stable.
   const working = document.getElementById('working'), suggestions = document.getElementById('suggestions');
@@ -314,6 +314,11 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (openInTab) openInTab.hidden = tabMode || !runtime?.getURL || !tabs?.create;
     renderGrant();
   }
+  function applyPendingBinding() {
+    if (pendingBinding === null) return;
+    const next = pendingBinding; pendingBinding = null;
+    if (next !== selected) select(next);
+  }
   function grantFor(id) { return id ? grants.find(grant => grant.conversationId === id) || null : null; }
   // The bar says which tab the agent may use and what page it shows now; the
   // button offers the page this view means by "this page".
@@ -350,10 +355,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     const reply = await runtime.sendMessage({ type: 'ab-tab-grant', action: 'list' });
     if (reply?.success && Array.isArray(reply.grants)) { grants = reply.grants; renderGrant(); }
   }
-  async function grantPage() {
-    if (!selected || !page || grantBusy) return;
-    if (tabBound && page.tabId === panelTab) { await setWorkIn(selected, 'tab'); autoNote = ''; }
-    const id = selected, tabId = page.tabId;
+  // The conversation and tab are fixed by the caller: an awaited step before
+  // this (an automatic lend revoking the tab's previous holder) may have
+  // changed the selection, and the tab must never go to that other one.
+  async function grantPage(id = selected, tabId = page?.tabId) {
+    if (!id || !Number.isInteger(tabId) || grantBusy) return;
+    if (tabBound && tabId === panelTab) { await setWorkIn(id, 'tab'); if (id === selected) autoNote = ''; }
     grantBusy = true; renderGrant();
     try {
       const reply = await grantMessage({ action: 'grant', tabId, conversationId: id, conversationTitle: titleOf(conversations.find(c => c.id === id), 'panel_conversation_untitled') });
@@ -376,7 +383,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   async function takeBack() {
     const id = selected;
     await revokeGrant(id);
-    if (tabBound && id) { await setWorkIn(id, 'window'); if (id === selected) autoNote = t('panel_work_in_window_taken_back'); renderGrant(); }
+    // Remembered in every view: taking the tab back in a panel tab must stop
+    // the side panel from lending it again on its own.
+    if (id) { await setWorkIn(id, 'window'); if (id === selected && tabBound) autoNote = t('panel_work_in_window_taken_back'); renderGrant(); }
   }
   // Lend this panel's tab to its conversation when it works in this tab.
   async function maybeAutoLend() {
@@ -399,7 +408,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       // This tab may still be lent to the conversation it showed before.
       const holder = grants.find(g => g.tabId === panelTab && g.conversationId !== id);
       if (holder) { await grantMessage({ action: 'revoke', tabId: panelTab }); grants = grants.filter(g => g !== holder); }
-      await grantPage();
+      // Another conversation was selected meanwhile: it lends nothing by itself.
+      if (id !== selected || workInFor(id) !== 'tab') return;
+      await grantPage(id, panelTab);
       if (id === selected) autoNote = '';
     } catch (failure) {
       if (id === selected) autoNote = t('panel_work_in_window_failed', failure?.message || t('panel_no_answer'));
@@ -1154,7 +1165,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       }
       if (pendingMessages.get(id) === pending) { pendingMessages.delete(id); await savePending(id); }
       await poll();
-    } finally { sending = false; controls(); }
+    } finally { sending = false; controls(); applyPendingBinding(); }
   }
   nodes.retryPending.addEventListener('click', () => void recoverPending(true).catch(error));
   nodes.clearPending.addEventListener('click', () => void recoverPending(false).catch(error));
@@ -1214,7 +1225,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       if (selected === id) { conversation = result.conversation; if (nodes.message.value === text) nodes.message.value = ''; }
       imageDrafts.delete(id); if (images.length) imageDrafts.delete(''); renderImageDrafts();
       pendingMessages.delete(id); drafts.delete(id); await savePending(id); await list(); await poll();
-    } finally { sending = false; controls(); }
+    } finally { sending = false; controls(); applyPendingBinding(); }
   }
   // A conversation keeps the model it was created with, so a model the account
   // cannot use is fixed by starting a new conversation on the CLI default.
@@ -1698,9 +1709,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   });
   // Another tab took this tab's conversation, or a notification bound one here.
   storage?.onChanged?.addListener?.((changes, area) => {
+    // Another view changed where a conversation works (a take-back in a panel tab).
+    if (changes.ab_panel_work_in && area !== 'session') { workInMap = changes.ab_panel_work_in.newValue || {}; renderGrant(); }
     if (!tabBound || area !== 'session') return;
     const change = changes[panelTabKey(panelTab)];
-    if (!change || (change.newValue || '') === selected || sending) return;
+    if (!change || (change.newValue || '') === selected) return;
+    // Applied once the send ends, so two panels never keep one conversation.
+    if (sending) { pendingBinding = change.newValue || ''; return; }
     select(change.newValue || '');
   });
   controls(); closeConversationMenu();
