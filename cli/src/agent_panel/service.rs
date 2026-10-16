@@ -4042,13 +4042,22 @@ mod schedule_tests {
             .join(".claude/projects/-project")
             .join(format!("{EXTERNAL_SESSION}.jsonl"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        // Claude stamps every record; the session is as old as its records.
+        let at = std::time::SystemTime::now() - age;
+        let stamp = chrono::DateTime::<chrono::Utc>::from(at).to_rfc3339();
+        let text: String = lines
+            .into_iter()
+            .map(|mut l| {
+                l["timestamp"] = stamp.clone().into();
+                format!("{l}\n")
+            })
+            .collect();
         std::fs::write(&path, text).unwrap();
         File::options()
             .write(true)
             .open(&path)
             .unwrap()
-            .set_modified(std::time::SystemTime::now() - age)
+            .set_modified(at)
             .unwrap();
     }
 
