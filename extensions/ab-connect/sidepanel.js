@@ -1556,7 +1556,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       head.append(element('strong', skill.name), element('span', skill.source, 'badge'));
       if (!skill.enabled) head.append(element('span', t('panel_skill_disabled'), 'badge'));
       row.append(head);
-      if (skill.description) row.append(element('div', skill.description, 'entry-description'));
+      if (skill.description) { const text = element('div', skill.description, 'entry-description'); text.title = skill.description; row.append(text); }
       const actions = element('div', undefined, 'entry-actions');
       actions.append(button(t('panel_skill_use'), async () => { skillChoice = skill; nodes.message.value = `/${skill.name} `; view(false); renderSkillPicker(); }, 'pill'));
       if (skill.editable) actions.append(button(t('panel_edit'), async () => {
