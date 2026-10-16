@@ -53,16 +53,18 @@
       <p>点击扩展图标打开侧栏，<strong>Settings</strong> 打开连接设置。macOS、Linux 和 Windows 可选择 Codex、Claude Code、OpenCode 或 Pi，沿用已安装 CLI 的登录。主机会报告支持哪些 agent，旧主机可能需要升级。Windows 同样支持技能、图片、会话参数、定时任务及配置应用和恢复。停止、删除或更改参数会确认整个 agent 进程树退出；私有数据通过 Windows ACL 限制为当前用户和 SYSTEM 访问，不需要管理员权限。Codex 走 app-server，Claude Code 走 stream-json，OpenCode 走 ACP，Pi 走 JSONL RPC。</p>
       <h2 id="pages-models">页面与模型</h2>
       <p>每个会话使用独立浏览器 session。输入框上方的页面标签会随下一条消息附带当前网页，点 <strong>×</strong> 可去掉。模型下拉来自所选 CLI 的目录，<strong>Default model</strong> 沿用配置的模型，<strong>＋</strong> 菜单中的 <strong>Custom model ID</strong> 可覆盖选择，<strong>Reload models from CLI</strong> 重新读取目录。列出模型或报告已登录不代表实际调用可用。</p>
-      <h2 id="tab-modes">在标签页中打开，以及让 agent 使用你的标签页</h2>
-      <p>侧栏顶部的箭头按钮 <strong>在标签页中打开</strong> 会把当前对话作为整页标签页打开，内容居中加宽。侧栏和标签页可以同时显示同一个对话：两边都从本机服务实时更新，消息只会从你输入的那一边发出。打开标签页不会改变侧栏显示的对话。标签页旁边没有“当前页面”，所以它的页面标签指你在该窗口最后使用的网页标签页，也可以在标签里的列表中另选。Chrome 自身的页面不会列出。</p>
-      <p>默认情况下 agent 在它自己的后台浏览器窗口里工作。如果要让它在你自己的某个标签页里工作，选中对话后点输入框上方的 <strong>让 agent 使用这个标签页</strong>。授权只针对这个标签页和这个对话：</p>
+      <h2 id="per-tab">每个标签页一个侧栏</h2>
+      <p>点工具栏按钮会为当前标签页打开侧栏。每个标签页有自己的侧栏和对话：切到别的标签页时，侧栏显示那个标签页的对话，没在那里打开过就不显示；切回来原来的对话还在。在新标签页上打开侧栏会开始新对话。选择另一个标签页正在显示的对话，会把它移到当前标签页。关闭标签页后，它的对话仍保留在历史里。</p>
+      <h2 id="tab-modes">agent 在哪里工作</h2>
+      <p>标签页侧栏里的对话默认就在这个标签页里工作：第一条消息会把标签页借给这个对话，agent 用你的登录状态读取并操作你的页面，而不是另开自己的窗口。输入框上方的 <strong>agent 工作位置</strong> 可以把单个对话切换为 <strong>这个标签页</strong> 或 <strong>它自己的窗口</strong>；默认值在 <strong>设置 → 侧栏 agent</strong>。借出的标签页：</p>
       <ul>
-        <li>agent 用你的登录状态操作这个标签页：没有指定标签页的命令都在这里执行，每条消息也会告诉 agent 它可以用哪个标签页。它不会关闭或移动这个标签页。已经借出的标签页不能再借给另一个对话。</li>
-        <li>借出期间，该标签页的工具栏图标显示 <strong>AI</strong> 徽标（悬停可看到对应的对话），侧栏顶部有一条提示写明标签页和所在网站。agent 连接时 Chrome 还会显示调试提示条。页面本身不会被加入任何东西。</li>
-        <li>点 <strong>收回标签页</strong>、<strong>停止</strong>、删除对话或关闭标签页都会立即结束授权。调试器会脱离这个标签页，之后 agent 对它的任何命令都会被拒绝，并提示你已收回，直到你重新借出或关闭它。给同一个对话借出另一个标签页时，前一个会被收回。</li>
-        <li>标签页跳转到别的网站后授权仍然保留，提示条会显示新的网站。Chrome 自身页面和 Chrome 应用商店不能借出；借出的标签页跳到这类页面时，提示条会说明。</li>
+        <li>只由这个对话操作：没有指定标签页的命令都在这里执行，每条消息也会告诉 agent 它可以用哪个标签页。它不会关闭或移动这个标签页，其他对话也不能使用它。</li>
+        <li>工具栏图标显示 <strong>AI</strong> 徽标（悬停可看到对应的对话），侧栏顶部有一条提示写明标签页和所在网站。agent 连接时 Chrome 还会显示调试提示条。页面本身不会被加入任何东西。</li>
+        <li>点 <strong>收回标签页</strong>、删除对话或关闭标签页即可收回。调试器会脱离这个标签页，这个对话之后的命令会被拒绝，并提示你已收回。收回后对话会切换为 <strong>它自己的窗口</strong>；再选 <strong>这个标签页</strong> 即可重新借出。<strong>停止</strong> 只停止当前回复。你在终端里运行的 chrome-use 命令不受影响。</li>
+        <li>跳转到别的网站后仍保持借出，提示条显示新的网站。Chrome 自身页面和 Chrome 应用商店不能借出：在这类页面上 agent 会在它自己的窗口里工作，侧栏会说明。</li>
       </ul>
-      <p>授权在 Chrome 重启后失效。需要 CLI 1.5.221 和扩展 0.5.62 或更高版本。</p>
+      <p>侧栏顶部的箭头按钮 <strong>在标签页中打开</strong> 会把当前对话作为整页标签页打开，内容居中加宽。侧栏和整页标签页可以同时显示同一个对话：两边都实时更新，消息只会从你输入的那一边发出。整页标签页旁边没有页面，所以它的页面标签指你在该窗口最后使用的网页标签页（可在列表里另选），也不会自动借出：点 <strong>让 agent 使用这个标签页</strong> 才会借出标签里的页面。</p>
+      <p>借出在 Chrome 重启后失效。每个标签页一个侧栏和在侧栏所属标签页里工作需要 CLI 1.5.222 和扩展 0.5.63 或更高版本。</p>
       <h2 id="permissions">工具权限与审批</h2>
       <p>权限开关只作用于当前会话。新会话默认开启 <strong>Full access</strong>，除非你保存过其他选择。</p>
       <ul>
@@ -90,7 +92,7 @@
       <p>工具和审批记录中的已识别敏感字段与凭据格式会在写入本机记录前遮盖，已知敏感值也会从后续显示文本中移除。这不覆盖你自己的消息原文、图片像素、文件内容或 CLI 自己的历史；后来才识别的敏感值不能抹掉此前文本。结果文件随会话保存，删除会话时一并清理。详见<a href="/privacy.html">隐私说明</a>。</p>
       <p>历史保存在本机。所选 CLI 可能把任务和网页内容发送给它配置的模型服务，该服务的隐私政策适用。侧栏没有新增网页 content script，打开时仍可能改变页面视口。<strong>Agents &amp; models</strong> 可发现程序和预览配置改动，写入后读回，恢复时保留后来的修改。</p>
       <h2 id="skills-images">技能和图片</h2>
-      <p>输入 <code>/</code> 选择技能。在 <strong>Agents &amp; models → Skill library</strong> 编辑、启停库内条目，或从本机目录、ZIP/.skill 压缩包、HTTPS Git 仓库导入。用户和 CLI 原有技能目录在这里只读。发送前保存所选技能及文件的副本，队列编辑和明确重试保留同一份内容。面板 agent 可通过 <code>chrome_use_skills</code> 列出、读取技能或保存库内说明。</p>
+      <p>输入 <code>/</code> 选择技能，可以在消息开头，也可以在消息中任意空格之后；用 ↑↓ 移动，Tab 或回车选中，Esc 关闭。列表包括已启用的 Claude Code 插件里的技能。在 <strong>Agents &amp; models → Skill library</strong> 编辑、启停库内条目，或从本机目录、ZIP/.skill 压缩包、HTTPS Git 仓库导入。用户和 CLI 原有技能目录在这里只读。发送前保存所选技能及文件的副本，队列编辑和明确重试保留同一份内容。面板 agent 可通过 <code>chrome_use_skills</code> 列出、读取技能或保存库内说明。</p>
       <p>通过 <strong>Attach images</strong> 选择图片，也可粘贴或拖入，每条消息最多五张 PNG/JPEG/WebP/HEIC。HEIC 由本地 CLI 用系统编解码器转成 JPEG：macOS 用 <code>sips</code>，Windows 需要从 Microsoft Store 安装 HEIF 图像扩展和 HEVC 视频扩展，Linux 需要 <code>heif-convert</code> 或带 HEIF 支持的 ImageMagick。转换后的照片会按方向转正，并去掉包括 GPS 在内的 EXIF 信息。最长边缩到 2000 像素，每张不超过 512 KiB。图片随会话保存，队列编辑和重试会保留，删除会话时一起清理。ACP agent 必须声明支持图片输入。附件会交给配置的模型服务。</p>
       <h2 id="options-schedules">会话参数和定时提示</h2>
       <p><strong>Conversation options</strong> 设置允许的工具、Codex/Claude 推理强度和 Codex 服务等级。空闲时保存，下一次回复生效，不改 CLI 全局配置。Codex 无法移除可以读文件的 shell，OpenCode ACP 无法保证限制内置工具。审批开关只决定是否自动处理当前工具范围内的请求，Pi 没有逐次审批。</p>
