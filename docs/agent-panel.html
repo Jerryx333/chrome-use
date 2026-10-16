@@ -53,6 +53,16 @@
       <p>点击扩展图标打开侧栏，<strong>Settings</strong> 打开连接设置。macOS、Linux 和 Windows 可选择 Codex、Claude Code、OpenCode 或 Pi，沿用已安装 CLI 的登录。主机会报告支持哪些 agent，旧主机可能需要升级。Windows 同样支持技能、图片、会话参数、定时任务及配置应用和恢复。停止、删除或更改参数会确认整个 agent 进程树退出；私有数据通过 Windows ACL 限制为当前用户和 SYSTEM 访问，不需要管理员权限。Codex 走 app-server，Claude Code 走 stream-json，OpenCode 走 ACP，Pi 走 JSONL RPC。</p>
       <h2 id="pages-models">页面与模型</h2>
       <p>每个会话使用独立浏览器 session。输入框上方的页面标签会随下一条消息附带当前网页，点 <strong>×</strong> 可去掉。模型下拉来自所选 CLI 的目录，<strong>Default model</strong> 沿用配置的模型，<strong>＋</strong> 菜单中的 <strong>Custom model ID</strong> 可覆盖选择，<strong>Reload models from CLI</strong> 重新读取目录。列出模型或报告已登录不代表实际调用可用。</p>
+      <h2 id="tab-modes">在标签页中打开，以及让 agent 使用你的标签页</h2>
+      <p>侧栏顶部的箭头按钮 <strong>在标签页中打开</strong> 会把当前对话作为整页标签页打开，内容居中加宽。侧栏和标签页可以同时显示同一个对话：两边都从本机服务实时更新，消息只会从你输入的那一边发出。打开标签页不会改变侧栏显示的对话。标签页旁边没有“当前页面”，所以它的页面标签指你在该窗口最后使用的网页标签页，也可以在标签里的列表中另选。Chrome 自身的页面不会列出。</p>
+      <p>默认情况下 agent 在它自己的后台浏览器窗口里工作。如果要让它在你自己的某个标签页里工作，选中对话后点输入框上方的 <strong>让 agent 使用这个标签页</strong>。授权只针对这个标签页和这个对话：</p>
+      <ul>
+        <li>agent 用你的登录状态操作这个标签页：没有指定标签页的命令都在这里执行，每条消息也会告诉 agent 它可以用哪个标签页。它不会关闭或移动这个标签页。已经借出的标签页不能再借给另一个对话。</li>
+        <li>借出期间，该标签页的工具栏图标显示 <strong>AI</strong> 徽标（悬停可看到对应的对话），侧栏顶部有一条提示写明标签页和所在网站。agent 连接时 Chrome 还会显示调试提示条。页面本身不会被加入任何东西。</li>
+        <li>点 <strong>收回标签页</strong>、<strong>停止</strong>、删除对话或关闭标签页都会立即结束授权。调试器会脱离这个标签页，之后 agent 对它的任何命令都会被拒绝，并提示你已收回，直到你重新借出或关闭它。给同一个对话借出另一个标签页时，前一个会被收回。</li>
+        <li>标签页跳转到别的网站后授权仍然保留，提示条会显示新的网站。Chrome 自身页面和 Chrome 应用商店不能借出；借出的标签页跳到这类页面时，提示条会说明。</li>
+      </ul>
+      <p>授权在 Chrome 重启后失效。需要 CLI 1.5.221 和扩展 0.5.62 或更高版本。</p>
       <h2 id="permissions">工具权限与审批</h2>
       <p>权限开关只作用于当前会话。新会话默认开启 <strong>Full access</strong>，除非你保存过其他选择。</p>
       <ul>

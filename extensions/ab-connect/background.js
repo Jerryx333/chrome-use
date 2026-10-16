@@ -84,7 +84,7 @@ import {
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
 import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION } from './user-tab-organizer.js';
-import { createTabGrants, TAKEN_BACK } from './tab-grant.js';
+import { createTabGrants, LENT_TAB_CLOSE, TAKEN_BACK } from './tab-grant.js';
 import {
   followReplacement,
   forgetReplacement,
@@ -1658,6 +1658,9 @@ async function handleForwardCdpCommand(msg) {
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';
     const tabId = tid ? tabForTarget(tid) : null;
     if (!tabId) return { success: false };
+    // A tab the user lent stays theirs: the agent never closes it.
+    await tabGrants.load();
+    if (tabGrants.get(tabId)) throw new Error(LENT_TAB_CLOSE);
     try {
       await removeAgentTab(tabId, agentTabRemoval);
     } catch {

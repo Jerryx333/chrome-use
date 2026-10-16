@@ -13,6 +13,8 @@ export const GRANTS_KEY = 'ab_tab_grants';
 // Read by the agent (relay errors reach it verbatim), so it stays English.
 export const TAKEN_BACK = 'The user took this tab back from the agent in the chrome-use side panel, so it can no longer be used. Continue in your own tab, or ask the user to let you use this tab again.';
 
+export const LENT_TAB_CLOSE = 'This is the user\'s own tab, lent to the agent from the chrome-use side panel; the agent cannot close it. Leave it open.';
+
 /** Why a page cannot be lent to the agent: 'notWeb', 'webStore', or null. */
 export function grantRefusal(url) {
   let parsed;
