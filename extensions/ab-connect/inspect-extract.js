@@ -97,8 +97,8 @@
     return classes.length ? tag + classes.map(c => '.' + cssEscape(c)).join('') : tag;
   }
 
-  function unique(doc, selector) {
-    try { return doc.querySelectorAll(selector).length === 1; } catch { return false; }
+  function unique(scope, selector) {
+    try { return scope.querySelectorAll(selector).length === 1; } catch { return false; }
   }
 
   function nthOfType(el) {
@@ -109,19 +109,65 @@
     return '';
   }
 
+  // Unique within the element's own tree: the document, or the shadow root
+  // it lives in (a selector never crosses a shadow boundary).
   function buildSelector(el) {
     const doc = el.ownerDocument;
+    const scope = el.getRootNode?.() || doc;
     const parts = [];
     let current = el;
     while (current && current.nodeType === 1 && current !== doc.body && current !== doc.documentElement && parts.length < 10) {
       let part = selectorPart(current);
-      if (current.parentElement && !unique(doc, [part, ...parts].join(' > '))) part += nthOfType(current);
+      if (current.parentElement && !unique(scope, [part, ...parts].join(' > '))) part += nthOfType(current);
       parts.unshift(part);
       const selector = parts.join(' > ');
-      if (unique(doc, selector)) return clamp(selector, BUDGET.selector);
+      if (unique(scope, selector)) return clamp(selector, BUDGET.selector);
       current = current.parentElement;
     }
     return clamp(parts.join(' > ') || el.tagName.toLowerCase(), BUDGET.selector);
+  }
+
+  // Shadow hosts between the element and its document, outermost first.
+  function shadowHosts(el) {
+    const hosts = [];
+    for (let root = el.getRootNode?.(); root && root.host && hosts.length < 8; root = root.host.getRootNode?.()) hosts.unshift(buildSelector(root.host));
+    return hosts;
+  }
+
+  // Frames between the element's document and the top document, outermost
+  // first: the <iframe> selector in its parent and the frame's own address.
+  function frameChain(el) {
+    const frames = [];
+    for (let win = el.ownerDocument.defaultView; win && win !== win.top && frames.length < 4; win = win.parent) {
+      let owner = null;
+      try { owner = win.frameElement; } catch {}
+      if (!owner) break;
+      frames.unshift({ selector: buildSelector(owner), url: sanitizeUrl(win.location.href), hosts: shadowHosts(owner) });
+    }
+    return frames;
+  }
+
+  // A cross-origin <iframe> picked as a whole: what it shows comes from
+  // another site the picker cannot read.
+  function foreignFrame(el) {
+    if (el.tagName !== 'IFRAME' && el.tagName !== 'FRAME') return null;
+    try { if (el.contentDocument) return null; } catch {}
+    return { url: sanitizeUrl(el.getAttribute('src') || '', el.ownerDocument.baseURI) };
+  }
+
+  // Bounds in the top window's viewport: frames add their offsets.
+  function topRect(el) {
+    const r = el.getBoundingClientRect();
+    let x = r.left, y = r.top;
+    for (let win = el.ownerDocument.defaultView; win && win !== win.top; win = win.parent) {
+      let owner = null;
+      try { owner = win.frameElement; } catch {}
+      if (!owner) break;
+      const o = owner.getBoundingClientRect();
+      x += o.left + owner.clientLeft;
+      y += o.top + owner.clientTop;
+    }
+    return { left: x, top: y, width: r.width, height: r.height, right: x + r.width, bottom: y + r.height };
   }
 
   function readablePath(el) {
@@ -230,7 +276,7 @@
   }
 
   function describe(el) {
-    const rect = el.getBoundingClientRect();
+    const rect = topRect(el);
     const name = accessibleName(el);
     const text = textOf(el);
     const tag = el.tagName.toLowerCase();
@@ -241,13 +287,16 @@
       selector: buildSelector(el),
       path: readablePath(el),
       classes: containsSecret(el.getAttribute('class')) ? '[redacted]' : clamp(el.getAttribute('class') || '', BUDGET.classes),
-      rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
+      rect: { x: Math.round(rect.left), y: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
       text: containsSecret(text) ? '[redacted]' : text,
       selectedText: selectedTextIn(el),
       nearby: nearbyText(el),
       styles: computedStyles(el),
       html: htmlSnippet(el),
       source: sourceMark(el),
+      shadowHosts: shadowHosts(el),
+      frames: frameChain(el),
+      foreignFrame: foreignFrame(el),
     };
   }
 
@@ -261,6 +310,6 @@
 
   globalThis.__chromeUseInspectExtract = Object.freeze({
     BUDGET, clamp, inlineText, containsSecret, sanitizeUrl, parseInspPath, looksHashy,
-    buildSelector, readablePath, describe, sourceMark, htmlSnippet, layout,
+    buildSelector, readablePath, describe, sourceMark, htmlSnippet, layout, topRect, shadowHosts, frameChain,
   });
 })();

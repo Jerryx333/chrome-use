@@ -55,6 +55,19 @@ export function annotationTitle(annotation) {
   return plain(`${component}${annotation.element.label}`, 120);
 }
 
+// Where a selector applies when it is not the top document: frames, then
+// shadow roots, outermost first. Empty for an element of the page itself.
+export function withinText(element) {
+  const parts = [];
+  for (const frame of Array.isArray(element?.frames) ? element.frames.slice(0, 4) : []) {
+    for (const host of Array.isArray(frame?.hosts) ? frame.hosts.slice(0, 8) : []) parts.push(`shadow root of ${inlineCode(host)}`);
+    parts.push(`iframe ${inlineCode(frame?.selector)}${frame?.url ? ` (${inlineCode(frame.url)})` : ''}`);
+  }
+  for (const host of Array.isArray(element?.shadowHosts) ? element.shadowHosts.slice(0, 8) : []) parts.push(`shadow root of ${inlineCode(host)}`);
+  if (element?.foreignFrame) parts.push(`this is a cross-origin iframe${element.foreignFrame.url ? ` showing ${inlineCode(element.foreignFrame.url)}` : ''}; its content was not read`);
+  return parts.join(' › ');
+}
+
 // One element. Everything except the user's note comes from the page.
 export function formatAnnotation(annotation, number) {
   const { element, probe } = annotation;
@@ -64,6 +77,8 @@ export function formatAnnotation(annotation, number) {
   lines.push(`**Source:** ${source ? inlineCode(sourceLabel(source)) + ` (${source.kind === 'insp' ? 'code-inspector mark' : source.kind + ' dev metadata'})` : 'no source location; search by selector and text'}`);
   if (probe?.component) lines.push(`**Component:** ${inlineCode([probe.component, ...(probe.ancestors || [])].join(' < '))}`);
   lines.push(`**Selector:** ${inlineCode(element.selector)}`);
+  const within = withinText(element);
+  if (within) lines.push(`**Inside:** ${within}`);
   if (element.path) lines.push(`**Location:** ${inlineCode(element.path)}`);
   lines.push(`**Bounds:** x=${element.rect.x}, y=${element.rect.y}, ${element.rect.width}x${element.rect.height}`);
   if (element.classes) lines.push(`**Classes:** ${inlineCode(element.classes)}`);
