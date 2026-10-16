@@ -2217,11 +2217,22 @@
   "panel_resume_open": {
     "message": "Open in panel"
   },
+  "panel_resume_other": {
+    "message": "Other"
+  },
   "panel_resume_ownership": {
     "message": "After you continue a session here, don't keep using it in the terminal at the same time."
   },
   "panel_resume_project_refused": {
     "message": "The session's folder $FOLDER$ is a system or home folder, so this conversation works in its private folder instead.",
+    "placeholders": {
+      "folder": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_project_toggle": {
+    "message": "Show or hide the sessions in $FOLDER$",
     "placeholders": {
       "folder": {
         "content": "$1"
@@ -2236,6 +2247,20 @@
   },
   "panel_resume_search": {
     "message": "Search sessions"
+  },
+  "panel_resume_show_less": {
+    "message": "Show less"
+  },
+  "panel_resume_show_more": {
+    "message": "Show $COUNT$ more",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_resume_site_project": {
+    "message": "This site"
   },
   "panel_resume_title": {
     "message": "Resume a session"

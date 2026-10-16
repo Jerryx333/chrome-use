@@ -1,7 +1,7 @@
 import './test-i18n.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseResumeCommand, projectName, importedView, createResumePicker, RESUME_TEXT } from './resume-picker.js';
+import { parseResumeCommand, projectName, importedView, createResumePicker, groupSessions, PROJECT_PREVIEW, RESUME_TEXT } from './resume-picker.js';
 
 class Node {
   constructor(tag = 'div') { this.tag = tag; this.children = []; this.listeners = {}; this.textContent = ''; this.hidden = false; this.value = ''; this.attributes = {}; }
@@ -52,8 +52,8 @@ test('the picker lists, searches and opens an already continued session without 
   });
   await picker.open('app');
   assert.equal(picker.isOpen, true);
-  assert.deepEqual(calls[0], ['conversationSessionList', { agentId: 'codex', limit: 50, query: 'app', executable: '/opt/codex' }]);
-  assert.match(text(picker.container), /Untitled session Codex · app/);
+  assert.deepEqual(calls[0], ['conversationSessionList', { agentId: 'codex', limit: 100, query: 'app', executable: '/opt/codex' }]);
+  assert.match(text(picker.container), /▾ app 1 Untitled session Open in panel/);
   assert.match(text(picker.container), /Open in panel/);
   // Typing searches after a pause.
   const search = all(picker.container, n => n.tag === 'input')[0];
@@ -67,4 +67,91 @@ test('the picker lists, searches and opens an already continued session without 
   // An agent whose sessions cannot be continued says so.
   await picker.open('', 'pi');
   assert.match(text(picker.container), /Pi sessions can't be continued here/);
+});
+
+test('sessions group by folder, the latest project first and folderless ones last', () => {
+  const rows = [
+    { sessionId: 'a1', cwd: '/w/app/', lastActive: 50 },
+    { sessionId: 'n1', cwd: null, lastActive: 90 },
+    { sessionId: 'b1', cwd: '/w/blog', lastActive: 80 },
+    { sessionId: 'a2', cwd: '/w/app', lastActive: 70 },
+  ];
+  const ids = groups => groups.map(g => [g.key, g.sessions.map(s => s.sessionId)]);
+  assert.deepEqual(ids(groupSessions(rows)), [['/w/blog', ['b1']], ['/w/app', ['a1', 'a2']], ['', ['n1']]]);
+  // The site's project leads.
+  assert.deepEqual(ids(groupSessions(rows, '/w/app/')).map(([key]) => key), ['/w/app', '/w/blog', '']);
+  assert.deepEqual(ids(groupSessions(rows, '/w/none')).map(([key]) => key), ['/w/blog', '/w/app', '']);
+});
+
+test('the picker shows a few sessions per project, folds projects and moves with the arrow keys', async () => {
+  const sessions = [
+    ...Array.from({ length: 5 }, (_, i) => ({ sessionId: `a${i}`, agentId: 'codex', title: `app ${i}`, cwd: '/w/app', lastActive: 100 - i, running: false, conversationId: null })),
+    { sessionId: 'b0', agentId: 'codex', title: 'blog 0', cwd: '/w/blog', lastActive: 200, running: false, conversationId: null },
+    { sessionId: 'n0', agentId: 'codex', title: 'loose', cwd: null, lastActive: 300, running: false, conversationId: null },
+  ];
+  const calls = [];
+  const picker = createResumePicker({
+    document,
+    api: async (operation, params) => {
+      calls.push([operation, params]);
+      if (operation === 'conversationResume') return { conversation: { id: 'c-new' } };
+      const query = (params.query || '').toLowerCase();
+      return { agentId: params.agentId, supported: true, sessions: sessions.filter(s => !query || `${s.title} ${s.cwd}`.toLowerCase().includes(query)) };
+    },
+    agents: () => [{ id: 'codex', name: 'Codex' }],
+    preferredAgent: () => 'codex',
+    preferredProject: () => '/w/app',
+    onResumed: async () => {},
+    onError: error => { throw error; },
+    schedule: callback => { callback(); return 1; },
+    cancel: () => {},
+  });
+  await picker.open();
+  const items = () => all(picker.container, n => n.className?.split?.(' ').includes('resume-item'));
+  const headers = () => all(picker.container, n => n.className === 'resume-project');
+  const more = () => all(picker.container, n => n.className?.includes?.('resume-more'));
+  // The site's project first, then the latest; folderless last.
+  assert.deepEqual(headers().map(h => text(h)), ['▾ app This site 5', '▾ blog 1', `▾ ${RESUME_TEXT.other} 1`]);
+  assert.equal(headers()[0].title, '/w/app');
+  assert.deepEqual(items().map(i => text(i.children[0])), ['app 0', 'app 1', 'app 2', 'blog 0', 'loose']);
+  assert.equal(PROJECT_PREVIEW, 3);
+  assert.equal(text(more()[0]), 'Show 2 more');
+  more()[0].fire('click'); await settle();
+  assert.equal(items().length, 7);
+  assert.equal(text(more()[0]), 'Show less');
+  // Folding a project hides its sessions, and it stays folded.
+  headers()[0].fire('click');
+  assert.equal(headers()[0].attributes['aria-expanded'], 'false');
+  assert.deepEqual(items().map(i => text(i.children[0])), ['blog 0', 'loose']);
+  // Arrows walk the sessions on screen; Enter continues the highlighted one.
+  const search = all(picker.container, n => n.tag === 'input')[0];
+  search.fire('keydown', { key: 'ArrowDown' });
+  search.fire('keydown', { key: 'ArrowDown' });
+  assert.deepEqual(items().map(i => i.attributes['aria-selected']), ['false', 'true']);
+  search.fire('keydown', { key: 'ArrowDown' });
+  assert.equal(items()[0].attributes['aria-selected'], 'true', 'wraps around');
+  search.fire('keydown', { key: 'ArrowUp' });
+  search.fire('keydown', { key: 'Enter' }); await settle();
+  assert.deepEqual(calls.at(-1), ['conversationResume', { agentId: 'codex', sessionId: 'n0' }]);
+  assert.equal(picker.isOpen, false);
+  // A search shows every match, folded or not, still by project.
+  await picker.open('app');
+  assert.deepEqual(headers().map(h => text(h)), ['▾ app This site 5']);
+  assert.equal(items().length, 5);
+  assert.equal(more().length, 0);
+});
+
+test('projects with the same folder name show their parents', async () => {
+  const picker = createResumePicker({
+    document,
+    api: async (operation, params) => ({ agentId: params.agentId, supported: true, sessions: [
+      { sessionId: 'x', agentId: 'claude', title: 'x', cwd: '/runs/r1/.protocol', lastActive: 2, running: true, conversationId: null },
+      { sessionId: 'y', agentId: 'claude', title: 'y', cwd: '/runs/r2/.protocol', lastActive: 1, running: false, conversationId: null },
+    ] }),
+    agents: () => [{ id: 'claude', name: 'Claude Code' }], preferredAgent: () => 'claude',
+    onResumed: async () => {}, onError: error => { throw error; },
+  });
+  await picker.open();
+  assert.deepEqual(all(picker.container, n => n.className === 'resume-project').map(h => text(h)), ['▾ .protocol · runs/r1 1', '▾ .protocol · runs/r2 1']);
+  assert.match(text(picker.container), /x Active elsewhere/);
 });
