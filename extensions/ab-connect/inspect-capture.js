@@ -75,5 +75,23 @@ async function blobToDataUrl(blob) {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return 'data:image/png;base64,' + btoa(binary);
+  return `data:${blob.type || 'image/png'};base64,` + btoa(binary);
+}
+
+// Screenshots wait in session storage until sent: large ones are scaled
+// down and stored as JPEG on a white background.
+export async function shrinkForStorage(dataUrl, { over = 400 * 1024, maxSide = 1200 } = {}) {
+  if (typeof dataUrl !== 'string' || dataUrl.length <= over) return dataUrl;
+  const bitmap = await createImageBitmap(await (await fetch(dataUrl)).blob());
+  try {
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    const canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return blobToDataUrl(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }));
+  } finally {
+    bitmap.close?.();
+  }
 }

@@ -8,6 +8,7 @@ import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } fro
 import { createProjectChoice, folderLabel } from './project-picker.js';
 import { grantRefusal, originOf } from './tab-grant.js';
 import { panelTabKey, panelTabFrom } from './panel-tabs.js';
+import { inspectChipsKey, inspectPickKey, chipTitle, composeMessage, removeChip, withinLabel, splitElementContext, sourceShort } from './inspect-chips.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -64,8 +65,8 @@ function pageName(target) { const host = hostOf(target?.url); let path = ''; try
 function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
-export function createPanel({ document, runtime, storage, tabs, windows, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
-  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
+export function createPanel({ document, runtime, storage, tabs, windows, permissions, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
+  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'inspectChips', 'pickElement', 'pickHint', 'pickCancel', 'chipCard', 'chipLive', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -90,6 +91,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   const tabBound = !tabMode && Number.isInteger(panelTab);
   const openInTab = document.getElementById('openInTab'), pagePicker = document.getElementById('pagePicker'), pageLabel = document.getElementById('pageLabel');
   let ownTabId = null, pickedTabId = null;
+  // Inspect & Ask → chat: elements picked on this tab wait here as chips
+  // (written by the background under this tab's key) until the next send.
+  const chipKey = tabBound ? inspectChipsKey(panelTab) : null;
+  let chipRecord = { items: [], question: '' };
+  // The Pick button's picker on this tab is running (set by the background
+  // under its own key; shown at once on click, before it confirms).
+  let picking = false, shownChipIds = null;
   // "Let the agent use this tab": grants live in the background (per tab,
   // per conversation); every view of a conversation shows the same ones.
   const grantBar = document.getElementById('grantBar'), grantText = document.getElementById('grantText'), grantNote = document.getElementById('grantNote'), grantRevoke = document.getElementById('grantRevoke'), grantTab = document.getElementById('grantTab');
@@ -105,8 +113,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   // each, so a send waits for the lend a poll started.
   const autoTried = new Map();
   function workInFor(id) { return id ? workInMap[id] || workInDefault : newWorkIn || workInDefault; }
+  // The empty state says where the agent will work: this tab (the default
+  // since 0.5.63) or, when set so or outside a tab's panel, its own window.
+  function renderEmptyDetail() {
+    const detail = document.getElementById('emptyDetail');
+    if (detail) detail.textContent = t(tabBound && workInFor('') === 'tab' ? 'sidepanel_empty_detail' : 'panel_empty_detail_window');
+  }
   async function setWorkIn(id, value) {
-    if (!id) { newWorkIn = value; return; }
+    if (!id) { newWorkIn = value; renderEmptyDetail(); return; }
     workInMap[id] = value;
     // Merged with what other panels saved meanwhile.
     const stored = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
@@ -619,7 +633,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       view.text = row.text;
       // Agent replies are Markdown; user text and tool output stay literal.
       if (row.type === 'assistant') { renderMarkdown(document, view.content, row.text.trim()); view.container.hidden = !row.text.trim(); }
-      else view.content.textContent = row.text;
+      else {
+        // Picked elements ride in the message; the transcript folds them.
+        const picked = row.type === 'user' ? splitElementContext(row.text) : null;
+        view.content.textContent = picked ? picked.words : row.text;
+        if (picked) { const fold = element('details', undefined, 'inspect-context'); fold.append(element('summary', t('panel_inspect_context_summary', picked.count)), element('pre', picked.block)); view.content.append(fold); }
+      }
     }
     if (row.type === 'user') view.speaker.textContent = row.queueStatus || '';
     if (row.type === 'tool') {
@@ -1148,7 +1167,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         if (pendingMessages.get(id) === pending && status.message.known) {
           pendingMessages.delete(id);
           await savePending(id);
-          if (id === selected && epoch === selectionEpoch) { if (nodes.message.value === pending.text) { nodes.message.value = ''; imageDrafts.delete(id); renderImageDrafts(); } controls(); }
+          if (id === selected && epoch === selectionEpoch) { if (nodes.message.value === (pending.typed ?? pending.text)) { nodes.message.value = ''; imageDrafts.delete(id); renderImageDrafts(); } controls(); }
           if (drafts.get(id) === pending.text) drafts.delete(id);
         } else if (pendingMessages.get(id) === pending) {
           pending.unconfirmed = true;
@@ -1183,15 +1202,27 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   nodes.clearPending.addEventListener('click', () => void recoverPending(false).catch(error));
   async function send(direct = false) {
     if (panelSupport?.mode !== 'full') throw new Error(t('panel_error_cli_required'));
-    if (!connected || sending || convertingImages || pendingMessages.has(selected) || conversation?.phase === 'recoveryRequired' || !nodes.message.value.trim()) return;
+    const chips = [...chipRecord.items];
+    if (!connected || sending || convertingImages || pendingMessages.has(selected) || conversation?.phase === 'recoveryRequired' || (!nodes.message.value.trim() && !chips.length)) return;
     // A built-in command, looked up before skills.
     const command = parseResumeCommand(nodes.message.value);
     if (command) { await openResume(command.query); return; }
     if (direct && conversation?.directMessageId) throw new Error(t('panel_error_direct_waiting'));
-    const text = nodes.message.value, chosen = chosenSkill(text);
+    const typed = nodes.message.value, chosen = chosenSkill(typed);
     const images = [...(imageDrafts.get(selected) || [])];
     sending = true; clearError(); controls();
     try {
+      // Picked elements ride in the message: their context after the user's
+      // words, their screenshots after the user's own images.
+      const shots = [], imageNumbers = [];
+      if (panelSupport?.imageAttachments) {
+        for (const [index, chip] of chips.entries()) {
+          const match = chip.image && /^data:(image\/(?:png|jpeg));base64,(.+)$/.exec(chip.image);
+          if (!match || images.length + shots.length >= 5) continue;
+          try { shots.push(await encodeImage(new Blob([base64Bytes(match[2])], { type: match[1] }))); imageNumbers[index] = images.length + shots.length; } catch {}
+        }
+      }
+      const text = composeMessage(typed, chips, { tabId: panelTab, imageNumbers });
       if (!selected) {
         const options = { agentId: nodes.agent.value };
         const model = nodes.customModel.value.trim() || nodes.model.value;
@@ -1202,14 +1233,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         const project = panelSupport?.projectDirectory ? projectChoice.value() : '';
         if (project) options.project = project;
         const result = await api('conversationCreate', options); rememberAgent(options.agentId);
-        conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = text;
+        conversations.unshift(result.conversation); conversationChoices(); select(result.conversation.id, true); nodes.message.value = typed;
         // Where it works was chosen before it existed; its first turn already
         // runs in this tab when it works here.
         if (tabBound) { await setWorkIn(result.conversation.id, workInFor('')); newWorkIn = null; await maybeAutoLend(); }
         // After selecting it: selecting another conversation hides the question.
         if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); }
       }
-      const id = selected, pending = { id: crypto.randomUUID(), text, direct };
+      const id = selected, pending = { id: crypto.randomUUID(), text, typed, direct };
       imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();
       const params = { conversationId: id, messageId: pending.id, text };
       const attached = attachedPage(); if (attached) params.page = attached;
@@ -1218,9 +1249,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       if (panelSupport?.tabGrant) { const grant = grantFor(id); params.tabGrant = grant ? { tabId: grant.tabId, url: grant.url.slice(0, 8192), title: (grant.title || grant.url).slice(0, 1024) } : null; }
       // Recording consent is per message; the host refuses to record without it.
       if (panelSupport?.recording && nodes.recordTask.checked) params.record = true;
-      if (images.length) {
+      if (images.length || shots.length) {
         params.attachments = [];
-        for (const image of images) {
+        for (const image of [...images, ...shots]) {
           const uploaded = await api('conversationAttachmentPut', { conversationId: id, data: image.data });
           params.attachments.push(uploaded.attachment);
         }
@@ -1229,13 +1260,14 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
         const snapshot = await api('conversationSkillSelect', { conversationId: id, skillId: chosen.id });
         params.skillId = snapshot.skill.id;
       }
-      pending.params = { ...params }; delete pending.params.conversationId; delete pending.params.messageId; delete pending.params.text;
+      pending.params = { ...params }; delete pending.params.conversationId; delete pending.params.messageId; delete pending.params.text; delete pending.params.typed;
       pendingMessages.set(id, pending); controls();
       try { await savePending(id); } catch (failure) { pendingMessages.delete(id); throw failure; }
       const result = await api(direct ? 'conversationSendDirect' : 'conversationSend', params);
       pageDetached = false; renderPage(); nodes.recordTask.checked = false;
-      if (selected === id) { conversation = result.conversation; if (nodes.message.value === text) nodes.message.value = ''; }
+      if (selected === id) { conversation = result.conversation; if (nodes.message.value === typed) nodes.message.value = ''; }
       imageDrafts.delete(id); if (images.length) imageDrafts.delete(''); renderImageDrafts();
+      if (chips.length) await dropChips(chips.map(chip => chip.id));
       pendingMessages.delete(id); drafts.delete(id); await savePending(id); await list(); await poll();
     } finally { sending = false; controls(); applyPendingBinding(); }
   }
@@ -1267,7 +1299,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (!(tabBound ? tabs?.get : tabs?.query)) return;
     const tab = tabMode ? await windowPage() : tabBound ? await Promise.resolve(tabs.get?.(panelTab)).catch(() => null) : (await tabs.query({ active: true, currentWindow: true }))[0];
     const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
-    if (tabBound) { panelTabUrl = tab?.url || tab?.pendingUrl || ''; pageRead = true; }
+    if (tabBound) { panelTabUrl = tab?.url || tab?.pendingUrl || ''; pageRead = true; renderPick(); }
     if (next?.tabId !== page?.tabId) pageDetached = false;
     const moved = next?.url !== page?.url;
     page = next; renderPage(); renderConversationMenu();
@@ -1647,6 +1679,141 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     try { await api('skillImport', { agentId: skillAgent(), kind: nodes.skillImportKind.value, source: nodes.skillImportSource.value.trim() }); await loadSkills(); }
     finally { nodes.importSkill.disabled = false; }
   })().catch(error));
+  // Chips, and a question typed in the picker: the question is put into the
+  // composer once and taken out of storage, so a reload does not add it again.
+  function applyChips(record) {
+    chipRecord = { items: Array.isArray(record?.items) ? record.items : [], question: '' };
+    const question = typeof record?.question === 'string' ? record.question.trim() : '';
+    if (question) {
+      const current = nodes.message.value.trimEnd();
+      nodes.message.value = current ? `${current}\n${question}` : question;
+      // Read again before writing: a chip added meanwhile must stay.
+      void writeChips(stored => ({ ...stored, question: stored.question === record.question ? '' : stored.question })).catch(() => {});
+    }
+    renderChips();
+  }
+  async function writeChips(change) {
+    if (!chipKey) return;
+    const stored = (await Promise.resolve(storage?.session?.get?.(chipKey)).catch(() => null))?.[chipKey] || { items: [], question: '' };
+    const next = change(stored);
+    if (next.items.length || next.question) await storage?.session?.set?.({ [chipKey]: next }); else await storage?.session?.remove?.(chipKey);
+    chipRecord = { items: next.items, question: '' }; renderChips();
+  }
+  // Only the chips that were sent go: one added while sending stays.
+  function dropChips(ids) { return writeChips(record => ({ ...record, items: (record.items || []).filter(chip => !ids.includes(chip.id)) })).catch(() => {}); }
+  // Element chips sit with the page chip, one family: icon, short name, the
+  // source file when one was found, a dot while a screenshot or source is
+  // still coming. Hover or focus shows the details; Delete or × removes.
+  // Chips are kept by id and updated in place, so a chip's landing
+  // highlight keeps playing while its screenshot and source fill in.
+  const chipNodes = new Map();
+  function renderChips() {
+    const items = chipRecord.items;
+    const fresh = shownChipIds ? items.filter(chip => !shownChipIds.has(chip.id)) : [];
+    shownChipIds = new Set(items.map(chip => chip.id));
+    nodes.inspectChips.hidden = !items.length;
+    for (const [id, node] of chipNodes) if (!shownChipIds.has(id)) { node.remove(); chipNodes.delete(id); }
+    items.forEach((chip, index) => {
+      let item = chipNodes.get(chip.id);
+      if (!item) { item = chipNode(chip.id); chipNodes.set(chip.id, item); if (fresh.includes(chip)) { item.dataset.landed = '1'; schedule(() => { delete item.dataset.landed; item.classList.remove?.('landed'); }, 1300); } }
+      fillChip(item, chip);
+      if (nodes.inspectChips.children[index] !== item) nodes.inspectChips.insertBefore(item, nodes.inspectChips.children[index] || null);
+    });
+    if (fresh.length) {
+      announce(t('panel_inspect_added_live', fresh.map(chipTitle).join(', ')));
+      // A pick from the Pick button is done: the next step is typing.
+      if (!picking) nodes.message.focus?.();
+    }
+    if (cardChip && !items.some(chip => chip.id === cardChip)) hideCard();
+    else if (cardChip) showCard(items.find(chip => chip.id === cardChip));
+  }
+  function chipNode(id) {
+    const item = element('span');
+    item.setAttribute('role', 'listitem'); item.tabIndex = 0;
+    const current = () => chipRecord.items.find(chip => chip.id === id);
+    const drop = () => {
+      const name = chipTitle(current() || { label: '' }), at = chipRecord.items.findIndex(chip => chip.id === id);
+      return writeChips(record => removeChip(record, id)).then(() => { announce(t('panel_inspect_removed_live', name)); hideCard(); (nodes.inspectChips.children[at] || nodes.inspectChips.children[at - 1] || nodes.message).focus?.(); });
+    };
+    item.drop = drop;
+    item.addEventListener('mouseenter', () => showCard(current())); item.addEventListener('mouseleave', hideCard);
+    item.addEventListener('focus', () => showCard(current())); item.addEventListener('blur', hideCard);
+    item.addEventListener('keydown', event => {
+      if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void drop().catch(error); }
+      else if (event.key === 'Escape') hideCard();
+    });
+    return item;
+  }
+  // Element chips sit with the page chip, one family: icon, short name, the
+  // source file when one was found, a dot while a screenshot or source is
+  // still coming. Hover or focus shows the details; Delete or × removes.
+  function fillChip(item, chip) {
+    const name = chipTitle(chip);
+    item.className = 'page-chip inspect-chip' + (chip.stale ? ' stale' : '') + (item.dataset.landed ? ' landed' : '');
+    item.setAttribute('aria-label', t(chip.stale ? 'panel_inspect_chip_aria_stale' : 'panel_inspect_chip_aria', name));
+    const icon = element('span', undefined, 'inspect-chip-icon'); icon.setAttribute('aria-hidden', 'true');
+    const parts = [icon, element('span', name, 'inspect-chip-label')];
+    const source = sourceShort(chip.source);
+    if (source) parts.push(element('span', source, 'inspect-chip-src'));
+    if (chip.pending?.image || chip.pending?.source) { const dot = element('span', undefined, 'inspect-chip-pending'); dot.title = t('panel_inspect_chip_pending'); parts.push(dot); }
+    if (chip.stale) parts.push(element('span', t('panel_inspect_chip_stale'), 'inspect-chip-tag stale'));
+    const remove = button('×', () => item.drop(), 'inspect-chip-remove');
+    remove.tabIndex = -1; remove.title = t('panel_inspect_chip_remove'); remove.setAttribute('aria-label', t('panel_inspect_chip_remove_named', name));
+    parts.push(remove);
+    item.replaceChildren(...parts);
+  }
+  function announce(text) { nodes.chipLive.textContent = text; }
+  // Details card above the composer: screenshot (or its placeholder), the
+  // selector, where the element sits, its source and text.
+  let cardChip = null;
+  function showCard(chip) {
+    if (!chip) return;
+    cardChip = chip.id;
+    const card = nodes.chipCard, rows = [];
+    const head = element('div', chipTitle(chip), 'chip-card-title');
+    const shot = chip.image ? element('img', undefined, 'chip-card-shot') : element('div', t(chip.pending?.image ? 'panel_inspect_card_shot_pending' : 'panel_inspect_card_no_shot'), 'chip-card-shot empty' + (chip.pending?.image ? ' loading' : ''));
+    if (chip.image) { shot.src = chip.image; shot.alt = t('panel_inspect_card_shot_alt', chipTitle(chip)); }
+    const row = (label, value, mono = false) => { if (!value) return; const line = element('div', undefined, 'chip-card-row'); line.append(element('span', label, 'chip-card-key'), element('span', value, mono ? 'chip-card-value mono' : 'chip-card-value')); rows.push(line); };
+    row(t('panel_inspect_card_selector'), chip.selector, true);
+    const where = withinLabel(chip);
+    if (where) row(t('panel_inspect_card_inside'), `${t(where === 'frame' ? 'panel_inspect_chip_in_frame' : where === 'foreign' ? 'panel_inspect_chip_foreign_frame' : 'panel_inspect_chip_in_shadow')} · ${where === 'frame' ? chip.frames.map(f => f.selector).join(' › ') : where === 'foreign' ? chip.foreignFrame.url || chip.selector : chip.shadowHosts.join(' › ')}`);
+    row(t('panel_inspect_card_source'), chip.source ? `${chip.source.path}${chip.source.line ? `:${chip.source.line}` : ''}` : chip.pending?.source ? t('panel_inspect_card_source_pending') : '', true);
+    row(t('panel_inspect_card_text'), chip.text);
+    row(t('panel_inspect_card_page'), chip.pageUrl, true);
+    card.replaceChildren(head, shot, ...rows);
+    if (chip.stale) card.append(element('div', t('panel_inspect_chip_stale_title'), 'chip-card-stale'));
+    card.hidden = false;
+  }
+  function hideCard() { cardChip = null; nodes.chipCard.hidden = true; }
+  // The Pick button: shown in a tab's panel, usable on web pages only.
+  function renderPick() {
+    const button = nodes.pickElement;
+    button.hidden = !tabBound;
+    const pickable = /^https?:/.test(panelTabUrl);
+    button.disabled = !picking && pageRead && !pickable;
+    button.setAttribute('aria-pressed', String(picking));
+    button.classList.toggle('active', picking);
+    const label = picking ? t('panel_pick_cancel_title') : button.disabled ? t('panel_pick_unavailable') : t('panel_pick_title');
+    button.title = label; button.setAttribute('aria-label', label);
+    nodes.pickHint.hidden = !picking;
+  }
+  async function togglePick(event) {
+    if (!tabBound) return;
+    if (picking) { picking = false; renderPick(); await runtime.sendMessage({ type: 'ab-inspect-pick-cancel', tabId: panelTab }); return; }
+    const keep = !!event?.shiftKey;
+    picking = true; renderPick(); hideCard();
+    try {
+      let reply = await runtime.sendMessage({ type: 'ab-inspect-pick', tabId: panelTab, keep });
+      // A site the extension may not script yet: Chrome asks the user once.
+      if (reply?.success && reply.needsPermission) {
+        const granted = await Promise.resolve(permissions?.request?.({ origins: [reply.needsPermission] })).catch(() => false);
+        if (!granted) throw new Error(t('panel_pick_permission_denied'));
+        reply = await runtime.sendMessage({ type: 'ab-inspect-pick', tabId: panelTab, keep });
+      }
+      if (!reply?.success || !reply.started) throw new Error(reply?.error || t('panel_pick_failed'));
+    } catch (failure) { picking = false; renderPick(); throw failure; }
+  }
+  function cancelPick() { if (picking) void togglePick().catch(error); }
   function renderImageDrafts() {
     const images = imageDrafts.get(selected) || [];
     nodes.attachmentDrafts.hidden = !images.length;
@@ -1666,6 +1833,11 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     } finally { convertingImages = false; nodes.imageFiles.value = ''; controls(); }
   }
   nodes.attachImages.addEventListener('click', () => nodes.imageFiles.click());
+  nodes.pickElement.addEventListener('click', event => void togglePick(event).catch(error));
+  nodes.pickCancel.addEventListener('click', cancelPick);
+  // Esc cancels picking from the panel too (focus stays here while the
+  // pointer works on the page).
+  document.addEventListener?.('keydown', event => { if (event.key === 'Escape' && picking) { event.preventDefault?.(); cancelPick(); nodes.pickElement.focus?.(); } });
   nodes.imageFiles.addEventListener('change', () => void addImages([...nodes.imageFiles.files]).catch(error));
   nodes.message.addEventListener('paste', event => {
     const files = [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith('image/') || isHeif(file));
@@ -1755,6 +1927,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     // Another view changed where a conversation works (a take-back in a panel tab).
     if (changes.ab_panel_work_in && area !== 'session') { workInMap = changes.ab_panel_work_in.newValue || {}; renderGrant(); }
     if (!tabBound || area !== 'session') return;
+    if (chipKey && changes[chipKey]) applyChips(changes[chipKey].newValue);
+    if (tabBound && changes[inspectPickKey(panelTab)]) { picking = !!changes[inspectPickKey(panelTab)].newValue; renderPick(); }
     const change = changes[panelTabKey(panelTab)];
     if (!change || (change.newValue || '') === selected) return;
     // Applied once the send ends, so two panels never keep one conversation.
@@ -1770,8 +1944,17 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       if (chatAgents.has(saved?.ab_panel_agent)) preferredAgent = saved.ab_panel_agent;
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
       workInDefault = (await Promise.resolve(storage?.sync?.get?.({ ab_work_in: 'tab' })).catch(() => null))?.ab_work_in === 'window' ? 'window' : 'tab';
+      renderEmptyDetail();
       workInMap = (await Promise.resolve(storage?.local?.get?.('ab_panel_work_in')).catch(() => null))?.ab_panel_work_in || {};
-      if (tabBound) { const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || ''; }
+      if (tabBound) {
+        const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || '';
+        const waiting = (await Promise.resolve(storage?.session?.get?.(chipKey)).catch(() => null))?.[chipKey];
+        if (waiting) applyChips(waiting);
+        // Chips already waiting when the panel opens are not "new".
+        shownChipIds = new Set(chipRecord.items.map(chip => chip.id));
+        picking = !!(await Promise.resolve(storage?.session?.get?.(inspectPickKey(panelTab))).catch(() => null))?.[inspectPickKey(panelTab)];
+        renderPick();
+      }
       else selected = tabMode ? initialConversation : saved?.ab_panel_conversation || '';
       if (saved?.ab_panel_full_access === false) newFullAccess = false;
       for (const [id, messageId] of Object.entries(saved?.ab_panel_pending || {}).slice(0, 64)) {
@@ -1783,7 +1966,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       await refresh();
       projectChoice.setAgent(nodes.agent.value); refreshProjects();
     } catch (failure) { error(failure); }
-  }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
+  }, refresh, select, send, togglePick, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
 // The English fallback loads first, so the first render has no raw keys.
@@ -1793,7 +1976,7 @@ if (typeof document !== 'undefined') void i18nReady.then(() => {
   const mode = query.get('mode') === 'tab' ? 'tab' : 'panel';
   document.documentElement.dataset.mode = mode;
   const setLocation = id => { try { globalThis.history.replaceState(null, '', `?mode=tab${id ? `&conversation=${encodeURIComponent(id)}` : ''}`); } catch {} };
-  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, mode, initialConversation: query.get('conversation') || '', panelTab: panelTabFrom(globalThis.location?.search), setLocation });
+  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, permissions: globalThis.chrome?.permissions, mode, initialConversation: query.get('conversation') || '', panelTab: panelTabFrom(globalThis.location?.search), setLocation });
   void panel.start();
   globalThis.addEventListener('pagehide', () => panel.close());
 });

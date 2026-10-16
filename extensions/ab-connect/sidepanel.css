@@ -158,6 +158,45 @@ details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .page-chip { display:inline-flex; align-items:center; gap:5px; max-width:100%; margin:0; padding:2px 4px 2px 8px; border-radius:10px; background:var(--surface); color:var(--muted); font-size:12px; }
 .page-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .page-chip button { border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
+/* Elements picked with Inspect & Ask, waiting for the next send: the same
+   chip as the page chip, with an element icon. */
+.inspect-chips { display:contents; }
+.input-box { position:relative; }
+.page-chip.inspect-chip { color:var(--ink); cursor:default; outline:none; min-width:0; max-width:100%; }
+.page-chip.inspect-chip:focus-visible { box-shadow:0 0 0 2px var(--accent); }
+.inspect-chip .inspect-chip-icon { flex:none; width:12px; height:12px; background:currentColor; opacity:.7; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4'/%3E%3Cpath d='M10 10l4.5 10.5 1.6-4.4 4.4-1.6z'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4'/%3E%3Cpath d='M10 10l4.5 10.5 1.6-4.4 4.4-1.6z'/%3E%3C/svg%3E") center/contain no-repeat; }
+.page-chip.inspect-chip .inspect-chip-label { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.page-chip.inspect-chip .inspect-chip-src { flex:0 2 auto; min-width:0; max-width:45%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font:11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.page-chip.inspect-chip .inspect-chip-tag { flex:none; overflow:visible; color:var(--muted); font-size:11px; }
+.page-chip.inspect-chip .inspect-chip-tag.stale { color:var(--warning); }
+.inspect-chip.stale .inspect-chip-label { color:var(--muted); text-decoration:line-through; text-decoration-thickness:1px; }
+.inspect-chip-pending { flex:none; width:6px; height:6px; border-radius:50%; background:var(--accent); animation:pulse 1.2s ease-in-out infinite; }
+.page-chip.inspect-chip button { flex:none; border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
+.page-chip.inspect-chip button:hover { color:var(--ink); background:transparent; }
+.inspect-chip.landed { animation:chip-land 1.2s ease-out; }
+@keyframes chip-land { 0% { transform:scale(.92); background:var(--accent-soft); box-shadow:0 0 0 2px var(--accent); } 60% { transform:none; background:var(--accent-soft); box-shadow:0 0 0 2px var(--accent); } 100% { background:var(--surface); box-shadow:0 0 0 0 transparent; } }
+@media (prefers-reduced-motion:reduce) { .inspect-chip.landed, .inspect-chip-pending, .pick-hint::before { animation:none; } }
+/* Details of a chip, above the composer, on hover or focus. */
+.chip-card { position:absolute; left:8px; right:8px; bottom:calc(100% + 6px); max-width:340px; z-index:6; padding:8px; background:var(--bg); border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 24px rgb(0 0 0 / .16); font-size:12px; color:var(--ink); pointer-events:none; }
+.chip-card-title { font-weight:600; margin-bottom:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chip-card-shot { display:block; max-width:100%; max-height:120px; margin:0 0 6px; border-radius:6px; background:var(--surface); object-fit:contain; }
+.chip-card-shot.empty { height:44px; display:grid; place-items:center; color:var(--muted); font-size:11px; }
+.chip-card-shot.loading { animation:pulse 1.2s ease-in-out infinite; }
+.chip-card-row { display:flex; gap:8px; margin-top:2px; min-width:0; }
+.chip-card-key { flex:none; width:52px; color:var(--muted); }
+.chip-card-value { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chip-card-value.mono { font:11px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.chip-card-stale { margin-top:6px; color:var(--warning); }
+/* The Pick button while a picker runs on the page, and its hint. */
+button.tool.pick.active, button.tool.pick.active:hover:not(:disabled) { background:var(--accent-soft); color:var(--accent); box-shadow:inset 0 0 0 1.5px var(--accent); }
+.pick-hint { display:flex; align-items:center; gap:6px; margin:0 0 6px; font-size:12px; color:var(--accent); min-width:0; }
+.pick-hint span { flex:1; min-width:0; line-height:1.4; }
+.pick-hint::before { content:""; flex:none; width:7px; height:7px; border-radius:50%; background:var(--accent); animation:pulse 1.2s ease-in-out infinite; }
+.pick-hint button.quiet { flex:none; font-size:12px; padding:1px 6px; }
+.inspect-context { margin-top:4px; font-size:12px; }
+.inspect-context summary { cursor:pointer; color:var(--muted); }
+.inspect-context pre { margin:4px 0 0; max-height:240px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-size:11px; }
+.inspect-chip button { border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
 .page-ref { font-size:11px; color:var(--muted); margin-top:3px; max-width:88%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .page-ref::before { content:"↳ "; }
 

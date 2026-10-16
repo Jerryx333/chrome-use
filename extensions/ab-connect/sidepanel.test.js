@@ -44,6 +44,7 @@ async function fixture(overrides = {}, saved = {}) {
       if (request.type === 'ab-status') return overrides.status ? {agentPanel:fullSupport,...overrides.status()} : { connected: true,agentPanel:fullSupport };
       calls.push(request);
       if (request.type === 'ab-tab-grant') return overrides.tabGrant ? overrides.tabGrant(request) : { success: true, grants: [] };
+      if (request.type?.startsWith?.('ab-inspect-pick')) return overrides.pick ? overrides.pick(request) : { success: true, started: true };
       if (overrides[request.operation]) return overrides[request.operation](request.params);
       let result;
       switch (request.operation) {
@@ -56,7 +57,7 @@ async function fixture(overrides = {}, saved = {}) {
       return { success: true, result };
     },
   };
-  const document = { createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); } };
+  const document = { createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }), getElementById(id) { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); }, listeners: {}, addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); } };
   for (const id of overrides.hiddenNodes || []) document.getElementById(id).hidden = true;
   const windows = overrides.presence || overrides.mode === 'tab' ? { async getCurrent() { return { id: 7 }; } } : undefined;
   const locations = [];
@@ -65,9 +66,9 @@ async function fixture(overrides = {}, saved = {}) {
     async set(values) { Object.assign(this.data, values); },
     async remove(keys) { for (const key of [].concat(keys)) delete this.data[key]; } } : null;
   let storageChanged = null;
-  const panel = createPanel({ document, runtime, windows, mode: overrides.mode, initialConversation: overrides.initialConversation, panelTab: overrides.panelTab, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } }, ...(overrides.sync ? { sync: { async get(defaults) { return { ...defaults, ...overrides.sync }; } } } : {}), ...(session ? { session, onChanged: { addListener(fn) { storageChanged = fn; } } } : {}) }, schedule() {}, cancel() {} });
+  const panel = createPanel({ document, runtime, windows, permissions: overrides.permissions, mode: overrides.mode, initialConversation: overrides.initialConversation, panelTab: overrides.panelTab, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } }, ...(overrides.sync ? { sync: { async get(defaults) { return { ...defaults, ...overrides.sync }; } } } : {}), ...(session ? { session, onChanged: { addListener(fn) { storageChanged = fn; } } } : {}) }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
-  return { panel, nodes, calls, chats, writes, presence, locations, session, storageChange(changes) { storageChanged(changes, 'session'); }, grantUpdate(grants) { hostState({ type: 'ab-tab-grants', grants }); }, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
+  return { panel, nodes, calls, chats, writes, presence, locations, session, document, storageChange(changes) { storageChanged(changes, 'session'); }, grantUpdate(grants) { hostState({ type: 'ab-tab-grants', grants }); }, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
 
 test('a late stop acknowledgement cannot replace the selected conversation', async () => {
@@ -1194,4 +1195,160 @@ test('an update blocked by an older build names its conversations; Open finds on
   assert.ok(f.writes.some(w => w.ab_panel_conversation_scope === 'all'));
   assert.equal(notice.hidden, true);
   f.panel.close();
+});
+
+// ---- Inspect & Ask → side-panel chat (0.5.69) ---------------------------------
+
+const pickedChip = (id, selector, extra = {}) => ({ id, documentId: 'd1', pageUrl: 'https://shop.example/21', label: `button "${id}"`, component: null, selector, frames: [], shadowHosts: [], foreignFrame: null, text: id, source: null, note: '', html: '', rect: null, image: null, stale: false, addedAt: 1, ...extra });
+
+test('picked elements wait as chips in their tab\'s composer and ride in the next message', async () => {
+  const tabs = { async get(id) { return { id, url: `https://shop.example/${id}`, title: `Tab ${id}` }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const sent = [], put = [];
+  const f = await fixture({
+    panelTab: 21, tabs,
+    session: { ab_panel_tab_21: 'b', ab_inspect_tab_21: { items: [pickedChip('save', 'form > button.save', { image: 'data:image/png;base64,iVBORw0KGgo=', stale: true })], question: 'Why is it gray?' } },
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, pageContext: true, imageAttachments: true } }),
+    encodeImage: async blob => ({ name: 'Image', mediaType: blob.type, data: 'shot' }),
+    conversationAttachmentPut: async params => { put.push(params); return { success: true, result: { attachment: { id: `att${put.length}` } } }; },
+    conversationSend: async params => { sent.push(params); return { success: true, result: { conversation: chat('b') } }; },
+  });
+  await settle(); await settle();
+  const chips = f.nodes.get('inspectChips');
+  assert.equal(chips.hidden, false);
+  assert.equal(chips.children.length, 1);
+  assert.equal(f.nodes.get('message').value, 'Why is it gray?', 'the question from the picker goes into the composer');
+  assert.equal(f.session.data.ab_inspect_tab_21.question, '', 'and is taken out so a reload does not add it again');
+  // The panel was open already: a new pick adds a chip and sends nothing.
+  const record = { items: [...f.session.data.ab_inspect_tab_21.items, pickedChip('more', 'a.more')], question: '' };
+  f.session.data.ab_inspect_tab_21 = record;
+  f.storageChange({ ab_inspect_tab_21: { newValue: record } }); await settle();
+  assert.equal(chips.children.length, 2);
+  assert.equal(sent.length, 0);
+  // Removing one.
+  chips.children[1].querySelectorAll('button')[0].fire('click'); await settle(); await settle();
+  assert.deepEqual(f.session.data.ab_inspect_tab_21.items.map(c => c.id), ['save']);
+  assert.equal(chips.children.length, 1);
+  await f.panel.send(); await settle();
+  assert.equal(sent.length, 1);
+  assert.ok(sent[0].text.startsWith('Why is it gray?\n\n[Page elements the user picked'), sent[0].text);
+  assert.match(sent[0].text, /in tab "chrome-tab:21"/);
+  assert.match(sent[0].text, /selector: `form > button\.save`/);
+  assert.match(sent[0].text, /screenshot: attached image 1/);
+  assert.match(sent[0].text, /stale: picked before the page changed/);
+  assert.doesNotMatch(sent[0].text, /a\.more/);
+  assert.equal(sent[0].attachments.length, 1);
+  assert.equal(put[0].data, 'shot');
+  assert.equal(f.session.data.ab_inspect_tab_21, undefined, 'sent chips leave the composer');
+  assert.equal(chips.hidden, true);
+  assert.equal(f.nodes.get('message').value, '');
+  f.panel.close();
+});
+
+test('chips alone can be sent, and a failed send keeps them', async () => {
+  const tabs = { async get(id) { return { id, url: `https://shop.example/${id}`, title: `Tab ${id}` }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  let fail = true;
+  const sent = [];
+  const f = await fixture({
+    panelTab: 21, tabs,
+    session: { ab_panel_tab_21: 'b', ab_inspect_tab_21: { items: [pickedChip('save', 'form > button.save')], question: '' } },
+    status: () => ({ connected: true, agentPanel: { ...fullSupport, pageContext: true } }),
+    conversationSend: async params => { sent.push(params); if (fail) throw new Error('lost'); return { success: true, result: { conversation: chat('b') } }; },
+  });
+  await settle(); await settle();
+  assert.equal(f.nodes.get('message').value, '');
+  await assert.rejects(f.panel.send());
+  assert.equal(f.session.data.ab_inspect_tab_21.items.length, 1, 'a failed send keeps the chips');
+  assert.match(sent[0].text, /^\[Page elements the user picked/);
+  f.panel.close();
+});
+
+test('another tab\'s chips never show here', async () => {
+  const tabs = { async get(id) { return { id, url: `https://shop.example/${id}`, title: `Tab ${id}` }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ panelTab: 21, tabs, hiddenNodes: ['inspectChips'], session: { ab_inspect_tab_30: { items: [pickedChip('x', '#x')], question: 'not mine' } } });
+  await settle();
+  assert.equal(f.nodes.get('inspectChips').hidden, true);
+  f.storageChange({ ab_inspect_tab_30: { newValue: { items: [pickedChip('y', '#y')], question: 'still not mine' } } }); await settle();
+  assert.equal(f.nodes.get('inspectChips').hidden, true);
+  assert.equal(f.nodes.get('message').value, '');
+  f.panel.close();
+});
+
+// ---- The Pick button (0.5.69) -----------------------------------------------------
+
+const pickTabs = url => ({ async get(id) { return { id, url, title: `Tab ${id}` }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } });
+
+test('the Pick button starts a picker on its tab, shows it is active, and cancels on a second click or Esc', async () => {
+  const f = await fixture({ panelTab: 21, tabs: pickTabs('https://shop.example/21'), session: {} });
+  await settle(); await settle();
+  const pick = f.nodes.get('pickElement');
+  assert.equal(pick.hidden, false);
+  assert.equal(pick.disabled, false);
+  pick.fire('click', { shiftKey: true }); await settle();
+  assert.deepEqual(f.calls.find(c => c.type === 'ab-inspect-pick'), { type: 'ab-inspect-pick', tabId: 21, keep: true });
+  assert.equal(f.nodes.get('pickHint').hidden, false, 'the panel says what to do on the page');
+  // The background confirms, then ends it (the pick is done).
+  f.storageChange({ ab_inspect_pick_21: { newValue: { instanceId: 'x', keep: true } } }); await settle();
+  f.storageChange({ ab_inspect_pick_21: { newValue: undefined } }); await settle();
+  assert.equal(f.nodes.get('pickHint').hidden, true);
+  // Started again, then cancelled with Esc from the panel.
+  pick.fire('click', {}); await settle();
+  for (const fn of f.document.listeners.keydown || []) fn({ key: 'Escape', preventDefault() {} });
+  await settle();
+  assert.ok(f.calls.some(c => c.type === 'ab-inspect-pick-cancel' && c.tabId === 21));
+  assert.equal(f.nodes.get('pickHint').hidden, true);
+  f.panel.close();
+});
+
+test('a page that cannot be picked disables the button; a site without access asks Chrome once', async () => {
+  const off = await fixture({ panelTab: 21, tabs: pickTabs('chrome://settings/'), session: {} });
+  await settle(); await settle();
+  assert.equal(off.nodes.get('pickElement').disabled, true);
+  off.panel.close();
+  const asked = [];
+  let replies = [{ success: true, needsPermission: 'https://shop.example/*' }, { success: true, started: true }];
+  const f = await fixture({ panelTab: 21, tabs: pickTabs('https://shop.example/21'), session: {}, pick: () => replies.shift(), permissions: { async request(p) { asked.push(p); return true; } } });
+  await settle(); await settle();
+  await f.panel.togglePick({});
+  assert.deepEqual(asked, [{ origins: ['https://shop.example/*'] }]);
+  assert.equal(f.nodes.get('pickHint').hidden, false);
+  f.panel.close();
+  replies = [{ success: true, needsPermission: 'https://shop.example/*' }];
+  const g = await fixture({ panelTab: 21, tabs: pickTabs('https://shop.example/21'), session: {}, pick: () => replies.shift(), permissions: { async request() { return false; } } });
+  await settle(); await settle();
+  await assert.rejects(g.panel.togglePick({}), /access to this site/);
+  assert.equal(g.nodes.get('pickHint').hidden, true);
+  g.panel.close();
+});
+
+test('a chip that lands is highlighted and announced; Delete on a focused chip removes it', async () => {
+  const f = await fixture({ panelTab: 21, tabs: pickTabs('https://shop.example/21'), session: {} });
+  await settle(); await settle();
+  const record = { items: [pickedChip('save', 'form > button.save', { pending: { image: true, source: true }, source: { path: 'src/pages/Order.tsx', line: 42, kind: 'insp' } })], question: '' };
+  f.session.data.ab_inspect_tab_21 = record;
+  f.storageChange({ ab_inspect_tab_21: { newValue: record } }); await settle(); await settle();
+  const chip = f.nodes.get('inspectChips').children[0];
+  assert.match(chip.className, /page-chip inspect-chip landed/);
+  assert.ok(chip.children.some(c => c.className === 'inspect-chip-src' && c.textContent === 'Order.tsx:42'));
+  assert.ok(chip.children.some(c => c.className === 'inspect-chip-pending'), 'a placeholder while the screenshot comes');
+  assert.match(f.nodes.get('chipLive').textContent, /save/);
+  chip.fire('focus'); assert.equal(f.nodes.get('chipCard').hidden, false);
+  chip.fire('keydown', { key: 'Delete' }); await settle(); await settle();
+  assert.equal(f.session.data.ab_inspect_tab_21, undefined);
+  assert.equal(f.nodes.get('chipCard').hidden, true);
+  f.panel.close();
+});
+
+test('the empty state says the agent works in this tab, or in its own window when set so', async () => {
+  const f = await fixture({ panelTab: 21, tabs: pickTabs('https://shop.example/21'), session: {} });
+  await settle(); await settle();
+  assert.match(f.nodes.get('emptyDetail').textContent, /works in this tab by default/);
+  f.panel.close();
+  const g = await fixture({ panelTab: 21, tabs: pickTabs('https://shop.example/21'), session: {}, sync: { ab_work_in: 'window' } });
+  await settle(); await settle();
+  assert.match(g.nodes.get('emptyDetail').textContent, /its own browser window/);
+  g.panel.close();
+  const h = await fixture({ mode: 'tab' });
+  await settle();
+  assert.match(h.nodes.get('emptyDetail').textContent, /its own browser window/);
+  h.panel.close();
 });

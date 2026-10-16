@@ -132,6 +132,25 @@ function saveInspect(patch) {
 }
 optInspect?.addEventListener('change', () => saveInspect({ enabled: optInspect.checked }))
 optInspectEditor?.addEventListener('change', () => saveInspect({ editor: optInspectEditor.value }))
+// Element picking from the side panel needs host access; this grants it for
+// every http(s) site at once instead of one prompt per site.
+const PICK_ALL = { origins: ['http://*/*', 'https://*/*'] }
+const optPickAll = el('optPickAll')
+function loadPickAll() {
+  if (!optPickAll || !chrome.permissions?.contains) return
+  chrome.permissions.contains(PICK_ALL).then(granted => { optPickAll.checked = granted }).catch(() => {})
+}
+optPickAll?.addEventListener('change', async () => {
+  const want = optPickAll.checked
+  try {
+    const done = want ? await chrome.permissions.request(PICK_ALL) : await chrome.permissions.remove(PICK_ALL)
+    if (done) flashSaved()
+  } catch {}
+  loadPickAll()
+})
+chrome.permissions?.onAdded?.addListener(loadPickAll)
+chrome.permissions?.onRemoved?.addListener(loadPickAll)
+loadPickAll()
 el('inspectShortcuts')?.addEventListener('click', (event) => {
   event.preventDefault()
   if (hasChrome) chrome.tabs.create({ url: 'chrome://extensions/shortcuts' })

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>点选改代码（Inspect &amp; Ask） · chrome-use 文档</title>
-  <meta name="description" content="在页面上点选元素，写一句修改要求，连同源码位置和截图交给正在这个项目里工作的 Claude Code、Codex 或 Pi 会话。" />
+  <meta name="description" content="在页面上点选元素，放进这个标签页的侧边栏对话里提问；或者写一句修改要求，连同源码位置和截图交给正在这个项目里工作的 Claude Code、Codex 或 Pi 会话。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -47,20 +47,43 @@
       </div>
 
       <p class="du-lede">
-        按快捷键 <code>Alt+Shift+C</code>，在页面上点一个元素，写一句“这里改成什么样”，
-        回车。chrome-use 会把这句话、元素的<span class="mark">源码文件和行号</span>、截图和样式，
+        按快捷键 <code>Alt+Shift+C</code>，在页面上点一个元素，点<strong>加入对话</strong>。
+        元素会变成一张小卡片，放进<span class="mark">这个标签页的侧边栏对话</span>的输入框里；你接着问，发送后侧边栏里的 agent
+        拿到元素的选择器、位置、源码文件和截图，可以直接在这个标签页里操作它。
+        也可以切到<strong>终端会话（ocs）</strong>：写一句“这里改成什么样”，chrome-use 把这句话、元素的源码文件和行号、截图和样式，
         通过 <code>ocs</code> 投给正在这个项目里干活的 Claude Code、Codex 或 Pi 会话，由它去改代码。
         本地 dev server 和测试环境域名都能用，用的就是你已经登录的 Chrome。
       </p>
 
       <h2 id="start">开始使用</h2>
       <ol>
-        <li>装好 chrome-use 和扩展（扩展 0.5.57 及以上、CLI 1.5.214 及以上；路径范围、认领和仅本标签目标需要这两个版本）。</li>
-        <li>装 <a href="https://github.com/leeguooooo/open-cross-session">ocs</a>，并在项目目录里开着一个 Claude Code、Codex 或 Pi 会话。没装 ocs 时，面板会给出安装命令，草稿不会丢。</li>
-        <li>在页面上按 <code>Alt+Shift+C</code>，或点工具栏图标里的 <strong>Inspect element</strong>。第一次使用会先问你是否启用。快捷键可以在 <code>chrome://extensions/shortcuts</code> 里改。</li>
+        <li>装好 chrome-use 和扩展。发到侧边栏对话需要扩展 0.5.69 及以上、CLI 1.5.223 及以上；发到终端会话需要扩展 0.5.57 及以上、CLI 1.5.214 及以上（路径范围、认领和仅本标签目标需要这两个版本）。</li>
+        <li>只有发到终端会话才需要 <a href="https://github.com/leeguooooo/open-cross-session">ocs</a>，并在项目目录里开着一个 Claude Code、Codex 或 Pi 会话。没装 ocs 时，面板会给出安装命令，草稿不会丢。</li>
+        <li>在页面上按 <code>Alt+Shift+C</code>，或点工具栏图标里的 <strong>Inspect element</strong>。发到终端会话时，第一次使用会先问你是否启用。快捷键可以在 <code>chrome://extensions/shortcuts</code> 里改。</li>
         <li>点元素。<kbd>Shift</kbd>+点击或拖一个框可以一次选多个（最多 8 个）；<kbd>↑</kbd>/<kbd>↓</kbd> 在父子元素之间切换；<kbd>P</kbd> 暂停页面动画，方便选中会动的东西；<kbd>Esc</kbd> 退出。</li>
-        <li>在弹出的面板里写修改要求，每个元素也可以单独写备注，或者在截图上画圈。按 <kbd>Enter</kbd> 或 <strong>Send</strong> 发送；<kbd>Shift</kbd>+<kbd>Enter</kbd> 换行。</li>
+        <li>弹出的面板顶部选发到哪里：<strong>侧边栏对话</strong>（默认）或<strong>终端会话（ocs）</strong>，按网站记住。每个元素都可以单独写备注，或者在截图上画圈。
+          发到侧边栏对话时，可以先写一句问题（可选），按 <kbd>Enter</kbd> 或<strong>加入对话</strong>，见下一节；
+          发到终端会话时写修改要求，按 <kbd>Enter</kbd> 或 <strong>Send</strong> 发送。<kbd>Shift</kbd>+<kbd>Enter</kbd> 换行。</li>
       </ol>
+
+      <h2 id="panel">发到侧边栏对话（默认）</h2>
+      <p>
+        最直接的入口在侧边栏里：输入框下方工具栏最前面的<strong>选择元素</strong>按钮（准星图标）。点一下进入选择状态（按钮高亮，输入框上方提示“在页面上点一个元素 · Shift+点击可连选 · Esc 取消”），
+        到页面上点元素：元素闪一下“已加入对话”，同时变成卡片出现在输入框里，选择自动结束，光标回到输入框。按住 <kbd>Shift</kbd> 可以连续选多个；再点一次按钮、点“取消”或按 <kbd>Esc</kbd> 退出。
+        截图和源码位置随后补上（卡片上的小圆点表示还在获取）；找到源码就显示 <code>文件:行号</code>，找不到什么都不显示。chrome:// 等页面上按钮不可用。
+        侧边栏里的点击不像快捷键那样带来 activeTab 授权，所以在扩展还不能访问的网站上第一次使用时，Chrome 会请你允许访问这个网站（只问一次）。
+      </p>
+      <p>快捷键 <code>Alt+Shift+C</code> 打开的页面内面板也能发到侧边栏：</p>
+      <ul>
+        <li><strong>加入对话</strong>会打开这个标签页自己的侧边栏（已经开着就直接加进去），元素变成输入框上方的卡片，面板里写的问题放进侧边栏的输入框。这一步不会发送任何东西，侧边栏里正在进行的对话也不受影响。</li>
+        <li>可以多次点选，卡片累加，最多 8 个；同一个元素再点一次会替换原来的卡片。卡片上的 <strong>×</strong> 可以移除它。</li>
+        <li>发送时，消息后面附上每个元素的上下文：选择器、页面地址、在哪个 iframe 或 Shadow DOM 里、一条从顶层页面就能找到它的 JavaScript 定位表达式、源码位置（如果找到了）、文字、HTML 片段和你的备注；截图作为图片附件（和你自己加的图片合计最多 5 张）。侧边栏的 agent 默认就在这个标签页里工作，可以直接用选择器读它、点它。会话记录里只显示你写的话，元素上下文折叠在“N 个点选的元素”下面。</li>
+        <li>点选之后页面跳转或刷新，卡片仍然保留，标成“页面已变”；发出时会告诉 agent 这个元素可能已经不在了。关掉标签页，它的卡片也一起清除。</li>
+        <li>能选中 open 模式 Shadow DOM 和同源 iframe 里的元素。跨站 iframe 只能整体选中，里面的内容读不到；closed 模式的 Shadow DOM 只能选到它的宿主元素。</li>
+        <li>卡片只保存在扩展的会话存储里（浏览器关掉就没了），页面读不到；选取结束后页面上不留任何元素、属性或全局变量。</li>
+      </ul>
+
+      <h2 id="terminal">发到终端会话（ocs）</h2>
       <p>
         第一次在某个站点发送时，面板会问两件事：这个站点对应哪个项目目录，交给哪个会话。
         候选项目来自本地 dev server 的进程目录、ocs 里会话的工作目录，以及哪个项目里真的存在页面标注的源码文件。

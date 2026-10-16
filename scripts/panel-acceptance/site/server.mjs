@@ -55,6 +55,11 @@ setInterval(()=>{const rootAttrs=[...document.documentElement.attributes].map(a=
   // 1500 requests in bursts of 25, for the request-log bound (check 16).
   '/burst': () => page('Burst', `<h1>Burst</h1><button id="act" onclick="this.dataset.clicked='1'">Act</button><button id="go" onclick="go()">Go</button><p id="sent">0</p>
 <script>async function go(){let n=0;for(let i=0;i<60;i++){await Promise.all(Array.from({length:25},()=>fetch('/ping?n='+(n++)).catch(()=>{})));document.getElementById('sent').textContent=n;}}</script>`),
+  // Inspect & Ask → panel (inspect-panel-live): a plain button, one in an
+  // open shadow root, one in a same-origin iframe.
+  '/inspect': () => page('Inspect fixture', '<h1 id="title">Inspect fixture</h1><p><button id="save" style="background:#bbb;color:#555">Save order</button> <button id="long">Save this order and notify the warehouse team about express shipping</button></p><x-card id="card"></x-card><p><iframe id="pay" src="/inspect-pay" style="width:360px;height:110px;border:1px solid #ccc"></iframe></p><a id="away" href="/a">Away</a>',
+    '<script>customElements.define("x-card", class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: "open" }).innerHTML = \'<div class="body"><button class="inner">Inner action</button></div>\'; } });</script>'),
+  '/inspect-pay': () => page('Pay frame', '<button id="pay-now">Pay now</button>'),
   '/popup-page': () => page('Popup opener', '<a id="popup" href="/b?popup=1" target="_blank">Open popup</a>'),
 };
 

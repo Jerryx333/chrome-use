@@ -118,7 +118,7 @@ const signalPath = (conv, name) => path.join(ACCEPT, 'signals', `${conv}.${name}
 // Runs one turn's steps through a personality's emitter.
 async function runTurn(text, emit, mcp, control) {
   const scenario = loadScenario(text);
-  log({ event: 'turn', scenario: scenario.name, conversation: mcp?.conversation });
+  log({ event: 'turn', scenario: scenario.name, conversation: mcp?.conversation, text: String(text || '').slice(0, 40000) });
   control.ignoreInterrupt = !!scenario.ignoreInterrupt;
   // exitOnInterrupt: the leader exits at once on Stop while children it
   // spawned still run in its process group, which the service must end.

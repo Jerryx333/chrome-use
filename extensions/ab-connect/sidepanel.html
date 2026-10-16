@@ -46,7 +46,7 @@
       <div id="empty" class="empty">
         <img src="icons/icon48.png" width="40" height="40" alt="">
         <h2 data-i18n="sidepanel_empty_title">What should the browser do?</h2>
-        <p data-i18n="sidepanel_empty_detail">Describe a page or a task. The agent works in its own browser session with your local CLI login.</p>
+        <p id="emptyDetail" data-i18n="sidepanel_empty_detail">Describe a page or a task. The agent works in this tab by default (take it back any time) and uses your local CLI login.</p>
         <div id="suggestions" class="suggestions" aria-label="Example tasks" data-i18n-aria-label="sidepanel_example_tasks">
           <button type="button" data-prompt="Summarize this page in a few bullet points." data-i18n="sidepanel_suggest_summarize">Summarize this page</button>
           <button type="button" data-prompt="Extract the main table or list on this page as a Markdown table." data-i18n="sidepanel_suggest_table">Extract a table from this page</button>
@@ -65,10 +65,14 @@
     </section>
     <form id="composer" class="composer">
       <div class="input-box">
+        <div id="pickHint" class="pick-hint" role="status" hidden><span data-i18n="sidepanel_pick_hint">Click an element on the page · Shift+click for several · Esc cancels</span><button id="pickCancel" class="quiet" type="button" data-i18n="sidepanel_pick_cancel">Cancel</button></div>
+        <div id="chipCard" class="chip-card" role="tooltip" hidden></div>
+        <div id="chipLive" class="sr-only" aria-live="polite"></div>
         <div class="context-row">
         <div id="pageChip" class="page-chip" hidden><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg><span id="pageLabel" class="page-label" data-i18n="sidepanel_page_from_window" hidden>Page:</span><span id="pageTitle"></span><label class="sr-only" for="pagePicker" data-i18n="sidepanel_page_picker">Which tab of this window</label><select id="pagePicker" hidden></select><button id="pageDetach" type="button" title="Don't send this page" aria-label="Don't send this page" data-i18n-title="sidepanel_page_detach" data-i18n-aria-label="sidepanel_page_detach">×</button></div>
         <button id="grantTab" class="grant-tab quiet" type="button" hidden>Let the agent use this tab</button>
         <div id="workRow" class="work-row" hidden><label class="work-chip" title="Agent works in" data-i18n-title="sidepanel_work_in"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg><span class="sr-only" data-i18n="sidepanel_work_in">Agent works in</span><select id="workIn"><option value="tab" data-i18n="sidepanel_work_in_tab">This tab</option><option value="window" data-i18n="sidepanel_work_in_window">Its own window</option></select></label><span id="workNote" class="hint" hidden></span></div>
+        <div id="inspectChips" class="inspect-chips" role="list" aria-label="Picked elements" data-i18n-aria-label="sidepanel_inspect_chips" hidden></div>
         </div>
         <div id="skillPicker" class="skill-picker" role="listbox" aria-label="Skills" data-i18n-aria-label="sidepanel_skills" hidden></div>
         <div id="attachmentDrafts" class="attachment-images" hidden></div>
@@ -76,6 +80,7 @@
         <label class="sr-only" for="message" data-i18n="sidepanel_message_label">Message</label>
         <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" data-i18n-placeholder="sidepanel_message_placeholder"></textarea>
         <div class="composer-controls">
+          <button id="pickElement" class="tool pick" type="button" aria-pressed="false" title="Pick element" aria-label="Pick element" data-i18n-title="sidepanel_pick_element" data-i18n-aria-label="sidepanel_pick_element" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><path d="M10 10l4.5 10.5 1.6-4.4 4.4-1.6z"/></svg></button>
           <button id="attachImages" class="tool" type="button" title="Attach images" aria-label="Attach images" data-i18n-title="sidepanel_attach_images" data-i18n-aria-label="sidepanel_attach_images" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></button>
           <span id="newOptions" class="new-options" aria-label="New conversation options" data-i18n-aria-label="sidepanel_new_conversation_options">
             <details class="more">

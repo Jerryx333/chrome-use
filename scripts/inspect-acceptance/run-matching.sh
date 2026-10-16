@@ -19,6 +19,9 @@ p='ext-acc/manifest.json'; m=json.load(open(p))
 m['host_permissions']=['<all_urls>']
 json.dump(m,open(p,'w'),indent=2)
 PY
+# Scenarios match English button text; without other locales the UI is
+# English whatever the build host's system language.
+find ext-acc/_locales -mindepth 1 -maxdepth 1 ! -name en -exec rm -rf {} +
 pkill -f 'user-data-dir=.*inspect-accept-' 2>/dev/null || true
 pkill -f "vite --port 5173" 2>/dev/null || true
 (cd react-app && npx vite --port 5173 --strictPort >/tmp/inspect-vite-react.log 2>&1 &)

@@ -58,6 +58,18 @@
   "inspect_add_element_title": {
     "message": "在页面上再选一个元素"
   },
+  "inspect_add_to_chat": {
+    "message": "加入对话"
+  },
+  "inspect_add_to_chat_hint": {
+    "message": "⏎ 加入 · ⇧⏎ 换行"
+  },
+  "inspect_add_to_chat_title": {
+    "message": "把这些元素放进这个标签页的侧边栏对话。在那边点发送之前，什么都不会发出去。"
+  },
+  "inspect_added_open_panel": {
+    "message": "已加入。从工具栏打开 chrome-use 侧边栏就能看到。"
+  },
   "inspect_agree_setup": {
     "message": "同意，让我的 agent 来配置"
   },
@@ -370,6 +382,15 @@
       }
     }
   },
+  "inspect_destination_label": {
+    "message": "点选的元素发到哪里"
+  },
+  "inspect_destination_panel": {
+    "message": "侧边栏对话"
+  },
+  "inspect_destination_terminal": {
+    "message": "终端会话（ocs）"
+  },
   "inspect_draw_clear": {
     "message": "清除"
   },
@@ -573,14 +594,26 @@
       }
     }
   },
+  "inspect_panel_unavailable": {
+    "message": "这个 Chrome 用不了侧边栏。"
+  },
   "inspect_pause_title": {
     "message": "暂停动画 (P)"
   },
   "inspect_pick_hint": {
     "message": "点页面上的元素开始。Shift+点击或拖选可以选多个。"
   },
+  "inspect_pick_hint_panel": {
+    "message": "点页面上的元素，把它加入这个标签页的对话。Shift+点击或拖选可以选多个。"
+  },
+  "inspect_picker_added": {
+    "message": "已加入对话"
+  },
   "inspect_picker_hint": {
     "message": "点选元素 · Shift+点击或拖选多个 · ↑/↓ 父/子元素 · P 暂停动画 · Esc 退出"
+  },
+  "inspect_picker_hint_direct": {
+    "message": "点一个元素加入对话 · Shift+点击可连选 · Esc 取消"
   },
   "inspect_plugin_change_dependency": {
     "message": "把 code-inspector-plugin 加为 devDependency"
@@ -593,6 +626,9 @@
   },
   "inspect_project_path_placeholder": {
     "message": "或者输入项目目录路径"
+  },
+  "inspect_question_placeholder": {
+    "message": "想问这些元素什么（可选）…"
   },
   "inspect_reason_port_moved": {
     "message": "这个端口上的 dev server 现在从另一个目录运行。请重新选择请求发到哪里。"
@@ -1006,7 +1042,7 @@
     "message": "不显示"
   },
   "options_inspect_enable_hint": {
-    "message": "默认关闭。在你按下快捷键（$SHORTCUT$）或弹窗里的按钮之前，不会向页面注入任何东西。",
+    "message": "默认关闭。把元素加入侧边栏对话不需要设置；这个开关只管通过 ocs 发到终端会话。在你按下快捷键（$SHORTCUT$）或弹窗里的按钮之前，不会向页面注入任何东西。",
     "placeholders": {
       "shortcut": {
         "content": "$1",
@@ -1015,13 +1051,13 @@
     }
   },
   "options_inspect_enable_name": {
-    "message": "启用点选改代码"
+    "message": "允许发到终端会话（ocs）"
   },
   "options_inspect_heading": {
     "message": "点选改代码"
   },
   "options_inspect_lead": {
-    "message": "按下快捷键，点一下元素，就能把带源码位置和截图的修改请求，发给正在做这个项目的编程会话（通过 ocs）。"
+    "message": "按快捷键点选元素：元素会放进这个标签页的侧边栏对话；在设成「终端会话」的网站上，则连同源码位置和截图发给正在做这个项目的编程会话（通过 ocs）。"
   },
   "options_inspect_revoke_dev": {
     "message": "撤销开发版授权"
@@ -1564,6 +1600,12 @@
   "panel_conversation_untitled": {
     "message": "会话"
   },
+  "panel_copied": {
+    "message": "已复制 ✓"
+  },
+  "panel_copy_command": {
+    "message": "复制命令"
+  },
   "panel_decline": {
     "message": "拒绝"
   },
@@ -1608,6 +1650,9 @@
   },
   "panel_empty_answer": {
     "message": "agent 没有返回回答文本。"
+  },
+  "panel_empty_detail_window": {
+    "message": "描述一个页面或任务。agent 在它自己的浏览器窗口里工作，使用你本地 CLI 的登录。"
   },
   "panel_enable": {
     "message": "启用"
@@ -1717,6 +1762,107 @@
   "panel_image_unavailable": {
     "message": "已保存的图片不可用"
   },
+  "panel_inspect_added_live": {
+    "message": "已加入消息：$NAMES$",
+    "placeholders": {
+      "names": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_card_inside": {
+    "message": "位于"
+  },
+  "panel_inspect_card_no_shot": {
+    "message": "没有截图"
+  },
+  "panel_inspect_card_page": {
+    "message": "页面"
+  },
+  "panel_inspect_card_selector": {
+    "message": "选择器"
+  },
+  "panel_inspect_card_shot_alt": {
+    "message": "$NAME$ 的截图",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_card_shot_pending": {
+    "message": "正在截图…"
+  },
+  "panel_inspect_card_source": {
+    "message": "源码"
+  },
+  "panel_inspect_card_source_pending": {
+    "message": "查找中…"
+  },
+  "panel_inspect_card_text": {
+    "message": "文字"
+  },
+  "panel_inspect_chip_aria": {
+    "message": "已选元素 $NAME$。按 Delete 移除。",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_chip_aria_stale": {
+    "message": "已选元素 $NAME$，页面之后变了。按 Delete 移除。",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_chip_foreign_frame": {
+    "message": "跨站 iframe"
+  },
+  "panel_inspect_chip_in_frame": {
+    "message": "在 iframe 里"
+  },
+  "panel_inspect_chip_in_shadow": {
+    "message": "在 Shadow DOM 里"
+  },
+  "panel_inspect_chip_pending": {
+    "message": "截图和源码位置还在获取"
+  },
+  "panel_inspect_chip_remove": {
+    "message": "移除这个元素"
+  },
+  "panel_inspect_chip_remove_named": {
+    "message": "移除 $NAME$",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_chip_stale": {
+    "message": "页面已变"
+  },
+  "panel_inspect_chip_stale_title": {
+    "message": "点选之后页面变了；会告诉 agent 它可能已经不在了。"
+  },
+  "panel_inspect_context_summary": {
+    "message": "$COUNT$ 个点选的元素",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_inspect_removed_live": {
+    "message": "已移除 $NAME$",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_keep_going": {
     "message": "继续"
   },
@@ -1824,17 +1970,11 @@
   "panel_old_build_busy": {
     "message": "这个 profile 上还有旧版 chrome-use 在运行，新版暂时接管不了。请先回应或停止下面的对话，然后重新发送。"
   },
-  "panel_old_build_open": {
-    "message": "打开"
-  },
   "panel_old_build_force_hint": {
     "message": "也可以在终端运行下面的命令，停止旧版的所有对话，让新版直接接管："
   },
-  "panel_copy_command": {
-    "message": "复制命令"
-  },
-  "panel_copied": {
-    "message": "已复制 ✓"
+  "panel_old_build_open": {
+    "message": "打开"
   },
   "panel_old_build_stop": {
     "message": "停止它"
@@ -1886,6 +2026,21 @@
   },
   "panel_phase_unknown": {
     "message": "响应状态未知"
+  },
+  "panel_pick_cancel_title": {
+    "message": "停止选择（Esc）"
+  },
+  "panel_pick_failed": {
+    "message": "没能在这个页面上开始选择。"
+  },
+  "panel_pick_permission_denied": {
+    "message": "选择元素需要访问这个网站的权限。Chrome 询问时请允许，或者在页面上按 Alt+Shift+C。不想每个网站都问，可以在设置里打开「允许在所有网站选择元素」。"
+  },
+  "panel_pick_title": {
+    "message": "选择元素：在页面上点一个，直接放进这里（按住 Shift 连选）"
+  },
+  "panel_pick_unavailable": {
+    "message": "这个页面不能选择元素"
   },
   "panel_pointed_at": {
     "message": "浏览器工具指向：$PAGES$",
@@ -2865,7 +3020,7 @@
     "message": "放弃预览"
   },
   "sidepanel_empty_detail": {
-    "message": "描述一个页面或任务。agent 会在自己的浏览器会话里工作，使用你本地 CLI 的登录。"
+    "message": "描述一个页面或任务。agent 默认在这个标签页里工作（随时可以收回），使用你本地 CLI 的登录。"
   },
   "sidepanel_empty_title": {
     "message": "想让浏览器做什么？"
@@ -2908,6 +3063,9 @@
   },
   "sidepanel_import_source_placeholder": {
     "message": "绝对路径或仓库地址"
+  },
+  "sidepanel_inspect_chips": {
+    "message": "点选的元素"
   },
   "sidepanel_inspect_replies": {
     "message": "agent 的回复"
@@ -2974,6 +3132,15 @@
   },
   "sidepanel_phase_ready": {
     "message": "就绪"
+  },
+  "sidepanel_pick_cancel": {
+    "message": "取消"
+  },
+  "sidepanel_pick_element": {
+    "message": "选择元素"
+  },
+  "sidepanel_pick_hint": {
+    "message": "在页面上点一个元素 · Shift+点击可连选 · Esc 取消"
   },
   "sidepanel_preview_changes": {
     "message": "预览改动"
@@ -3259,5 +3426,11 @@
   },
   "timeline_verdict_page_not_recorded": {
     "message": "未记录页面"
+  },
+  "options_pick_all_name": {
+    "message": "允许在所有网站选择元素"
+  },
+  "options_pick_all_hint": {
+    "message": "Chrome 只问一次，不用在每个网站第一次选择元素时再问。插件仍然只在你选择元素时才接触页面。"
   }
 }
