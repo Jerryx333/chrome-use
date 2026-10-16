@@ -1,5 +1,5 @@
 // Live end-to-end check of per-tab side panels (ab-connect 0.5.63, CLI
-// 1.5.222) through the real side panel (build host only; one browser run per
+// 1.5.223) through the real side panel (build host only; one browser run per
 // host at a time):
 //   HOST_BIN=<chrome-use> CHROME=<Chrome for Testing> EXT_DIR=<extension> node per-tab-live.mjs
 // Chrome for Testing runs headless with its own profile, the unpacked
@@ -10,6 +10,8 @@
 //   1. tab X's panel starts a new conversation; its first message lends X by
 //      itself (AI badge, grant bar), and the agent's call without a tab handle
 //      runs in X, with no tab of its own opened;
+//   1b. the conversation's daemon exits (as after its idle timeout); the next
+//      message still runs in X and opens no tab or window;
 //   2. tab Y has no panel until one is opened on it; Y's panel starts its own
 //      conversation; X's panel still shows X's;
 //   3. slash completion in the middle of a message, and no raw message key on
@@ -100,6 +102,22 @@ try {
   check(lent.binding[`ab_panel_tab_${X.tabId}`] === c1, 'X is bound to its conversation');
   const sendParams = (await rig.service.journal(c1)).events.find(e => e.kind === 'tabGrant');
   check(sendParams?.data.granted === true && sendParams.data.tabId === X.tabId, 'the service holds the grant');
+
+  // 1b. The session's daemon exits between turns, as after its idle timeout.
+  const pidFile = path.join(rig.home, '.chrome-use', `panel-${c1}.pid`);
+  const firstPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  process.kill(firstPid, 'SIGTERM');
+  await waitFor(() => { try { process.kill(firstPid, 0); return false; } catch { return true; } }, { timeout: 20000, label: 'daemon exit' });
+  const windowsBefore = (await rig.ev('chrome.windows.getAll()')).length;
+  scenario('pt-again', { steps: [{ tool: 'chrome_use_eval', args: { script: 'location.href' } }, { say: 'Still here.' }] });
+  await px.run(`(() => { document.getElementById('message').value = 'run scenario pt-again'; document.getElementById('composer').requestSubmit(); return true; })()`);
+  await turnOf(c1, 2);
+  const again = backendLog().filter(e => e.event === 'tool' && e.scenario === 'pt-again');
+  const restarted = { pid: Number(fs.readFileSync(pidFile, 'utf8').trim()), firstPid, tabs: (await rig.ev('chrome.tabs.query({})')).map(t => t.url), windows: (await rig.ev('chrome.windows.getAll()')).length, windowsBefore, result: again.map(e => ({ isError: e.isError, result: e.result.slice(0, 300) })) };
+  step('after a daemon restart', restarted);
+  check(restarted.pid !== firstPid, 'a new daemon served the turn');
+  check(again.length === 1 && !again[0].isError && again[0].result.includes(`${rig.site}/a`), 'the call without a tab handle still ran in X');
+  check(restarted.tabs.length === tabsBefore && restarted.windows === windowsBefore, 'no tab or window was opened');
 
   // 2. Y has no panel until one is opened there; then its own conversation.
   await activate(rig, Y);

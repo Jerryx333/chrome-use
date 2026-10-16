@@ -3068,6 +3068,23 @@ fn validate_reply(method: &str, original: &Value, result: &Value) -> Result<(), 
 /// the old process did not confirm its exit, the message stays active and the
 /// conversation needs recovery; otherwise the turn simply failed.
 async fn launch(engine: &Arc<Mutex<Engine>>, id: &str, message: Message) -> Result<(), String> {
+    // A lent tab stays the session's tab across a daemon that exited (idle)
+    // since the grant: a new one starts by adopting it, so the agent's first
+    // command opens no about:blank tab and no agent window.
+    if let Some(grant) = message.tab_grant.as_ref() {
+        let session = format!("panel-{id}");
+        if !crate::connection::daemon_ready(&session) {
+            let profile = engine.lock().await.profile.clone();
+            if let Err(error) = adopt_granted_tab(&profile, &session, grant.tab_id).await {
+                let mut e = engine.lock().await;
+                let _ = e.record(
+                    id,
+                    "tabGrantAdopt",
+                    json!({"tabId":grant.tab_id,"adopted":false,"error":error}),
+                );
+            }
+        }
+    }
     let Err(failure) = start(engine, id, message).await else {
         return Ok(());
     };
