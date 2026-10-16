@@ -165,6 +165,9 @@ details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .inspect-chip .inspect-chip-tag { flex:none; color:var(--muted); font-size:11px; }
 .inspect-chip .inspect-chip-tag.stale { color:var(--warning); }
 .inspect-chip.stale .inspect-chip-label { opacity:.6; text-decoration:line-through; text-decoration-thickness:1px; }
+.inspect-context { margin-top:4px; font-size:12px; }
+.inspect-context summary { cursor:pointer; color:var(--muted); }
+.inspect-context pre { margin:4px 0 0; max-height:240px; overflow:auto; white-space:pre-wrap; word-break:break-word; font-size:11px; }
 .inspect-chip button { border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
 .page-ref { font-size:11px; color:var(--muted); margin-top:3px; max-width:88%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .page-ref::before { content:"↳ "; }

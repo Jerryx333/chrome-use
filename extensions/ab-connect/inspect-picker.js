@@ -167,11 +167,14 @@
   }
 
   async function report() {
+    // Described before the probe attribute goes on, so the element's HTML
+    // never carries it.
+    const elements = selected.map(node => X.describe(node));
     const attribute = 'data-' + letters(12);
     selected.forEach((node, i) => node.setAttribute(attribute, String(i)));
     try {
       const revision = document.querySelector('meta[name="chrome-use-revision"]')?.getAttribute('content') || null;
-      await send({ type: 'inspect:selection', selectionSeq, elements: selected.map(node => X.describe(node)), probeAttribute: attribute, layout: layoutNow(), revision });
+      await send({ type: 'inspect:selection', selectionSeq, elements, probeAttribute: attribute, layout: layoutNow(), revision });
     } finally {
       for (const node of selected) node.removeAttribute(attribute);
     }

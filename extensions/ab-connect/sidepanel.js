@@ -8,7 +8,7 @@ import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } fro
 import { createProjectChoice, folderLabel } from './project-picker.js';
 import { grantRefusal, originOf } from './tab-grant.js';
 import { panelTabKey, panelTabFrom } from './panel-tabs.js';
-import { inspectChipsKey, chipTitle, composeMessage, removeChip, withinLabel } from './inspect-chips.js';
+import { inspectChipsKey, chipTitle, composeMessage, removeChip, withinLabel, splitElementContext } from './inspect-chips.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -624,7 +624,12 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       view.text = row.text;
       // Agent replies are Markdown; user text and tool output stay literal.
       if (row.type === 'assistant') { renderMarkdown(document, view.content, row.text.trim()); view.container.hidden = !row.text.trim(); }
-      else view.content.textContent = row.text;
+      else {
+        // Picked elements ride in the message; the transcript folds them.
+        const picked = row.type === 'user' ? splitElementContext(row.text) : null;
+        view.content.textContent = picked ? picked.words : row.text;
+        if (picked) { const fold = element('details', undefined, 'inspect-context'); fold.append(element('summary', t('panel_inspect_context_summary', picked.count)), element('pre', picked.block)); view.content.append(fold); }
+      }
     }
     if (row.type === 'user') view.speaker.textContent = row.queueStatus || '';
     if (row.type === 'tool') {

@@ -159,11 +159,15 @@ try {
   const ended = await waitFor(async () => { const r = await rig.service.journal(conversationId); return r.events.some(e => e.kind === 'turnEnded') && r.events; }, { timeout: 120000, interval: 500, label: 'turn ended' });
   const turn = backendLog().find(e => e.event === 'turn' && e.scenario === 'ip-act');
   const tool = backendLog().find(e => e.event === 'tool' && e.scenario === 'ip-act');
-  const userEvent = ended.find(e => e.data?.attachments);
+  const userEvent = ended.find(e => Array.isArray(e.data?.attachments) && e.data.attachments.length);
+  const attachedImages = backendLog().filter(e => e.event === 'in' && /localImage|"image"/.test(e.m || '')).length;
   const afterSend = await chipView(panel);
+  const folded = await waitFor(() => panel.run(`(() => { const d = document.querySelector('#transcript details.inspect-context'); return d && { summary: d.querySelector('summary').textContent, open: d.open, words: d.parentElement.firstChild.textContent }; })()`), { timeout: 10000, label: 'folded element block' }).catch(() => null);
   const reply = await waitFor(() => panel.run(`document.getElementById('transcript').innerText.includes('Found all three.') && true`), { timeout: 20000, label: 'reply shown' }).catch(() => false);
   await shotOf(panel.sid, '4-sent');
-  step('sent', { text: turn?.text?.slice(0, 6000), tool: tool && { isError: tool.isError, result: String(tool.result).slice(0, 400) }, attachments: userEvent?.data.attachments?.length ?? null, afterSend, reply });
+  step('sent', { text: turn?.text?.slice(0, 6000), tool: tool && { isError: tool.isError, result: String(tool.result).slice(0, 400) }, attachments: userEvent?.data.attachments?.length ?? null, attachmentEvent: userEvent?.kind ?? null, kinds: [...new Set(ended.map(e => e.kind))], attachedImages, afterSend, reply, folded });
+  check(folded && /3/.test(folded.summary) && !folded.open && folded.words.startsWith('Why is Save gray?'), 'the transcript shows the words and folds the element block');
+  check(!/data-[a-z]{12}=/.test(turn?.text || ''), 'no probe attribute in the HTML the agent got');
   check(turn && turn.text.includes('Why is Save gray?'), 'the agent got the question');
   for (const c of items) check(turn.text.includes(c.selector), `the agent got selector ${c.selector}`);
   check(turn.text.includes(`chrome-tab:${X.tabId}`), 'the agent was told which tab');

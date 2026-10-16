@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chipsFromAnnotations, mergeChips, markStale, removeChip, composeMessage, elementContext, locateExpression, withinLabel, inspectChipsKey, MAX_CHIPS } from './inspect-chips.js';
+import { chipsFromAnnotations, mergeChips, markStale, removeChip, composeMessage, elementContext, locateExpression, withinLabel, inspectChipsKey, splitElementContext, MAX_CHIPS } from './inspect-chips.js';
 
 const element = { label: 'button "Save"', selector: 'form > button.save', path: 'form > button.save', classes: 'save', rect: { x: 1, y: 2, width: 30, height: 10 }, text: 'Save', selectedText: '', nearby: [], styles: [], html: '<button>Save</button>', source: { kind: 'insp', path: 'src/Order.tsx', line: 4, column: 2 } };
 let n = 0;
@@ -71,4 +71,14 @@ test('page text cannot break out of its inline code', () => {
   const text = elementContext([chip]);
   assert.doesNotMatch(text, /\n# Heading/);
   assert.doesNotMatch(text, /\n- item/);
+});
+
+test('a sent message splits back into the words and the folded element block', () => {
+  const text = composeMessage('Why gray?', [make(), make({ selector: '#b' })], { tabId: 1 });
+  const split = splitElementContext(text);
+  assert.equal(split.words, 'Why gray?');
+  assert.equal(split.count, 2);
+  assert.ok(split.block.startsWith('[Page elements'));
+  assert.equal(splitElementContext('plain words'), null);
+  assert.equal(splitElementContext(composeMessage('', [make()])).words, '');
 });

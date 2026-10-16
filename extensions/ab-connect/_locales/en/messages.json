@@ -1779,6 +1779,14 @@
       }
     }
   },
+  "panel_inspect_context_summary": {
+    "message": "$COUNT$ picked elements",
+    "placeholders": {
+      "count": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_keep_going": {
     "message": "Keep going"
   },
