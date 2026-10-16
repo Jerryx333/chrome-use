@@ -60,9 +60,14 @@ async function fixture(overrides = {}, saved = {}) {
   for (const id of overrides.hiddenNodes || []) document.getElementById(id).hidden = true;
   const windows = overrides.presence || overrides.mode === 'tab' ? { async getCurrent() { return { id: 7 }; } } : undefined;
   const locations = [];
-  const panel = createPanel({ document, runtime, windows, mode: overrides.mode, initialConversation: overrides.initialConversation, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } } }, schedule() {}, cancel() {} });
+  const session = overrides.session ? { data: overrides.session, listeners: [],
+    async get(key) { return key === null ? { ...this.data } : key in this.data ? { [key]: this.data[key] } : {}; },
+    async set(values) { Object.assign(this.data, values); },
+    async remove(keys) { for (const key of [].concat(keys)) delete this.data[key]; } } : null;
+  let storageChanged = null;
+  const panel = createPanel({ document, runtime, windows, mode: overrides.mode, initialConversation: overrides.initialConversation, panelTab: overrides.panelTab, setLocation: id => locations.push(id), encodeImage: overrides.encodeImage, tabs: overrides.tabs, storage: { local: { async get() { return saved; }, async set(values) { writes.push(structuredClone(values)); } }, ...(session ? { session, onChanged: { addListener(fn) { storageChanged = fn; } } } : {}) }, schedule() {}, cancel() {} });
   await panel.start(); await settle();
-  return { panel, nodes, calls, chats, writes, presence, locations, grantUpdate(grants) { hostState({ type: 'ab-tab-grants', grants }); }, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
+  return { panel, nodes, calls, chats, writes, presence, locations, session, storageChange(changes) { storageChanged(changes, 'session'); }, grantUpdate(grants) { hostState({ type: 'ab-tab-grants', grants }); }, hostUpdate(state) { hostState({type:'ab-host-state',agentPanel:fullSupport,...state}); } };
 }
 
 test('a late stop acknowledgement cannot replace the selected conversation', async () => {
@@ -1030,5 +1035,38 @@ test('an unknown `/word` in the middle of a message is plain text, at the start 
   f.nodes.get('message').value = '/nothing here'; f.nodes.get('composer').fire('submit'); await settle(); await settle();
   assert.equal(f.nodes.get('notice').textContent, en.panel_skill_unknown.message);
   assert.equal(f.calls.filter(c => c.operation === 'conversationSend').length, 1);
+  f.panel.close();
+});
+
+// ---- One panel per tab (0.5.63) -----------------------------------------------
+
+test('a tab\'s panel shows that tab\'s conversation and means that tab by this page', async () => {
+  const tabs = { async get(id) { return { id, url: `https://shop.example/${id}`, title: `Tab ${id}` }; }, async query() { throw new Error('a tab panel never asks for the active tab'); }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ panelTab: 21, presence: true, tabs, session: { ab_panel_tab_21: 'b', ab_panel_tab_30: 'a' }, status: () => ({ connected: true, agentPanel: { ...fullSupport, pageContext: true } }) }, { ab_panel_conversation: 'a' });
+  await settle(); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b', 'its own conversation, not the last one used anywhere');
+  assert.equal(f.nodes.get('pageTitle').textContent, 'Tab 21');
+  assert.equal(f.presence.posted.at(-1).tabId, 21);
+  // Choosing a conversation another tab shows moves it here.
+  f.panel.select('a'); await settle(); await settle();
+  assert.deepEqual(f.session.data, { ab_panel_tab_21: 'a' });
+  assert.ok(!f.writes.some(w => 'ab_panel_conversation' in w));
+  // A new conversation leaves the tab unbound until it exists.
+  f.panel.select(''); await settle();
+  assert.deepEqual(f.session.data, {});
+  // A notification bound a conversation to this tab while the panel was open.
+  f.storageChange({ ab_panel_tab_21: { newValue: 'b' } }); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b');
+  // Another tab's change is not this panel's business.
+  f.storageChange({ ab_panel_tab_30: { newValue: 'a' } }); await settle();
+  assert.equal(f.nodes.get('conversation').value, 'b');
+  f.panel.close();
+});
+
+test('a panel opened on a new tab starts a new conversation', async () => {
+  const tabs = { async get(id) { return { id, url: 'https://new.example/', title: 'New' }; }, onActivated: { addListener() {} }, onUpdated: { addListener() {} } };
+  const f = await fixture({ panelTab: 44, tabs, session: { ab_panel_tab_21: 'b' } }, { ab_panel_conversation: 'b' });
+  await settle();
+  assert.equal(f.nodes.get('conversation').value, '');
   f.panel.close();
 });

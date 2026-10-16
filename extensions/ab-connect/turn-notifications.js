@@ -156,7 +156,30 @@ export class TurnNotifications {
  * the click's user gesture, so it is called before anything is awaited.
  * `pending` receives the selection for a panel that has yet to report.
  */
-export function openFromNotification(id, { windowId, chrome, panels, pending = () => {} }) {
+// `tabs` (one panel per tab, 0.5.63): { tabFor(conversationId), activeTab(windowId),
+// bind(tabId, conversationId), open(tabId), show(tabId) }, all answering at
+// once so the panel opens while the click's gesture lasts. Without it the
+// window's single panel is opened, as before.
+export function openFromNotification(id, { windowId, chrome, panels, pending = () => {}, tabs = null }) {
+  const postTo = (tabId, message) => { for (const [port, presence] of panels) if (presence.tabId === tabId) try { port.postMessage(message); } catch {} };
+  const openTab = tabId => void Promise.resolve(tabs.open(tabId)).catch(error => console.warn('Open the side panel:', String(error?.message || error)));
+  if (tabs && windowId !== null && windowId !== undefined) {
+    const finished = /^(schedule-run|panel-turn):([a-f0-9-]{36})$/.exec(id)?.[2];
+    if (id.startsWith('inspect-reply:') || finished) {
+      // The conversation's own tab when it has one, else the tab the user is on.
+      let tabId = finished ? tabs.tabFor(finished) : null;
+      if (tabId !== null) tabs.show(tabId);
+      else { tabId = tabs.activeTab(windowId); if (tabId !== null && finished) tabs.bind(tabId, finished); }
+      if (tabId !== null) {
+        if (id.startsWith('inspect-reply:')) void Promise.resolve(chrome.storage.local.set({ ab_panel_show_replies: Date.now() })).catch(() => {});
+        openTab(tabId);
+        void Promise.resolve(chrome.windows.update(windowId, { focused: true })).catch(() => {});
+        postTo(tabId, finished ? { type: 'select', conversationId: finished } : { type: 'showReplies' });
+        void Promise.resolve(chrome.notifications.clear(id)).catch(() => {});
+        return true;
+      }
+    }
+  }
   if (id.startsWith('inspect-reply:')) {
     // The side panel lists Inspect & Ask replies; open it where the user is.
     void Promise.resolve(chrome.storage.local.set({ ab_panel_show_replies: Date.now() })).catch(() => {});

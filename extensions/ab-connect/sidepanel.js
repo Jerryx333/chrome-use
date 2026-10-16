@@ -6,6 +6,7 @@ import { renderReplies, validReplies } from './inspect-replies.js';
 import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } from './resume-picker.js';
 import { createProjectChoice, folderLabel } from './project-picker.js';
 import { grantRefusal, originOf } from './tab-grant.js';
+import { panelTabKey, panelTabFrom } from './panel-tabs.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -62,7 +63,7 @@ function pageName(target) { const host = hostOf(target?.url); let path = ''; try
 function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
-export function createPanel({ document, runtime, storage, tabs, windows, mode = 'panel', initialConversation = '', setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
+export function createPanel({ document, runtime, storage, tabs, windows, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
   const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
@@ -83,6 +84,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   // beside it, so "this page" is a web tab of its window: the last one the
   // user was on, or the one they pick.
   const tabMode = mode === 'tab';
+  // One panel per tab (0.5.63): this panel belongs to `panelTab`, shows that
+  // tab's conversation and means that tab by "this page".
+  const tabBound = !tabMode && Number.isInteger(panelTab);
   const openInTab = document.getElementById('openInTab'), pagePicker = document.getElementById('pagePicker'), pageLabel = document.getElementById('pageLabel');
   let ownTabId = null, pickedTabId = null;
   // "Let the agent use this tab": grants live in the background (per tab,
@@ -371,10 +375,21 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     nodes.transcript.replaceChildren(nodes.empty); nodes.empty.hidden = false; controls(); renderConversationMenu();
     // A panel tab keeps its conversation in its own address, so opening one
     // never changes what the side panel shows next.
-    if (tabMode) setLocation(id); else storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
+    if (tabMode) setLocation(id); else if (tabBound) void bindTab(id).catch(() => {}); else storage?.local?.set({ ab_panel_conversation: id }).catch(() => {});
     if (!id) refreshProjects(); else projectChoice.hideQuestion();
     reportPresence();
     void poll().catch(error);
+  }
+  // This tab now shows `id`; a conversation is shown by one tab at a time, so
+  // another tab that showed it lets it go (its panel starts a new one).
+  async function bindTab(id) {
+    const key = panelTabKey(panelTab), session = storage?.session;
+    if (!session) return;
+    if (!id) { await session.remove(key); return; }
+    await session.set({ [key]: id });
+    const all = await session.get(null);
+    const others = Object.entries(all || {}).filter(([other, value]) => other !== key && other.startsWith('ab_panel_tab_') && value === id).map(([other]) => other);
+    if (others.length) await session.remove(others);
   }
   // Tell the background which conversation this panel shows, so a turn the
   // user is watching does not notify and its badge count clears.
@@ -383,7 +398,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
     if (!presencePort || windowId === null) return;
     const visible = document.visibilityState !== 'hidden' && !nodes.chatView.hidden;
     const repliesShown = visible && replyCount > 0 && replyBox.open === true;
-    try { presencePort.postMessage({ type: 'presence', windowId, conversationId: selected, visible, ...(repliesShown ? { repliesShown } : {}) }); } catch {}
+    try { presencePort.postMessage({ type: 'presence', windowId, ...(tabBound ? { tabId: panelTab } : {}), conversationId: selected, visible, ...(repliesShown ? { repliesShown } : {}) }); } catch {}
   }
   // Inspect & Ask replies: agents answer batches sent from the page picker,
   // and hosts that report `inspectReplies` keep them for this list.
@@ -1131,7 +1146,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   }
   async function refreshPage() {
     if (!tabs?.query) return;
-    const tab = tabMode ? await windowPage() : (await tabs.query({ active: true, currentWindow: true }))[0];
+    const tab = tabMode ? await windowPage() : tabBound ? await Promise.resolve(tabs.get?.(panelTab)).catch(() => null) : (await tabs.query({ active: true, currentWindow: true }))[0];
     const next = tab && typeof tab.id === 'number' && /^https?:/.test(tab.url || '') ? { tabId: tab.id, url: tab.url, title: tab.title || tab.url } : null;
     if (next?.tabId !== page?.tabId) pageDetached = false;
     const moved = next?.url !== page?.url;
@@ -1584,6 +1599,13 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       else if (connected) void poll().catch(error);
     }
   });
+  // Another tab took this tab's conversation, or a notification bound one here.
+  storage?.onChanged?.addListener?.((changes, area) => {
+    if (!tabBound || area !== 'session') return;
+    const change = changes[panelTabKey(panelTab)];
+    if (!change || (change.newValue || '') === selected || sending) return;
+    select(change.newValue || '');
+  });
   controls(); closeConversationMenu();
   return { async start() {
     try {
@@ -1592,7 +1614,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
       if (Date.now() - Number(saved?.ab_panel_show_replies || 0) < 30000) replyBox.open = true;
       if (chatAgents.has(saved?.ab_panel_agent)) preferredAgent = saved.ab_panel_agent;
       if (saved?.ab_panel_conversation_scope === 'all') scope = 'all';
-      selected = tabMode ? initialConversation : saved?.ab_panel_conversation || '';
+      if (tabBound) { const key = panelTabKey(panelTab); selected = (await Promise.resolve(storage?.session?.get?.(key)).catch(() => null))?.[key] || ''; }
+      else selected = tabMode ? initialConversation : saved?.ab_panel_conversation || '';
       if (saved?.ab_panel_full_access === false) newFullAccess = false;
       for (const [id, messageId] of Object.entries(saved?.ab_panel_pending || {}).slice(0, 64)) {
         if (typeof messageId === 'string' && messageId.length <= 80) pendingMessages.set(id, { id: messageId });
@@ -1613,7 +1636,7 @@ if (typeof document !== 'undefined') void i18nReady.then(() => {
   const mode = query.get('mode') === 'tab' ? 'tab' : 'panel';
   document.documentElement.dataset.mode = mode;
   const setLocation = id => { try { globalThis.history.replaceState(null, '', `?mode=tab${id ? `&conversation=${encodeURIComponent(id)}` : ''}`); } catch {} };
-  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, mode, initialConversation: query.get('conversation') || '', setLocation });
+  const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, mode, initialConversation: query.get('conversation') || '', panelTab: panelTabFrom(globalThis.location?.search), setLocation });
   void panel.start();
   globalThis.addEventListener('pagehide', () => panel.close());
 });

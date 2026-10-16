@@ -132,7 +132,7 @@ function workerFixture() {
   const tabReads = []
   let pending = Promise.resolve()
   const context = {
-    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null },    console,
+    tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null }, forgetTabPanel() {},    console,
     createTabAttachmentQueue,
     posted,
     tabs: new Map(),
