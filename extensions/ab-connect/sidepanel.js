@@ -1,7 +1,7 @@
 import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
-import { t, messageMap, applyI18n } from './i18n.js';
+import { t, messageMap, applyI18n, i18nReady } from './i18n.js';
 import { renderReplies, validReplies } from './inspect-replies.js';
 import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } from './resume-picker.js';
 import { createProjectChoice, folderLabel } from './project-picker.js';
@@ -1570,7 +1570,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, mode = 
   }, refresh, select, send, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
-if (typeof document !== 'undefined') {
+// The English fallback loads first, so the first render has no raw keys.
+if (typeof document !== 'undefined') void i18nReady.then(() => {
   applyI18n(document);
   const query = new URLSearchParams(globalThis.location?.search || '');
   const mode = query.get('mode') === 'tab' ? 'tab' : 'panel';
@@ -1579,4 +1580,4 @@ if (typeof document !== 'undefined') {
   const panel = createPanel({ document, runtime: globalThis.chrome?.runtime, storage: globalThis.chrome?.storage, tabs: globalThis.chrome?.tabs, windows: globalThis.chrome?.windows, mode, initialConversation: query.get('conversation') || '', setLocation });
   void panel.start();
   globalThis.addEventListener('pagehide', () => panel.close());
-}
+});
