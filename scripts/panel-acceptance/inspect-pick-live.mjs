@@ -161,7 +161,8 @@ try {
   await shot(panel.sid, '06-panel-four-chips');
   step('several', { chips: afterEsc.chips.map(c => c.text), longChip, overflow: afterEsc.overflow });
   check(longChip.truncated && longChip.chipRight <= longChip.width && afterEsc.overflow <= 0, 'a long name truncates; no horizontal overflow at 380 px');
-  check(await A.evaluate(page.sid, '![...document.documentElement.children].some(e => /^[A-Z]{5}-[A-Z]{6}$/.test(e.tagName))'), 'Esc removed the picker from the page');
+  // Esc stops picking at once; the overlay leaves once pending screenshots are in.
+  check(await waitFor(() => A.evaluate(page.sid, '![...document.documentElement.children].some(e => /^[A-Z]{5}-[A-Z]{6}$/.test(e.tagName))'), { timeout: 8000, label: 'picker gone' }).catch(() => false), 'Esc removed the picker from the page');
   void stopped;
 
   // 7. Delete a chip, send the rest.
