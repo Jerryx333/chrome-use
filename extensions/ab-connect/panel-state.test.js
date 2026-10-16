@@ -71,7 +71,7 @@ test('commands show their command line and output; reasoning is not a tool row',
 
 // Fixtures live outside the extension folder so they never ship to the store.
 import { readFileSync } from 'node:fs';
-import { assessmentLabel, outcomeLabel, stepVerdict, stepActions, actingPages } from './panel-state.js';
+import { assessmentLabel, outcomeLabel, stepVerdict, stepActions, actingPages, notStarted } from './panel-state.js';
 const fixture = name => JSON.parse(readFileSync(new URL(`../../cli/src/agent_panel/fixtures/panel/${name}`, import.meta.url), 'utf8'));
 const turnsJournal = fixture('journal-turns.json'), legacyJournal = fixture('journal-v1.5.214.json'), oldestJournal = fixture('journal-oldest.json');
 const replay = events => { const timeline = new PanelTimeline(); timeline.apply(events, events.at(-1)?.sequence ?? 0); return timeline; };
@@ -241,4 +241,28 @@ test('imported CLI history is projected apart from the turns', () => {
   const bad = new PanelTimeline();
   bad.apply([{ sequence: 1, kind: 'importedHistory', data: { role: 'system', text: 'x' } }, { sequence: 2, kind: 'importedHistory', data: { role: 'user', text: { not: 'text' } } }], 2);
   assert.deepEqual(bad.imported.messages, []);
+});
+
+test('a message queued behind a running turn has not started until its own turnStarted', () => {
+  const events = [event(1,'user',{messageId:'busy',text:'work'}),event(2,'turnStarted',{v:1,messageId:'busy',generation:1}),
+    event(3,'user',{messageId:'q1',text:'one'}),event(4,'user',{messageId:'q2',text:'two'}),event(5,'user',{messageId:'q3',text:'three'})];
+  const timeline = replay(events);
+  let queued = new Set(['q1','q2','q3']);
+  assert.deepEqual(timeline.turnOrder.filter(id => !notStarted(timeline.turns.get(id), queued)), ['busy']);
+  // An edit renames the waiting turn; a removal never runs.
+  timeline.apply([event(6,'queueEdited',{messageId:'q2',replacementId:'q2b',text:'two, edited'}),event(7,'queueRemoved',{messageId:'q3'})],7);
+  queued = new Set(['q1','q2b']);
+  assert.deepEqual(timeline.turnOrder.filter(id => !notStarted(timeline.turns.get(id), queued)), ['busy']);
+  timeline.apply([event(8,'turnEnded',{messageId:'busy',outcome:'completed'}),event(9,'turnStarted',{v:1,messageId:'q1',generation:1})],9);
+  queued = new Set(['q2b']);
+  assert.deepEqual(timeline.turnOrder.filter(id => !notStarted(timeline.turns.get(id), queued)), ['busy','q1']);
+  assert.equal(timeline.turns.get('q1').state,'running');
+  timeline.apply([event(10,'turnEnded',{messageId:'q1',outcome:'completed'}),event(11,'turnStarted',{v:1,messageId:'q2b',generation:1})],11);
+  assert.deepEqual(timeline.turnOrder.filter(id => !notStarted(timeline.turns.get(id), new Set())), ['busy','q1','q2b']);
+  // Journals that never recorded a turn start keep every message visible.
+  for (const journal of [legacyJournal, oldestJournal]) {
+    const old = replay(journal.events);
+    assert.ok(old.turnOrder.length > 0);
+    assert.ok(old.turnOrder.every(id => !notStarted(old.turns.get(id), new Set())));
+  }
 });
