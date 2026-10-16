@@ -3504,9 +3504,18 @@ async fn adopt_granted_tab(profile: &str, session: &str, tab_id: i64) -> Result<
         return Err(format!("not run in tests ({profile}, {session}, {tab_id})"));
     }
     let executable = std::env::current_exe().map_err(|_| "Cannot locate chrome-use")?;
+    let handle = format!("chrome-tab:{tab_id}");
+    // A session with no daemon yet starts one that adopts the tab as its
+    // first connect (`adopt`), so it opens no about:blank tab, and with it no
+    // agent window, first. A running daemon takes it as its current tab.
+    let args: Vec<&str> = if crate::connection::daemon_ready(session) {
+        vec!["--json", "tab", "adopt", &handle]
+    } else {
+        vec!["--json", "adopt", &handle]
+    };
     let mut command = tokio::process::Command::new(&executable);
     command
-        .args(["--json", "tab", "adopt", &format!("chrome-tab:{tab_id}")])
+        .args(&args)
         .env("AGENT_BROWSER_BROWSER", profile)
         .env("AGENT_BROWSER_SESSION", session)
         .env("CHROME_USE_NO_UPDATE_CHECK", "1")
