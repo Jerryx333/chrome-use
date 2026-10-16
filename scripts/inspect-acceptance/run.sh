@@ -16,6 +16,9 @@ p='ext-acc/manifest.json'; m=json.load(open(p))
 m['host_permissions']=['<all_urls>']  # stands in for the activeTab grant a real shortcut gives
 json.dump(m,open(p,'w'),indent=2)
 PY
+# Scenarios match English button text; without other locales the UI is
+# English whatever the build host's system language.
+find ext-acc/_locales -mindepth 1 -maxdepth 1 ! -name en -exec rm -rf {} +
 (cd react-app && npx vite --port 5173 --strictPort >/tmp/inspect-vite-react.log 2>&1 &) 
 (cd vue-app && npx vite --port 5174 --strictPort >/tmp/inspect-vite-vue.log 2>&1 &)
 for p in 5173 5174; do for i in $(seq 1 60); do curl -sf "http://localhost:$p/" >/dev/null && break; sleep 0.5; done; done

@@ -52,8 +52,7 @@ fs.writeFileSync(path.join(userDataDir, 'NativeMessagingHosts', 'com.agent_brows
 }));
 const b = await launch({
   chrome: CHROME, port: 9344, userDataDir,
-  // English UI whatever the build host's language: scenarios match button text.
-  args: ['--headless=new', '--lang=en-US', '-AppleLanguages', '(en-US)', `--load-extension=${path.join(dir, 'ext-acc')}`, `--disable-extensions-except=${path.join(dir, 'ext-acc')}`,
+  args: ['--headless=new', `--load-extension=${path.join(dir, 'ext-acc')}`, `--disable-extensions-except=${path.join(dir, 'ext-acc')}`,
     '--host-resolver-rules=MAP test.inspect.example 127.0.0.1:8899, MAP prod.inspect.example 127.0.0.1:8898, MAP evil.inspect.example 127.0.0.1:8897'],
   env: { CHROME_USE_INSPECT_OCS: path.join(dir, 'fake-ocs') },
 });
