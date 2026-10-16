@@ -136,4 +136,6 @@ try {
   save();
   cleanup(rig);
   console.log(`evidence: ${out}`);
+  // The rig's proxy and service sockets keep the event loop alive.
+  setTimeout(() => process.exit(evidence.passed ? 0 : 1), 1000).unref();
 }
