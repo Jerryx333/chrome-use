@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.232
+## 1.5.233
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.71 (no CLI change; this release ships the extension fixes).
+
+### Bug Fixes
+
+- **Messages sent while the agent is working show only in the queue.** Each one used to appear twice: as a sent message in the conversation with "Checks not recorded" under it, as if it had already run, and again in the queue below. It now stays in the queue, where it can be edited or removed, and moves into the conversation when its turn starts.
+
+### New Features
+
+- **Thermo's tab organizer can add tabs to a group it made earlier, and new groups stay in the tabs' own window** instead of moving to the focused window.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.232
+
 Works with extension ab-connect 0.5.70 (no CLI change; this release ships the extension fix).
 
 ### Bug Fixes
@@ -12,7 +29,6 @@ Works with extension ab-connect 0.5.70 (no CLI change; this release ships the ex
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.231
 
