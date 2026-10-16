@@ -88,6 +88,7 @@ try {
   // 1. The Pick button in the toolbar.
   const panel = await openPanelFor(X);
   await watchChips(panel);
+  await sleep(800);
   const idle = await panelView(panel);
   await shot(panel.sid, '01-panel-idle');
   step('panel idle', idle);
@@ -115,6 +116,7 @@ try {
   await b.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: ps.x, y: ps.y, button: 'left', clickCount: 1 }, page.sid);
   const t0 = Date.now();
   await b.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: ps.x, y: ps.y, button: 'left', clickCount: 1 }, page.sid);
+  await sleep(120);
   await shot(page.sid, '04-page-flash');
   const landed = await waitFor(async () => { const l = await panel.run('globalThis.__landed'); const k = Object.keys(l)[0]; return k && { label: k, at: l[k].at, cls: l[k].cls }; }, { interval: 20, label: 'chip landed' });
   await shot(panel.sid, '04-panel-chip-landed');

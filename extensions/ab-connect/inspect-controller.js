@@ -22,6 +22,7 @@ const MAX_ELEMENTS = 8;
 const DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const CAPTURE_GAP_MS = 600;
+const DIRECT_FLASH_MS = 800;
 const EDITORS = ['vscode', 'cursor', 'windsurf', 'webstorm', 'none'];
 
 export const DEFAULT_INSPECT_SETTINGS = Object.freeze({ enabled: false, editor: 'vscode' });
@@ -379,7 +380,10 @@ export class InspectController {
   // over each other; each is bound to the selection revision it was made for.
   queueCapture(instance) {
     const selection = instance.selectionRevision;
-    instance.captureChain = (instance.captureChain || Promise.resolve()).then(() => this.capture(instance, selection)).catch(() => {})
+    // A direct pick's "Added to chat" flash plays before the overlay is
+    // hidden for the screenshot; the chip is already in the composer.
+    const settle = instance.mode === 'direct' ? () => new Promise(resolve => setTimeout(resolve, DIRECT_FLASH_MS)) : () => null;
+    instance.captureChain = (instance.captureChain || Promise.resolve()).then(settle).then(() => this.capture(instance, selection)).catch(() => {})
       .then(() => (instance.mode === 'direct' ? this.directCaptured(instance, selection, instance.lastImages?.selection === selection ? instance.lastImages.images : null) : null)).catch(() => {});
     return instance.captureChain;
   }
