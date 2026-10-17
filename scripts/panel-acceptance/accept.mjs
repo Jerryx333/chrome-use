@@ -112,14 +112,33 @@ const h = {
   // click on a button in an extension page opens it.
   async openPanel(windowId) {
     const win = windowId ?? (await rig.ev('chrome.windows.getLastFocused()')).id;
+    // Since 0.5.63 each tab has its own panel (setOptions for the tab, then
+    // open it), the way the toolbar button does; older builds open one panel
+    // per window. The opener must be in the same window: a click in another
+    // window does not count as a user gesture for sidePanel.open.
+    const tab = (await rig.ev(`chrome.tabs.query({ active: true, windowId: ${win} })`))?.[0]?.id;
+    const perTab = await rig.ev(`chrome.runtime.getManifest().version.split('.').map(Number).reduce((a, n) => a * 1000 + n, 0) >= 5063`);
     const before = new Set((await rig.browser.send('Target.getTargets')).targetInfos.filter(t => t.url.includes('/sidepanel.html')).map(t => t.targetId));
     const { targetId: opener } = await rig.browser.send('Target.createTarget', { url: `chrome-extension://${EXT}/sidepanel.html?opener=1` });
     const os = await rig.cdp.attach(opener);
     await waitFor(() => rig.cdp.evaluate(os, 'document.readyState === "complete" && !!document.body'), { label: 'opener load' });
     await sleep(500);
-    await rig.cdp.evaluate(os, `(() => { const b = document.createElement('button'); b.id = '__open'; b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => chrome.sidePanel.open({ windowId: ${win} }).then(() => { b.dataset.r = 'ok'; }, e => { b.dataset.r = e.message; }); (document.body || document.documentElement).append(b); return true; })()`);
+    // setOptions needs no gesture; the click then only has to open.
+    if (perTab && Number.isInteger(tab)) await rig.ev(`chrome.sidePanel.setOptions({ tabId: ${tab}, path: 'sidepanel.html?tab=${tab}', enabled: true })`);
+    const open = perTab && Number.isInteger(tab) ? `chrome.sidePanel.open({ tabId: ${tab} })` : `chrome.sidePanel.open({ windowId: ${win} })`;
+    await rig.cdp.evaluate(os, `(() => { const b = document.createElement('button'); b.id = '__open'; b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => ${open}.then(() => { b.dataset.r = 'ok'; }, e => { b.dataset.r = e.message; }); (document.body || document.documentElement).append(b); return true; })()`);
     await rig.cdp.click(os, 50, 40);
-    const target = await waitFor(async () => (await rig.browser.send('Target.getTargets')).targetInfos.find(t => t.url.includes('/sidepanel.html') && !t.url.includes('opener=1') && !before.has(t.targetId)), { label: 'side panel target' });
+    // A tab's panel shows once that tab is active again: drop the opener first.
+    if (perTab && Number.isInteger(tab)) {
+      await waitFor(() => rig.cdp.evaluate(os, `document.getElementById('__open')?.dataset.r || ''`), { label: 'panel open result', timeout: 5000 }).catch(() => {});
+      await rig.browser.send('Target.closeTarget', { targetId: opener }).catch(() => {});
+      await rig.ev(`chrome.tabs.update(${tab}, { active: true })`).catch(() => {});
+    }
+    const target = await waitFor(async () => (await rig.browser.send('Target.getTargets')).targetInfos.find(t => t.url.includes('/sidepanel.html') && !t.url.includes('opener=1') && !before.has(t.targetId)), { label: 'side panel target' }).catch(async error => {
+      const result = await rig.cdp.evaluate(os, `document.getElementById('__open')?.dataset.r || 'no result'`).catch(e => e.message);
+      const targets = (await rig.browser.send('Target.getTargets')).targetInfos.map(t => `${t.type}:${t.url.slice(0, 80)}`);
+      throw new Error(`${error.message} (perTab=${perTab} tab=${tab} win=${win} open: ${result}; targets: ${targets.join(' | ')})`);
+    });
     await rig.browser.send('Target.closeTarget', { targetId: opener }).catch(() => {});
     const sid = await rig.cdp.attach(target.targetId);
     await waitFor(() => rig.cdp.evaluate(sid, 'document.readyState === "complete"'), { label: 'panel load' });
@@ -128,6 +147,9 @@ const h = {
   async screenshot(name, conversationId, panel) {
     panel ||= (h.panel ||= await h.openPanel());
     await rig.ev(`chrome.storage.local.set({ ab_panel_conversation: ${JSON.stringify(conversationId)}, ab_panel_conversation_scope: "all" })`);
+    // A tab's panel (0.5.63+) shows the conversation bound to its tab.
+    const tab = await rig.cdp.evaluate(panel.sid, `new URLSearchParams(location.search).get('tab')`).catch(() => null);
+    if (tab) await rig.ev(`chrome.storage.session.set({ ['ab_panel_tab_${tab}']: ${JSON.stringify(conversationId)} })`);
     await rig.browser.send('Page.reload', {}, panel.sid);
     await sleep(1000);
     await waitFor(() => rig.cdp.evaluate(panel.sid, 'document.readyState === "complete"'), { label: 'panel reload' });
