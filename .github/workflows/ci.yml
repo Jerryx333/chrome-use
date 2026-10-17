@@ -65,6 +65,9 @@ jobs:
       - name: Test shell installer completion
         run: sh scripts/test-install.sh
 
+      - name: Test shell installer app-bundle placement
+        run: sh scripts/test-install-app-bundle.sh
+
       - name: Check skills frontmatter
         run: python3 scripts/check-skills-frontmatter.py
 

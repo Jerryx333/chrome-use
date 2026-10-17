@@ -490,10 +490,7 @@ fn binary_dir_writable() -> bool {
 }
 
 fn current_bin_dir() -> Option<PathBuf> {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.canonicalize().ok())
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    crate::app_bundle::install_dir(&std::env::current_exe().ok()?)
 }
 
 /// Quiet, non-interactive in-place upgrade for the detached `__auto-upgrade`
