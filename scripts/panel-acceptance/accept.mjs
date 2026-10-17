@@ -128,6 +128,12 @@ const h = {
     const open = perTab && Number.isInteger(tab) ? `chrome.sidePanel.open({ tabId: ${tab} })` : `chrome.sidePanel.open({ windowId: ${win} })`;
     await rig.cdp.evaluate(os, `(() => { const b = document.createElement('button'); b.id = '__open'; b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => ${open}.then(() => { b.dataset.r = 'ok'; }, e => { b.dataset.r = e.message; }); (document.body || document.documentElement).append(b); return true; })()`);
     await rig.cdp.click(os, 50, 40);
+    // A tab's panel shows once that tab is active again: drop the opener first.
+    if (perTab && Number.isInteger(tab)) {
+      await waitFor(() => rig.cdp.evaluate(os, `document.getElementById('__open')?.dataset.r || ''`), { label: 'panel open result', timeout: 5000 }).catch(() => {});
+      await rig.browser.send('Target.closeTarget', { targetId: opener }).catch(() => {});
+      await rig.ev(`chrome.tabs.update(${tab}, { active: true })`).catch(() => {});
+    }
     const target = await waitFor(async () => (await rig.browser.send('Target.getTargets')).targetInfos.find(t => t.url.includes('/sidepanel.html') && !t.url.includes('opener=1') && !before.has(t.targetId)), { label: 'side panel target' }).catch(async error => {
       const result = await rig.cdp.evaluate(os, `document.getElementById('__open')?.dataset.r || 'no result'`).catch(e => e.message);
       const targets = (await rig.browser.send('Target.getTargets')).targetInfos.map(t => `${t.type}:${t.url.slice(0, 80)}`);
