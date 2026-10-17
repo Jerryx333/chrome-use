@@ -21,6 +21,13 @@ rm -rf "${WORK_ROOT:-/tmp/pa}"/*/bin/chrome-use-* "${WORK_ROOT:-/tmp/pa}"/*/Chro
 mkdir -p "$WORK/bin" "$OUT"
 stage_host_bin "$SRC" "$WORK"
 export EXT_DIR="${EXT_DIR:-$PWD/ext}"
+# The checks read the panel's English text, and macOS ignores --lang: stage a
+# copy of the extension with only the English messages (as inspect-acceptance does).
+if [ -d "$EXT_DIR/_locales" ]; then
+  rm -rf "$WORK/ext"; mkdir -p "$WORK/ext"; cp -R "$EXT_DIR/." "$WORK/ext/"
+  find "$WORK/ext/_locales" -mindepth 1 -maxdepth 1 ! -name en -exec rm -rf {} +
+  export EXT_DIR="$WORK/ext"
+fi
 # v1.5.214 release binary and extension for checks 15 and 16 (comparison runs).
 export OLD_BIN="${OLD_BIN:-$HOME/panel-accept/old/chrome-use}"
 export OLD_EXT_DIR="${OLD_EXT_DIR:-$HOME/panel-accept/old/ext}"
