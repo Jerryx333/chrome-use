@@ -112,12 +112,21 @@ const h = {
   // click on a button in an extension page opens it.
   async openPanel(windowId) {
     const win = windowId ?? (await rig.ev('chrome.windows.getLastFocused()')).id;
+    // Since 0.5.63 each tab has its own panel (setOptions for the tab, then
+    // open it), the way the toolbar button does; older builds open one panel
+    // per window. The opener lives in its own window so the page tab stays
+    // the active one.
+    const tab = (await rig.ev(`chrome.tabs.query({ active: true, windowId: ${win} })`))?.[0]?.id;
+    const perTab = await rig.ev(`chrome.runtime.getManifest().version.split('.').map(Number).reduce((a, n) => a * 1000 + n, 0) >= 5063`);
     const before = new Set((await rig.browser.send('Target.getTargets')).targetInfos.filter(t => t.url.includes('/sidepanel.html')).map(t => t.targetId));
-    const { targetId: opener } = await rig.browser.send('Target.createTarget', { url: `chrome-extension://${EXT}/sidepanel.html?opener=1` });
+    const { targetId: opener } = await rig.browser.send('Target.createTarget', { url: `chrome-extension://${EXT}/sidepanel.html?opener=1`, ...(perTab ? { newWindow: true } : {}) });
     const os = await rig.cdp.attach(opener);
     await waitFor(() => rig.cdp.evaluate(os, 'document.readyState === "complete" && !!document.body'), { label: 'opener load' });
     await sleep(500);
-    await rig.cdp.evaluate(os, `(() => { const b = document.createElement('button'); b.id = '__open'; b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => chrome.sidePanel.open({ windowId: ${win} }).then(() => { b.dataset.r = 'ok'; }, e => { b.dataset.r = e.message; }); (document.body || document.documentElement).append(b); return true; })()`);
+    const open = perTab && Number.isInteger(tab)
+      ? `chrome.sidePanel.setOptions({ tabId: ${tab}, path: 'sidepanel.html?tab=${tab}', enabled: true }); chrome.sidePanel.open({ tabId: ${tab} })`
+      : `chrome.sidePanel.open({ windowId: ${win} })`;
+    await rig.cdp.evaluate(os, `(() => { const b = document.createElement('button'); b.id = '__open'; b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => ${open}.then(() => { b.dataset.r = 'ok'; }, e => { b.dataset.r = e.message; }); (document.body || document.documentElement).append(b); return true; })()`);
     await rig.cdp.click(os, 50, 40);
     const target = await waitFor(async () => (await rig.browser.send('Target.getTargets')).targetInfos.find(t => t.url.includes('/sidepanel.html') && !t.url.includes('opener=1') && !before.has(t.targetId)), { label: 'side panel target' });
     await rig.browser.send('Target.closeTarget', { targetId: opener }).catch(() => {});
