@@ -17,7 +17,8 @@ export WORK="${WORK_ROOT:-/tmp/pa}/$STAMP"
 export OUT="${OUT:-$PWD/results/$(date +%Y-%m-%d)}"
 # Disk on the build host is tight: keep earlier runs' journals, drop their binary copies.
 rm -rf "${WORK_ROOT:-/tmp/pa}"/*/bin/chrome-use-* "${WORK_ROOT:-/tmp/pa}"/*/ChromeUse.app 2>/dev/null || true
-mkdir -p "$WORK" "$OUT"
+# bin/ holds the comparison binaries some checks copy in (check 15).
+mkdir -p "$WORK/bin" "$OUT"
 stage_host_bin "$SRC" "$WORK"
 export EXT_DIR="${EXT_DIR:-$PWD/ext}"
 # v1.5.214 release binary and extension for checks 15 and 16 (comparison runs).
