@@ -1,12 +1,14 @@
 #!/bin/sh
 # Verifiable-panel-turns live acceptance on the build host.
-# Usage: ./run.sh <host binary> [ONLY=1,4]
-# The binary is copied under a fresh name each run: macOS SIGKILLs a binary
-# that was overwritten in place while its old pages are cached.
+# Usage: ./run.sh <host binary or ChromeUse.app> [ONLY=1,4]
+# The binary is copied into a fresh ChromeUse.app each run (stage-bin.sh):
+# macOS SIGKILLs a binary that was overwritten in place while its old pages
+# are cached.
 set -e
 cd "$(dirname "$0")"
+. ./stage-bin.sh
 SRC="$1"; shift || true
-[ -n "$SRC" ] && [ -x "$SRC" ] || { echo "usage: $0 <chrome-use binary>"; exit 64; }
+[ -n "$SRC" ] && [ -e "$SRC" ] || { echo "usage: $0 <chrome-use binary or ChromeUse.app>"; exit 64; }
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 export CHROME="${CHROME:-$HOME/.chrome-use/browsers/chrome-155.0.8059.39/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing}"
 STAMP="$(date +%m%d%H%M%S)"
@@ -14,11 +16,9 @@ STAMP="$(date +%m%d%H%M%S)"
 export WORK="${WORK_ROOT:-/tmp/pa}/$STAMP"
 export OUT="${OUT:-$PWD/results/$(date +%Y-%m-%d)}"
 # Disk on the build host is tight: keep earlier runs' journals, drop their binary copies.
-rm -f "${WORK_ROOT:-/tmp/pa}"/*/bin/chrome-use-* 2>/dev/null || true
-mkdir -p "$WORK/bin" "$OUT"
-export HOST_BIN="$WORK/bin/chrome-use-$STAMP"
-cp "$SRC" "$HOST_BIN"
-chmod 755 "$HOST_BIN"
+rm -rf "${WORK_ROOT:-/tmp/pa}"/*/bin/chrome-use-* "${WORK_ROOT:-/tmp/pa}"/*/ChromeUse.app 2>/dev/null || true
+mkdir -p "$WORK" "$OUT"
+stage_host_bin "$SRC" "$WORK"
 export EXT_DIR="${EXT_DIR:-$PWD/ext}"
 # v1.5.214 release binary and extension for checks 15 and 16 (comparison runs).
 export OLD_BIN="${OLD_BIN:-$HOME/panel-accept/old/chrome-use}"

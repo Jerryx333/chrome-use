@@ -1,8 +1,8 @@
 #!/bin/sh
 # Run queue-live.mjs on the build host against a branch build:
 #   ./queue-live.sh <chrome-use binary> [extension git ref, default HEAD]
-# Copies the binary under a fresh name (macOS kills a binary overwritten in
-# place), stages the extension from git, and runs the check. One browser run
+# Copies the binary into a fresh ChromeUse.app (stage-bin.sh; macOS kills a
+# binary overwritten in place), stages the extension from git, and runs the check. One browser run
 # per host at a time.
 set -eu
 cd "$(dirname "$0")"
@@ -11,8 +11,8 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 export CHROME="${CHROME:-$HOME/.chrome-use/browsers/chrome-155.0.8059.39/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing}"
 export WORK="$(mktemp -d /tmp/ql-XXXXXX)"; export OUT="${OUT:-$WORK/out}"
 mkdir -p "$WORK/bin" "$WORK/ext"
-cp "$BIN" "$WORK/bin/chrome-use"
-export HOST_BIN="$WORK/bin/chrome-use"
+. ./stage-bin.sh
+stage_host_bin "$BIN" "$WORK"
 "$HOST_BIN" --version
 ROOT=$(git rev-parse --show-toplevel)
 git -C "$ROOT" archive "$REF" extensions/ab-connect | tar -x -C "$WORK/ext"
