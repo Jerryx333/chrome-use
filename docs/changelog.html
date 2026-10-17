@@ -81,7 +81,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
-        <li><strong>v1.5.235</strong>（未发布）：macOS 上以 <code>ChromeUse.app</code> 安装：签名、公证并装订票据的应用包放在 <code>&lt;prefix&gt;/share/chrome-use/</code>，<code>chrome-use</code> 是指向它的软链接。系统设置「文件与文件夹」以前按路径记录裸二进制，没有名字和图标，每多一份二进制就多一条；现在侧栏服务、它运行的 agent 和扩展的 native host 都算作这一个带图标的「ChromeUse」，授权提示也说明了用途。<code>upgrade</code> 照旧装回原目录；不带应用包的旧版本仍装裸二进制；<code>AGENT_BROWSER_NO_APP_BUNDLE=1</code> 可关闭。Linux、Windows 不变。贡献者：@leeguooooo。</li>
+        <li><strong>v1.5.235</strong>（2026-10-17）：macOS 上以 <code>ChromeUse.app</code> 安装：签名、公证并装订票据的应用包放在 <code>&lt;prefix&gt;/share/chrome-use/</code>，<code>chrome-use</code> 是指向它的软链接。系统设置「文件与文件夹」以前按路径记录裸二进制，没有名字和图标，每多一份二进制就多一条；现在侧栏服务、它运行的 agent 和扩展的 native host 都算作这一个带图标的「ChromeUse」，授权提示也说明了用途。<code>upgrade</code> 照旧装回原目录；不带应用包的旧版本仍装裸二进制；<code>AGENT_BROWSER_NO_APP_BUNDLE=1</code> 可关闭。Linux、Windows 不变。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.234</strong>（2026-10-17）：修复 CSS 平滑滚动导致后台表单控件未滚入视口的问题；页面或容器未移动时返回警告，scrollintoview 检查目标是否进入视口。pick 使用真实指针事件打开和选择下拉选项，报告选中后清空搜索文本时的隐藏表单变化，未确认选中时明确警告（#656）。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.233</strong>（2026-10-17）：修复 agent 正在回复时发出的消息显示两遍（对话里一条带「未记录检查」，排队区一条），现在只在排队区显示，轮到执行时才进入对话；Thermo 整理标签页可加入它之前建的分组，新分组留在原窗口。适用扩展 0.5.71。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.232</strong>（2026-10-16）：修复「选择元素」点中按钮时按钮被真的点击（比如点选搜索按钮会直接提交搜索）。适用扩展 0.5.70。贡献者：@leeguooooo。</li>
