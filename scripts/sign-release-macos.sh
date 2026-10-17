@@ -46,15 +46,28 @@ for asset in chrome-use-darwin-arm64 chrome-use-darwin-x64; do
   codesign --verify --strict "$bin"
   echo "   signed (was adhoc: $before)"
 
-  ditto -c -k --keepParent "$bin" "$work/$asset.notarize.zip"
+  # Since v1.5.235 the archive also carries ChromeUse.app (the same binary
+  # as an app bundle, see macos-app-bundle.sh); it is signed as a bundle.
+  app=""
+  if [ -d "$work/$asset/ChromeUse.app" ]; then
+    app=ChromeUse.app
+    codesign --force --options runtime --timestamp -s "$IDENTITY" "$work/$asset/$app"
+    codesign --verify --strict "$work/$asset/$app"
+  fi
+
+  ( cd "$work/$asset" && ditto -c -k --keepParent . "$work/$asset.notarize.zip" )
   xcrun notarytool submit "$work/$asset.notarize.zip" \
     --keychain-profile "$PROFILE" --wait --timeout 30m
   # A bare executable cannot hold a stapled ticket (only .app/.dmg/.pkg can);
   # Gatekeeper verifies notarization online. Confirm the outcome rather than
   # assuming the submission implies it.
   spctl -a -vv -t install "$bin" 2>&1 | sed 's/^/   /'
+  if [ -n "$app" ]; then
+    xcrun stapler staple "$work/$asset/$app"
+    spctl -a -vv "$work/$asset/$app" 2>&1 | sed 's/^/   /'
+  fi
 
-  ( cd "$work/$asset" && tar czf "../$asset.tar.gz" chrome-use LICENSE* )
+  ( cd "$work/$asset" && COPYFILE_DISABLE=1 tar czf "../$asset.tar.gz" chrome-use $app LICENSE* )
   ( cd "$work" && shasum -a 256 "$asset.tar.gz" > "$asset.tar.gz.sha256" )
 
   if [ -n "$DRY_RUN" ]; then

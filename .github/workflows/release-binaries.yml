@@ -11,6 +11,10 @@ name: Release binaries
 # now also runs on main, daily and when this file changes, only to keep those
 # caches warm. It signs, packages and publishes nothing.
 #
+# Dry run: dispatch it on a branch with no tag. It builds, signs, notarizes
+# and packages that branch and keeps the archives as workflow artifacts for
+# three days; nothing is published.
+#
 # Not on every `cli/Cargo.lock` change: a release bumps the version in it, so
 # each release started seven cache builds that took runners from the next one.
 # A dependency bump is picked up by the next daily run; until then a release
@@ -27,8 +31,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to (re)build binaries for, e.g. v0.27.0-fork.12'
-        required: true
+        description: 'Existing tag to (re)build binaries for, e.g. v0.27.0-fork.12. Empty: dry run of the selected branch, nothing is published'
+        required: false
 
 permissions:
   contents: read
@@ -44,7 +48,7 @@ env:
 jobs:
   validate:
     name: Validate release version and notes
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '') || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -187,23 +191,41 @@ jobs:
             -s "$APPLE_SIGN_IDENTITY" --keychain "$kc" "$bin"
           codesign --verify --strict --verbose=2 "$bin"
 
+          # The same binary as ChromeUse.app, signed as a bundle (see the
+          # script). Its executable cannot double as the bare one: a copy
+          # taken out of the bundle no longer matches its sealed Info.plist,
+          # and the hardened runtime kills it.
+          sh scripts/macos-app-bundle.sh "$bin" "$RUNNER_TEMP/bundle" \
+            --identity "$APPLE_SIGN_IDENTITY" --keychain "$kc"
+          app="$RUNNER_TEMP/bundle/ChromeUse.app"
+
           if [ -n "${APPLE_API_KEY_P8:-}" ]; then
             echo "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc.p8"
-            ditto -c -k --keepParent "$bin" "$RUNNER_TEMP/notarize.zip"
+            mkdir "$RUNNER_TEMP/notarize"
+            cp "$bin" "$RUNNER_TEMP/notarize/"
+            ditto "$app" "$RUNNER_TEMP/notarize/ChromeUse.app"
+            ditto -c -k --keepParent "$RUNNER_TEMP/notarize" "$RUNNER_TEMP/notarize.zip"
             xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
               --key "$RUNNER_TEMP/asc.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
               --wait --timeout 30m
-            rm -f "$RUNNER_TEMP/asc.p8" "$RUNNER_TEMP/notarize.zip"
+            rm -rf "$RUNNER_TEMP/asc.p8" "$RUNNER_TEMP/notarize.zip" "$RUNNER_TEMP/notarize"
             # A bare executable cannot carry a stapled ticket (only .app/.dmg/
-            # .pkg can), so there is nothing to staple — Gatekeeper checks the
-            # notarization online. Verified: `spctl -a` goes from `rejected` to
-            # `accepted / source=Notarized Developer ID`.
-            echo "notarized (no staple: bare executables cannot hold a ticket)"
+            # .pkg can), so Gatekeeper checks its notarization online.
+            # Verified: `spctl -a` goes from `rejected` to
+            # `accepted / source=Notarized Developer ID`. The bundle holds its
+            # ticket, so it passes offline too.
+            xcrun stapler staple "$app"
+            spctl -a -vv "$app" || echo "::warning::spctl did not accept the stapled ChromeUse.app"
+            echo "notarized (bundle stapled; the bare executable cannot hold a ticket)"
           else
             echo "signed but NOT notarized (no App Store Connect key configured)"
           fi
 
           security delete-keychain "$kc" || true
+
+      - name: Build app bundle, ad-hoc signed (macOS, no signing secrets)
+        if: env.IS_RELEASE == 'true' && startsWith(matrix.os, 'macos') && env.HAS_SIGNING != 'true'
+        run: sh scripts/macos-app-bundle.sh "cli/target/${{ matrix.target }}/release/chrome-use" "$RUNNER_TEMP/bundle"
 
       - name: Package (.tar.gz + .sha256)
         if: env.IS_RELEASE == 'true'
@@ -219,9 +241,18 @@ jobs:
           cp cli/src/native/a11y/LICENSE-axe-core.txt dist/LICENSE-axe-core.txt
           cp cli/src/native/a11y/LICENSE-axe-core-THIRD-PARTY.txt dist/LICENSE-axe-core-THIRD-PARTY.txt
           chmod +x "dist/chrome-use${{ matrix.ext }}" || true
+          # macOS archives also carry ChromeUse.app; install.sh prefers it.
+          # Older installers extract only the bare binary and keep working.
+          app=""
+          if [ -d "$RUNNER_TEMP/bundle/ChromeUse.app" ]; then
+            ditto "$RUNNER_TEMP/bundle/ChromeUse.app" dist/ChromeUse.app
+            app=ChromeUse.app
+          fi
+          # COPYFILE_DISABLE: no AppleDouble (._*) files inside the bundle.
           ( cd dist
-            tar czf "${{ matrix.asset }}.tar.gz" \
+            COPYFILE_DISABLE=1 tar czf "${{ matrix.asset }}.tar.gz" \
               "chrome-use${{ matrix.ext }}" \
+              $app \
               LICENSE \
               LICENSE-axe-core.txt \
               LICENSE-axe-core-THIRD-PARTY.txt
@@ -244,7 +275,7 @@ jobs:
   release:
     name: Attach binaries to GitHub Release
     needs: build
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '') || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
