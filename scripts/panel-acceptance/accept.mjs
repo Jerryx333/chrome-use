@@ -128,7 +128,11 @@ const h = {
       : `chrome.sidePanel.open({ windowId: ${win} })`;
     await rig.cdp.evaluate(os, `(() => { const b = document.createElement('button'); b.id = '__open'; b.style = 'position:fixed;left:0;top:0;width:200px;height:80px;z-index:2147483647'; b.onclick = () => ${open}.then(() => { b.dataset.r = 'ok'; }, e => { b.dataset.r = e.message; }); (document.body || document.documentElement).append(b); return true; })()`);
     await rig.cdp.click(os, 50, 40);
-    const target = await waitFor(async () => (await rig.browser.send('Target.getTargets')).targetInfos.find(t => t.url.includes('/sidepanel.html') && !t.url.includes('opener=1') && !before.has(t.targetId)), { label: 'side panel target' });
+    const target = await waitFor(async () => (await rig.browser.send('Target.getTargets')).targetInfos.find(t => t.url.includes('/sidepanel.html') && !t.url.includes('opener=1') && !before.has(t.targetId)), { label: 'side panel target' }).catch(async error => {
+      const result = await rig.cdp.evaluate(os, `document.getElementById('__open')?.dataset.r || 'no result'`).catch(e => e.message);
+      const targets = (await rig.browser.send('Target.getTargets')).targetInfos.map(t => `${t.type}:${t.url.slice(0, 80)}`);
+      throw new Error(`${error.message} (perTab=${perTab} tab=${tab} win=${win} open: ${result}; targets: ${targets.join(' | ')})`);
+    });
     await rig.browser.send('Target.closeTarget', { targetId: opener }).catch(() => {});
     const sid = await rig.cdp.attach(target.targetId);
     await waitFor(() => rig.cdp.evaluate(sid, 'document.readyState === "complete"'), { label: 'panel load' });
