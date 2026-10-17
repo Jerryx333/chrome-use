@@ -114,12 +114,12 @@ const h = {
     const win = windowId ?? (await rig.ev('chrome.windows.getLastFocused()')).id;
     // Since 0.5.63 each tab has its own panel (setOptions for the tab, then
     // open it), the way the toolbar button does; older builds open one panel
-    // per window. The opener lives in its own window so the page tab stays
-    // the active one.
+    // per window. The opener must be in the same window: a click in another
+    // window does not count as a user gesture for sidePanel.open.
     const tab = (await rig.ev(`chrome.tabs.query({ active: true, windowId: ${win} })`))?.[0]?.id;
     const perTab = await rig.ev(`chrome.runtime.getManifest().version.split('.').map(Number).reduce((a, n) => a * 1000 + n, 0) >= 5063`);
     const before = new Set((await rig.browser.send('Target.getTargets')).targetInfos.filter(t => t.url.includes('/sidepanel.html')).map(t => t.targetId));
-    const { targetId: opener } = await rig.browser.send('Target.createTarget', { url: `chrome-extension://${EXT}/sidepanel.html?opener=1`, ...(perTab ? { newWindow: true } : {}) });
+    const { targetId: opener } = await rig.browser.send('Target.createTarget', { url: `chrome-extension://${EXT}/sidepanel.html?opener=1` });
     const os = await rig.cdp.attach(opener);
     await waitFor(() => rig.cdp.evaluate(os, 'document.readyState === "complete" && !!document.body'), { label: 'opener load' });
     await sleep(500);
