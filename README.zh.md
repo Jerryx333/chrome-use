@@ -111,6 +111,7 @@ irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | i
 
 - **锁定版本：** `curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | AGENT_BROWSER_VERSION=v1.5.188 sh`
 - **自定义路径：** `curl -fsSL … | AGENT_BROWSER_BIN_DIR=$HOME/bin sh`
+- **macOS 应用包：** 在 Mac 上，安装脚本把签名并公证过的 `ChromeUse.app` 放到 bin 目录旁边的 `<prefix>/share/chrome-use/`（默认 `~/.local/share/chrome-use/`），`chrome-use` 是指向它的软链接。侧栏里的 agent 在「文稿」「桌面」「下载」下的项目里干活时，系统设置 → 隐私与安全性 →「文件与文件夹」里只会出现一条带图标的「ChromeUse」。想装裸二进制就设 `AGENT_BROWSER_NO_APP_BUNDLE=1`。
 - **Windows 锁定版本或安装位置：** 在 `irm … | iex` 前先设置 `$env:AGENT_BROWSER_VERSION = 'v1.5.139'` 或 `$env:AGENT_BROWSER_BIN_DIR = 'D:\tools'`。默认装到 `%LOCALAPPDATA%\Programs\chrome-use` 并加入用户 PATH，原有条目原样保留（不想改 PATH 就设 `$env:AGENT_BROWSER_NO_PATH = 1`）。不需要管理员权限。
 - **Windows 手动安装：** 从 [Releases 页](https://github.com/leeguooooo/chrome-use/releases) 下载 `chrome-use-win32-x64.tar.gz` 和对应的 `.sha256`，确认 `(Get-FileHash chrome-use-win32-x64.tar.gz -Algorithm SHA256).Hash` 与 `.sha256` 文件一致，用 `tar -xzf chrome-use-win32-x64.tar.gz` 解压，再把 `chrome-use.exe` 放进 PATH。运行前一定先对哈希：下载中断的包照样能解压出 `.exe`，它会在启动时报访问违规（退出码 `-1073741819`，即 `0xC0000005`），而不会提示下载不完整。
 </details>
