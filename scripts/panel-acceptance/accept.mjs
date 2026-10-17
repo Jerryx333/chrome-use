@@ -147,6 +147,9 @@ const h = {
   async screenshot(name, conversationId, panel) {
     panel ||= (h.panel ||= await h.openPanel());
     await rig.ev(`chrome.storage.local.set({ ab_panel_conversation: ${JSON.stringify(conversationId)}, ab_panel_conversation_scope: "all" })`);
+    // A tab's panel (0.5.63+) shows the conversation bound to its tab.
+    const tab = await rig.cdp.evaluate(panel.sid, `new URLSearchParams(location.search).get('tab')`).catch(() => null);
+    if (tab) await rig.ev(`chrome.storage.session.set({ ['ab_panel_tab_${tab}']: ${JSON.stringify(conversationId)} })`);
     await rig.browser.send('Page.reload', {}, panel.sid);
     await sleep(1000);
     await waitFor(() => rig.cdp.evaluate(panel.sid, 'document.readyState === "complete"'), { label: 'panel reload' });
