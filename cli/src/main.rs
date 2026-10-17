@@ -3,6 +3,7 @@
 #![recursion_limit = "256"]
 mod account;
 mod agent_panel;
+mod app_bundle;
 mod autologin;
 mod bwu_login;
 mod chat;

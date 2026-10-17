@@ -47,8 +47,12 @@ ssh <host> 'cd .../panel-acceptance && BUILD_COMMIT=<sha> ONLY=1,4 ./run.sh <chr
 node manifest.mjs results/<date>
 ```
 
-`run.sh` copies the binary under a fresh name each run (macOS kills a binary
-overwritten in place) and keeps the work directory short (`/tmp/pa/<stamp>`;
+`run.sh` copies the binary into a fresh `ChromeUse.app` each run (macOS kills
+a binary overwritten in place; `stage-bin.sh`). The bundle is signed with the
+first Developer ID identity in `~/Library/Keychains/cbbuild.keychain-db`
+(override with `SIGN_IDENTITY` / `SIGN_KEYCHAIN`; unlock the keychain first
+over SSH), so the host's privacy settings keep one "ChromeUse" entry instead
+of a new anonymous one per run. Without an identity it is ad-hoc signed. The work directory stays short (`/tmp/pa/<stamp>`;
 daemon sockets must fit the 103-byte Unix limit). Long runs go under `nohup`
 with a done-file; SSH drops.
 

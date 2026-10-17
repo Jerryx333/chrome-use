@@ -540,7 +540,10 @@ fn launchd_start(
 ) -> Result<(), String> {
     let (target, domain) = launchd_target(directory);
     let label = target.rsplit('/').next().unwrap_or_default().to_string();
-    let plist = launchd_plist(&label, executable, arguments)?;
+    // Named by its place in ChromeUse.app when installed as one, so the job
+    // shows what macOS attributes the service's file access to.
+    let executable = crate::app_bundle::resolved(executable);
+    let plist = launchd_plist(&label, &executable, arguments)?;
     let path = directory.join("service.plist");
     atomic_write(&path, plist.as_bytes(), None)?;
     // A quarantined writer quarantines the plist too, and launchd refuses

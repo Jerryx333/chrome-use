@@ -8,6 +8,7 @@
 #   curl -fsSL <this url> | AGENT_BROWSER_VERSION=v1.5.188 sh
 #   AGENT_BROWSER_VERSION=v1.5.188      pin a specific release tag
 #   AGENT_BROWSER_BIN_DIR=/usr/local/bin  install location (auto-detected otherwise)
+#   AGENT_BROWSER_NO_APP_BUNDLE=1       macOS: install the bare binary, not ChromeUse.app
 set -eu
 
 REPO="leeguooooo/chrome-use"
@@ -102,9 +103,42 @@ if [ -z "$bindir" ]; then
 fi
 mkdir -p "$bindir"
 
-mv "$tmp/${BIN_NAME}" "$bindir/${BIN_NAME}"
+# --- install the binary ---------------------------------------------------
+# macOS archives also carry ChromeUse.app, the same CLI as a signed app
+# bundle. It goes to <prefix>/share/chrome-use and <prefix>/bin/chrome-use
+# becomes a symlink into it, so every chrome-use process runs inside the
+# bundle: macOS privacy settings (Files and Folders) then list one
+# "ChromeUse" with its icon instead of an anonymous entry per binary path.
+# Opt out with AGENT_BROWSER_NO_APP_BUNDLE=1.
+app=""
+appdir="$(dirname "$bindir")/share/chrome-use"
+if [ "$plat" = "darwin" ] && [ -z "${AGENT_BROWSER_NO_APP_BUNDLE:-}" ] \
+  && [ -x "$tmp/ChromeUse.app/Contents/MacOS/${BIN_NAME}" ] \
+  && mkdir -p "$appdir" 2>/dev/null && [ -w "$appdir" ]; then
+  app="$appdir/ChromeUse.app"
+fi
+if [ -n "$app" ]; then
+  # Replaced as a whole directory, by renames: a running chrome-use keeps
+  # executing the old image, as with the bare binary's `mv`.
+  rm -rf "$app.new" "$app".old.* 2>/dev/null || true
+  mv "$tmp/ChromeUse.app" "$app.new"
+  [ ! -e "$app" ] || mv "$app" "$app.old.$$"
+  mv "$app.new" "$app"
+  rm -rf "$app.old.$$" 2>/dev/null || true
+  ln -sfn "$app/Contents/MacOS/${BIN_NAME}" "$bindir/.${BIN_NAME}.link.$$"
+  mv -f "$bindir/.${BIN_NAME}.link.$$" "$bindir/${BIN_NAME}"
+  # So System Settings can show the bundle's name and icon.
+  lsregister=${LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}
+  [ ! -x "$lsregister" ] || "$lsregister" -f "$app" >/dev/null 2>&1 || true
+  info "installed -> ${bindir}/${BIN_NAME} (in ${app})"
+else
+  mv "$tmp/${BIN_NAME}" "$bindir/${BIN_NAME}"
+  # A bundle left by a newer install would otherwise outlive the binary
+  # that replaced its symlink.
+  [ "$plat" != "darwin" ] || rm -rf "$appdir/ChromeUse.app" 2>/dev/null || true
+  info "installed -> ${bindir}/${BIN_NAME}"
+fi
 
-info "installed -> ${bindir}/${BIN_NAME}"
 "$bindir/${BIN_NAME}" --version || err "the installed CLI could not run"
 
 # --- guided setup: install the Chrome extension + banner preference -----------

@@ -1,8 +1,19 @@
 # Changelog
 
-## 1.5.234
+## 1.5.235
 
 <!-- release:start -->
+### New Features
+
+- **macOS: chrome-use installs as `ChromeUse.app`, so privacy settings list it once, by name and icon.** System Settings → Privacy & Security → Files and Folders keyed the bare `chrome-use` binary by its path and showed it with no name or icon, and every other copy of the binary (each build, each test run) became one more anonymous entry. On a Mac, install.sh now puts a signed, notarized and stapled `ChromeUse.app` (bundle id `com.leeguoo.chrome-use`) in `<prefix>/share/chrome-use/` and makes `<prefix>/bin/chrome-use` a symlink into it, so the panel service, the agents it runs and the native-messaging host all run as that one app. Its prompts say why access is asked for. `upgrade` keeps installing into the symlink's directory, archives without the bundle (older tags) still install the bare binary, and `AGENT_BROWSER_NO_APP_BUNDLE=1` opts out. Linux and Windows are unchanged.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.234
+
 ### Bug Fixes
 
 - **Background form controls scroll instantly before pointer input.** CSS smooth scrolling no longer leaves off-screen click targets in place. Page/container scrolling reports an unchanged position, and `scrollintoview` checks that its target reached the viewport (#657).
@@ -11,7 +22,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.233
 

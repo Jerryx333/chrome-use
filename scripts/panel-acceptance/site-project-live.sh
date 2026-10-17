@@ -14,7 +14,9 @@ mkdir -p "$WORK/release" "$WORK/bin" "$WORK/ext"
 gh release download "$TAG" -R leeguooooo/chrome-use -p "$ASSET" -p "$ASSET.sha256" -D "$WORK/release"
 ( cd "$WORK/release" && shasum -a 256 -c "$ASSET.sha256" )
 tar -xzf "$WORK/release/$ASSET" -C "$WORK/bin"
-export HOST_BIN="$(find "$WORK/bin" -type f -name chrome-use -perm -u+x | head -1)"
+# Since v1.5.235 the archive also carries ChromeUse.app, which install.sh uses.
+export HOST_BIN="$WORK/bin/ChromeUse.app/Contents/MacOS/chrome-use"
+[ -x "$HOST_BIN" ] || HOST_BIN="$WORK/bin/chrome-use"
 "$HOST_BIN" --version
 ROOT=$(git rev-parse --show-toplevel)
 # A shallow single-branch clone has no other branches until fetched.

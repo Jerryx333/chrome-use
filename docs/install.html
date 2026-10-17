@@ -108,6 +108,7 @@
       </div>
 
       <ul>
+        <li><strong>macOS 应用包：</strong>在 Mac 上，安装脚本把签名并公证过的 <code>ChromeUse.app</code> 放到 bin 目录旁边的 <code>&lt;prefix&gt;/share/chrome-use/</code>（默认 <code>~/.local/share/chrome-use/</code>），<code>chrome-use</code> 是指向它的软链接。侧栏里的 agent 在「文稿」「桌面」「下载」下的项目里干活时，系统设置 → 隐私与安全性 →「文件与文件夹」里只会出现一条带图标的「ChromeUse」。想装裸二进制就设 <code>AGENT_BROWSER_NO_APP_BUNDLE=1</code>。</li>
         <li><strong>Windows：</strong>从 <a href="https://github.com/leeguooooo/chrome-use/releases">Releases 页面</a> 下载 <code>chrome-use-win32-x64.tar.gz</code> 和对应的 <code>.sha256</code>，确认 <code>(Get-FileHash chrome-use-win32-x64.tar.gz -Algorithm SHA256).Hash</code> 与 <code>.sha256</code> 一致，用 <code>tar -xzf</code> 解压，再把 <code>chrome-use.exe</code> 放进 PATH。运行前先对哈希：下载中断的包照样能解压出 <code>.exe</code>，启动时报访问违规（<code>0xC0000005</code>），不会提示下载不完整。连接真实 Chrome 的扩展路径 Windows 同样支持，见下一节。</li>
         <li><strong>npm（遗留）：</strong><code>npm install -g chrome-use</code> 仍在发布，但 GitHub Releases 是现在的主渠道。</li>
       </ul>
