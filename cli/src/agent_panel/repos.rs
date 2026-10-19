@@ -113,7 +113,8 @@ fn host_of(raw: &str) -> Option<String> {
 /// A git remote URL in any form git accepts for a server: `https://`,
 /// `http://`, `ssh://`, `git://`, and scp-like `user@host:owner/repo.git`.
 /// Local paths and `file://` URLs are not remotes of a web page.
-pub(super) fn parse_remote(url: &str) -> Option<Remote> {
+#[cfg(test)]
+fn parse_remote(url: &str) -> Option<Remote> {
     parse_remote_via(url, |_| None)
 }
 
@@ -378,10 +379,12 @@ pub(super) fn ssh_host_names(text: &str) -> Vec<(String, String)> {
     pairs
 }
 
+type HostNames = Vec<(String, String)>;
+
 /// The `HostName` `~/.ssh/config` gives an ssh host alias, read once per
 /// change of the file (`Include`d files are not followed).
 fn ssh_host_name(alias: &str) -> Option<String> {
-    static CACHE: OnceLock<Mutex<Option<(SystemTime, Vec<(String, String)>)>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<Option<(SystemTime, HostNames)>>> = OnceLock::new();
     let config = dirs::home_dir()?.join(".ssh").join("config");
     let modified = std::fs::metadata(&config).and_then(|m| m.modified()).ok()?;
     let cache = CACHE.get_or_init(Default::default);
