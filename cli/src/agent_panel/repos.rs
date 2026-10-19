@@ -32,6 +32,8 @@ const NOT_OWNERS: &[&str] = &[
     "enterprise",
     "explore",
     "features",
+    "groups",
+    "help",
     "issues",
     "login",
     "logout",
@@ -182,14 +184,17 @@ pub(super) fn shape_scope(host: &str, page_path: &str) -> Option<String> {
         return None;
     }
     let host = host_of(host)?;
-    if host == "gitlab.com" {
-        // A project's own pages all carry `/-/`; without it the whole path
-        // is the project (or a group: the remember bar only proposes it).
-        return Some(scope_of(&all));
-    }
     if CODE_HOSTS.contains(&host.as_str()) {
-        let owner = all[0].to_ascii_lowercase();
-        return (!NOT_OWNERS.contains(&owner.as_str())).then(|| scope_of(&all[..2]));
+        if NOT_OWNERS.contains(&all[0].to_ascii_lowercase().as_str()) {
+            return None;
+        }
+        // A GitLab project's own pages all carry `/-/`; without it the whole
+        // path is the project (or a group: the remember bar only proposes it).
+        return Some(scope_of(if host == "gitlab.com" {
+            &all
+        } else {
+            &all[..2]
+        }));
     }
     let tab = all.get(2)?.to_ascii_lowercase();
     REPO_TABS
@@ -452,6 +457,7 @@ mod tests {
             s("gitlab.com", "/group/sub/app").as_deref(),
             Some("/group/sub/app")
         );
+        assert_eq!(s("gitlab.com", "/explore/projects"), None);
         assert_eq!(
             s("bitbucket.org", "/team/repo/src/main/").as_deref(),
             Some("/team/repo")
