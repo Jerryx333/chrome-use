@@ -103,7 +103,7 @@ try {
 
   // 2. A new conversation on the same site starts in it.
   await panel(`document.getElementById('newChat').click()`);
-  await waitFor(() => panel(`document.getElementById('project').value === ${JSON.stringify(project)}`), { timeout: 20000, label: 'project preselected' });
+  await waitFor(() => panel(`document.getElementById('project').value === ${JSON.stringify(project)} && document.getElementById('project').dataset.reason === 'site'`), { timeout: 20000, label: 'project preselected' });
   await shot('2-preselected');
   step('new conversation preselects the project', { title: await panel(`document.getElementById('project').title`) });
 
