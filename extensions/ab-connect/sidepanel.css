@@ -465,6 +465,8 @@ button.tool:hover:not(:disabled),.composer-controls #turnOptions > summary:hover
 .project-host .project-manual input { flex:1; min-width:160px; }
 .project-host .project-manual .hint { flex-basis:100%; margin:0; }
 .project-host .project-remember > span { flex-basis:100%; }
+.project-host > div.project-match { border:0; padding:0 2px; margin:6px 12px 0; font-size:11px; }
+.project-host .project-remember select { max-width:100%; font-size:12px; }
 
 /* "Let the agent use this tab" */
 .grant-bar { display:flex; align-items:center; gap:8px; margin:8px 12px 0; padding:7px 10px; border:1px solid #7c3aed; border-radius:10px; background:rgb(124 58 237 / .08); font-size:12px; }

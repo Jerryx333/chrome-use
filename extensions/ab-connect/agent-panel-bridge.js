@@ -84,6 +84,14 @@ export class AgentPanelBridge {
   }
 }
 
+// What a host with projectDirectory 2 says about the page (absent before).
+function validProjectPage(page) {
+  if (page === undefined || page === null) return true;
+  const suggestion = page.suggestion;
+  return typeof page === 'object' && typeof page.codeHost === 'boolean' && (page.repositoryScope === null || typeof page.repositoryScope === 'string') &&
+    (suggestion === null || (typeof suggestion?.root === 'string' && ['repository', 'site'].includes(suggestion.reason))) &&
+    Array.isArray(page.bindings) && page.bindings.every(b => typeof b?.pathScope === 'string' && typeof b.fingerprint === 'string');
+}
 function validResult({ operation, agentId, planId, conversationId, messageId, replacementId, id, skillId, attachmentId, artifactId, offset, requestedOptions, sessionId, project }, result) {
   if (result?.schemaVersion !== 1) return false;
   // Recovery and artifact replies name another conversation (a fork) or no
@@ -91,7 +99,7 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
   if (operation === 'conversationArtifactRead') return result.artifactId === artifactId && Number.isInteger(result.offset) && result.offset === offset && typeof result.data === 'string' && Number.isInteger(result.total) && result.total >= 0 && typeof result.digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(result.digest);
   if (operation === 'conversationRecoveryReview') return ['exited', 'alive', 'unknown'].includes(result.process?.state);
   if (operation === 'conversationRecoveryTerminate') return typeof result.confirmed === 'boolean';
-  if (operation === 'conversationProjectList') return Array.isArray(result.projects) && result.projects.length <= 30 && result.projects.every(project => typeof project.path === 'string' && Array.isArray(project.sources));
+  if (operation === 'conversationProjectList') return Array.isArray(result.projects) && result.projects.length <= 30 && result.projects.every(project => typeof project.path === 'string' && Array.isArray(project.sources)) && validProjectPage(result.page);
   // The chosen folder, a cancelled dialog, or no picker on this computer.
   if (operation === 'conversationProjectChoose') return typeof result.path === 'string' ? result.cancelled === undefined : result.cancelled === true || result.unavailable === true;
   if (operation === 'conversationSessionList') return result.agentId === agentId && typeof result.supported === 'boolean' && Array.isArray(result.sessions) && result.sessions.length <= 100 && result.sessions.every(session => typeof session.sessionId === 'string' && session.agentId === agentId && typeof session.running === 'boolean' && Number.isFinite(session.lastActive) && (session.title === null || typeof session.title === 'string') && (session.cwd === null || typeof session.cwd === 'string') && (session.conversationId == null || typeof session.conversationId === 'string'));
