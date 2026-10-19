@@ -100,7 +100,7 @@ try {
     await sleep(300);
     const login = cli(b, ['--session', session, '--json', 'auth', 'login', '--bwu'], {
       CU_BWU_CHILD: '1', CU_BWU_USER: 'user@example.com', CU_BWU_PW: 'super-secret',
-      CU_BWU_ORIGIN: origin, CU_BWU_ITEM: 'fixture',
+      CU_BWU_ORIGIN: origin, CU_BWU_ITEM: 'fixture', CU_BWU_ITEM_ID: 'fixture-id',
     });
     const events = (await inPm(`chrome.storage.local.get('events')`)).events || [];
     const front = await inExt(`chrome.tabs.query({ active: true, windowId: ${user.window} }).then(([t]) => t && t.id)`);
@@ -119,6 +119,10 @@ try {
       check(result?.success === true && result.data?.signedIn === true, `the login was confirmed (${result?.error || ''})`);
       check(front === user.tab, 'the user\'s window kept its front tab');
       check(!events.some((e) => e.kind === 'activated' && e.window === user.window), 'no tab was activated in the user\'s window');
+      let remembered = null;
+      try { remembered = JSON.parse(fs.readFileSync(path.join(home, '.chrome-use', 'bwu-items.json'), 'utf8')); } catch {}
+      run.remembered = remembered;
+      check(remembered?.hosts?.['app.test.localhost']?.id === 'fixture-id', 'the confirmed login remembered its vault item for the host');
     }
     cli(b, ['--session', session, 'close']);
   }

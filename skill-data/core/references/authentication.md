@@ -113,8 +113,8 @@ chrome-use auth login --bwu --passkey       # sign in with the vault passkey
   sees masked entries only (names and folders, not URIs). One match is used.
   bwu matches by registrable domain, so `app.example.com` also lists every
   other `*.example.com` login. Among several it uses, in order: the item that
-  signed in to this host last time (recorded after a confirmed login, by id
-  only, in `~/.chrome-use/bwu-items.json`); the one item named exactly the
+  signed in to this host last time (recorded only when the site was seen to
+  take the login, by id only, in `~/.chrome-use/bwu-items.json`); the one item named exactly the
   page's host; the one item named exactly the host of the page's sign-in
   frame (App Store Connect signs in through an `idmsa.apple.com` iframe). It
   says which and why on stderr, even with `--json`. Otherwise all are listed,
@@ -209,7 +209,8 @@ it signs in to that site from their vault from now on without asking. A
 person running chrome-use in a terminal is prompted directly instead.
 
 With `always` stored for the host, the wall runs the `auth login --bwu` flow
-by itself with the vault login for the site (several are reported, never
+by itself with the vault login for the site, chosen as `auth login --bwu`
+chooses without `--item` (several it cannot tell apart are reported, never
 guessed), returns to `returnTo`, and reports `loginWall.autoLogin: {ok, item,
 error, returnedTo}`; a signed-out site adapter is then run once more. With
 `never` the wall is only reported. It handles a one-time code exactly as

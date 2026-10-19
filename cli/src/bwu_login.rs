@@ -32,6 +32,8 @@ const FIELDS: &str = "CU_BWU_FIELDS";
 const STEPS: &str = "CU_BWU_STEPS";
 const ORIGIN: &str = "CU_BWU_ORIGIN";
 const ITEM: &str = "CU_BWU_ITEM";
+/// The item's id, for remembering it once the sign-in is confirmed.
+const ITEM_ID: &str = "CU_BWU_ITEM_ID";
 
 struct Opts {
     item: Option<String>,
@@ -117,6 +119,7 @@ pub fn parse(args: &[&str], id: &str) -> Result<Value, ParseError> {
     let steps: Option<Value> = take(STEPS).and_then(|j| serde_json::from_str(&j).ok());
     let origin = take(ORIGIN);
     let item = take(ITEM);
+    let item_id = take(ITEM_ID);
     std::env::remove_var(CHILD);
     let origin = origin.ok_or_else(|| ParseError::InvalidValue {
         message: format!("auth login --bwu: {ORIGIN} is not set; run it without {CHILD}"),
@@ -142,7 +145,7 @@ pub fn parse(args: &[&str], id: &str) -> Result<Value, ParseError> {
     Ok(json!({
         "id": id, "action": "auth_login_bwu", "secret": true, "secrets": secrets,
         "username": username, "password": password, "otp": otp, "fields": fields,
-        "steps": steps, "origin": origin, "item": item, "noSubmit": o.no_submit,
+        "steps": steps, "origin": origin, "item": item, "itemId": item_id, "noSubmit": o.no_submit,
         "passkeys": passkeys, "passkeyFirst": o.passkey,
     }))
 }
@@ -382,9 +385,26 @@ fn remembered_item(host: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The child half, after the daemon answered: a login the site was seen to
+/// take (`signedIn`) remembers its item for the page's host. Nothing else
+/// counts: not a page that was already signed in, nor one that still asks for
+/// a code.
+pub fn remember_if_signed_in(cmd: &Value, data: Option<&Value>) {
+    if data.and_then(|d| d["signedIn"].as_bool()) != Some(true) {
+        return;
+    }
+    let host = cmd["origin"]
+        .as_str()
+        .and_then(|o| url::Url::parse(o).ok())
+        .and_then(|u| u.host_str().map(str::to_string));
+    if let (Some(host), Some(id)) = (host, cmd["itemId"].as_str()) {
+        remember_item(&host, id);
+    }
+}
+
 /// Remember that `id` signed in to `host`. Best effort: a failure to write
 /// only means the next login asks again.
-fn remember_item(host: &str, id: &str, name: &str) {
+fn remember_item(host: &str, id: &str) {
     let Some(path) = remembered_path() else {
         return;
     };
@@ -396,7 +416,7 @@ fn remember_item(host: &str, id: &str, name: &str) {
     if !store["hosts"].is_object() {
         store["hosts"] = json!({});
     }
-    store["hosts"][host.to_ascii_lowercase()] = json!({ "id": id, "name": name });
+    store["hosts"][host.to_ascii_lowercase()] = json!({ "id": id });
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -596,6 +616,7 @@ fn child_command(p: &Prepared, child_args: &[std::ffi::OsString]) -> Result<Comm
     run.env(CHILD, "1")
         .env(ORIGIN, &p.origin)
         .env(ITEM, &p.name)
+        .env(ITEM_ID, &p.id)
         .env(FIELDS, serde_json::to_string(&p.custom).unwrap_or_default());
     match &p.steps {
         Some(s) => run.env(STEPS, serde_json::to_string(s).unwrap_or_default()),
@@ -629,11 +650,7 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
     let status = child_command(&p, &args)?
         .status()
         .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))?;
-    let code = status.code().unwrap_or(1);
-    if code == 0 && !cmd["noSubmit"].as_bool().unwrap_or(false) {
-        remember_item(&p.host, &p.id, &p.name);
-    }
-    Ok(code)
+    Ok(status.code().unwrap_or(1))
 }
 
 /// Whether login walls are signed in automatically (#434):
@@ -737,10 +754,7 @@ pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
     loop {
         attempt += 1;
         match run_login_child(&p, &args) {
-            Ok(()) => {
-                remember_item(&p.host, &p.id, &p.name);
-                break;
-            }
+            Ok(()) => break,
             // #482: a step the tab detached under, or a submit the site was
             // not seen to take. Logging in again from the sign-in page is
             // safe: on a page that is already signed in, `auth login --bwu`
@@ -974,6 +988,7 @@ mod tests {
             ),
             (ORIGIN, "https://example.com"),
             (ITEM, "example"),
+            (ITEM_ID, "uuid-1"),
             (
                 PASSKEYS,
                 r#"[{"credentialId":"AQID","rpId":"example.com","privateKey":"c2VjcmV0a2V5","userHandle":"dQ==","signCount":0,"isResidentCredential":true}]"#,
@@ -988,6 +1003,7 @@ mod tests {
         assert_eq!(cmd["fields"]["PIN"], "1234");
         assert_eq!(cmd["steps"][3], "custom:PIN");
         assert_eq!(cmd["origin"], "https://example.com");
+        assert_eq!(cmd["itemId"], "uuid-1");
         let secrets: Vec<&str> = cmd["secrets"]
             .as_array()
             .unwrap()
@@ -1006,6 +1022,7 @@ mod tests {
             STEPS,
             ORIGIN,
             ITEM,
+            ITEM_ID,
             PASSKEYS,
         ] {
             assert!(std::env::var_os(k).is_none(), "{k} still set");

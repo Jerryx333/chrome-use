@@ -4117,6 +4117,10 @@ fn main() {
 
     match send_command(cmd.clone(), &flags.session) {
         Ok(mut resp) => {
+            if cmd.get("action").and_then(|v| v.as_str()) == Some("auth_login_bwu") && resp.success
+            {
+                bwu_login::remember_if_signed_in(&cmd, resp.data.as_ref());
+            }
             // #122: promote an adapter's application-level error into the
             // envelope (see `site::promote_adapter_error`).
             let raw_eval = cmd.get("rawEval").and_then(|v| v.as_bool()) == Some(true);
