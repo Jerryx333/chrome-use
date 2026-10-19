@@ -105,7 +105,7 @@ struct NewConversationView: View {
             access = first?.defaultAccess ?? .browserOnly
             if let first { await loadModels(first.id) }
         } catch {
-            self.error = describe(error)
+            self.error = describe(error, deviceId: client.id)
         }
         loading = false
     }
@@ -126,7 +126,7 @@ struct NewConversationView: View {
         } catch GatewayError.remote("rateLimited", _) {
             modelsNote = String(localized: "正在读取模型列表，稍后再试；也可以直接输入模型名。")
         } catch {
-            modelsNote = String(localized: "无法读取模型列表：\(describe(error))")
+            modelsNote = String(localized: "无法读取模型列表：\(describe(error, deviceId: client.id))")
         }
     }
 
@@ -143,7 +143,7 @@ struct NewConversationView: View {
             dismiss()
             created(summary.id)
         } catch {
-            self.error = describe(error)
+            self.error = describe(error, deviceId: client.id)
         }
     }
 }

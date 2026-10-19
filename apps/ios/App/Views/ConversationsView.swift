@@ -58,7 +58,7 @@ struct ConversationsView: View {
         .confirmationDialog("删除这个对话？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible, presenting: deleting) { conversation in
             Button("删除", role: .destructive) {
                 Task {
-                    do { try await client.delete(conversationId: conversation.id) } catch { self.error = describe(error) }
+                    do { try await client.delete(conversationId: conversation.id) } catch { self.error = describe(error, deviceId: client.id) }
                 }
             }
         } message: { conversation in
@@ -73,7 +73,7 @@ struct ConversationsView: View {
             try await client.refreshConversations()
             error = nil
         } catch {
-            self.error = describe(error)
+            self.error = describe(error, deviceId: client.id)
         }
     }
 }

@@ -22,8 +22,14 @@ public struct PushNotice: Equatable, Sendable {
     /// Pick the key by the payload's kid; a payload naming no paired
     /// computer is dropped.
     public static func open(payload: String, credentials: [GatewayCredential]) -> PushNotice? {
-        guard let credential = credentials.first(where: { PushCrypto.names(payload: payload, pushKey: $0.keys.push) }),
-              let plain = PushCrypto.open(payload: payload, pushKey: credential.keys.push),
+        open(payload: payload, keys: credentials.map(PushKeyEntry.init))
+    }
+
+    /// What the notification extension calls: it holds push keys only.
+    public static func open(payload: String, keys: [PushKeyEntry]) -> PushNotice? {
+        guard let raw = Data(base64Encoded: payload), raw.count > 4,
+              let entry = keys.first(where: { $0.kid == raw.prefix(4) }),
+              let plain = PushCrypto.open(payload: payload, pushKey: entry.pushKey),
               let value = try? JSONValue.decode(plain), value["v"] == .int(1)
         else { return nil }
         return PushNotice(
@@ -32,7 +38,7 @@ public struct PushNotice: Equatable, Sendable {
             code: value["code"].string.flatMap(Code.init(rawValue:)),
             title: value["title"].string ?? "",
             body: value["body"].string ?? "",
-            deviceId: credential.deviceId
+            deviceId: entry.deviceId
         )
     }
 

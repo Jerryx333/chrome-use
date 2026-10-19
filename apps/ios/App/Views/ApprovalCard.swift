@@ -101,7 +101,7 @@ struct ApprovalCard: View {
             sent = true
             error = nil
         } catch {
-            self.error = describe(error)
+            self.error = describe(error, deviceId: client.id)
         }
     }
 }

@@ -113,7 +113,10 @@ enum ToolLabel {
 }
 
 extension GatewayError {
-    var message: String {
+    var message: String { message(deviceId: nil) }
+
+    /// `deviceId` fills in the command for `accessTooHigh`.
+    func message(deviceId: String?) -> String {
         switch self {
         case .closed(let reason): return reason.message
         case .remote(let code, let message):
@@ -121,6 +124,9 @@ extension GatewayError {
             case "denied": return String(localized: "手机端不允许这个操作：\(message)")
             case "rateLimited": return String(localized: "操作太频繁，请稍后再试。")
             case "screenshot": return String(localized: "无法截图：这个对话的浏览器会话没有在运行。")
+            case "accessTooHigh":
+                let id = deviceId ?? "<id>"
+                return String(localized: "这个对话权限太高，需要在电脑上运行 `chrome-use mobile access \(id) full` 才能从手机操作")
             default: return message.isEmpty ? code : message
             }
         case .timeout: return String(localized: "电脑没有及时回应。")
@@ -130,8 +136,8 @@ extension GatewayError {
     }
 }
 
-func describe(_ error: Error) -> String {
-    if let error = error as? GatewayError { return error.message }
+func describe(_ error: Error, deviceId: String? = nil) -> String {
+    if let error = error as? GatewayError { return error.message(deviceId: deviceId) }
     if let error = error as? PairLink.ParseError {
         switch error {
         case .notAPairLink: return String(localized: "这不是 chrome-use 配对链接。")

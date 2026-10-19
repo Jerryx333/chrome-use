@@ -196,6 +196,7 @@ public final class GatewayClient: Identifiable {
         if let mutes = reply["pushMutes"].array { pushMutes = Set(mutes.compactMap(\.string)) }
         var updated = credential
         if let version = reply["gatewayVersion"].string { updated.gatewayVersion = version }
+        if let allowed = reply["fullAccessAllowed"].bool { updated.fullAccessAllowed = allowed }
         if !updated.nameIsCustom, let name = reply["computerName"].string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             updated.name = String(name.prefix(80))
         }

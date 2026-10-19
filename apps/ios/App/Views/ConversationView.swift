@@ -102,7 +102,7 @@ struct ConversationView: View {
                     let muted = client.pushMutes.contains(conversationId)
                     Button(muted ? LocalizedStringKey("恢复通知") : LocalizedStringKey("静音通知"), systemImage: muted ? "bell" : "bell.slash") {
                         Task {
-                            do { try await client.setMuted(conversationId, !muted) } catch { self.error = describe(error) }
+                            do { try await client.setMuted(conversationId, !muted) } catch { self.error = describe(error, deviceId: client.id) }
                         }
                     }
                     .disabled(client.status != .connected)
@@ -119,7 +119,7 @@ struct ConversationView: View {
         .confirmationDialog("删除这个对话？", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("删除", role: .destructive) {
                 Task {
-                    do { try await client.delete(conversationId: conversationId); dismiss() } catch { self.error = describe(error) }
+                    do { try await client.delete(conversationId: conversationId); dismiss() } catch { self.error = describe(error, deviceId: client.id) }
                 }
             }
         } message: {
@@ -201,7 +201,7 @@ struct ConversationView: View {
                     images.append(PreparedImage(jpeg: jpeg, thumbnail: thumbnail))
                 }
             } catch {
-                self.error = describe(error)
+                self.error = describe(error, deviceId: client.id)
             }
         }
     }
@@ -217,19 +217,19 @@ struct ConversationView: View {
             images = []
             error = nil
         } catch {
-            self.error = describe(error)
+            self.error = describe(error, deviceId: client.id)
         }
     }
 
     /// Stop is never paywalled.
     private func stop() async {
-        do { try await client.stopTurn(conversationId: conversationId) } catch { self.error = describe(error) }
+        do { try await client.stopTurn(conversationId: conversationId) } catch { self.error = describe(error, deviceId: client.id) }
     }
 
     private func screenshot() async {
         shooting = true
         defer { shooting = false }
-        do { shot = try await client.screenshot(conversationId: conversationId) } catch { self.error = describe(error) }
+        do { shot = try await client.screenshot(conversationId: conversationId) } catch { self.error = describe(error, deviceId: client.id) }
     }
 }
 

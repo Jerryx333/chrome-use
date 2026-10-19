@@ -16,9 +16,10 @@ final class NotificationService: UNNotificationServiceExtension {
         }
         self.content = content
         let group = Bundle.main.object(forInfoDictionaryKey: "ChromeUseKeychainGroup") as? String
-        let credentials = (try? KeychainCredentialStore(accessGroup: group).all()) ?? []
+        // Push keys only; the full pairing secrets stay in the app's own group.
+        let keys = (try? KeychainPushKeyStore(accessGroup: group).all()) ?? []
         if let payload = request.content.userInfo["e"] as? String,
-           let notice = PushNotice.open(payload: payload, credentials: credentials) {
+           let notice = PushNotice.open(payload: payload, keys: keys) {
             content.title = notice.title.isEmpty ? "chrome-use" : notice.title
             // Worded by the code, never by the English body; an agent's own
             // text (turn preview, schedule result) goes under the reason.

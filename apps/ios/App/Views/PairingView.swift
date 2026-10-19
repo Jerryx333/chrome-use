@@ -12,26 +12,46 @@ struct PairingView: View {
     @State private var name = ""
     @State private var pairing = false
     @State private var error: String?
+    /// A saved computer this link would replace (same device id, another
+    /// address or gateway).
+    @State private var conflict: GatewayCredential?
+    @State private var confirmReplace = false
 
     var body: some View {
         NavigationStack {
             Form {
                 if let link {
+                    if let conflict {
+                        Section {
+                            Label("这会替换「\(conflict.name)」，地址/电脑不同", systemImage: "exclamationmark.octagon.fill")
+                                .font(.headline)
+                                .foregroundStyle(.red)
+                            LabeledContent("原来", value: conflict.url.absoluteString)
+                            LabeledContent("现在", value: link.url.absoluteString)
+                        } footer: {
+                            Text("只有你确定这是同一部手机在新电脑或新地址上的配对时才继续。否则取消，并在电脑上重新运行 mobile pair。")
+                        }
+                    }
                     Section("电脑") {
                         LabeledContent("地址", value: link.url.absoluteString)
                         TextField("名称", text: $name)
                     }
                     Section {
-                        Button {
-                            Task { await pair(link) }
+                        Button(role: conflict == nil ? nil : .destructive) {
+                            if conflict == nil { Task { await pair(link, replacing: false) } } else { confirmReplace = true }
                         } label: {
                             HStack {
-                                Text(pairing ? "正在配对…" : "配对")
+                                Text(pairing ? "正在配对…" : conflict == nil ? "配对" : "替换并配对")
                                 if pairing { Spacer(); ProgressView() }
                             }
                         }
                         .disabled(pairing || name.trimmingCharacters(in: .whitespaces).isEmpty)
-                        Button("换一个二维码", role: .cancel) { self.link = nil; error = nil }
+                        .confirmationDialog("替换「\(conflict?.name ?? "")」？", isPresented: $confirmReplace, titleVisibility: .visible) {
+                            Button("替换", role: .destructive) { Task { await pair(link, replacing: true) } }
+                        } message: {
+                            Text("原来的电脑会从这部手机上删除。")
+                        }
+                        Button("换一个二维码", role: .cancel) { self.link = nil; conflict = nil; error = nil }
                             .disabled(pairing)
                     } footer: {
                         Text("配对会生成一份只存在这部手机里的密钥；二维码随即失效，再扫一次也无法使用。")
@@ -87,7 +107,11 @@ struct PairingView: View {
     private func use(_ found: PairLink) {
         link = found
         error = nil
-        if let existing = model.client(found.deviceId) {
+        conflict = model.conflict(for: found)
+        if conflict != nil {
+            // Never presented as an ordinary re-pair of the saved computer.
+            name = found.suggestedName
+        } else if let existing = model.client(found.deviceId) {
             name = existing.credential.name
         } else if let replacing = model.repairing.flatMap(model.client) {
             name = replacing.credential.name
@@ -96,11 +120,11 @@ struct PairingView: View {
         }
     }
 
-    private func pair(_ link: PairLink) async {
+    private func pair(_ link: PairLink, replacing: Bool) async {
         pairing = true
         defer { pairing = false }
         do {
-            let client = try await model.pair(link, name: name.trimmingCharacters(in: .whitespaces))
+            let client = try await model.pair(link, name: name.trimmingCharacters(in: .whitespaces), replacing: replacing)
             model.pendingLink = nil
             dismiss()
             model.path = [.computer(client.id)]

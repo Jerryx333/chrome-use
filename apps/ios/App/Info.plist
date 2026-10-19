@@ -38,6 +38,8 @@
 	</array>
 	<key>ChromeUseAppGroup</key>
 	<string>$(APP_GROUP)</string>
+	<key>ChromeUseKeychainAppGroup</key>
+	<string>$(KEYCHAIN_APP_GROUP)</string>
 	<key>ChromeUseKeychainGroup</key>
 	<string>$(KEYCHAIN_GROUP)</string>
 	<key>ChromeUsePushWorkerURL</key>

@@ -110,7 +110,7 @@ final class VectorTests: XCTestCase {
     func testPushNoticePicksItsComputerByKid() throws {
         let other = GatewayCredential(url: URL(string: "ws://a")!, deviceId: UUID().uuidString, secret: Data(repeating: 7, count: 64), gatewayId: "x", name: "other", pairedAt: Date())
         let mine = GatewayCredential(url: URL(string: "ws://b")!, deviceId: deviceId, secret: pairSecret + phoneSecret, gatewayId: "y", name: "mine", pairedAt: Date())
-        let notice = try XCTUnwrap(PushNotice.open(payload: Self.pushPayload, credentials: [other, mine]))
+        let notice = try XCTUnwrap(PushNotice.open(payload: Self.pushPayload, keys: [other, mine].map(PushKeyEntry.init)))
         XCTAssertEqual(notice.deviceId, deviceId)
         XCTAssertEqual(notice.code, .needsInput)
         XCTAssertEqual(notice.rawKind, "needsInput")

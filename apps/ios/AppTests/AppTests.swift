@@ -81,22 +81,56 @@ final class StorePurchaseTests: XCTestCase {
     }
 }
 
-/// The app's entitlements let it use the shared keychain group the
-/// notification extension reads push keys from.
-final class SharedKeychainTests: XCTestCase {
-    func testCredentialRoundTripInSharedGroup() throws {
-        let group = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "ChromeUseKeychainGroup") as? String)
-        XCTAssertFalse(group.isEmpty)
-        let store = KeychainCredentialStore(service: "chrome-use.gateway.test", accessGroup: group)
-        let credential = GatewayCredential(url: URL(string: "ws://127.0.0.1:17345/")!, deviceId: UUID().uuidString.lowercased(), secret: Data(repeating: 5, count: 64), gatewayId: "g", name: "Mac", pairedAt: Date())
-        try store.save(credential)
-        XCTAssertEqual(try store.all().first { $0.deviceId == credential.deviceId }, credential)
-        var renamed = credential
+/// Full credentials live in the app's own keychain group; the group shared
+/// with the notification extension holds push keys only.
+final class KeychainSplitTests: XCTestCase {
+    var appGroup: String { Bundle.main.object(forInfoDictionaryKey: "ChromeUseKeychainAppGroup") as? String ?? "" }
+    var sharedGroup: String { Bundle.main.object(forInfoDictionaryKey: "ChromeUseKeychainGroup") as? String ?? "" }
+
+    func credential() -> GatewayCredential {
+        GatewayCredential(url: URL(string: "ws://127.0.0.1:17345/")!, deviceId: UUID().uuidString.lowercased(), secret: Data(repeating: 5, count: 64), gatewayId: "test-\(UUID().uuidString.prefix(6))", name: "Mac", pairedAt: Date())
+    }
+
+    func testCredentialsStayInTheAppGroupAndPushKeysAreShared() throws {
+        XCTAssertFalse(appGroup.isEmpty)
+        XCTAssertNotEqual(appGroup, sharedGroup)
+        let store = KeychainCredentialStore(service: "chrome-use.computer.test", accessGroup: appGroup)
+        let keys = KeychainPushKeyStore(service: "chrome-use.pushkey.test", accessGroup: sharedGroup)
+        let saved = credential()
+        try store.save(saved)
+        try keys.save(PushKeyEntry(credential: saved))
+        defer { try? store.delete(deviceId: saved.deviceId); try? keys.delete(deviceId: saved.deviceId) }
+
+        let item = try XCTUnwrap(store.items.all().first { $0.account == saved.storageKey })
+        XCTAssertEqual(item.group, appGroup, "the full secret is in the app-only group")
+        // What the extension can query (the shared group) has no credential.
+        XCTAssertTrue(try KeychainItems(service: "chrome-use.computer.test", accessGroup: sharedGroup).all().isEmpty)
+        let entry = try XCTUnwrap(keys.all().first { $0.deviceId == saved.deviceId })
+        XCTAssertEqual(entry.pushKey, saved.keys.push)
+        XCTAssertEqual(entry.kid, PushCrypto.kid(pushKey: saved.keys.push))
+        let pushItem = try XCTUnwrap(keys.items.all().first { $0.account == saved.storageKey })
+        XCTAssertEqual(pushItem.group, sharedGroup)
+        XCTAssertFalse(String(decoding: pushItem.data, as: UTF8.self).contains(saved.secret.base64EncodedString()))
+
+        var renamed = saved
         renamed.name = "Mac mini"
         try store.save(renamed)
-        XCTAssertEqual(try store.all().filter { $0.deviceId == credential.deviceId }, [renamed])
-        try store.delete(deviceId: credential.deviceId)
-        XCTAssertFalse(try store.all().contains { $0.deviceId == credential.deviceId })
+        XCTAssertEqual(try store.all().filter { $0.deviceId == saved.deviceId }, [renamed])
+    }
+
+    /// Computers saved by earlier builds (full credential in the shared
+    /// group) move on launch, and the shared copy is deleted.
+    @MainActor
+    func testLaunchMigratesLegacyCredentials() throws {
+        let legacy = KeychainCredentialStore(service: "chrome-use.gateway", accessGroup: sharedGroup)
+        let old = credential()
+        try legacy.items.put(account: old.deviceId, data: try JSONEncoder().encode(old))
+        let model = AppModel(cache: InMemoryJournalCache())
+        defer { model.remove(old.deviceId, tellGateway: false) }
+        XCTAssertTrue(try legacy.all().filter { $0.deviceId == old.deviceId }.isEmpty, "shared copy deleted")
+        XCTAssertEqual(try KeychainCredentialStore(accessGroup: appGroup).all().first { $0.deviceId == old.deviceId }, old)
+        XCTAssertNotNil(try KeychainPushKeyStore(accessGroup: sharedGroup).all().first { $0.deviceId == old.deviceId })
+        XCTAssertNotNil(model.client(old.deviceId))
     }
 }
 
@@ -219,5 +253,112 @@ final class ComputerNameAndTokenTests: XCTestCase {
         XCTAssertNil(model.push.registration)
         XCTAssertTrue(model.push.lastError?.contains("invalid") == true)
         model.remove(credential.deviceId, tellGateway: false)
+    }
+}
+
+@MainActor
+final class PairingConflictTests: XCTestCase {
+    func testLinkReusingADeviceIdForAnotherComputerNeedsConfirmation() async throws {
+        let device = UUID().uuidString.lowercased()
+        let saved = GatewayCredential(url: URL(string: "ws://100.64.1.2:17345/")!, deviceId: device, secret: Data(repeating: 1, count: 64), gatewayId: "home", name: "Home Mac", pairedAt: Date())
+        let keychain = InMemoryCredentialStore([saved])
+        let pushKeys = InMemoryPushKeyStore()
+        try pushKeys.save(PushKeyEntry(credential: saved))
+        let model = AppModel(credentials: keychain, pushKeys: pushKeys, cache: InMemoryJournalCache()) { link, store in
+            let secret = link.pairSecret + Data(repeating: 0xEE, count: 32)
+            try store(secret)
+            return (nil, secret)
+        }
+        model.asksForNotifications = false
+
+        // Same device id and computer: an ordinary re-scan, no conflict.
+        XCTAssertNil(model.conflict(for: PairLink(url: saved.url, deviceId: device, pairSecret: Data(count: 32), gatewayId: "home")))
+        // Same device id, another address or gateway: a conflict.
+        let other = PairLink(url: URL(string: "ws://192.168.1.9:17345/")!, deviceId: device, pairSecret: Data(repeating: 4, count: 32), gatewayId: "office")
+        XCTAssertEqual(model.conflict(for: other), saved)
+        XCTAssertNotNil(model.conflict(for: PairLink(url: saved.url, deviceId: device, pairSecret: Data(count: 32), gatewayId: "office")))
+
+        do {
+            _ = try await model.pair(other, name: "Office")
+            XCTFail("a conflicting link must not pair without confirmation")
+        } catch is AppModel.PairingConflict {}
+        XCTAssertEqual(try keychain.all(), [saved])
+
+        // Confirmed: the new computer replaces the old one, keys included.
+        _ = try await model.pair(other, name: "Office", replacing: true)
+        let stored = try keychain.all()
+        XCTAssertEqual(stored.map(\.gatewayId), ["office"])
+        XCTAssertEqual(try pushKeys.all().map(\.gatewayId), ["office"])
+        XCTAssertEqual(model.clients.map(\.credential.gatewayId), ["office"])
+        model.remove(device, tellGateway: false)
+    }
+}
+
+final class MutableClock: Clock, @unchecked Sendable {
+    var now: Date
+    init(_ now: Date) { self.now = now }
+}
+
+@MainActor
+final class AppLockTests: XCTestCase {
+    func defaults() -> UserDefaults {
+        let name = "lock-test-\(UUID().uuidString)"
+        return UserDefaults(suiteName: name)!
+    }
+
+    func testRequiredLockAtLaunchAndAfterFiveMinutes() async {
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_800_000_000))
+        var prompts = 0
+        let lock = AppLock(defaults: defaults(), clock: clock) { _ in prompts += 1; return true }
+        XCTAssertFalse(lock.locked)
+        lock.setRequired(true, atLaunch: true)
+        XCTAssertTrue(lock.locked, "required: locked on launch")
+        await lock.unlock()
+        XCTAssertFalse(lock.locked)
+        XCTAssertEqual(prompts, 1)
+
+        lock.background()
+        clock.now += 4 * 60
+        lock.foreground()
+        XCTAssertFalse(lock.locked, "under five minutes away: still open")
+        lock.background()
+        clock.now += 5 * 60 + 1
+        lock.foreground()
+        XCTAssertTrue(lock.locked, "over five minutes away: locked")
+
+        // It cannot be switched off while a computer requires it.
+        await lock.unlock()
+        await lock.setEnabled(false)
+        XCTAssertTrue(lock.active)
+    }
+
+    func testOptionalLockLocksOnEveryReturn() async {
+        let clock = MutableClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let lock = AppLock(defaults: defaults(), clock: clock) { _ in true }
+        await lock.setEnabled(true)
+        lock.background()
+        lock.foreground()
+        XCTAssertTrue(lock.locked)
+    }
+
+    /// `hello.fullAccessAllowed` from any computer turns the requirement on.
+    func testHelloMakesTheLockRequired() {
+        let credential = GatewayCredential(url: URL(string: "ws://127.0.0.1:9/")!, deviceId: UUID().uuidString.lowercased(), secret: Data(repeating: 1, count: 64), gatewayId: "g", name: "Mac", pairedAt: Date())
+        let keychain = InMemoryCredentialStore([credential])
+        let lock = AppLock(defaults: defaults(), clock: SystemClock()) { _ in true }
+        let model = AppModel(credentials: keychain, cache: InMemoryJournalCache(), lock: lock)
+        XCTAssertFalse(lock.required)
+        model.client(credential.deviceId)?.applyHello(["computerName": "Mac", "gatewayVersion": "1", "pushMutes": [], "fullAccessAllowed": true])
+        XCTAssertTrue(lock.required)
+        XCTAssertEqual(try keychain.all().first?.fullAccessAllowed, true, "remembered for the next launch")
+        let relaunched = AppModel(credentials: keychain, cache: InMemoryJournalCache(), lock: AppLock(defaults: defaults(), clock: SystemClock()) { _ in true })
+        XCTAssertTrue(relaunched.lock.locked)
+        model.remove(credential.deviceId, tellGateway: false)
+        relaunched.remove(credential.deviceId, tellGateway: false)
+    }
+
+    func testAccessTooHighNamesTheCommand() {
+        let message = GatewayError.remote(code: "accessTooHigh", message: "x").message(deviceId: "0f8fad5b-d9cb-469f-a165-70867728950e")
+        XCTAssertTrue(message.contains("chrome-use mobile access 0f8fad5b-d9cb-469f-a165-70867728950e full"), message)
     }
 }

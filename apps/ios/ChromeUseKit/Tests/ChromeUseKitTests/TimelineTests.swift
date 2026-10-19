@@ -249,3 +249,62 @@ final class HelloAndRejectionTests: XCTestCase {
         XCTAssertEqual(unnamed.suggestedName, "100.88.1.2")
     }
 }
+
+final class CredentialSplitTests: XCTestCase {
+    func credential(_ gateway: String = "g", device: String = UUID().uuidString.lowercased()) -> GatewayCredential {
+        GatewayCredential(url: URL(string: "ws://127.0.0.1:1")!, deviceId: device, secret: Data(repeating: 9, count: 64), gatewayId: gateway, name: "Mac", pairedAt: Date())
+    }
+
+    func testMigrationMovesFullCredentialsAndLeavesOnlyPushKeysShared() throws {
+        let old = [credential(), credential("h")]
+        let legacy = InMemoryCredentialStore(old)
+        let credentials = InMemoryCredentialStore()
+        let pushKeys = InMemoryPushKeyStore()
+        XCTAssertEqual(try CredentialMigration.run(legacy: legacy, into: credentials, pushKeys: pushKeys), 2)
+        XCTAssertTrue(try legacy.all().isEmpty)
+        XCTAssertEqual(Set(try credentials.all()), Set(old))
+        let entries = try pushKeys.all()
+        XCTAssertEqual(Set(entries.map(\.deviceId)), Set(old.map(\.deviceId)))
+        for entry in entries {
+            let source = old.first { $0.deviceId == entry.deviceId }!
+            XCTAssertEqual(entry.pushKey, source.keys.push)
+            XCTAssertEqual(entry.kid, PushCrypto.kid(pushKey: source.keys.push))
+            let encoded = String(decoding: try JSONEncoder().encode(entry), as: UTF8.self)
+            XCTAssertFalse(encoded.contains(source.secret.base64EncodedString()), "no pairing secret in the shared entry")
+        }
+        XCTAssertEqual(try CredentialMigration.run(legacy: legacy, into: credentials, pushKeys: pushKeys), 0, "idempotent")
+    }
+
+    func testStorageKeyedByGatewayAndDevice() throws {
+        let device = UUID().uuidString.lowercased()
+        let store = InMemoryCredentialStore()
+        let home = credential("home", device: device)
+        let office = credential("office", device: device)
+        try store.save(home)
+        try store.save(office)
+        XCTAssertEqual(try store.all().count, 2, "another gateway cannot overwrite the item")
+        try store.delete(storageKey: office.storageKey)
+        XCTAssertEqual(try store.all(), [home])
+    }
+
+    func testConflictDetection() {
+        let saved = credential("home")
+        let same = PairLink(url: saved.url, deviceId: saved.deviceId, pairSecret: Data(count: 32), gatewayId: "home")
+        XCTAssertFalse(same.conflicts(with: saved))
+        XCTAssertTrue(PairLink(url: URL(string: "ws://10.0.0.2:1")!, deviceId: saved.deviceId, pairSecret: Data(count: 32), gatewayId: "home").conflicts(with: saved))
+        XCTAssertTrue(PairLink(url: saved.url, deviceId: saved.deviceId, pairSecret: Data(count: 32), gatewayId: "office").conflicts(with: saved))
+        XCTAssertFalse(PairLink(url: URL(string: "ws://10.0.0.2:1")!, deviceId: UUID().uuidString, pairSecret: Data(count: 32), gatewayId: "x").conflicts(with: saved))
+    }
+
+    @MainActor
+    func testHelloRemembersFullAccessAllowed() {
+        let client = GatewayClient(credential: credential(), cache: InMemoryJournalCache())
+        XCTAssertFalse(client.credential.fullAccessAllowed)
+        client.applyHello(["computerName": "Mac", "gatewayVersion": "1", "pushMutes": [], "fullAccessAllowed": true])
+        XCTAssertTrue(client.credential.fullAccessAllowed)
+        client.applyHello(["computerName": "Mac", "gatewayVersion": "1", "pushMutes": []])
+        XCTAssertTrue(client.credential.fullAccessAllowed, "an older gateway without the field changes nothing")
+        client.applyHello(["computerName": "Mac", "gatewayVersion": "1", "pushMutes": [], "fullAccessAllowed": false])
+        XCTAssertFalse(client.credential.fullAccessAllowed)
+    }
+}

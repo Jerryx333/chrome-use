@@ -57,6 +57,12 @@ public struct PairLink: Equatable, Sendable {
 
     /// A name for the computer until the user renames it: the gateway's,
     /// else the URL's host.
+    /// A link for this device id that points at a different computer than
+    /// the one saved under it: pairing would replace that computer.
+    public func conflicts(with saved: GatewayCredential) -> Bool {
+        saved.deviceId == deviceId && (saved.url != url || saved.gatewayId != gatewayId)
+    }
+
     public var suggestedName: String {
         computerName ?? url.host ?? "chrome-use"
     }
@@ -77,8 +83,12 @@ public struct GatewayCredential: Codable, Identifiable, Hashable, Sendable {
     public var nameIsCustom: Bool
     /// The chrome-use version the gateway reported in `hello`.
     public var gatewayVersion: String?
+    /// The gateway lets this phone drive conversations with full access or
+    /// command execution (`hello.fullAccessAllowed`); the app then requires
+    /// its lock.
+    public var fullAccessAllowed: Bool
 
-    public init(url: URL, deviceId: String, secret: Data, gatewayId: String, name: String, pairedAt: Date, nameIsCustom: Bool = false, gatewayVersion: String? = nil) {
+    public init(url: URL, deviceId: String, secret: Data, gatewayId: String, name: String, pairedAt: Date, nameIsCustom: Bool = false, gatewayVersion: String? = nil, fullAccessAllowed: Bool = false) {
         self.url = url
         self.deviceId = deviceId
         self.secret = secret
@@ -87,10 +97,11 @@ public struct GatewayCredential: Codable, Identifiable, Hashable, Sendable {
         self.pairedAt = pairedAt
         self.nameIsCustom = nameIsCustom
         self.gatewayVersion = gatewayVersion
+        self.fullAccessAllowed = fullAccessAllowed
     }
 
     enum CodingKeys: String, CodingKey {
-        case url, deviceId, secret, gatewayId, name, pairedAt, nameIsCustom, gatewayVersion
+        case url, deviceId, secret, gatewayId, name, pairedAt, nameIsCustom, gatewayVersion, fullAccessAllowed
     }
 
     /// Credentials stored by earlier builds lack the newer fields.
@@ -104,7 +115,8 @@ public struct GatewayCredential: Codable, Identifiable, Hashable, Sendable {
             name: try c.decode(String.self, forKey: .name),
             pairedAt: try c.decode(Date.self, forKey: .pairedAt),
             nameIsCustom: try c.decodeIfPresent(Bool.self, forKey: .nameIsCustom) ?? false,
-            gatewayVersion: try c.decodeIfPresent(String.self, forKey: .gatewayVersion)
+            gatewayVersion: try c.decodeIfPresent(String.self, forKey: .gatewayVersion),
+            fullAccessAllowed: try c.decodeIfPresent(Bool.self, forKey: .fullAccessAllowed) ?? false
         )
     }
 

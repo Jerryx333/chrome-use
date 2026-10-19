@@ -13,7 +13,10 @@ enum AppConfig {
         (Bundle.main.object(forInfoDictionaryKey: key) as? String) ?? ""
     }
 
+    /// Shared with the notification extension: push keys only.
     static var keychainGroup: String { value("ChromeUseKeychainGroup") }
+    /// The app's own group: full credentials.
+    static var keychainAppGroup: String { value("ChromeUseKeychainAppGroup") }
     static var appGroup: String { value("ChromeUseAppGroup") }
     static var defaultPushWorker: URL { URL(string: value("ChromeUsePushWorkerURL")) ?? PushRegistrar.defaultBaseURL }
     static var unlockProduct: String { value("ChromeUseUnlockProduct") }
@@ -49,6 +52,7 @@ final class AppModel {
     let push: PushManager
     let lock: AppLock
     @ObservationIgnored private let credentials: CredentialStore
+    @ObservationIgnored private let pushKeys: PushKeyStore
     @ObservationIgnored private let cache: JournalCache
     @ObservationIgnored private let pairer: Pairer
     /// Off in tests, where the permission prompt would block.
@@ -58,8 +62,15 @@ final class AppModel {
     /// and the combined secret, after calling `store` with it.
     typealias Pairer = (PairLink, @escaping (Data) throws -> Void) async throws -> (GatewayConnection?, Data)
 
-    init(credentials: CredentialStore? = nil, cache: JournalCache = FileJournalCache.applicationSupport(), pairer: Pairer? = nil) {
-        self.credentials = credentials ?? KeychainCredentialStore(accessGroup: AppConfig.keychainGroup)
+    /// Live stores unless given: full credentials in the app-only keychain
+    /// group, push keys in the group shared with the notification extension.
+    /// `legacy` holds computers saved by earlier builds (full credentials in
+    /// the shared group); they are moved on launch.
+    init(credentials: CredentialStore? = nil, pushKeys: PushKeyStore? = nil, legacy: CredentialStore? = nil,
+         cache: JournalCache = FileJournalCache.applicationSupport(), pairer: Pairer? = nil, lock: AppLock? = nil) {
+        let live = credentials == nil
+        self.credentials = credentials ?? KeychainCredentialStore(accessGroup: AppConfig.keychainAppGroup)
+        self.pushKeys = pushKeys ?? (live ? KeychainPushKeyStore(accessGroup: AppConfig.keychainGroup) : InMemoryPushKeyStore())
         self.cache = cache
         self.pairer = pairer ?? { link, store in
             let (connection, secret) = try await GatewayConnection.pair(link: link, store: store)
@@ -67,11 +78,27 @@ final class AppModel {
         }
         self.store = Store()
         self.push = PushManager()
-        self.lock = AppLock()
+        self.lock = lock ?? AppLock()
         push.onRelayToken = { [weak self] token in
             self?.clients.forEach { $0.relayToken = token }
         }
+        let legacy = legacy ?? (live ? KeychainCredentialStore(service: "chrome-use.gateway", accessGroup: AppConfig.keychainGroup) : nil)
+        if let legacy {
+            do {
+                try CredentialMigration.run(legacy: legacy, into: self.credentials, pushKeys: self.pushKeys)
+            } catch {
+                storeError = String(localized: "无法迁移已配对的电脑：\(String(describing: error))")
+            }
+        }
         load()
+        // On launch, a computer that allows high-access conversations from
+        // the phone requires the lock before anything shows.
+        self.lock.setRequired(lockRequired, atLaunch: true)
+    }
+
+    /// Some paired computer lets this phone drive full-access conversations.
+    var lockRequired: Bool {
+        clients.contains { $0.credential.fullAccessAllowed }
     }
 
     func load() {
@@ -91,7 +118,10 @@ final class AppModel {
         client.relayToken = push.relayToken
         client.onPushTokenRejected = { [weak self] reason in self?.push.tokenRejected(reason: reason) }
         let keychain = credentials
-        client.onCredentialChanged = { credential in try? keychain.save(credential) }
+        client.onCredentialChanged = { [weak self] credential in
+            try? keychain.save(credential)
+            if let self { self.lock.setRequired(self.lockRequired, atLaunch: false) }
+        }
         return client
     }
 
@@ -109,10 +139,25 @@ final class AppModel {
         }
     }
 
+    /// A saved computer this link would replace: same device id, but another
+    /// address or gateway. Pairing it needs an explicit confirmation.
+    func conflict(for link: PairLink) -> GatewayCredential? {
+        clients.map(\.credential).first { link.conflicts(with: $0) }
+    }
+
+    struct PairingConflict: Error {
+        let saved: GatewayCredential
+    }
+
     /// Pair, persist and connect. The combined secret is in the keychain
-    /// before `pairComplete` leaves the phone.
-    func pair(_ link: PairLink, name: String) async throws -> GatewayClient {
+    /// before `pairComplete` leaves the phone. A link that reuses a saved
+    /// computer's device id for another address or gateway is refused unless
+    /// `replacing` confirms it.
+    func pair(_ link: PairLink, name: String, replacing: Bool = false) async throws -> GatewayClient {
+        let conflicting = conflict(for: link)
+        if let conflicting, !replacing { throw PairingConflict(saved: conflicting) }
         let keychain = credentials
+        let pushKeys = self.pushKeys
         let pairedAt = Date()
         // A name the user typed (or kept from the computer being re-paired)
         // wins over the gateway's; otherwise `hello` keeps it current.
@@ -124,10 +169,16 @@ final class AppModel {
         let stored = StoredFlag()
         do {
             let (connection, secret) = try await pairer(link) { secret in
-                try keychain.save(credentialFor(secret))
+                let credential = credentialFor(secret)
+                try keychain.save(credential)
+                try pushKeys.save(PushKeyEntry(credential: credential))
                 stored.value = true
             }
             let credential = credentialFor(secret)
+            if let conflicting {
+                // Confirmed: the old computer under this device id goes.
+                removeCredential(conflicting)
+            }
             if let replaced = repairing, replaced != link.deviceId { remove(replaced, tellGateway: false) }
             repairing = nil
             let client = makeClient(credential)
@@ -143,7 +194,10 @@ final class AppModel {
                 // next connection either works or is refused with 4401.
                 load()
             } else {
-                try? credentials.delete(deviceId: link.deviceId)
+                // Only what this attempt stored; never a computer it was about to replace.
+                let key = credentialFor(Data()).storageKey
+                try? credentials.delete(storageKey: key)
+                try? self.pushKeys.delete(storageKey: key)
             }
             throw error
         }
@@ -159,6 +213,17 @@ final class AppModel {
         client.update(credential: credential)
     }
 
+    /// Drop one saved computer by its exact keychain key (the conflict case,
+    /// where a new computer shares its device id).
+    private func removeCredential(_ credential: GatewayCredential) {
+        try? credentials.delete(storageKey: credential.storageKey)
+        try? pushKeys.delete(storageKey: credential.storageKey)
+        if let client = client(credential.deviceId), client.credential.storageKey == credential.storageKey {
+            client.purge()
+            clients.removeAll { $0 === client }
+        }
+    }
+
     /// Forget a computer. The gateway is told to drop the push token first,
     /// when it can be reached.
     func remove(_ deviceId: String, tellGateway: Bool = true) {
@@ -169,6 +234,7 @@ final class AppModel {
             client.purge()
         }
         try? credentials.delete(deviceId: deviceId)
+        try? pushKeys.delete(deviceId: deviceId)
         clients.removeAll { $0.id == deviceId }
         path.removeAll {
             switch $0 {
@@ -203,6 +269,7 @@ final class AppModel {
     // MARK: Lifecycle
 
     func foreground() {
+        lock.foreground()
         clients.forEach { $0.reconnectNow() }
         Task { await store.refresh() }
         push.refreshIfNeeded()

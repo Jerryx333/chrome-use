@@ -341,6 +341,26 @@
         }
       }
     },
+    "原来": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Before"
+          }
+        }
+      }
+    },
+    "原来的电脑会从这部手机上删除。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The previous computer will be removed from this phone."
+          }
+        }
+      }
+    },
     "发送": {
       "localizations": {
         "en": {
@@ -377,6 +397,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Cancel request"
+          }
+        }
+      }
+    },
+    "只有你确定这是同一部手机在新电脑或新地址上的配对时才继续。否则取消，并在电脑上重新运行 mobile pair。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Continue only if you are sure this phone is being paired with a new computer or address. Otherwise cancel and run mobile pair again on the computer."
           }
         }
       }
@@ -981,12 +1011,62 @@
         }
       }
     },
+    "无法迁移已配对的电脑：%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot migrate paired computers: %@"
+          }
+        }
+      }
+    },
     "无法连接到电脑。请确认 chrome-use mobile serve 正在运行，且手机能访问该地址。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Cannot reach the computer. Make sure chrome-use mobile serve is running and the phone can reach its address."
+          }
+        }
+      }
+    },
+    "替换": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace"
+          }
+        }
+      }
+    },
+    "替换「%@」？": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace “%@”?"
+          }
+        }
+      }
+    },
+    "替换并配对": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace and pair"
+          }
+        }
+      }
+    },
+    "有电脑允许手机操作高权限对话，所以必须开启：启动时和离开超过 5 分钟后都要验证。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A computer lets this phone drive high-access conversations, so the lock is required: at launch and after more than 5 minutes away."
           }
         }
       }
@@ -1151,6 +1231,16 @@
         }
       }
     },
+    "此电脑允许手机操作高权限对话": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This computer allows high-access conversations from the phone"
+          }
+        }
+      }
+    },
     "每 %lld 分钟": {
       "localizations": {
         "en": {
@@ -1257,6 +1347,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Status"
+          }
+        }
+      }
+    },
+    "现在": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Now"
           }
         }
       }
@@ -1641,12 +1741,32 @@
         }
       }
     },
+    "这个对话权限太高，需要在电脑上运行 `chrome-use mobile access %@ full` 才能从手机操作": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This conversation’s access is too high. Run `chrome-use mobile access %@ full` on the computer to drive it from the phone"
+          }
+        }
+      }
+    },
     "这个请求（%@）只能在电脑上处理。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "This request (%@) can only be answered on the computer."
+          }
+        }
+      }
+    },
+    "这会替换「%@」，地址/电脑不同": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This replaces “%@”: a different address or computer"
           }
         }
       }

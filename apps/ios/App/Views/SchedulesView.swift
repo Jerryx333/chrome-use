@@ -68,7 +68,7 @@ struct SchedulesView: View {
             schedules = try await client.schedules()
             error = nil
         } catch {
-            self.error = describe(error)
+            self.error = describe(error, deviceId: client.id)
         }
         loaded = true
     }
@@ -77,7 +77,7 @@ struct SchedulesView: View {
         guard model.allow(.toggleSchedule) else { return }
         busy = schedule.id
         defer { busy = nil }
-        do { try await client.setSchedule(schedule.id, enabled: on) } catch { self.error = describe(error) }
+        do { try await client.setSchedule(schedule.id, enabled: on) } catch { self.error = describe(error, deviceId: client.id) }
         await load()
     }
 
@@ -85,7 +85,7 @@ struct SchedulesView: View {
         guard model.allow(.runSchedule) else { return }
         busy = schedule.id
         defer { busy = nil }
-        do { try await client.runSchedule(schedule.id) } catch { self.error = describe(error) }
+        do { try await client.runSchedule(schedule.id) } catch { self.error = describe(error, deviceId: client.id) }
         await load()
     }
 }

@@ -22,6 +22,10 @@ struct SettingsView: View {
                             Text(client.credential.url.absoluteString).font(.caption.monospaced()).foregroundStyle(.secondary)
                             let when = client.credential.pairedAt.formatted(date: .abbreviated, time: .shortened)
                             Text("配对于 \(when)").font(.caption2).foregroundStyle(.secondary)
+                            if client.credential.fullAccessAllowed {
+                                Label("此电脑允许手机操作高权限对话", systemImage: "exclamationmark.shield")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
                             if let version = client.credential.gatewayVersion {
                                 Text("chrome-use \(version)").font(.caption2).foregroundStyle(.secondary)
                             }
@@ -43,10 +47,14 @@ struct SettingsView: View {
                     Button("恢复购买") { Task { await model.store.restore() } }
                 }
                 Section {
-                    Toggle("面容 ID 锁", isOn: Binding(get: { model.lock.enabled }, set: { on in Task { await model.lock.setEnabled(on) } }))
-                        .disabled(!model.lock.available && !model.lock.enabled)
+                    Toggle("面容 ID 锁", isOn: Binding(get: { model.lock.active }, set: { on in Task { await model.lock.setEnabled(on) } }))
+                        .disabled(model.lock.required || (!model.lock.available && !model.lock.enabled))
                 } footer: {
-                    Text("开启后，每次回到 App 都需要验证。")
+                    if model.lock.required {
+                        Text("有电脑允许手机操作高权限对话，所以必须开启：启动时和离开超过 5 分钟后都要验证。")
+                    } else {
+                        Text("开启后，每次回到 App 都需要验证。")
+                    }
                 }
                 Section {
                     LabeledContent("通知权限", value: model.push.authorized == true ? String(localized: "已允许") : model.push.authorized == false ? String(localized: "未允许") : String(localized: "未询问"))
