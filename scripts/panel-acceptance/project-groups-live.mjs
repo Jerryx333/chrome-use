@@ -16,6 +16,8 @@
 //      reuses its tab for the same page instead of opening another;
 //   7. a session with a per-session group from an older build moves its tab
 //      under its project's group;
+//   7b. sessions that only read, did nothing, or were killed leave no blank
+//      tab or empty group behind;
 //   8. with the extension relay unreachable and a process list that cannot
 //      see Chrome (a sandbox), no second Chrome is started; with one that
 //      can, chrome-use decides to start it (the rig has no profile to start).
@@ -136,6 +138,31 @@ try {
   check(g7.some(g => g.title === '✦ older' && g.id === oldTab.groupId), 'its tab is under the project group');
   check(!g7.some(g => g.title === '✦ ' + L.name), 'no per-session group left');
   ok(cu(4001, '%84', ['done'], { cwd: other }), 'L done');
+
+  // 7b. Sessions that never loaded a page leave nothing behind: one that
+  // only read (`get title`), one that did nothing but list its tabs, and one
+  // whose daemon was killed (no idle exit), cleaned by the next daemon's sweep.
+  const mk = name => { const d = path.join(work, name); fs.mkdirSync(path.join(d, '.git'), { recursive: true }); return d; };
+  const readOnly = mk('readonly'), idleOnly = mk('nothing'), crashed = mk('crashed'), next = mk('next');
+  ok(cu(6001, '%86', ['get', 'title'], { cwd: readOnly }), 'R get title');
+  ok(cu(6002, '%87', ['tab', 'list'], { cwd: idleOnly }), 'N tab list');
+  ok(cu(6003, '%88', ['get', 'url'], { cwd: crashed }), 'K get url');
+  const R = sessionOf(6001, '%86', { cwd: readOnly }), N = sessionOf(6002, '%87', { cwd: idleOnly }), K = sessionOf(6003, '%88', { cwd: crashed });
+  const groupsBefore = (await agentGroups()).map(g => g.title);
+  const kPid = Number(fs.readFileSync(path.join(socketDir, `${K.name}.pid`), 'utf8'));
+  process.kill(kPid, 'SIGKILL');
+  await daemonGone(R.name);
+  await daemonGone(N.name);
+  const afterIdle = (await agentGroups()).map(g => g.title);
+  fs.rmSync(path.join(socketDir, '.group-sweep'), { force: true });
+  ok(cu(6004, '%89', ['open', rig.site + '/a?next'], { cwd: next }), 'Z open');
+  const swept = await waitFor(async () => { const g = (await agentGroups()).map(g => g.title); return !g.includes('✦ crashed') && g; }, { timeout: 30000, label: 'crashed session swept' });
+  const blanks = (await tabs()).filter(t => !t.url || t.url === 'about:blank');
+  step('sessions that never loaded a page', { groupsBefore, afterIdle, swept, blanks: blanks.map(t => `${t.id} ${t.groupId}`) });
+  check(groupsBefore.includes('✦ readonly') && groupsBefore.includes('✦ nothing') && groupsBefore.includes('✦ crashed'), 'each of them had opened a blank tab in its group');
+  check(!afterIdle.includes('✦ readonly') && !afterIdle.includes('✦ nothing'), 'their idle exit closed the blank tab and the group went with it');
+  check(blanks.every(t => t.groupId === -1), 'no agent group holds a blank tab');
+  ok(cu(6004, '%89', ['done'], { cwd: next }), 'Z done');
 
   // 8. Relay unreachable, process list that cannot see Chrome: no Chrome start.
   const fake = path.join(work, 'fakebin');

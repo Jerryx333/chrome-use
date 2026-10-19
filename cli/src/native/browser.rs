@@ -8075,6 +8075,19 @@ impl BrowserManager {
         ok
     }
 
+    /// Close every tab this session opened that is still blank (relay only):
+    /// the first tab a session opens on connect, when nothing was ever
+    /// loaded into it. Left open it would hold the session's group in the
+    /// user's window with nothing in it. Urls are re-read first, so a tab that
+    /// did get a page is never taken for blank.
+    pub async fn close_blank_own_tabs(&mut self) {
+        if self.agent_group().is_none() {
+            return;
+        }
+        let _ = self.resync_targets().await;
+        self.close_leftover_blank_scratch("").await;
+    }
+
     /// Fold this session's tab group away in the user's window (relay only).
     /// Best effort: the extension refuses it when the group holds a tab no
     /// agent created.
@@ -8155,7 +8168,7 @@ impl BrowserManager {
             .filter(|p| {
                 p.target_id != keep
                     && self.created_targets.contains(&p.target_id)
-                    && (p.url == "about:blank" || p.url.is_empty())
+                    && crate::group_lifecycle::is_blank_url(&p.url)
             })
             .map(|p| p.target_id.clone())
             .collect();

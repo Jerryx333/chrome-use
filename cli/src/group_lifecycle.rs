@@ -396,6 +396,18 @@ pub fn take_moved_note(session: &str) -> Option<String> {
     Some(to.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// A page with nothing on it: a tab an agent opened and never used. It is
+/// never the user's, even in front, and closes as soon as its session ends.
+pub fn is_blank_url(url: &str) -> bool {
+    let url = url.trim().trim_end_matches('/');
+    url.is_empty()
+        || url == "about:blank"
+        || url == "about:newtab"
+        || url == "chrome://newtab"
+        || url == "chrome://new-tab-page"
+        || url == "edge://newtab"
+}
+
 // ---------------------------------------------------------------------------
 // Same page
 // ---------------------------------------------------------------------------
@@ -657,6 +669,19 @@ impl Browser {
         })
     }
 
+    /// A tab still on a blank page: nothing in it for anyone.
+    fn is_blank(&self, tab_id: i64) -> bool {
+        self.tabs.get(&tab_id).is_some_and(|t| {
+            let url = t
+                .get("url")
+                .and_then(Value::as_str)
+                .filter(|u| !u.is_empty())
+                .or_else(|| t.get("pendingUrl").and_then(Value::as_str))
+                .unwrap_or("");
+            is_blank_url(url)
+        })
+    }
+
     fn facts(&self, tab_id: i64) -> Option<TabFacts> {
         TabFacts::from_tab(self.tabs.get(&tab_id)?, &self.touched)
     }
@@ -738,25 +763,29 @@ async fn sweep_session(
         return skip(report, "running");
     }
     // Another session of the project is working: these tabs are its to reuse.
-    if group_has_other_live_session(session) {
-        return skip(report, "its project group is in use");
-    }
+    let in_use = group_has_other_live_session(session);
     let last = last_activity(session);
-    if !idle_enough(last, opts.idle, now) {
-        return skip(report, "used recently");
-    }
+    // A blank tab holds nothing: it closes whenever its session is gone, at
+    // once. Everything else waits for the idle time.
+    let idle = !in_use && idle_enough(last, opts.idle, now);
     let targets = crate::connection::read_created_targets(session, endpoint);
     if targets.is_empty() {
         // Recorded in another browser or profile; not this sweep's to judge.
         return;
     }
     let mut close = HashSet::new();
+    let mut wait = HashSet::new();
     for target in targets {
-        let facts = browser
-            .tab_of_target
-            .get(&target)
-            .and_then(|tab| browser.facts(*tab));
-        match facts {
+        let tab = browser.tab_of_target.get(&target).copied();
+        if tab.is_some_and(|tab| browser.is_blank(tab)) {
+            close.insert(target);
+            continue;
+        }
+        if !idle {
+            wait.insert(target);
+            continue;
+        }
+        match tab.and_then(|tab| browser.facts(tab)) {
             Some(tab) if user_has_tab(&tab, last) => {
                 browser.ungroup(tab.id).await;
                 let _ = crate::connection::set_kept_tab(session, &target, USER_KEPT_REASON);
@@ -769,8 +798,16 @@ async fn sweep_session(
             }
         }
     }
-    // The kept tabs leave the record before anything closes, so a failure
-    // below can never take them with it.
+    if close.is_empty() && !wait.is_empty() {
+        let why = if in_use {
+            "its project group is in use"
+        } else {
+            "used recently"
+        };
+        return skip(report, why);
+    }
+    // Only the tabs to close stay in the record while closing (the kept ones
+    // leave it for good), so a failure below can never take another with it.
     if let Err(e) = crate::connection::write_created_targets(session, endpoint, &close) {
         report.errors.push(format!("session {session}: {e}"));
         return;
@@ -788,7 +825,16 @@ async fn sweep_session(
             (t.clone(), row)
         })
         .collect();
-    match crate::native::browser::close_persisted_session_tabs_at(session, endpoint).await {
+    let closed = crate::native::browser::close_persisted_session_tabs_at(session, endpoint).await;
+    // The tabs still waiting out the idle time go back into the record.
+    if !wait.is_empty() {
+        let mut record = crate::connection::read_created_targets(session, endpoint);
+        record.extend(wait);
+        if let Err(e) = crate::connection::write_created_targets(session, endpoint, &record) {
+            report.errors.push(format!("session {session}: {e}"));
+        }
+    }
+    match closed {
         Ok(closed) => {
             for target in closed {
                 if let Some(row) = rows.get(&target) {
@@ -874,13 +920,11 @@ async fn sweep_unrecorded_groups(browser: &Browser, opts: SweepOptions, report: 
         ) else {
             continue;
         };
+        // Blank tabs go from any agent group nobody works in; the rest only
+        // when asked (`tabs cleanup`).
         let label = match agent_group_title(title) {
-            Some(AgentGroupTitle::Legacy(label) | AgentGroupTitle::Current(label))
-                if opts.orphans =>
-            {
-                label
-            }
-            _ => continue,
+            Some(AgentGroupTitle::Legacy(label) | AgentGroupTitle::Current(label)) => label,
+            None => continue,
         };
         if live.contains(&label) {
             continue;
@@ -904,10 +948,14 @@ async fn sweep_unrecorded_groups(browser: &Browser, opts: SweepOptions, report: 
             if recorded {
                 continue;
             }
+            let blank = browser.is_blank(tab_id);
+            if !blank && !opts.orphans {
+                continue;
+            }
             let Some(facts) = browser.facts(tab_id) else {
                 continue;
             };
-            if user_has_tab(&facts, None) {
+            if !blank && user_has_tab(&facts, None) {
                 browser.ungroup(tab_id).await;
                 report.left_for_user.push(browser.row(tab_id, None));
                 continue;
@@ -975,14 +1023,13 @@ pub fn auto_sweep_due(last: Option<SystemTime>, now: SystemTime) -> bool {
     }
 }
 
-/// Whether some session with recorded tabs has no running daemon and has
-/// been idle for `idle`: the only thing the automatic sweep acts on. Read from
-/// the socket directory alone.
-fn sweep_has_work(idle: Option<Duration>) -> bool {
-    let now = SystemTime::now();
-    recorded_sessions().iter().any(|session| {
-        idle_enough(last_activity(session), idle, now) && !crate::connection::daemon_ready(session)
-    })
+/// Whether some session with recorded tabs has no running daemon: it may
+/// have left a blank tab, which goes at once (the rest of its tabs wait for
+/// the idle time). Read from the socket directory alone.
+fn sweep_has_work() -> bool {
+    recorded_sessions()
+        .iter()
+        .any(|session| !crate::connection::daemon_ready(session))
 }
 
 /// After a new daemon started for `session`: unless one ran in the last few
@@ -998,7 +1045,7 @@ pub fn maybe_spawn_auto_sweep(session: &str) {
         return;
     }
     // Nothing ended long enough ago: no process, no connection to Chrome.
-    if !sweep_has_work(cleanup_idle()) {
+    if !sweep_has_work() {
         return;
     }
     if std::fs::write(&stamp, now_ms().to_string()).is_err() {
@@ -1116,6 +1163,26 @@ mod tests {
         ];
         assert_eq!(expired_leases("cu-a-me", "K", &members), vec!["cu-a-old"]);
         assert!(expired_leases("cu-x", "N", &members).is_empty());
+    }
+
+    #[test]
+    fn blank_pages_are_recognised() {
+        for url in [
+            "",
+            "about:blank",
+            "chrome://newtab/",
+            "chrome://new-tab-page/",
+            " about:newtab ",
+        ] {
+            assert!(is_blank_url(url), "{url}");
+        }
+        for url in [
+            "https://example.com/",
+            "chrome://settings/",
+            "about:blank#x",
+        ] {
+            assert!(!is_blank_url(url), "{url}");
+        }
     }
 
     #[test]

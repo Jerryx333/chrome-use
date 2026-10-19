@@ -49,6 +49,9 @@ What happens without it:
   on the machine closes its tabs in the background. A tab the user is looking
   at, or has switched to (extension 0.5.77+), is left for them, ungrouped and
   recorded as kept.
+- A tab the session opened and never loaded a page into (still `about:blank`
+  or the new tab page) closes when the session idles out, and the cleanup
+  closes such tabs of an ended session at once. It never counts as the user's.
 - When the last session working in a project's group idles out, the group is
   collapsed in the user's window at once; its tabs wait there for the
   project's next session, or for the 30-minute cleanup.

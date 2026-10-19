@@ -397,7 +397,17 @@ async fn run_socket_server(
                     if should_close_browser_on_idle(mgr.is_cdp_connection(), handed_off) {
                         let _ = mgr.close().await;
                         mark_browser_reaped(&session_id, idle_timeout_ms.unwrap_or_default());
-                    } else if !crate::group_lifecycle::group_has_other_live_session(&session_id)
+                    } else {
+                        // A tab the session opened and never loaded anything
+                        // into is clutter: it goes now, not with the sweep.
+                        let _ = tokio::time::timeout(
+                            Duration::from_secs(5),
+                            mgr.close_blank_own_tabs(),
+                        )
+                        .await;
+                    }
+                    if mgr.is_cdp_connection()
+                        && !crate::group_lifecycle::group_has_other_live_session(&session_id)
                     {
                         // Nobody works in the project's group any more: fold it
                         // away now. Its tabs stay for the next session of the
