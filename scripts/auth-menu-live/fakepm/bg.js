@@ -1,5 +1,9 @@
 // See content.js. Every event is logged to storage for the driver.
+// The tab with the menu, kept in session storage: a worker restart between
+// two events must not forget it (Bitwarden keeps its worker alive).
 let menuTab = null;
+const menuTabReady = chrome.storage.session.get('menuTab').then((o) => { menuTab = o.menuTab ?? null; });
+const setMenuTab = (tab) => { menuTab = tab; chrome.storage.session.set({ menuTab: tab }); };
 const log = async (entry) => {
   const { events = [] } = await chrome.storage.local.get('events');
   events.push({ at: Date.now(), ...entry });
@@ -8,22 +12,25 @@ const log = async (entry) => {
 const hide = (tab, why) => {
   log({ kind: 'close', why, tab });
   chrome.tabs.sendMessage(tab, { cmd: 'hide' }, { frameId: 0 }).catch(() => {});
-  if (menuTab === tab) menuTab = null;
+  if (menuTab === tab) setMenuTab(null);
 };
-chrome.runtime.onMessage.addListener((m, sender) => {
+chrome.runtime.onMessage.addListener(async (m, sender) => {
+  await menuTabReady;
   const tab = sender.tab?.id;
   if (tab == null) return;
   if (m.cmd === 'open') {
-    menuTab = tab;
+    setMenuTab(tab);
     log({ kind: 'open', tab, frame: sender.frameId });
     chrome.tabs.sendMessage(tab, { cmd: 'show' }, { frameId: 0 }).catch(() => {});
   } else {
     hide(tab, m.cmd);
   }
 });
-// Bitwarden's OverlayBackground.handleOverlayCiphersUpdate: on a tab or window
-// change, the menu of a tab that is not in front of the current window closes.
+// Bitwarden's OverlayBackground.handleOverlayCiphersUpdate: on a tab activated,
+// replaced (a discard) or a window focus change (TabsBackground), the menu of a
+// tab that is not in front of the current window closes.
 async function tabsChanged(why) {
+  await menuTabReady;
   const [current] = await chrome.tabs.query({ active: true, windowId: chrome.windows.WINDOW_ID_CURRENT });
   log({ kind: 'tabs-changed', why, current: current?.id ?? null, menuTab });
   if (menuTab != null && current?.id !== menuTab) hide(menuTab, 'elsewhere');
@@ -31,6 +38,10 @@ async function tabsChanged(why) {
 chrome.tabs.onActivated.addListener((info) => {
   log({ kind: 'activated', tab: info.tabId, window: info.windowId });
   tabsChanged('activated');
+});
+chrome.tabs.onReplaced.addListener((added, removed) => {
+  log({ kind: 'replaced', added, removed });
+  tabsChanged('replaced');
 });
 chrome.windows.onFocusChanged.addListener((w) => {
   log({ kind: 'window-focus', window: w });

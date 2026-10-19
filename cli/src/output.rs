@@ -6263,8 +6263,8 @@ Core Commands:
   connect <port|url>         Connect to browser via CDP
   debugger_access_denied: protected extension content blocks this tab; do not
   loop on reattach. A password manager's inline menu is closed automatically
-  (a brief tab switch, or a blank tab in the agent window for a background tab
-  in your own window); otherwise follow the error's next step.
+  (a brief tab switch, or a blank tab in the minimized agent window for a
+  background tab in your own window); otherwise follow the error's next step.
   Relay lifecycle waits stop early on a confirmed access denial; ordinary
   slow pages retain their normal readiness wait.
   Extension popup: Connected means the native host replied; Connecting means

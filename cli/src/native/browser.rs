@@ -1821,10 +1821,20 @@ fn window_has_unowned_tab(tabs: &Value, owned: &HashSet<i64>) -> bool {
 
 /// The recovery's error when the menu was open again after the tab was shown.
 const MENU_STILL_OPEN: &str = "the menu was still open after chrome-use hid the tab for a moment";
+/// What [`BrowserManager::activate_in_agent_window`] found in the agent window.
+struct AgentWindowNudge {
+    window: i64,
+    /// The tab that was in front there before, to put back afterwards.
+    before: Option<i64>,
+    /// The blank tab is the window's only tab (a window opened for it).
+    only_tab: bool,
+    minimized: bool,
+}
+
 /// The menu stayed open after a tab was shown in the agent window (see
 /// `close_menu_from_agent_window`).
 const MENU_STILL_OPEN_ELSEWHERE: &str = "the blocked tab is in the background of a window with \
-the user's own tabs; chrome-use showed a blank tab in its agent window, which makes Bitwarden \
+the user's own tabs; chrome-use activated a blank tab in its agent window, which makes Bitwarden \
 close its menu on other tabs, and the menu was still open after 2s. The vault may be locked (a \
 locked Bitwarden does not do this), or the frame is another password manager's or its \
 \"save login?\" bar";
@@ -7050,17 +7060,28 @@ impl BrowserManager {
     }
 
     /// Close a password manager's menu on a background tab of the user's
-    /// window without switching anything there: show a blank tab of our own
-    /// in the agent window for a moment instead.
+    /// window without switching anything there: activate a blank tab of our
+    /// own in the agent window instead.
     ///
     /// Bitwarden (2026.10, `OverlayBackground.handleOverlayCiphersUpdate`)
     /// runs on every `tabs.onActivated` in any window and force-closes the
     /// inline menu of the tab holding the focused field whenever that tab is
     /// not the one in front of the last focused window, which a background
-    /// tab never is. Activating a tab in the agent window fires that event
+    /// tab never is. Activating a tab in another window fires that event
     /// while the user's window, its front tab and the focus stay as they
-    /// were. The agent window is opened unfocused if there is none, and goes
-    /// away with the blank tab when it held nothing else.
+    /// were.
+    ///
+    /// The agent window is kept minimized for this. A tab activated in a
+    /// minimized window fires the event and shows nothing (measured on macOS
+    /// with Chrome for Testing 155: no window on screen, no focus change).
+    /// Chrome cannot open a window minimized without showing and focusing it
+    /// first, so when there is no agent window, the first recovery opens one
+    /// unfocused (it is seen for about a second while it minimizes), keeps
+    /// its blank tab, and minimizes it; every later recovery in the session
+    /// only adds and removes a tab there. The kept tab is a tab this session
+    /// created, so it closes with the session, and the window with it. An
+    /// agent window that holds other agent tabs (`--window dedicated`) is
+    /// used as it is and never minimized.
     ///
     /// The menu has to be seen closed (a debugger command on the tab runs
     /// again); a password manager that does not close it this way, or a
@@ -7090,22 +7111,36 @@ impl BrowserManager {
             .ok_or("the blank tab has no target id")?;
         self.remember_created_target(&temp);
         let nudged = self.activate_in_agent_window(&temp, user_window).await;
-        let closed = self
-            .client
-            .send_command(
-                "Target.closeTarget",
-                Some(json!({ "targetId": temp })),
-                None,
-            )
-            .await
-            .ok()
-            .and_then(|v| v.get("success").and_then(Value::as_bool))
-            .unwrap_or(false);
-        if closed {
-            let _ = self.forget_created_target(&temp);
+        // A window opened just now for this holds only the blank tab: keep
+        // the tab and minimize the window, for the next time.
+        let parked = match &nudged {
+            Ok(n) if n.only_tab && !n.minimized => self
+                .chrome_call(
+                    "windows",
+                    "update",
+                    json!([n.window, { "state": "minimized" }]),
+                )
+                .await
+                .is_ok(),
+            _ => false,
+        };
+        if !parked {
+            let closed = self
+                .client
+                .send_command(
+                    "Target.closeTarget",
+                    Some(json!({ "targetId": temp })),
+                    None,
+                )
+                .await
+                .ok()
+                .and_then(|v| v.get("success").and_then(Value::as_bool))
+                .unwrap_or(false);
+            if closed {
+                let _ = self.forget_created_target(&temp);
+            }
         }
-        let restore = nudged?;
-        if let Some(tab) = restore {
+        if let Some(tab) = nudged?.before {
             // The tab that was in front of the agent window before.
             let _ = self
                 .chrome_call("tabs", "update", json!([tab, { "active": true }]))
@@ -7122,13 +7157,12 @@ impl BrowserManager {
     }
 
     /// Put the blank tab `temp` in front of its window, which must be the
-    /// agent window (only agent tabs), never `user_window`. Returns the tab
-    /// that was in front there before, to put back afterwards.
+    /// agent window (only agent tabs), never `user_window`.
     async fn activate_in_agent_window(
         &self,
         temp: &str,
         user_window: i64,
-    ) -> Result<Option<i64>, String> {
+    ) -> Result<AgentWindowNudge, String> {
         let info: Value = self
             .client
             .send_command_typed("ABExt.inspectTab", &json!({ "targetId": temp }), None)
@@ -7145,21 +7179,36 @@ impl BrowserManager {
                  the user's own tabs, so nothing was switched there"
             ));
         }
-        let before = self
-            .chrome_call(
-                "tabs",
-                "query",
-                json!([{ "active": true, "windowId": window }]),
-            )
+        let tabs = self
+            .chrome_call("tabs", "query", json!([{ "windowId": window }]))
             .await
             .ok()
-            .and_then(|v| v.as_array().and_then(|t| t.first()).cloned())
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
+        let before = tabs
+            .iter()
+            .find(|t| t.get("active").and_then(Value::as_bool) == Some(true))
             .and_then(|t| t.get("id").and_then(Value::as_i64))
             .filter(|id| *id != tab);
+        let minimized = self
+            .chrome_call("windows", "get", json!([window]))
+            .await
+            .ok()
+            .and_then(|w| {
+                w.get("state")
+                    .and_then(Value::as_str)
+                    .map(|s| s == "minimized")
+            })
+            .unwrap_or(false);
         self.chrome_call("tabs", "update", json!([tab, { "active": true }]))
             .await?;
         tokio::time::sleep(Duration::from_millis(200)).await;
-        Ok(before)
+        Ok(AgentWindowNudge {
+            window,
+            before,
+            only_tab: tabs.len() == 1,
+            minimized,
+        })
     }
 
     /// The tab switches of [`Self::cycle_pinned_tab_visibility`]; the caller

@@ -266,8 +266,10 @@ Bitwarden's own inline menu (the dropdown next to a focused login field) is an
 extension frame chrome-use cannot click; while it is open Chrome blocks the tab
 for debugger commands. chrome-use closes it and carries on by itself: for a
 tab in front, and for a background tab in your own window (where agent tabs
-open), by showing a blank tab in its agent window for a moment, which leaves
-your window and the tab you are on alone. Only a tab you are looking at in
+open), by activating a blank tab in its agent window, which leaves your window,
+the tab you are on and the focus alone. That window is kept minimized for the
+session: the first time it appears for about a second while it minimizes,
+later times nothing shows. Only a tab you are looking at in
 your own window is left to you (press Escape there). `auth login` also takes
 the cursor out of each field it filled, so the menu usually closes before it
 gets in the way. Filling through `bwu run` does not need that menu at all.

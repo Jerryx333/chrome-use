@@ -4,7 +4,9 @@
 // (fakepm/, modelled on Bitwarden 2026.10). Build host only, one browser run
 // per host at a time:
 //   HOST_BIN=<chrome-use> [BASE_BIN=<released chrome-use>] CHROME=<Chrome for Testing> \
-//   EXT_DIR=<ab-connect> node live.mjs
+//   EXT_DIR=<ab-connect> [HEADED=1] [FRONT_APP=cft|<app>] node live.mjs
+// HEADED=1 runs a visible Chrome (on the build host's screen); run windows.swift
+// beside it and screen-check.py afterwards to see what appeared on screen.
 // Chrome for Testing runs headless with its own profile, the unpacked
 // extension and the native host in an isolated HOME. The vault is not used:
 // the login runs as the child half of `auth login --bwu` (the values come in
@@ -63,7 +65,7 @@ fs.mkdirSync(path.join(profile, 'NativeMessagingHosts'), { recursive: true });
 fs.writeFileSync(path.join(profile, 'NativeMessagingHosts', 'com.agent_browser.connect.json'), JSON.stringify({ name: 'com.agent_browser.connect', description: 'auth-menu-live host', path: nm, type: 'stdio', allowed_origins: [`chrome-extension://${EXT_ID}/`] }));
 // NO_FAKEPM=1: no password manager, to tell its effects from the rig's.
 const exts = [process.env.EXT_DIR, ...(process.env.NO_FAKEPM ? [] : [path.join(dir, 'fakepm')])].join(',');
-const browser = await launch({ chrome: process.env.CHROME, port: 9433, userDataDir: profile, args: ['--headless=new', `--load-extension=${exts}`, `--disable-extensions-except=${exts}`] });
+const browser = await launch({ chrome: process.env.CHROME, port: 9433, userDataDir: profile, args: [...(process.env.HEADED ? [] : ['--headless=new']), `--load-extension=${exts}`, `--disable-extensions-except=${exts}`] });
 evidence.chrome = browser.version;
 const A = api(browser);
 try {
@@ -85,6 +87,7 @@ try {
   if (process.env.BASE_BIN) runs.unshift(['base', process.env.BASE_BIN]);
   for (const [label, b] of runs) {
     const session = `aml-${label}`;
+    const run0 = {};
     await inPm(`chrome.storage.local.set({ events: [] })`);
     const version = cli(b, ['--version']).stdout.trim();
     // `--wait-until none`: in this headless rig a relay `open` that waits for
@@ -97,7 +100,16 @@ try {
     // run checks the menu recovery rather than the rig's loading.
     const framed = await waitFor(() => cli(b, ['--session', session, '--json', 'frames']).stdout.includes('idmsa.test.localhost'), { timeout: 30000, label: 'sign-in frame loaded' }).catch(() => false);
     const agentTab = await inExt(`chrome.tabs.query({}).then((ts) => ts.find((t) => (t.url || t.pendingUrl || '').startsWith(${JSON.stringify(origin)})))`);
+    // FRONT_APP=<app>: put another app in front first (the user working elsewhere).
+    // FRONT_APP=cft: this Chrome for Testing in front, on the user's tab (the
+    // user working in their own Chrome window).
+    if (process.env.FRONT_APP === 'cft') {
+      const userPage = (await browser.send('Target.getTargets')).targetInfos.find((t) => t.type === 'page' && t.url === 'about:blank');
+      await browser.send('Page.bringToFront', {}, await A.attach(userPage.targetId));
+      await sleep(1000);
+    } else if (process.env.FRONT_APP) { spawnSync('open', ['-a', process.env.FRONT_APP]); await sleep(1000); }
     await sleep(300);
+    run0.loginStartedAt = Date.now();
     const login = cli(b, ['--session', session, '--json', 'auth', 'login', '--bwu'], {
       CU_BWU_CHILD: '1', CU_BWU_USER: 'user@example.com', CU_BWU_PW: 'super-secret',
       CU_BWU_ORIGIN: origin, CU_BWU_ITEM: 'fixture', CU_BWU_ITEM_ID: 'fixture-id',
@@ -105,9 +117,10 @@ try {
     const events = (await inPm(`chrome.storage.local.get('events')`)).events || [];
     const front = await inExt(`chrome.tabs.query({ active: true, windowId: ${user.window} }).then(([t]) => t && t.id)`);
     const windows = await inExt(`chrome.windows.getAll({ populate: true }).then((ws) => ws.map((w) => ({ id: w.id, focused: w.focused, tabs: w.tabs.map((t) => ({ id: t.id, active: t.active, url: t.url })) })))`);
+    const tabList = cli(b, ['--session', session, '--json', 'tab', 'list']).stdout;
     let result = null;
     try { result = JSON.parse(login.stdout.trim().split('\n').pop()); } catch {}
-    const run = { label, version, framed, open: { code: opened.code, stdout: opened.stdout.slice(-1500), stderr: opened.stderr.slice(-1500) }, agentTab: agentTab && { id: agentTab.id, window: agentTab.windowId, active: agentTab.active }, login: { code: login.code, result, stderr: login.stderr.slice(-2000) }, events, front, windows };
+    const run = { ...run0, loginEndedAt: Date.now(), tabList: tabList.slice(0, 3000), label, version, framed, open: { code: opened.code, stdout: opened.stdout.slice(-1500), stderr: opened.stderr.slice(-1500) }, agentTab: agentTab && { id: agentTab.id, window: agentTab.windowId, active: agentTab.active }, login: { code: login.code, result, stderr: login.stderr.slice(-2000) }, events, front, windows };
     evidence.runs.push(run);
     save();
     if (opened.code !== 0) console.log(`[${label}] open failed:`, opened.stdout.slice(-800), opened.stderr.slice(-800));
@@ -125,6 +138,13 @@ try {
       check(remembered?.hosts?.['app.test.localhost']?.id === 'fixture-id', 'the confirmed login remembered its vault item for the host');
     }
     cli(b, ['--session', session, 'close']);
+    if (label === 'new') {
+      await sleep(500);
+      const left = await inExt(`chrome.windows.getAll({ populate: true }).then((ws) => ws.map((w) => ({ id: w.id, state: w.state, tabs: w.tabs.length })))`);
+      run.windowsAfterClose = left;
+      save();
+      check(left.length === 1 && left[0].id === user.window, `closing the session left only the user's window (${JSON.stringify(left)})`);
+    }
   }
 } finally {
   save();
