@@ -268,17 +268,30 @@ pub async fn deliver(
     };
     let status = response.status().as_u16();
     let reply: Value = response.json().await.unwrap_or(Value::Null);
+    outcome(status, &reply)
+}
+
+/// What a Worker reply means for the device's token.
+fn outcome(status: u16, reply: &Value) -> Outcome {
     match status {
         200 => Outcome::Sent,
+        // `reason` (BadDeviceToken, Unregistered, UNREGISTERED, NOT_FOUND)
+        // only says which service refused; all mean the token is dead.
         410 => Outcome::Rejected("unregistered"),
         401 if reply["status"] == "expired_token" => Outcome::Rejected("expired"),
         401 => Outcome::Rejected("invalid"),
         429 => Outcome::RetryAfter(Duration::from_secs(
             reply["retryAfter"].as_u64().unwrap_or(60).clamp(1, 3600),
         )),
+        // The Worker itself lacks its APNs/FCM credentials: not this
+        // device's fault, so its token is kept.
+        502 if reply["reason"] == "misconfigured" => Outcome::Failed(
+            "the push relay is misconfigured (no APNs/FCM credentials); notifications are not delivered until its operator fixes it. The device's token was kept".into(),
+        ),
         _ => Outcome::Failed(format!(
-            "push relay answered {status} {}",
-            reply["status"].as_str().unwrap_or("")
+            "push relay answered {status} {} {}",
+            reply["status"].as_str().unwrap_or(""),
+            reply["reason"].as_str().unwrap_or("")
         )),
     }
 }
@@ -541,6 +554,57 @@ mod tests {
             &notice("1b4e28ba-2fa1-41d2-883f-0016d3cca427")
         ));
         assert!(wants(&device, &notice("")));
+    }
+
+    #[test]
+    fn worker_replies_decide_the_token() {
+        let reason = |status, reply: Value| match outcome(status, &reply) {
+            Outcome::Rejected(r) => format!("rejected:{r}"),
+            Outcome::Failed(e) => format!("failed:{e}"),
+            Outcome::Sent => "sent".into(),
+            Outcome::RetryAfter(d) => format!("retry:{}", d.as_secs()),
+        };
+        assert_eq!(reason(200, json!({"status":"sent"})), "sent");
+        for r in [
+            "BadDeviceToken",
+            "Unregistered",
+            "UNREGISTERED",
+            "NOT_FOUND",
+        ] {
+            assert_eq!(
+                reason(410, json!({"status":"unregistered","reason":r})),
+                "rejected:unregistered"
+            );
+        }
+        assert_eq!(
+            reason(401, json!({"status":"expired_token"})),
+            "rejected:expired"
+        );
+        assert_eq!(
+            reason(401, json!({"status":"invalid_token"})),
+            "rejected:invalid"
+        );
+        assert_eq!(reason(429, json!({"retryAfter":30})), "retry:30");
+        let misconfigured = reason(
+            502,
+            json!({"status":"upstream_error","reason":"misconfigured"}),
+        );
+        assert!(misconfigured.starts_with("failed:the push relay is misconfigured"));
+        assert!(reason(502, json!({"status":"upstream_error"}))
+            .starts_with("failed:push relay answered 502"));
+    }
+
+    #[test]
+    fn payloads_are_padded_base64_of_at_least_32_bytes() {
+        use base64::Engine;
+        let keys = DeviceKeys::derive(&[5u8; 32]);
+        // The smallest possible plaintext still decodes to kid + nonce + tag.
+        let payload = crypto::seal_push(&keys.push, &[0u8; 12], b"").unwrap();
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(&payload)
+            .unwrap();
+        assert_eq!(raw.len(), 32);
+        assert_eq!(payload.len() % 4, 0, "padded");
     }
 
     #[test]
