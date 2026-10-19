@@ -80,6 +80,19 @@ test('a later batch joins the group this organizer made instead of adding a dupl
  const undone=await f.organizer.undo({version:1,id:'test-request-2',reviewed:true});
  assert.deepEqual(undone.undoResults.map(x=>x.status),['restored']);assert.equal(f.rows.find(t=>t.id===1).groupId,100,'the first batch keeps its group');
 });
+test('a group made before the created list existed is still joined from the batch records',async()=>{
+ const f=fixture();
+ f.request.groups[0].tabs=f.request.groups[0].tabs.slice(0,1);
+ await f.organizer.organize(f.request);
+ const stored=await f.env.storage.get();delete stored.thermo_tab_organizer_groups_v1;
+ f.env.storage.get=async()=>structuredClone(stored);
+ f.rows[2].active=false;
+ const second={version:1,id:'test-request-2',reviewed:true,groups:[{name:'Research',color:'blue',groupId:100,
+   tabs:[f.rows[2]].map(({id,index,windowId,url,title})=>({id,index,windowId,url,title}))}]};
+ const r=await f.organizer.organize(second);
+ assert.deepEqual(r.results,[{tabId:3,groupId:100,status:'grouped'}]);
+ assert.equal(f.groups.size,1,'no second group');
+});
 test('a group the organizer did not make is never joined, whatever its title',async()=>{
  const f=fixture();
  // e.g. a chrome-use agent session group titled like the reviewed group

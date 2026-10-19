@@ -63,7 +63,10 @@ export function createUserTabOrganizer(env) {
     }
     await env.storage.set({[KEY]: records});
   };
-  const created = async () => new Set((await env.storage.get(CREATED))?.[CREATED] || []);
+  // Also the groups in this organizer's own batch records: builds before CREATED existed made
+  // groups they never listed there, and those must stay joinable or every later run duplicates them.
+  const created = async () => new Set([...((await env.storage.get(CREATED))?.[CREATED] || []),
+    ...Object.values(await load()).flatMap(r => (r.originals || []).map(t => t.newGroupId)).filter(Number.isInteger)]);
   const remember = async id => {
     const ids = [...(await created()), id];
     await env.storage.set({[CREATED]: ids.slice(-1000)});
