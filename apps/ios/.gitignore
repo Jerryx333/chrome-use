@@ -5,3 +5,4 @@ xcuserdata/
 DerivedData/
 .swiftpm/
 !docs/screenshots/*.png
+!App/Assets.xcassets/**/*.png
