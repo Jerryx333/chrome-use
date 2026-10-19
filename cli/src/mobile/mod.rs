@@ -17,7 +17,7 @@ pub const DEFAULT_PORT: u16 = 17345;
 
 const USAGE: &str = "\
 Usage:
-  chrome-use mobile serve [--bind ADDR] [--allow-all-interfaces] [--profile P] [--push-url URL]
+  chrome-use mobile serve [--bind ADDR] [--allow-all-interfaces] [--profile P] [--push-url URL] [--name NAME]
   chrome-use mobile pair --url ws(s)://HOST[:PORT] [--name NAME] [--profile P] [--json]
   chrome-use mobile devices [--json]
   chrome-use mobile revoke <deviceId> [--json]
@@ -116,8 +116,15 @@ fn run(raw: &[String]) -> Result<(), String> {
     let rest = &raw[1..];
     match command.as_str() {
         "serve" => {
-            let args = Args::parse(rest, &["bind", "profile", "push-url"])?;
-            args.only(&["bind", "profile", "push-url", "allow-all-interfaces"])?;
+            let args = Args::parse(rest, &["bind", "profile", "push-url", "name"])?;
+            args.only(&[
+                "bind",
+                "profile",
+                "push-url",
+                "allow-all-interfaces",
+                "name",
+            ])?;
+            let name = args.value("name").map(|n| display_name(&n)).transpose()?;
             let bind = bind_address(args.value("bind"), args.flag("allow-all-interfaces"))?;
             let profile = args
                 .value("profile")
@@ -128,6 +135,7 @@ fn run(raw: &[String]) -> Result<(), String> {
                 bind,
                 profile,
                 push_url,
+                name,
             }))
         }
         "pair" => {
@@ -259,19 +267,18 @@ fn pair(args: &Args) -> Result<(), String> {
     {
         eprintln!("note: quick tunnel URLs change on every run, which forces pairing again; use them only for testing.");
     }
-    let name = args.value("name").unwrap_or_else(|| "Phone".into());
-    if name.trim().is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
-        return Err("--name must be 1-64 printable characters".into());
-    }
+    let name = display_name(&args.value("name").unwrap_or_else(|| "Phone".into()))?;
     let profile = choose_profile(args.value("profile"))?;
     let store = Store::open()?;
-    let (device, secret, gateway) = store.create_pending(name.trim(), &profile)?;
+    let (device, secret, gateway) = store.create_pending(&name, &profile)?;
+    let computer = store.read()?.computer_name.unwrap_or_else(computer_name);
     let link = format!(
-        "chromeuse://pair?v=1&url={}&id={}&k={}&fp={}",
+        "chromeuse://pair?v=1&url={}&id={}&k={}&fp={}&n={}",
         urlencoding::encode(&url),
         device.id,
         crypto::b64url(&secret),
-        gateway
+        gateway,
+        urlencoding::encode(&computer)
     );
     if args.flag("json") {
         println!(
@@ -293,6 +300,55 @@ fn pair(args: &Args) -> Result<(), String> {
     println!("Device: {} ({})", device.name, device.id);
     println!("Link (treat it like a password): {link}");
     Ok(())
+}
+
+/// A device or computer name: 1-64 printable characters, trimmed.
+fn display_name(raw: &str) -> Result<String, String> {
+    let name = raw.trim();
+    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+        return Err("--name must be 1-64 printable characters".into());
+    }
+    Ok(name.into())
+}
+
+/// The name this computer shows to phones: the macOS computer name (the one
+/// set in Sharing settings), else the host name.
+pub(crate) fn computer_name() -> String {
+    mac_computer_name()
+        .or_else(|| host_name().and_then(|n| display_name(n.trim_end_matches(".local")).ok()))
+        .unwrap_or_else(|| "Computer".into())
+}
+
+#[cfg(target_os = "macos")]
+fn mac_computer_name() -> Option<String> {
+    let output = std::process::Command::new("scutil")
+        .args(["--get", "ComputerName"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    display_name(&String::from_utf8(output.stdout).ok()?).ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mac_computer_name() -> Option<String> {
+    None
+}
+
+fn host_name() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let mut buffer = [0u8; 256];
+        if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+            return None;
+        }
+        let end = buffer.iter().position(|b| *b == 0).unwrap_or(buffer.len());
+        String::from_utf8(buffer[..end].to_vec()).ok()
+    }
+    #[cfg(not(unix))]
+    {
+        std::env::var("COMPUTERNAME").ok()
+    }
 }
 
 fn devices(json_output: bool) -> Result<(), String> {
@@ -425,5 +481,14 @@ mod tests {
         assert!(args.flag("json"));
         assert!(args.only(&["url", "name"]).is_err());
         assert!(Args::parse(&["--url".to_string()], &["url"]).is_err());
+    }
+
+    #[test]
+    fn computer_names_are_printable_and_bounded() {
+        assert!(!computer_name().is_empty());
+        assert_eq!(display_name("  Leo's Mac ").unwrap(), "Leo's Mac");
+        assert!(display_name("").is_err());
+        assert!(display_name(&"x".repeat(65)).is_err());
+        assert!(display_name("a\nb").is_err());
     }
 }

@@ -33,6 +33,8 @@ pub enum Action {
         relay_token: String,
     },
     PushUnregister,
+    /// The computer's display name and the gateway version.
+    Hello,
     Screenshot {
         conversation_id: String,
     },
@@ -362,6 +364,10 @@ pub fn check(op: &str, params: &Value) -> Result<Action, Refusal> {
             fields(params, &[], &[], op)?;
             Ok(Action::PushUnregister)
         }
+        "hello" => {
+            fields(params, &[], &[], op)?;
+            Ok(Action::Hello)
+        }
         "screenshot" => {
             let map = fields(params, &["conversationId"], &["conversationId"], op)?;
             Ok(Action::Screenshot {
@@ -604,6 +610,8 @@ mod tests {
         );
         assert!(check("pushRegister", &json!({"relayToken":"abc.DEF_-="})).is_ok());
         assert_eq!(code("discover", json!({"x":1})), "denied");
+        assert_eq!(check("hello", &json!({})).unwrap(), Action::Hello);
+        assert_eq!(code("hello", json!({"name":"x"})), "denied");
         assert_eq!(code("conversationList", json!([])), "invalidParams");
     }
 

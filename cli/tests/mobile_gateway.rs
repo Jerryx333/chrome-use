@@ -144,7 +144,12 @@ fn serve_panel(listener: TcpListener, hash: String, state: Arc<Mutex<Panel>>) {
 }
 
 /// A minimal HTTP/1.1 server standing in for the push Worker.
-fn serve_push(listener: TcpListener, pushes: Arc<Mutex<Vec<Value>>>) {
+/// Answers 200 until `gone` is set, then 410 `unregistered`.
+fn serve_push(
+    listener: TcpListener,
+    pushes: Arc<Mutex<Vec<Value>>>,
+    gone: Arc<std::sync::atomic::AtomicBool>,
+) {
     std::thread::spawn(move || {
         for incoming in listener.incoming() {
             let Ok(stream) = incoming else { continue };
@@ -170,11 +175,15 @@ fn serve_push(listener: TcpListener, pushes: Arc<Mutex<Vec<Value>>>) {
                 .lock()
                 .unwrap()
                 .push(serde_json::from_slice(&body).unwrap());
-            let reply = br#"{"status":"sent"}"#;
+            let (status, reply): (&str, &[u8]) = if gone.load(std::sync::atomic::Ordering::SeqCst) {
+                ("410 Gone", br#"{"status":"unregistered"}"#)
+            } else {
+                ("200 OK", br#"{"status":"sent"}"#)
+            };
             let mut stream = reader.into_inner();
             let _ = write!(
                 stream,
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                 reply.len()
             );
             let _ = stream.write_all(reply);
@@ -455,7 +464,8 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     let pushes = Arc::new(Mutex::new(Vec::new()));
     let push_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let push_url = format!("http://{}", push_listener.local_addr().unwrap());
-    serve_push(push_listener, pushes.clone());
+    let gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    serve_push(push_listener, pushes.clone(), gone.clone());
 
     // Pair: the QR link carries the device id and the pair secret.
     let paired = cli(
@@ -475,6 +485,8 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     let query: std::collections::HashMap<_, _> = uri.query_pairs().into_owned().collect();
     assert_eq!(query["v"], "1");
     assert_eq!(query["url"], "ws://127.0.0.1:1");
+    // Before any `serve --name`, the link carries the system computer name.
+    assert!(!query["n"].is_empty());
     let device = query["id"].clone();
     let secret = URL_SAFE_NO_PAD.decode(&query["k"]).unwrap();
     assert_eq!(secret.len(), 32);
@@ -488,7 +500,11 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     }
     assert!(!home.join(".chrome-use/mobile").exists());
 
-    let (_gateway, address) = start_gateway(&relay, &home, &["--push-url", &push_url]);
+    let (_gateway, address) = start_gateway(
+        &relay,
+        &home,
+        &["--push-url", &push_url, "--name", "Studio Mac"],
+    );
 
     // A wrong key fails and counts against the device.
     assert_eq!(
@@ -504,6 +520,9 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     let mut phone = connect(&address, &device, &secret, true).await.unwrap();
     let paired = phone.ikm.clone();
     assert_eq!(paired.len(), 64);
+    let hello = phone.request("hello", json!({})).await;
+    assert_eq!(hello["result"]["computerName"], "Studio Mac");
+    assert!(hello["result"]["gatewayVersion"].is_string());
     let list = phone.request("conversationList", json!({})).await;
     assert_eq!(list["result"]["conversations"][0]["id"], CONVERSATION);
 
@@ -592,6 +611,36 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
         )
         .await;
     assert_eq!(answer["result"]["response"]["dispatched"], true);
+
+    // The Worker now refuses the token: the next push reports it to the
+    // phone, and registering the same token again is refused.
+    gone.store(true, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    state.lock().unwrap().phase = "waitingInput".into();
+    let rejected = phone.event(|f| f["event"] == "pushTokenRejected").await;
+    assert_eq!(rejected["reason"], "unregistered");
+    let again = phone
+        .request("pushRegister", json!({"relayToken":"eyJwIjoiaW9zIn0.c2ln"}))
+        .await;
+    assert_eq!(
+        again["result"],
+        json!({"registered":false,"reason":"unregistered"})
+    );
+    let fresh = phone
+        .request("pushRegister", json!({"relayToken":"eyJwIjoiaW9zIn0.bmV3"}))
+        .await;
+    assert_eq!(fresh["result"], json!({"registered":true}));
+    gone.store(false, std::sync::atomic::Ordering::SeqCst);
+    // A later pair link names the computer as `serve --name` saved it.
+    let later = cli(
+        &relay,
+        &home,
+        &["pair", "--url", "ws://127.0.0.1:1", "--json"],
+    );
+    let later = url::Url::parse(later["pairUri"].as_str().unwrap()).unwrap();
+    let later: std::collections::HashMap<_, _> = later.query_pairs().into_owned().collect();
+    assert_eq!(later["n"], "Studio Mac");
+    cli(&relay, &home, &["revoke", &later["id"], "--json"]);
 
     // No browser session exists for the conversation: reported, not started.
     let shot = phone

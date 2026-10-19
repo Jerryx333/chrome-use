@@ -209,8 +209,8 @@ impl Debouncer {
 
 pub enum Outcome {
     Sent,
-    /// The token is dead (410, or 401 invalid/expired): drop it.
-    DropToken(String),
+    /// The token is dead: `unregistered` (410), `expired` or `invalid` (401).
+    Rejected(&'static str),
     RetryAfter(Duration),
     Failed(String),
 }
@@ -256,8 +256,9 @@ pub async fn deliver(
     let reply: Value = response.json().await.unwrap_or(Value::Null);
     match status {
         200 => Outcome::Sent,
-        410 => Outcome::DropToken("unregistered".into()),
-        401 => Outcome::DropToken(reply["status"].as_str().unwrap_or("invalid_token").into()),
+        410 => Outcome::Rejected("unregistered"),
+        401 if reply["status"] == "expired_token" => Outcome::Rejected("expired"),
+        401 => Outcome::Rejected("invalid"),
         429 => Outcome::RetryAfter(Duration::from_secs(
             reply["retryAfter"].as_u64().unwrap_or(60).clamp(1, 3600),
         )),
@@ -268,25 +269,16 @@ pub async fn deliver(
     }
 }
 
-async fn drop_token(store: &Store, device: &str, token: &str) {
+async fn reject_token(store: &Store, device: &str, token: &str, reason: &str) {
     let store = store.clone();
     let device = device.to_string();
     let token = token.to_string();
-    let _ = tokio::task::spawn_blocking(move || {
-        store.update(|r| {
-            if let Some(d) = r.device_mut(&device) {
-                // Only the token that failed; the phone may have sent a new one.
-                if d.relay_token.as_deref() == Some(token.as_str()) {
-                    d.relay_token = None;
-                }
-            }
-            Ok(())
-        })
-    })
-    .await;
+    let reason = reason.to_string();
+    let _ = tokio::task::spawn_blocking(move || store.reject_token(&device, &token, &reason)).await;
 }
 
-/// Send one notice to every given device, handling dead tokens and rate limits.
+/// Send one notice to every given device, handling dead tokens and rate
+/// limits. Returns the devices whose token was refused, with the reason.
 pub async fn fan_out(
     client: &reqwest::Client,
     url: &str,
@@ -294,7 +286,8 @@ pub async fn fan_out(
     devices: &[Device],
     notice: &Notice,
     paused: &mut HashMap<String, Instant>,
-) {
+) -> Vec<(String, &'static str)> {
+    let mut rejected = Vec::new();
     for device in devices {
         let Some(token) = &device.relay_token else {
             continue;
@@ -311,9 +304,10 @@ pub async fn fan_out(
         let keys = DeviceKeys::derive(&secret);
         match deliver(client, url, &keys, token, notice).await {
             Outcome::Sent => {}
-            Outcome::DropToken(reason) => {
-                eprintln!("mobile: push token of device {} dropped ({reason}); the app registers again on its next connection", device.id);
-                drop_token(store, &device.id, token).await;
+            Outcome::Rejected(reason) => {
+                eprintln!("mobile: push token of device {} refused ({reason}); the app must register a new one", device.id);
+                reject_token(store, &device.id, token, reason).await;
+                rejected.push((device.id.clone(), reason));
             }
             Outcome::RetryAfter(wait) => {
                 paused.insert(device.id.clone(), Instant::now() + wait);
@@ -323,6 +317,7 @@ pub async fn fan_out(
             }
         }
     }
+    rejected
 }
 
 pub(crate) async fn watch(shared: Arc<Shared>, url: String) {
@@ -368,7 +363,14 @@ pub(crate) async fn watch(shared: Arc<Shared>, url: String) {
                 debouncer.offer(notice);
             }
             for notice in debouncer.due(Instant::now()) {
-                fan_out(&client, &url, &shared.store, devices, &notice, &mut paused).await;
+                let rejected =
+                    fan_out(&client, &url, &shared.store, devices, &notice, &mut paused).await;
+                for (device, reason) in rejected {
+                    shared.notify(
+                        &device,
+                        json!({"event":"pushTokenRejected","reason":reason}),
+                    );
+                }
             }
         }
     }
@@ -393,9 +395,9 @@ pub async fn test(store: &Store, device_id: &str, url: &str) -> Result<(), Strin
     };
     match deliver(&client(), url, &keys, token, &notice).await {
         Outcome::Sent => Ok(()),
-        Outcome::DropToken(reason) => {
-            drop_token(store, device_id, token).await;
-            Err(format!("The push relay refused the token ({reason}); it was removed. Reconnect the app to register again"))
+        Outcome::Rejected(reason) => {
+            reject_token(store, device_id, token, reason).await;
+            Err(format!("The push relay refused the token ({reason}); it was removed. The app must register a new one"))
         }
         Outcome::RetryAfter(wait) => Err(format!(
             "The push relay is rate limiting this device; retry in {} s",

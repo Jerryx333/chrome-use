@@ -47,6 +47,8 @@ pub struct Options {
     /// Accept only devices paired to this panel profile.
     pub profile: Option<String>,
     pub push_url: String,
+    /// Overrides (and saves) the computer name shown to phones.
+    pub name: Option<String>,
 }
 
 #[derive(Default)]
@@ -99,19 +101,53 @@ impl Limiter {
     }
 }
 
+/// One authenticated connection: its device, close signal and event queue.
+struct Live {
+    device: String,
+    close: watch::Sender<bool>,
+    outbox: Outbox,
+}
+
 pub(crate) struct Shared {
     pub(crate) store: Store,
     pub(crate) panel: Panel,
     pub(crate) profile: Option<String>,
     limiter: Mutex<Limiter>,
-    /// Live connections: id -> (device, close signal).
-    live: Mutex<HashMap<u64, (String, watch::Sender<bool>)>>,
+    live: Mutex<HashMap<u64, Live>>,
+    /// Shown to the phone by `hello`.
+    computer_name: String,
     next_connection: AtomicU64,
     screenshots: Mutex<HashMap<String, Instant>>,
 }
 
+impl Shared {
+    /// Queue an event for every live connection of `device`; dropped when a
+    /// connection's queue is full.
+    pub(crate) fn notify(&self, device: &str, event: Value) {
+        if let Ok(live) = self.live.lock() {
+            for connection in live.values().filter(|c| c.device == device) {
+                let _ = connection.outbox.try_send(event.clone());
+            }
+        }
+    }
+}
+
 pub async fn serve(options: Options) -> Result<(), String> {
     let store = Store::open()?;
+    let computer_name = match options.name {
+        Some(name) => {
+            let saved = name.clone();
+            store.update(|r| {
+                r.computer_name = Some(saved);
+                Ok(())
+            })?;
+            name
+        }
+        None => store
+            .read()?
+            .computer_name
+            .unwrap_or_else(super::computer_name),
+    };
     let listener = TcpListener::bind(options.bind)
         .await
         .map_err(|e| format!("Cannot listen on {}: {e}", options.bind))?;
@@ -124,6 +160,7 @@ pub async fn serve(options: Options) -> Result<(), String> {
         profile: options.profile,
         limiter: Mutex::new(Limiter::default()),
         live: Mutex::new(HashMap::new()),
+        computer_name,
         next_connection: AtomicU64::new(1),
         screenshots: Mutex::new(HashMap::new()),
     });
@@ -169,7 +206,7 @@ async fn watch_revocations(shared: Arc<Shared>) {
             continue;
         };
         if let Ok(live) = shared.live.lock() {
-            for (device, close) in live.values() {
+            for Live { device, close, .. } in live.values() {
                 if registry
                     .device(device)
                     .is_none_or(|d| d.state != State::Active)
@@ -258,11 +295,19 @@ async fn connection(shared: Arc<Shared>, stream: TcpStream, peer: SocketAddr) {
         };
     let (closer, closed) = watch::channel(false);
     let connection_id = shared.next_connection.fetch_add(1, Ordering::Relaxed);
+    let (outbox, queue) = mpsc::channel::<Value>(64);
     if let Ok(mut live) = shared.live.lock() {
-        live.insert(connection_id, (session.device.clone(), closer));
+        live.insert(
+            connection_id,
+            Live {
+                device: session.device.clone(),
+                close: closer,
+                outbox: outbox.clone(),
+            },
+        );
     }
     eprintln!("mobile: device {} connected from {source}", session.device);
-    let code = run_session(&shared, ws, session.clone(), closed).await;
+    let code = run_session(&shared, ws, session.clone(), closed, outbox, queue).await;
     if let Ok(mut live) = shared.live.lock() {
         live.remove(&connection_id);
     }
@@ -507,9 +552,10 @@ async fn run_session(
     ws: WebSocketStream<TcpStream>,
     session: Session,
     mut closed: watch::Receiver<bool>,
+    outbox: Outbox,
+    mut queue: mpsc::Receiver<Value>,
 ) -> &'static str {
     let (mut sink, mut source) = ws.split();
-    let (outbox, mut queue) = mpsc::channel::<Value>(64);
     let mut sender = Channel::new(&session.send_key);
     let mut receiver = Channel::new(&session.receive_key);
     let writer = tokio::spawn(async move {
@@ -714,13 +760,30 @@ async fn perform(
                 .map_err(panel_error)
         }
         Action::PushRegister { relay_token } => {
-            set_relay_token(shared, &session.device, Some(relay_token)).await?;
-            Ok(json!({"registered":true}))
+            let store = shared.store.clone();
+            let device = session.device.clone();
+            let refused =
+                tokio::task::spawn_blocking(move || store.register_token(&device, &relay_token))
+                    .await
+                    .map_err(|_| "Device store unavailable".to_string())
+                    .and_then(|r| r)
+                    .map_err(|message| Refusal {
+                        code: "store",
+                        message,
+                    })?;
+            Ok(match refused {
+                Some(reason) => json!({"registered":false,"reason":reason}),
+                None => json!({"registered":true}),
+            })
         }
         Action::PushUnregister => {
             set_relay_token(shared, &session.device, None).await?;
             Ok(json!({"registered":false}))
         }
+        Action::Hello => Ok(json!({
+            "computerName": shared.computer_name,
+            "gatewayVersion": env!("CARGO_PKG_VERSION"),
+        })),
         Action::Screenshot { conversation_id } => {
             {
                 let mut last = shared.screenshots.lock().map_err(|_| Refusal {

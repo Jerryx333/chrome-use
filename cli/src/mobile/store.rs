@@ -40,6 +40,13 @@ pub struct Device {
     pub failures: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay_token: Option<String>,
+    /// The last relay token the push Worker refused, and why
+    /// (`invalid`, `expired` or `unregistered`). Registering it again is
+    /// refused; registering another token clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_reason: Option<String>,
 }
 
 impl Device {
@@ -59,6 +66,10 @@ pub struct Registry {
     pub schema_version: u32,
     /// Random identity of this gateway, shown to the phone as `fp`.
     pub gateway_id: String,
+    /// Shown to the phone; set by `mobile serve --name`, else the system's
+    /// computer name is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computer_name: Option<String>,
     pub devices: Vec<Device>,
 }
 
@@ -128,6 +139,7 @@ impl Store {
             return Ok(Registry {
                 schema_version: 1,
                 gateway_id: crypto::b64url(&crypto::random::<16>()?),
+                computer_name: None,
                 devices: Vec::new(),
             });
         }
@@ -245,6 +257,8 @@ impl Store {
             last_ip: None,
             failures: 0,
             relay_token: None,
+            rejected_token: None,
+            rejected_reason: None,
         };
         // The key exists before the record that refers to it.
         private_fs::write(&self.key_path(&device.id)?, &secret)?;
@@ -271,6 +285,41 @@ impl Store {
             let _ = std::fs::remove_file(self.key_path(&id)?);
         }
         Ok((device, secret, gateway))
+    }
+
+    /// Store a relay token from the phone, unless the Worker already refused
+    /// that exact token: then `Some(reason)` and nothing changes.
+    pub fn register_token(&self, id: &str, token: &str) -> Result<Option<String>, String> {
+        self.update(|registry| {
+            let device = registry.device_mut(id).ok_or("Device was revoked")?;
+            if device.rejected_token.as_deref() == Some(token) {
+                return Ok(Some(
+                    device
+                        .rejected_reason
+                        .clone()
+                        .unwrap_or_else(|| "invalid".into()),
+                ));
+            }
+            device.relay_token = Some(token.into());
+            device.rejected_token = None;
+            device.rejected_reason = None;
+            Ok(None)
+        })
+    }
+
+    /// Remember a token the Worker refused and stop using it. Only that
+    /// token: the phone may already have registered a new one.
+    pub fn reject_token(&self, id: &str, token: &str, reason: &str) -> Result<(), String> {
+        self.update(|registry| {
+            if let Some(device) = registry.device_mut(id) {
+                if device.relay_token.as_deref() == Some(token) {
+                    device.relay_token = None;
+                }
+                device.rejected_token = Some(token.into());
+                device.rejected_reason = Some(reason.into());
+            }
+            Ok(())
+        })
     }
 
     /// Delete a device's record, key and push token.
@@ -342,6 +391,36 @@ mod tests {
         assert!(store.secret(&device.id).is_err());
         assert!(store.revoke(&device.id).is_err());
         assert!(store.secret("../escape").is_err());
+    }
+
+    #[test]
+    fn rejected_relay_tokens_are_not_registered_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let (device, _, _) = store.create_pending("Phone", "p").unwrap();
+        let token = |s: &Store| {
+            s.read()
+                .unwrap()
+                .device(&device.id)
+                .unwrap()
+                .relay_token
+                .clone()
+        };
+        assert_eq!(store.register_token(&device.id, "a").unwrap(), None);
+        assert_eq!(token(&store).as_deref(), Some("a"));
+        store.reject_token(&device.id, "a", "expired").unwrap();
+        assert_eq!(token(&store), None);
+        assert_eq!(
+            store.register_token(&device.id, "a").unwrap().as_deref(),
+            Some("expired")
+        );
+        assert_eq!(token(&store), None);
+        // A new token is accepted and clears the rejection.
+        assert_eq!(store.register_token(&device.id, "b").unwrap(), None);
+        assert_eq!(store.register_token(&device.id, "a").unwrap(), None);
+        // Rejecting an old token leaves the current one alone.
+        store.reject_token(&device.id, "b", "invalid").unwrap();
+        assert_eq!(token(&store).as_deref(), Some("a"));
     }
 
     #[test]
