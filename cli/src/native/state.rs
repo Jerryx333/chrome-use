@@ -121,12 +121,13 @@ async fn collect_storage_via_temp_target(
             &CreateTargetParams {
                 url: "about:blank".to_string(),
                 // Transient internal target (storage collection), never grouped.
-                // On the relay it goes to the background agent window: without
-                // the hint the extension created it in the user's active window,
-                // inserting a tab there while it visited each origin.
+                // Follows the session's window choice: in the background agent
+                // window when that is on, otherwise an inactive tab in the
+                // user's window like every other agent tab.
                 agent_group: None,
                 background: None,
-                dedicated_window: on_relay.then_some(true),
+                dedicated_window: (on_relay && crate::native::browser::dedicated_window_enabled())
+                    .then_some(true),
             },
             None,
         )

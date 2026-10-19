@@ -327,7 +327,7 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 
 | Command | Purpose |
 |---|---|
-| `--window dedicated` (default) / `--window user` | Extension relay: all AI sessions share one background window per profile, with separate tab groups; `user` opts into the user window |
+| `--window user` (default) / `--window dedicated` | Extension relay: AI tabs open in your current window, each session in its own tab group starting with ⬉; `dedicated` moves all AI sessions into one shared background window per profile |
 | `chrome-use open <url>` | Connect to your Chrome and navigate. If `load` has not arrived after 25s but the tab's page is clearly usable, it succeeds with a ⚠ warning; when that page can't be tied to this request (always over the extension relay) the reply carries `commit: "unverified"` and the tab's real URL. A page that isn't usable fails with `navigation_incomplete:`, saying what is known (commit, readyState, candidate resources) |
 | `chrome-use snapshot -i` | Read the page; the start of every interaction (`-u` adds each link's absolute URL) |
 | `chrome-use read --links` | The page as text, plus a bounded `## Links` list of `[text](absolute URL)` (first 100, `--max-links <n>` up to 1000) |

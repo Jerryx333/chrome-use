@@ -354,8 +354,10 @@ async function isNativeDuplicateLifecycleEvent(tab) {
   return nativeDuplicateTabs.has(tab.id);
 }
 
-// Shared "agent window" (on by default: the daemon sends the `dedicatedWindow`
-// hint unless AGENT_BROWSER_DEDICATED_WINDOW turns it off). When set, all agent tabs are created in this one separate window — same Chrome
+// Shared "agent window" (opt-in: the daemon sends the `dedicatedWindow` hint
+// only when AGENT_BROWSER_DEDICATED_WINDOW / `--window dedicated` turns it on;
+// by default agent tabs open in the user's window, in their session's group).
+// When set, all agent tabs are created in this one separate window — same Chrome
 // profile (so logins/cookies are shared), but out of the window the user is
 // working in, instead of being interleaved with the user's own tabs. Per-session
 // colored tab groups still apply inside it. The id is persisted in

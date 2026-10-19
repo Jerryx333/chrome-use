@@ -1,8 +1,19 @@
 # Changelog
 
-## 1.5.235
+## 1.5.236
 
 <!-- release:start -->
+### Changes
+
+- **Agent tabs open in your own window again, in a tab group marked ⬉.** The separate agent window made it hard to watch the agent or take over: you had to go find a second window. AI tabs now open as background tabs in the window you are using, without taking focus, each session in its own tab group whose title starts with `⬉` (`⬉ 🔎 track a parcel`). `--window dedicated` or `AGENT_BROWSER_DEDICATED_WINDOW=1` brings back the shared background window. Groups made by an older build have no mark, so a session that is running during the upgrade opens a new `⬉` group next to its old one once. Closing a password-manager menu on a pinned tab now needs you in a shared window, as it did with `--window user`.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.235
+
 ### New Features
 
 - **macOS: chrome-use installs as `ChromeUse.app`, so privacy settings list it once, by name and icon.** System Settings → Privacy & Security → Files and Folders keyed the bare `chrome-use` binary by its path and showed it with no name or icon, and every other copy of the binary (each build, each test run) became one more anonymous entry. On a Mac, install.sh now puts a signed, notarized and stapled `ChromeUse.app` (bundle id `com.leeguoo.chrome-use`) in `<prefix>/share/chrome-use/` and makes `<prefix>/bin/chrome-use` a symlink into it, so the panel service, the agents it runs and the native-messaging host all run as that one app. Its prompts say why access is asked for. `upgrade` keeps installing into the symlink's directory, archives without the bundle (older tags) still install the bare binary, and `AGENT_BROWSER_NO_APP_BUNDLE=1` opts out. Linux and Windows are unchanged.
@@ -10,7 +21,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.234
 
