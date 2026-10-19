@@ -35,14 +35,19 @@ final class PushManager {
         }
         set {
             defaults.set(newValue.absoluteString, forKey: Self.workerKey)
-            registration = nil
-            refreshIfNeeded()
+            forgetRegistration()
         }
     }
 
     func resetWorkerURL() {
         defaults.removeObject(forKey: Self.workerKey)
+        forgetRegistration()
+    }
+
+    /// A token from another Worker is useless; drop it, also on disk.
+    private func forgetRegistration() {
         registration = nil
+        defaults.removeObject(forKey: Self.registrationKey)
         refreshIfNeeded()
     }
 

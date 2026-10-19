@@ -98,6 +98,9 @@ schemes:
       storeKitConfiguration: App/Products.storekit
     test:
       config: Debug
+      # Unit tests check the Chinese source strings; run them in Chinese.
+      commandLineArguments:
+        "-AppleLanguages (zh-Hans)": true
       targets:
         - ChromeUseTests
         - ChromeUseUITests
