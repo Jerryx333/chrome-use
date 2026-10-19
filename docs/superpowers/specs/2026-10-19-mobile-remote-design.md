@@ -87,7 +87,7 @@ gateway ──POST /v1/push {relayToken, ciphertext}──▶ push Worker ──
   - Android: FCM data message; the app decrypts and posts the notification itself.
 - Triggers: `waitingInput` (high priority, time-sensitive on iOS), turn end (`terminal`, normal priority), scheduled run finished/failed. Per-conversation mute on the phone; the gateway debounces to ≤1 push per conversation per 10 s.
 - Summary text is capped (≤120 chars) and comes from the agent's final text or the redacted request; even encrypted, page content and tool output are not included.
-- Abuse limits in the Worker: rate limit per `relayToken` (e.g. 60/h) and per source IP; `relayToken` expires after 90 days and the app silently refreshes it. APNs `410 Unregistered` / FCM `UNREGISTERED` is returned to the gateway, which drops the token.
+- Abuse limits in the Worker: per-minute burst caps via the Workers Rate Limiting binding: per `relayToken` (10/60 s), per source IP on push (120/60 s) and on register (10/60 s); `relayToken` expires after 90 days and the app silently refreshes it. APNs `410 Unregistered` / FCM `UNREGISTERED` is returned to the gateway, which drops the token.
 - Revocation: `mobile revoke` deletes the device's `relayToken` on the gateway; the Worker never needs to know.
 - Cost: Workers free tier (100k requests/day) covers early usage; no KV/D1/DO needed. Track with the cloudflare-cost-aware rules if a store is ever added.
 - Worker API (JSON over HTTPS):
