@@ -159,4 +159,6 @@ try {
 } finally {
   save();
   cleanup(rig);
+  // The rig's sockets would keep node alive.
+  process.exit(process.exitCode ?? 0);
 }
