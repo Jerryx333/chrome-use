@@ -191,7 +191,8 @@ the user still needs; do not ask them. `done --keep <tab>` (repeat it; bare
 will act on, or a logged-in page left for them to finish, as a plain tab
 outside your group. Every other tab you opened closes, and the session ends.
 Close searches, sources, intermediate steps, errors and duplicates. A session
-that ends without `done` has its tabs closed after 30 idle minutes, except a
+that ends without `done` has its tabs closed after 30 idle minutes
+(`AGENT_BROWSER_GROUP_CLEANUP_MS`; `0` turns this off), except a
 tab the user is looking at or switched to. A new task from the same terminal
 and directory continues the previous task's group. `tabs cleanup` clears
 ended sessions' groups now, when the user asks for that.

@@ -6381,11 +6381,16 @@ async fn handle_done(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let keep_active = cmd.get("keepActive").and_then(Value::as_bool) == Some(true);
     let session = super::browser::DAEMON_SESSION.get().cloned();
     let mut kept = Vec::new();
-    if keep_active || !specs.is_empty() {
-        let mgr = state.browser.as_mut().ok_or(
-            "done --keep: this session has no open tab to keep (its browser connection ended); \
-             run `done` without --keep, or `tab list` first",
-        )?;
+    let mut notes: Vec<String> = Vec::new();
+    // `done` is safe to repeat: a session with nothing open has nothing to
+    // keep, and the close below then reports nothing to close.
+    if (keep_active || !specs.is_empty()) && state.browser.is_none() {
+        notes.push(
+            "nothing kept: this session has no open tabs (already done, or never opened any)"
+                .to_string(),
+        );
+    } else if keep_active || !specs.is_empty() {
+        let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
         // Resolve every name before changing anything, so one typo keeps
         // nothing rather than half of what was asked.
         let mut tabs = Vec::new();
@@ -6396,7 +6401,25 @@ async fn handle_done(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             tabs.push(mgr.resolve_tab_spec(spec)?);
         }
         tabs.dedup_by(|a, b| a.0 == b.0);
+        let owned = mgr.created_target_ids();
         for (target_id, session_id) in tabs {
+            // Only this session's own tabs are handed over. A tab the user
+            // lent or the agent adopted is the user's already and stays as it
+            // is; a blank tab is nothing the user needs.
+            if !owned.contains(&target_id) {
+                notes.push(format!(
+                    "{target_id} was not kept: it is not a tab this session opened, so it was \
+                     left exactly as it was"
+                ));
+                continue;
+            }
+            if mgr
+                .target_url(&target_id)
+                .is_some_and(|u| u.is_empty() || u == "about:blank")
+            {
+                notes.push(format!("{target_id} was not kept: it is a blank tab"));
+                continue;
+            }
             // Only a tab this session created is handed over: an adopted or
             // lent tab is the user's already, and may sit in a group of theirs.
             let was_owned = mgr.unown_target(&target_id)?;
@@ -6431,6 +6454,9 @@ async fn handle_done(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let mut out = handle_close(&json!({ "action": "close" }), state).await?;
     out["done"] = json!(true);
     out["kept"] = json!(kept);
+    if !notes.is_empty() {
+        out["notes"] = json!(notes);
+    }
     Ok(out)
 }
 

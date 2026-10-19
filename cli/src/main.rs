@@ -2782,10 +2782,17 @@ fn main() {
     // With no daemon and nothing recorded, there is nothing to close; tabs
     // whose ownership was saved are closed by the daemon over the endpoint
     // their record names, without creating anything.
+    // `done --keep` needs the session's tabs, so after an idle exit it
+    // reconnects like any command: only then can it name the tab to keep.
+    // Without --keep, or with no tabs recorded, it only ends what is there.
+    let done_reconnects = clean.first().map(String::as_str) == Some("done")
+        && clean.iter().any(|a| a == "--keep")
+        && (connection::daemon_ready(&flags.session)
+            || connection::has_created_targets(&flags.session));
     let is_close = matches!(
         clean.first().map(String::as_str),
         Some("close") | Some("quit") | Some("exit") | Some("done")
-    );
+    ) && !done_reconnects;
     // `--profile` / AGENT_BROWSER_PROFILE doubles as a profile selector when it
     // names a Chrome profile (display name, directory, email, id). A path or
     // an unknown name keeps its launch-mode meaning.

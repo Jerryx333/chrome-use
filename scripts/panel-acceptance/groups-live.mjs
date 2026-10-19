@@ -12,6 +12,8 @@
 //      and there is still one ✦ group;
 //   3. B ends with `done --keep <tab>`: only the kept tab is left, outside any
 //      group and no longer the extension's; no ✦ group remains;
+//   3b. task E idles out, then `done --keep <label>` reconnects and keeps
+//      that tab; `done` again and `done --keep` with nothing open succeed;
 //   4. task C (another pane) opens two tabs; the user switches to one and
 //      back; C's daemon idle-exits;
 //   5. task D starts with AGENT_BROWSER_GROUP_CLEANUP_MS=1000: its background
@@ -116,6 +118,23 @@ try {
   check((await agentGroups()).length === 0, 'no agent group left');
   check(byUrl(tDone, '/a?user'), 'the user\'s tab is untouched');
 
+  // 3b. Task E: `done --keep` after the daemon idled out reconnects and
+  // keeps the named tab; `done` again, and `done --keep` with nothing open,
+  // succeed and change nothing.
+  ok(cu(4001, '%74', ['open', rig.site + '/b?e']), 'E open');
+  ok(cu(4001, '%74', ['tab', 'new', '--label', 'keepme', rig.site + '/c?e']), 'E tab new');
+  const E = sessionOf(4001, '%74');
+  await daemonGone(E.name);
+  const doneE = ok(cu(4001, '%74', ['done', '--keep', 'keepme']), 'E done --keep after idle exit');
+  await sleep(500);
+  const tE = await tabs();
+  const again = ok(cu(4001, '%74', ['done']), 'E done again');
+  const againKeep = ok(cu(4001, '%74', ['done', '--keep']), 'E done --keep with nothing open');
+  step('task E done after idle exit', { reply: doneE.data, again: again.data, againKeep: againKeep.data, keptTab: byUrl(tE, '/c?e') });
+  check(!byUrl(tE, '/b?e'), 'E\'s other tab was closed');
+  check(byUrl(tE, '/c?e')?.groupId === -1, 'E\'s kept tab is open and ungrouped');
+  check((await agentGroups()).length === 0, 'no agent group left after E');
+
   // 4. Task C in another pane; the user looks at one of its tabs.
   ok(cu(2001, '%72', ['open', rig.site + '/b?c1']), 'C open');
   ok(cu(2001, '%72', ['tab', 'new', rig.site + '/c?c2']), 'C tab new');
@@ -148,7 +167,7 @@ try {
   const manual = ok(cu(3001, '%73', ['tabs', 'cleanup']), 'tabs cleanup');
   const tEnd = await tabs();
   step('tabs cleanup', { reply: manual.data, open: tEnd.map(t => t.url) });
-  check(byUrl(tEnd, '/a?d') && byUrl(tEnd, '/a?user') && byUrl(tEnd, '/d') && byUrl(tEnd, '/c?c2'), 'manual cleanup left the live session and the user\'s tabs');
+  check(byUrl(tEnd, '/a?d') && byUrl(tEnd, '/a?user') && byUrl(tEnd, '/d') && byUrl(tEnd, '/c?c2') && byUrl(tEnd, '/c?e'), 'manual cleanup left the live session and the user\'s tabs');
   ok(cu(3001, '%73', ['done']), 'D done');
   step('PASS', { sessions: [A.name, B.name, C.name, D.name] });
   evidence.pass = true;

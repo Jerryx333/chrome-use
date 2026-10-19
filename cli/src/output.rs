@@ -1919,6 +1919,16 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 _ => format!("Browser closed{verified}"),
             };
             println!("{} {}", color::success_indicator(), label);
+            for note in data
+                .get("notes")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if let Some(note) = note.as_str() {
+                    println!("  {}", color::dim(note));
+                }
+            }
             return;
         }
         // Started actions (profiling, HAR, recording)
@@ -5941,7 +5951,9 @@ id such as t2, a label, a target id or a chrome-tab:<id> handle; bare
 `--keep` is the active tab) is left open for the user, outside the session's
 tab group, the way `keep` leaves it. Every other tab this session opened is
 closed and read back, like `close`, and the session ends. Tabs the user lent
-or you adopted are theirs and stay open either way.
+or you adopted are theirs and stay open either way; naming one with --keep
+keeps nothing and the reply's notes say so. Running `done` again, or with
+nothing open, does nothing and succeeds.
 
 Decide yourself; do not ask the user which tabs to keep. Keep a page the user
 asked to see, a result they will act on, or a logged-in page left for them to

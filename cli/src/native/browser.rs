@@ -6238,6 +6238,14 @@ impl BrowserManager {
             .ok_or_else(|| format!("tab `{spec}` is no longer open; run `tab list`"))
     }
 
+    /// The url this session last saw on `target_id`, if it is one of its pages.
+    pub fn target_url(&self, target_id: &str) -> Option<&str> {
+        self.pages
+            .iter()
+            .find(|p| p.target_id == target_id)
+            .map(|p| p.url.as_str())
+    }
+
     /// The page session of the active tab.
     pub fn active_tab_spec(&self) -> Result<(String, String), String> {
         Ok((

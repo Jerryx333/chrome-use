@@ -1983,10 +1983,6 @@ async fn dispatch(
             })
             .await
             .map_err(|_| "Inspect & Ask operation did not finish".to_string())?;
-            // An ocs run from an older build may have left a quarantined
-            // library behind that this one reused.
-            #[cfg(target_os = "macos")]
-            release_bun_libraries();
             result
         }
         "agentInspect" => {

@@ -20,7 +20,10 @@ keep; the user should never be asked. Keep only what they need to see or
 continue: a page they asked to open, a result to act on, a logged-in page left
 for them. A kept tab leaves the group and becomes a plain tab (extension
 0.5.77+ also detaches from it); the rest close and are read back like `close`.
-Tabs you adopted or the user lent stay open either way. The MCP form is
+Tabs you adopted or the user lent stay open either way, and a `--keep` that
+names one (or a blank tab) is not kept; the reply's `notes` say so. `done` is
+safe to repeat: with nothing open it closes nothing and succeeds. After the
+daemon's idle exit, `done --keep` reconnects first so it can find the tab. The MCP form is
 `chrome_use_tabs` with `action: "done"` and `keep: ["t3"]`.
 
 What happens without it:
