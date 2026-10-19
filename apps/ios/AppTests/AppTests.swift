@@ -6,7 +6,7 @@ import XCTest
 /// Runs in the simulator with the app as host, so these are the compiled
 /// catalogs. The test action runs in English (the source language).
 final class CloseMessageTests: XCTestCase {
-    static let locales = ["en", "zh-Hans", "zh-Hant", "ja", "ko", "es", "fr", "de", "pt-BR"]
+    static let locales = ["en", "zh-Hans", "zh-Hant", "ja"]
     let reasons: [CloseReason] = [
         CloseReason(closeCode: 4400), CloseReason(closeCode: 4401), CloseReason(closeCode: 4403),
         CloseReason(closeCode: 4408), CloseReason(closeCode: 4409), CloseReason(closeCode: 4429),

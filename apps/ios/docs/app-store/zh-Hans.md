@@ -20,7 +20,7 @@ chrome-use Remote 是电脑上 chrome-use agent 面板的手机遥控器。发�
 - 通知：agent 需要你或完成时提醒你。通知内容在电脑上加密，推送服务只转发密文。
 - 截图：随时看 agent 正在用的浏览器页面。
 - 定时任务：立即运行，或开关某个定时任务。
-- 支持多台电脑、可选的面容 ID 锁，提供 9 种语言。
+- 支持多台电脑、可选的面容 ID 锁，支持简体中文、繁体中文、英文和日文。
 
 手机拿到的权限永远不超过电脑允许的范围：手机上新建的对话不能运行命令，完全访问只在电脑上开启。
 
@@ -32,5 +32,5 @@ agent,AI,浏览器,自动化,遥控,远程,Claude,Codex,Chrome,电脑,审批,通
 ## In-app purchases
 | Product | Display name | Description |
 |---|---|---|
-| com.leeguoo.chromeuse.unlock | 解锁 chrome-use 遥控 | 在手机上发送、新建对话和审批。 |
-| com.leeguoo.chromeuse.trial | 14 天免费试用 | 免费试用全部功能 14 天。 |
+| com.leeguoo.chromeuse.unlock | 解锁 chrome-use Remote | 一次购买，永久从手机遥控电脑上的 AI 浏览器 agent |
+| com.leeguoo.chromeuse.trial | 14 天免费试用 | 免费试用全部功能 14 天，到期后可一次性解锁 |

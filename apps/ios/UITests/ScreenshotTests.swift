@@ -10,8 +10,7 @@ final class ScreenshotTests: XCTestCase {
     var shots: URL?
     var language = "en"
 
-    static let locales = ["en": "en_US", "zh-Hans": "zh_CN", "zh-Hant": "zh_TW", "ja": "ja_JP", "ko": "ko_KR",
-                          "es": "es_ES", "fr": "fr_FR", "de": "de_DE", "pt-BR": "pt_BR"]
+    static let locales = ["en": "en_US", "zh-Hans": "zh_CN", "zh-Hant": "zh_TW", "ja": "ja_JP"]
 
     override func setUp() {
         continueAfterFailure = false

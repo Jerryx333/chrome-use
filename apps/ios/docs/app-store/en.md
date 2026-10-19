@@ -20,7 +20,7 @@ Everything runs on your own computer. The phone connects to it directly over you
 - Notifications: get told when the agent needs you or finishes. Notification contents are encrypted on your computer; our push service only relays ciphertext.
 - Screenshots: see the agent's browser tab on demand.
 - Schedules: run a scheduled task now, or turn it on or off.
-- Several computers, an optional Face ID lock, and nine languages.
+- Several computers, an optional Face ID lock, and English, Japanese and Chinese (Simplified and Traditional).
 
 Your phone never gets more power than your computer allows: conversations started from the phone cannot run commands, and full access stays on the desktop unless you turn it on there.
 
@@ -32,5 +32,5 @@ agent,AI,browser,automation,remote,Claude,Codex,Chrome,desktop,approval,notifica
 ## In-app purchases
 | Product | Display name | Description |
 |---|---|---|
-| com.leeguoo.chromeuse.unlock | Unlock chrome-use Remote | Send, start and approve from your phone. |
-| com.leeguoo.chromeuse.trial | 14-day free trial | Try everything free for 14 days. |
+| com.leeguoo.chromeuse.unlock | Unlock chrome-use Remote | One-time purchase to control your desktop browser agent |
+| com.leeguoo.chromeuse.trial | 14-Day Free Trial | Try every feature free for 14 days |

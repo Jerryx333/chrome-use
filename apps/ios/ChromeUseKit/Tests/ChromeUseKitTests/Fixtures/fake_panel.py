@@ -20,6 +20,7 @@ WEEKLY = "7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e"
 INBOX = "3b0e9a52-6a3f-4f4e-9d0c-2f8f1a4b7c11"
 DEPLOY = "c5a1f0d2-7e44-4b8a-a1c9-5e2b8d3f6a90"
 SCHEDULE = "9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"
+ELEVATED = "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9"
 
 lock = threading.Lock()
 now = lambda: int(time.time() * 1000)
@@ -27,7 +28,7 @@ now = lambda: int(time.time() * 1000)
 
 def summary(c):
     return {"id": c["id"], "agentId": c["agentId"], "title": c["title"], "phase": c["phase"],
-            "fullAccess": False, "options": c.get("options", {}), "scheduleId": c.get("scheduleId"),
+            "fullAccess": c.get("fullAccess", False), "options": c.get("options", {}), "scheduleId": c.get("scheduleId"),
             "lastTurn": c.get("lastTurn"), "updated": c["updated"], "created": c["updated"] - 60000,
             "control": "stopRequested" if c["phase"] == "stopping" else "agent", "model": c.get("model"),
             "queued": 0, "target": {"mode": "agentSession", "session": "panel-" + c["id"]}}
@@ -41,7 +42,10 @@ def ev(c, kind, data):
 def initial(demo):
     t = now()
     weekly = {"id": WEEKLY, "agentId": "claude", "title": "Weekly report", "phase": "idle", "updated": t - 5000, "events": []}
-    convs = {WEEKLY: weekly}
+    # Created on the desktop with full access: a phone needs `mobile access <id> full`.
+    elevated = {"id": ELEVATED, "agentId": "claude", "title": "Release with full access", "phase": "idle", "updated": t - 7200_000,
+                "events": [], "fullAccess": True}
+    convs = {WEEKLY: weekly, ELEVATED: elevated}
     if demo:
         m = "1b4e28ba-2fa1-41d2-883f-0016d3cca427"
         ev(weekly, "user", {"messageId": m, "text": "整理本周的周报：打开 Jira 看看我这周关了哪些单"})

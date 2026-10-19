@@ -175,8 +175,11 @@ public final class GatewayClient: Identifiable {
         _ = try? await refreshConversations()
     }
 
+    /// The gateway's limit for a relay token.
+    public static let maximumRelayToken = 8192
+
     private func registerPush(on live: GatewayConnection) async {
-        guard let relayToken else { return }
+        guard let relayToken, relayToken.utf8.count <= Self.maximumRelayToken else { return }
         guard let reply = try? await live.request("pushRegister", ["relayToken": .string(relayToken)]) else { return }
         if reply["registered"] == .bool(false) {
             onPushTokenRejected?(reply["reason"].string ?? "invalid")
@@ -245,6 +248,12 @@ public final class GatewayClient: Identifiable {
     /// Create a conversation. Tool access is capped at `writeFiles` and full
     /// access is never asked for (the gateway refuses both anyway).
     public func create(agentId: String, model: String?, toolAccess: ToolAccess?) async throws -> ConversationSummary {
+        if let model, !AgentModel.isValidName(model) {
+            throw GatewayError.remote(code: "invalidParams", message: "A model name cannot start with -")
+        }
+        if let toolAccess, !ToolAccess.phoneCreateChoices(agentId: agentId).contains(toolAccess) {
+            throw GatewayError.remote(code: "denied", message: "This access cannot be chosen from the phone for \(agentId)")
+        }
         var params: [String: JSONValue] = ["agentId": .string(agentId), "fullAccess": false]
         if let model, !model.isEmpty { params["model"] = .string(model) }
         if let toolAccess { params["options"] = ["toolAccess": .string(toolAccess.rawValue)] }

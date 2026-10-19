@@ -44,7 +44,7 @@ delivered notification).
 
 English is the source language; the app follows the device language. String Catalogs
 (`App/Localizable.xcstrings`, `App/InfoPlist.xcstrings` and the extension's two) carry en, zh-Hans,
-zh-Hant, ja, ko, es, fr, de and pt-BR. `AppCatalogTests` (run by `swift test`) fails on any string
+zh-Hant and ja. `AppCatalogTests` (run by `swift test`) fails on any string
 missing a translation, a placeholder or command that a translation changed, a UI literal that is not a
 catalog key, or hard-coded CJK text. App Store texts and in-app purchase names per locale are in
 `docs/app-store/`; the in-app purchase texts are also in `App/Products.storekit`.

@@ -26,36 +26,6 @@
             "state": "translated",
             "value": "失敗しました"
           }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "실패"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échec"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fehlgeschlagen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Falhou"
-          }
         }
       }
     },
@@ -83,36 +53,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "完了しました"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "완료됨"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Terminado"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Terminé"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Abgeschlossen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Concluído"
           }
         }
       }
@@ -142,36 +82,6 @@
             "state": "translated",
             "value": "スケジュールが失敗しました"
           }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "예약 작업 실패"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error en la tarea programada"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échec de la tâche planifiée"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zeitplan fehlgeschlagen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agendamento falhou"
-          }
         }
       }
     },
@@ -199,36 +109,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "スケジュールが完了しました"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "예약 작업 완료"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tarea programada terminada"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tâche planifiée terminée"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zeitplan abgeschlossen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Agendamento concluído"
           }
         }
       }
@@ -258,36 +138,6 @@
             "state": "translated",
             "value": "停止しました"
           }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "중단됨"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Detenido"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Arrêté"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gestoppt"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parado"
-          }
         }
       }
     },
@@ -315,36 +165,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "テスト通知"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "테스트 알림"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Notificación de prueba"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Notification de test"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Testmitteilung"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Notificação de teste"
           }
         }
       }
@@ -374,36 +194,6 @@
             "state": "translated",
             "value": "承認待ちです"
           }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "승인 대기 중"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Esperando tu aprobación"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "En attente de votre accord"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wartet auf deine Zustimmung"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aguardando sua aprovação"
-          }
         }
       }
     },
@@ -431,36 +221,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "chrome-use が対応を求めています"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use에서 확인이 필요합니다"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use te necesita"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use a besoin de vous"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use braucht dich"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O chrome-use precisa de você"
           }
         }
       }

@@ -23,7 +23,8 @@ struct NewConversationView: View {
     @State private var working = false
     @State private var error: String?
 
-    private var choices: [ToolAccess] { ToolAccess.allCases.filter { $0 <= ToolAccess.phoneCreateMaximum } }
+    private var choices: [ToolAccess] { ToolAccess.phoneCreateChoices(agentId: agentId) }
+    private var modelValid: Bool { AgentModel.isValidName(chosenModel) }
 
     var body: some View {
         NavigationStack {
@@ -65,6 +66,7 @@ struct NewConversationView: View {
                     }
                 } footer: {
                     VStack(alignment: .leading) {
+                        if !modelValid { Text("A model name cannot start with “-”.").foregroundStyle(.red) }
                         if let modelsNote { Text(modelsNote) }
                         Text("The model is chosen when the conversation is created and cannot be changed later.")
                     }
@@ -74,7 +76,11 @@ struct NewConversationView: View {
                         ForEach(choices, id: \.self) { Text($0.label).tag($0) }
                     }
                 } footer: {
-                    Text("Conversations started from the phone can at most write files; when the agent needs to run a command it asks you to approve.")
+                    if agentId == "pi" {
+                        Text("Pi conversations started from the phone can only use the browser.")
+                    } else {
+                        Text("Conversations started from the phone can at most write files; when the agent needs to run a command it asks you to approve.")
+                    }
                 }
                 Section("First message") {
                     TextField("What should the agent do?", text: $message, axis: .vertical)
@@ -91,7 +97,7 @@ struct NewConversationView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.accessibilityIdentifier("cancel") }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Start") { Task { await create() } }
-                        .disabled(working || agentId.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(working || agentId.isEmpty || !modelValid || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .task { await load() }

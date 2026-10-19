@@ -33,6 +33,12 @@ public enum ToolAccess: String, Sendable, CaseIterable, Comparable {
 
     /// The most a conversation created from the phone may have.
     public static let phoneCreateMaximum: ToolAccess = .writeFiles
+
+    /// What the create screen offers: up to `writeFiles`, and Pi (whose
+    /// tools act beyond the browser) only `browserOnly`.
+    public static func phoneCreateChoices(agentId: String) -> [ToolAccess] {
+        agentId == "pi" ? [.browserOnly] : allCases.filter { $0 <= phoneCreateMaximum }
+    }
 }
 
 public struct ConversationSummary: Identifiable, Hashable, Sendable {
@@ -85,6 +91,11 @@ public struct Agent: Identifiable, Hashable, Sendable {
 
 /// One entry of `agentInspect`'s model list.
 public struct AgentModel: Identifiable, Hashable, Sendable {
+    /// The gateway refuses model names that would read as CLI flags.
+    public static func isValidName(_ name: String) -> Bool {
+        !name.trimmingCharacters(in: .whitespaces).hasPrefix("-")
+    }
+
     public let id: String
     public let label: String
     public let isDefault: Bool

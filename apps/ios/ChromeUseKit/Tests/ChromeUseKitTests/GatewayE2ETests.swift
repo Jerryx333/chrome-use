@@ -146,6 +146,7 @@ final class GatewayE2ETests: XCTestCase {
         XCTAssertEqual(hello["computerName"].string, computerName)
         XCTAssertFalse((hello["gatewayVersion"].string ?? "").isEmpty)
         XCTAssertEqual(hello["pushMutes"], [])
+        XCTAssertEqual(hello["fullAccessAllowed"], false)
         do {
             _ = try await connection.request("hello", ["name": "x"])
             XCTFail("hello takes no parameters")
@@ -287,6 +288,49 @@ final class GatewayE2ETests: XCTestCase {
         XCTAssertEqual(again, models)
         let none = try await client.models(agentId: "gemini")
         XCTAssertTrue(none.isEmpty, "not inspectable: no request")
+
+        // A conversation created on the desktop with full access: the phone
+        // may stop it but not drive it until the computer allows this phone.
+        let elevated = "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9"
+        do {
+            try await client.send(conversationId: elevated, text: "Ship it")
+            XCTFail("an elevated conversation needs mobile access <id> full")
+        } catch GatewayError.remote(let code, let message) {
+            XCTAssertEqual(code, "accessTooHigh")
+            XCTAssertTrue(message.contains("mobile access"), message)
+        }
+        try await client.stopTurn(conversationId: elevated)
+        // Pi only with browser access; a model that reads as a flag is refused locally.
+        do {
+            _ = try await client.create(agentId: "pi", model: nil, toolAccess: .writeFiles)
+            XCTFail("pi above browserOnly")
+        } catch GatewayError.remote(let code, _) { XCTAssertEqual(code, "denied") }
+        do {
+            _ = try await client.create(agentId: "claude", model: "--dangerously-skip-permissions", toolAccess: nil)
+            XCTFail("model starting with -")
+        } catch GatewayError.remote(let code, _) { XCTAssertEqual(code, "invalidParams") }
+        // The gateway itself refuses both too.
+        do {
+            _ = try await client.call("conversationCreate", ["agentId": "pi", "options": ["toolAccess": "writeFiles"]])
+            XCTFail("gateway allowed pi above browserOnly")
+        } catch GatewayError.remote(let code, _) { XCTAssertEqual(code, "denied") }
+        do {
+            _ = try await client.call("conversationCreate", ["agentId": "claude", "model": "-x"])
+            XCTFail("gateway allowed a model starting with -")
+        } catch GatewayError.remote(let code, _) { XCTAssertEqual(code, "invalidParams") }
+
+        // Allowed on the computer: hello says so on the next connection, the
+        // app records it (and requires its lock), and the send goes through.
+        let access = try cli(binary, ["access", link.deviceId, "full", "--json"], env: env)
+        XCTAssertEqual(access["fullAccessAllowed"], true)
+        await client.stop()
+        await client.start()
+        _ = try await wait("hello with fullAccessAllowed") { await client.credential.fullAccessAllowed ? true : nil }
+        try await client.send(conversationId: elevated, text: "Ship it")
+        _ = try cli(binary, ["access", link.deviceId, "limited", "--json"], env: env)
+        await client.stop()
+        await client.start()
+        _ = try await wait("hello back to limited") { await client.credential.fullAccessAllowed ? nil : true }
 
         // The app's answer to the refusal: a new token, which is stored.
         await MainActor.run { client.relayToken = "eyJwIjoiaW9zIn0.c2ln" }

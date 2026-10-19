@@ -216,3 +216,17 @@ final class GatedActionTests: XCTestCase {
         }
     }
 }
+
+final class CreateRulesTests: XCTestCase {
+    func testPiIsBrowserOnlyAndOthersUpToWriteFiles() {
+        XCTAssertEqual(ToolAccess.phoneCreateChoices(agentId: "pi"), [.browserOnly])
+        XCTAssertEqual(ToolAccess.phoneCreateChoices(agentId: "claude"), [.browserOnly, .readFiles, .writeFiles])
+    }
+
+    func testModelNamesThatReadAsFlagsAreRefused() {
+        XCTAssertTrue(AgentModel.isValidName("claude-opus-5-5"))
+        XCTAssertTrue(AgentModel.isValidName(""))
+        XCTAssertFalse(AgentModel.isValidName("-x"))
+        XCTAssertFalse(AgentModel.isValidName("  --dangerously-skip-permissions"))
+    }
+}

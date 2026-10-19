@@ -27,36 +27,6 @@
             "state": "translated",
             "value": "chrome-use"
           }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use"
-          }
         }
       }
     },
@@ -82,36 +52,6 @@
           }
         },
         "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ChromeUse"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ChromeUse"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ChromeUse"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ChromeUse"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ChromeUse"
-          }
-        },
-        "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "ChromeUse"
@@ -145,36 +85,6 @@
             "state": "translated",
             "value": "コンピュータのターミナルに表示されるペアリング用 QR コードをスキャンします。"
           }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "컴퓨터 터미널에 표시된 페어링 QR 코드를 스캔합니다."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escanea el código QR de emparejamiento que aparece en el terminal del ordenador."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scanner le code QR de jumelage affiché dans le terminal de l’ordinateur."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scanne den Kopplungs-QR-Code, der im Terminal deines Computers angezeigt wird."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escaneie o código QR de emparelhamento exibido no terminal do computador."
-          }
         }
       }
     },
@@ -203,36 +113,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Face ID で chrome-use のロックを解除します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Face ID로 chrome-use의 잠금을 해제합니다."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Desbloquea chrome-use con Face ID."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Déverrouiller chrome-use avec Face ID."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "chrome-use mit Face ID entsperren."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Desbloqueie o chrome-use com Face ID."
           }
         }
       }
@@ -263,36 +143,6 @@
             "state": "translated",
             "value": "ローカルネットワークまたは Tailscale 上で chrome-use を実行しているコンピュータに接続します。"
           }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "로컬 네트워크 또는 Tailscale에서 chrome-use를 실행 중인 컴퓨터에 연결합니다."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conéctate al ordenador que ejecuta chrome-use en tu red local o en Tailscale."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se connecter à l’ordinateur qui exécute chrome-use sur votre réseau local ou Tailscale."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mit deinem Computer verbinden, auf dem chrome-use im lokalen Netzwerk oder über Tailscale läuft."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conecte-se ao computador que executa o chrome-use na sua rede local ou no Tailscale."
-          }
         }
       }
     },
@@ -321,36 +171,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "エージェントに送信する画像を選択します。"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "에이전트에게 보낼 이미지를 선택합니다."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Elige imágenes para enviarlas al agente."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choisir des images à envoyer à l’agent."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wähle Bilder aus, die an den Agent gesendet werden."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escolha imagens para enviar ao agente."
           }
         }
       }
