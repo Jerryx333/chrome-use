@@ -1802,7 +1802,17 @@ pub fn cb_skip_of(cmd: &Value) -> bool {
 /// Actions a `--tab <handle> --force` does not apply to: tab management verbs
 /// (which take their own refs, and `tab close --force` its own flag) and
 /// session lifecycle.
+/// Whether a `done` command names any tab to keep.
+fn done_keeps(cmd: &Value) -> bool {
+    cmd.get("keepActive").and_then(Value::as_bool) == Some(true)
+        || cmd
+            .get("keep")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty())
+}
+
 const FORCE_TAB_SKIPS: &[&str] = &[
+    "done",
     "tab_switch",
     "tab_close",
     "tab_new",
@@ -2085,6 +2095,11 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             | "stream_status"
     ) || (action == "tab_list"
         && cmd.get("all").and_then(Value::as_bool) == Some(true))
+        // `done` connects only to find a tab to keep among the session's own:
+        // without --keep, or with no tabs recorded, connecting would open a
+        // first tab just to close it again.
+        || (action == "done"
+            && (!done_keeps(cmd) || !crate::connection::has_created_targets(&state.session_id)))
         || (action == "read"
         // `read <url>` (and --llms / --require-md) is a pure HTTP fetch — it
         // never touches the browser, so don't auto-launch. Only `read` with no
@@ -5350,6 +5365,7 @@ async fn annotate_site_change(
 /// Commands that never land on a login wall by themselves, or are the login.
 const LOGIN_WALL_SKIP_ACTIONS: &[&str] = &[
     "close",
+    "done",
     "auth_login",
     "auth_login_bwu",
     "auth_save",
@@ -24571,6 +24587,16 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn done_connects_only_to_keep_a_tab() {
+        assert!(!done_keeps(&json!({ "action": "done", "keep": [] })));
+        assert!(!done_keeps(&json!({ "action": "done" })));
+        assert!(done_keeps(&json!({ "action": "done", "keep": ["t2"] })));
+        assert!(done_keeps(
+            &json!({ "action": "done", "keep": [], "keepActive": true })
+        ));
+    }
+
     /// #507: with no current tab only listing, opening, naming or closing a
     /// named tab runs; everything that acts on "the current tab" is refused.
     #[test]

@@ -137,6 +137,7 @@ try {
   const againKeep = ok(cu(4001, '%74', ['done', '--keep']), 'E done --keep with nothing open');
   step('task E done after idle exit', { reply: doneE.data, again: again.data, againKeep: againKeep.data, keptTab: byUrl(tE, '/c?e') });
   check(!byUrl(tE, '/b?e'), 'E\'s other tab was closed');
+  check(!again.data.tabsClosed?.length && !againKeep.data.tabsClosed?.length, 'a repeated done opened and closed nothing');
   check(byUrl(tE, '/c?e')?.groupId === -1, 'E\'s kept tab is open and ungrouped');
   check((await agentGroups()).length === 0, 'no agent group left after E');
 
