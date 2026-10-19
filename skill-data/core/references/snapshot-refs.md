@@ -18,17 +18,19 @@ Compact element references that reduce context usage dramatically for AI agents.
 
 Traditional approach:
 ```
-Full DOM/HTML → AI parses → CSS selector → Action (~3000-5000 tokens)
+Full DOM/HTML → AI locates a selector → Action
 ```
 
 chrome-use approach:
 ```
-Compact snapshot → @refs assigned → Direct interaction (~200-400 tokens)
+Scoped accessibility snapshot → @refs assigned → Direct interaction
 ```
 
 Interactive snapshots add a bounded `context` annotation only to controls whose role and name repeat on the page and are not already separated by a named parent line (for example a table cell). The text comes from the nearby article, list item, row, or card (so a repeated `Add to cart` keeps its product and price), must differ between the repeated controls, never repeats the control's own name, drops punctuation-only fragments, and is capped at about 100 characters. Unnamed repeated controls such as icon links get one short fragment. Unique names get no context. Accessible names and refs are unchanged. Live `status` receipts also remain visible in interactive snapshots and action observations, with bounded text and explicit truncation. Context may be absent or marked truncated; use a scoped or full snapshot when a required detail is missing.
 
 ## The Snapshot Command
+
+MCP `chrome_use_snapshot` accepts `diff: true` for a reread of the same page with the same snapshot options, including the filter. It maps to CLI `snapshot --diff`. Without a valid baseline it returns the full tree and `diffNote`; omit `diff` or set it to false when a complete current tree is required. A diff is an excerpt, so keep its baseline and do not interpret a removed line as a current control.
 
 ```bash
 # Basic snapshot (shows page structure)

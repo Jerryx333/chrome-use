@@ -97,6 +97,9 @@ chrome-use click @e3 --observe     # fill, select, pick, press, hover also take 
 chrome-use snapshot -i --diff      # only if the observation leaves a question
 ```
 
+For MCP, `chrome_use_snapshot` accepts `diff: true` for this same incremental
+reread. Keep its baseline; omit it when a complete current tree is needed.
+
 1. Copy refs exactly from the latest snapshot or observation; never guess or
    renumber them. Navigation and tab switches reset refs. When a ref errors
    or a control is newly rendered, discover it again. If an action's
