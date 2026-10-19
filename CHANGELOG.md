@@ -1,8 +1,48 @@
 # Changelog
 
-## 1.5.241
+## 1.5.243
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.77.
+
+### Changes
+
+- **Agent tabs are grouped by project, not by session.** A session's tabs go in its project's group, `✦ <project>`. The project is the side panel conversation's project folder, else the git repository around the working directory, else the working directory. So two terminals in one repository, and every new conversation there, share one group instead of each opening another. A project whose folder name another project already uses gets its parent folder added to the title, once; the title is kept from then on. `session name` renames the project's group.
+- **Sessions hold leases on their tabs.** Each session drives only the tabs it opened. A tab another running session of the project opened is left to it, so two agents working at once never take each other's tabs, and `done` in one of them closes only its own. When a session's daemon has ended, its lease has too: the project's next session takes those tabs over and reuses them.
+- **The same page is not opened twice.** `open <url>` switches to the session's tab already showing that page instead of opening another, in the background and without reloading it (`reusedTab: true`). Pages compare by url without the `#fragment` and tracking parameters (`utm_*`, `fbclid`, `gclid`, …). `open --new-tab <url>` opens another tab anyway. Different projects never share tabs, and the user's own tabs are never moved or grouped.
+- **A group nobody works in collapses at once.** When the last session of a project idles out, its group is collapsed in your window; its tabs are closed after 30 idle minutes as before (`AGENT_BROWSER_GROUP_CLEANUP_MS`, `0` turns that off) unless the project's next session picks them up first.
+- **No more groups holding a single blank tab.** A session opens a blank tab when it first connects; a session that only read or did nothing left it behind in its own group. A tab still on `about:blank` or the new tab page is now closed when its session idles out, and the cleanup closes such tabs of an ended session at once (no 30-minute wait), so the group goes with them. A blank tab is never taken for the user's, even in front. `tabs cleanup` clears them too.
+- **Upgrading moves each session's tabs once.** A session whose tabs are in a group named after the session (1.5.236–1.5.242) moves them under its project's group the first time it runs on this version. Tabs of sessions that never run again are left to the cleanup.
+- **No second Chrome from a sandboxed agent.** When the extension relay is down, chrome-use starts Chrome only when it can prove Chrome is not running. A connected extension counts as proof that it is, and a process list that cannot even see the system's own processes (as inside Codex's macOS sandbox) proves nothing. Before, such a sandbox saw no Chrome and `open -na` started a second one.
+- **Tabs a session left for the user stay theirs.** Another session of the project never picks up a tab left with `keep`, `done --keep` or by the cleanup.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.242
+
+
+Works with extension ab-connect 0.5.77.
+
+### Changes
+
+- **Agents end their tasks with `chrome-use done`, and decide themselves what stays open.** `done --keep <tab>` leaves a tab the user still needs (a page they asked to see, a result to act on, a login left for them) as a plain tab outside the ✦ group; every other tab the session opened is closed and read back, like `close`, and the session ends. With extension 0.5.77 the kept tab is also released by the extension, so no debugger stays attached to it. The skill and the core guide now tell agents to run it at the end of every task without asking the user. After the daemon's idle exit, `done --keep` reconnects to find the tab; `done` with nothing open, or a second time, does nothing and succeeds; a `--keep` naming a tab the session did not open (or a blank one) is not kept, and the reply says so. MCP: `chrome_use_tabs` with `action: "done"`, `keep: [...]`.
+- **Tab groups no longer pile up.** A session's daemon exits after 10 idle minutes and leaves its tabs open, and every new conversation used to get a new group, so groups accumulated by the dozen. Now, once a session's daemon is gone and it has been idle for 30 minutes (`AGENT_BROWSER_GROUP_CLEANUP_MS`, `0` turns it off), the next new session closes its tabs in the background. A tab the user is looking at, or switched to and stayed on (extension 0.5.77), is left for them, ungrouped and recorded as kept. Tabs the user lent, adopted tabs and other people's tabs are never closed.
+- **A new task continues the previous task's group.** A session started from the same terminal and working directory takes over the group and tabs of the previous session there once its daemon has exited, instead of opening another group. `status` names the session's tab group. `--session <name>` sessions are unaffected.
+- **`chrome-use tabs cleanup`** closes the groups of every ended session now, including groups left by older builds (`⬉`, a trailing `🤖` or a bare session id in the title).
+- **`keep` actually ungroups the tab.** The ungroup request was sent without the tab's session, so the extension could not tell which tab was meant and the kept tab stayed in the group.
+- **No more "Apple cannot verify .bun-501-….dylib" from Inspect & Ask on macOS.** Opening Inspect & Ask ran `ocs` (a Bun-built program) inside Chrome's process tree, which inherits Chrome's file quarantine, so the library Bun extracts was blocked by Gatekeeper. These operations now run in the panel service, which launchd starts outside Chrome, so `ocs` no longer inherits the quarantine.
+- **The agent cursor (when turned on) no longer slides in from the top-left corner** of a page, and its tip sits exactly on the point it clicks.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.241
+
+
 Works with extension ab-connect 0.5.76.
 
 ### Changes
@@ -14,7 +54,6 @@ Works with extension ab-connect 0.5.76.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.240
 

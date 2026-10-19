@@ -3827,7 +3827,36 @@ impl BrowserManager {
                 Err(_) => {}
             }
         }
-        Ok(self.live_relay_targets(by_id.into_values().collect()).await)
+        let live = self.live_relay_targets(by_id.into_values().collect()).await;
+        Ok(self.without_leased_elsewhere(live))
+    }
+
+    /// Sessions of one project share its tab group, so the relay lists each
+    /// of them the others' tabs too, and the tabs they left for the user. A tab another running session opened is
+    /// its lease: leave it to that session. A tab of a session that has ended
+    /// is free to take over.
+    fn without_leased_elsewhere(&self, targets: Vec<TargetInfo>) -> Vec<TargetInfo> {
+        if !self.via_relay() {
+            return targets;
+        }
+        let others = crate::connection::created_targets_by_other_sessions(&self.session_name());
+        // A tab left for the user is theirs, even though the relay still
+        // files it under the group it left.
+        let kept = crate::group_lifecycle::kept_targets();
+        if others.is_empty() && kept.is_empty() {
+            return targets;
+        }
+        let mut live: HashMap<&str, bool> = HashMap::new();
+        targets
+            .into_iter()
+            .filter(|t| !kept.contains(&t.target_id) || self.created_targets.contains(&t.target_id))
+            .filter(|t| match others.get(&t.target_id) {
+                Some(session) => !*live
+                    .entry(session.as_str())
+                    .or_insert_with(|| session_is_live(session)),
+                None => true,
+            })
+            .collect()
     }
 
     /// Over the relay, only the targets that can be confirmed live: the
@@ -6215,6 +6244,45 @@ impl BrowserManager {
         self.forget_created_target(target_id)
     }
 
+    /// The target id and page session of one of this session's tabs, named
+    /// the way `tab` commands name it: `t<N>`, a label, a target id or a
+    /// relay `chrome-tab:<id>` handle.
+    pub fn resolve_tab_spec(&self, spec: &str) -> Result<(String, String), String> {
+        let tab_id = match self.tab_id_for_target(spec) {
+            Some(id) => id,
+            None => {
+                let spec = match parse_chrome_tab_handle(spec) {
+                    Some(_) => self.owned_tab_ref_for_handle(spec).ok_or_else(|| {
+                        format!("`{spec}` is not one of this session's tabs; run `tab list`")
+                    })?,
+                    None => spec.to_string(),
+                };
+                self.resolve_tab_ref(&TabRef::parse(&spec)?)?
+            }
+        };
+        self.pages
+            .iter()
+            .find(|p| p.tab_id == tab_id)
+            .map(|p| (p.target_id.clone(), p.session_id.clone()))
+            .ok_or_else(|| format!("tab `{spec}` is no longer open; run `tab list`"))
+    }
+
+    /// The url this session last saw on `target_id`, if it is one of its pages.
+    pub fn target_url(&self, target_id: &str) -> Option<&str> {
+        self.pages
+            .iter()
+            .find(|p| p.target_id == target_id)
+            .map(|p| p.url.as_str())
+    }
+
+    /// The page session of the active tab.
+    pub fn active_tab_spec(&self) -> Result<(String, String), String> {
+        Ok((
+            self.active_target_id()?.to_string(),
+            self.active_session_id()?.to_string(),
+        ))
+    }
+
     /// Re-take a tab this session created and later released with `keep`.
     ///
     /// The caller MUST establish that we created it — `handle_keep` does that by
@@ -7879,6 +7947,20 @@ impl BrowserManager {
     /// Matches on exact URL or the same origin+path (ignoring query/fragment) so
     /// a re-`open` of a stable entry URL lands on the existing tab instead of
     /// piling up duplicates (issue #21).
+    /// Another of this session's tabs already showing `url`'s page, by the
+    /// one comparison every same-page decision uses
+    /// ([`crate::group_lifecycle::normalize_page_url`]). The active tab does
+    /// not count: navigating it is what was asked.
+    pub fn same_page_tab(&self, url: &str) -> Option<u32> {
+        let want = crate::group_lifecycle::normalize_page_url(url);
+        let active = self.active_target_id().ok();
+        self.pages
+            .iter()
+            .filter(|p| Some(p.target_id.as_str()) != active)
+            .find(|p| crate::group_lifecycle::normalize_page_url(&p.url) == want)
+            .map(|p| p.tab_id)
+    }
+
     pub async fn reuse_tab_for_url(&mut self, url: &str) -> Result<Option<Value>, String> {
         self.resync_targets().await.ok();
         let want = normalize_url_for_match(url);
@@ -7987,7 +8069,84 @@ impl BrowserManager {
             .await
             .is_ok();
         self.relay_scoped = ok;
+        if ok {
+            self.move_legacy_group(&group).await;
+        }
         ok
+    }
+
+    /// Close every tab this session opened that is still blank (relay only):
+    /// the first tab a session opens on connect, when nothing was ever
+    /// loaded into it. Left open it would hold the session's group in the
+    /// user's window with nothing in it. Urls are re-read first, so a tab that
+    /// did get a page is never taken for blank.
+    pub async fn close_blank_own_tabs(&mut self) {
+        if self.agent_group().is_none() {
+            return;
+        }
+        let _ = self.resync_targets().await;
+        self.close_leftover_blank_scratch("").await;
+    }
+
+    /// Fold this session's tab group away in the user's window (relay only).
+    /// Best effort: the extension refuses it when the group holds a tab no
+    /// agent created.
+    pub async fn collapse_own_group(&self) {
+        let Some(title) = self.agent_group() else {
+            return;
+        };
+        let Ok(groups) = self
+            .chrome_call("tabGroups", "query", json!([{ "title": title }]))
+            .await
+        else {
+            return;
+        };
+        for id in groups
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|g| g.get("id").and_then(Value::as_i64))
+        {
+            let _ = self
+                .chrome_call("tabGroups", "update", json!([id, { "collapsed": true }]))
+                .await;
+        }
+    }
+
+    /// A session from a build that grouped tabs per session, joining its
+    /// project's group: relabel its old group and re-tag its own tabs in the
+    /// relay, which still files them under the old label, so they are found
+    /// under the project's.
+    async fn move_legacy_group(&mut self, group: &str) {
+        let Some(old) = crate::group_lifecycle::take_legacy_label(&self.session_name()) else {
+            return;
+        };
+        if old != group {
+            let _ = self
+                .client
+                .send_command_typed::<_, Value>(
+                    "ABExt.renameGroup",
+                    &json!({ "from": old, "to": group }),
+                    None,
+                )
+                .await;
+        }
+        // Attaching re-tags a target into this client's group.
+        let mut own: Vec<String> = self.created_targets.iter().cloned().collect();
+        own.sort();
+        for target_id in own {
+            let _ = self
+                .client
+                .send_command_typed::<_, Value>(
+                    "Target.attachToTarget",
+                    &AttachToTargetParams {
+                        target_id,
+                        flatten: true,
+                    },
+                    None,
+                )
+                .await;
+        }
     }
 
     /// On the relay, close any OWNED tabs still sitting at about:blank except
@@ -8009,7 +8168,7 @@ impl BrowserManager {
             .filter(|p| {
                 p.target_id != keep
                     && self.created_targets.contains(&p.target_id)
-                    && (p.url == "about:blank" || p.url.is_empty())
+                    && crate::group_lifecycle::is_blank_url(&p.url)
             })
             .map(|p| p.target_id.clone())
             .collect();

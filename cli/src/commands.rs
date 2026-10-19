@@ -214,6 +214,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "viewport",
     "resize",
     "keep",
+    "done",
 ];
 
 /// Parse a `drag` offset argument: `60`, `+60`, `-12`, or `60,-3` (dx[,dy]).
@@ -850,7 +851,8 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             if flags.provider.is_some() {
                 nav_cmd["waitUntil"] = json!("none");
             }
-            // `--new-tab` / `-t`: open URL in a fresh tab instead of navigating the active tab
+            // `--new-tab` / `-t`: open URL in a fresh tab instead of navigating the
+            // active tab, even when a tab already shows the page
             if rest.iter().any(|a| *a == "--new-tab" || *a == "-t") {
                 nav_cmd["newTab"] = json!(true);
             }
@@ -2489,6 +2491,40 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     usage: USAGE,
                 }),
             }
+        }
+
+        // `done [--keep [<tab>]]...`: the agent's task is over. Each `--keep`
+        // leaves one tab for the user (bare: the active tab) the way `keep`
+        // does; every other tab the session opened closes, as with `close`.
+        "done" => {
+            const USAGE: &str = "done [--keep [<tab>]]...";
+            let mut keep: Vec<String> = Vec::new();
+            let mut keep_active = false;
+            let mut i = 0;
+            while i < rest.len() {
+                match rest[i] {
+                    "--keep" => match rest.get(i + 1).filter(|v| !v.starts_with("--")) {
+                        Some(tab) => {
+                            keep.push(tab.to_string());
+                            i += 2;
+                        }
+                        None => {
+                            keep_active = true;
+                            i += 1;
+                        }
+                    },
+                    other => {
+                        return Err(ParseError::InvalidValue {
+                            message: format!(
+                                "unknown argument `{other}` for done; name each tab to leave open \
+                                 with --keep <tab>"
+                            ),
+                            usage: USAGE,
+                        })
+                    }
+                }
+            }
+            Ok(json!({ "id": id, "action": "done", "keep": keep, "keepActive": keep_active }))
         }
 
         // === Stealth self-check ===
@@ -6031,6 +6067,29 @@ mod tests {
         assert!(parse(&["pick", "@e6", "--option", " "]).is_err());
         assert!(parse(&["pick", "@e6", "stray", "--option", "Kyoto"]).is_err());
         assert!(parse(&["pick", "@e6", "Kyoto", "--force"]).is_err());
+    }
+
+    #[test]
+    fn done_parses_tabs_to_keep() {
+        let parse = |args: &[&str]| {
+            parse_command(
+                &args.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                &default_flags(),
+            )
+        };
+        let bare = parse(&["done"]).expect("bare done parses");
+        assert_eq!(bare["action"], "done");
+        assert_eq!(bare["keep"], json!([]));
+        assert_eq!(bare["keepActive"], false);
+        let some = parse(&["done", "--keep", "t2", "--keep", "chrome-tab:9"]).unwrap();
+        assert_eq!(some["keep"], json!(["t2", "chrome-tab:9"]));
+        assert_eq!(some["keepActive"], false);
+        let active = parse(&["done", "--keep"]).unwrap();
+        assert_eq!(active["keepActive"], true);
+        let mixed = parse(&["done", "--keep", "--keep", "t3"]).unwrap();
+        assert_eq!(mixed["keepActive"], true);
+        assert_eq!(mixed["keep"], json!(["t3"]));
+        assert!(parse(&["done", "t2"]).is_err());
     }
 
     #[test]

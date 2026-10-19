@@ -2177,44 +2177,108 @@ fn approved_config_profiles() -> (bool, Vec<&'static str>) {
     (approved, old)
 }
 
+/// What the process list says about Chrome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChromeProcess {
+    Running,
+    NotRunning,
+    /// The process list could not be read, or this process cannot see the
+    /// system's processes (a sandbox, such as Codex's on macOS, shows only its
+    /// own), so not finding Chrome proves nothing.
+    Unknown,
+}
+
+/// Combine what pgrep said about Chrome with whether it can see a process
+/// that is always running. `None` is pgrep failing to run or erroring.
+pub(crate) fn classify_chrome_process(
+    chrome: Option<bool>,
+    sees_system: Option<bool>,
+) -> ChromeProcess {
+    match (chrome, sees_system) {
+        (Some(true), _) => ChromeProcess::Running,
+        (Some(false), Some(true)) => ChromeProcess::NotRunning,
+        _ => ChromeProcess::Unknown,
+    }
+}
+
+/// Whether to start Chrome so the relay can come up. A connected extension
+/// is proof Chrome runs, whatever the process list shows; and only a process
+/// list that could have seen Chrome may say it is not running. Starting it
+/// when it does run opens a second window (`open -na`), which is what a
+/// sandboxed agent got when pgrep could not see Chrome.
+pub(crate) fn should_launch_chrome(extension_connected: bool, process: ChromeProcess) -> bool {
+    !extension_connected && process == ChromeProcess::NotRunning
+}
+
+#[cfg(unix)]
+fn pgrep_exact(name: &str) -> Option<bool> {
+    let out = std::process::Command::new("pgrep")
+        .args(["-x", name])
+        .output()
+        .ok()?;
+    // 0: found, 1: none found; anything else is pgrep failing.
+    match out.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
+}
+
 /// Is a Chrome-family browser process alive at all? The extension relay can
 /// only come up inside a running browser, so with nothing running every wait
 /// for the relay is a wait for nothing (#213: `open` sat on "relay dropped —
 /// reconnecting…" for 98s with Chrome quit, then gave up with "no connected
 /// Chrome profiles" — and never once tried to start it).
-pub(crate) fn chrome_running() -> bool {
+pub(crate) fn chrome_process() -> ChromeProcess {
     #[cfg(target_os = "macos")]
     {
-        [
+        let names = [
             "Google Chrome",
             "Google Chrome Beta",
             "Google Chrome Canary",
             "Chromium",
-        ]
-        .iter()
-        .any(|app| {
-            std::process::Command::new("pgrep")
-                .args(["-x", app])
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        })
+        ];
+        let mut chrome = Some(false);
+        for name in names {
+            match pgrep_exact(name) {
+                Some(true) => return ChromeProcess::Running,
+                Some(false) => {}
+                None => chrome = None,
+            }
+        }
+        // launchd is always there; a pgrep that cannot see it cannot see
+        // Chrome either.
+        classify_chrome_process(chrome, pgrep_exact("launchd"))
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        ["chrome", "google-chrome", "chromium", "chromium-browser"]
-            .iter()
-            .any(|bin| {
-                std::process::Command::new("pgrep")
-                    .args(["-x", bin])
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            })
+        let mut chrome = Some(false);
+        for name in ["chrome", "google-chrome", "chromium", "chromium-browser"] {
+            match pgrep_exact(name) {
+                Some(true) => return ChromeProcess::Running,
+                Some(false) => {}
+                None => chrome = None,
+            }
+        }
+        // pgrep finding this very process proves it can read the process list
+        // (pgrep never lists itself, so it is asked about us).
+        let own: String = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default()
+            .chars()
+            .take(15)
+            .collect();
+        let sees = if own.is_empty() {
+            None
+        } else {
+            pgrep_exact(&own)
+        };
+        classify_chrome_process(chrome, sees)
     }
     #[cfg(not(unix))]
     {
-        true // no cheap probe; keep the old behaviour (wait for the relay)
+        ChromeProcess::Running // no cheap probe; keep the old behaviour (wait for the relay)
     }
 }
 
@@ -4610,6 +4674,21 @@ where
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chrome_is_started_only_when_it_provably_is_not_running() {
+        use super::{classify_chrome_process as classify, should_launch_chrome, ChromeProcess};
+        assert_eq!(classify(Some(true), None), ChromeProcess::Running);
+        assert_eq!(classify(Some(false), Some(true)), ChromeProcess::NotRunning);
+        // A sandbox shows only its own processes: not seeing Chrome means nothing.
+        assert_eq!(classify(Some(false), Some(false)), ChromeProcess::Unknown);
+        assert_eq!(classify(None, Some(true)), ChromeProcess::Unknown);
+        assert_eq!(classify(Some(false), None), ChromeProcess::Unknown);
+        assert!(should_launch_chrome(false, ChromeProcess::NotRunning));
+        // A connected extension is proof Chrome runs.
+        assert!(!should_launch_chrome(true, ChromeProcess::NotRunning));
+        assert!(!should_launch_chrome(false, ChromeProcess::Unknown));
+        assert!(!should_launch_chrome(false, ChromeProcess::Running));
+    }
 
     #[tokio::test]
     async fn panel_jobs_beyond_the_limit_wait_for_a_slot_instead_of_failing() {

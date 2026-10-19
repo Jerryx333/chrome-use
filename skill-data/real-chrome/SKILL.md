@@ -123,8 +123,8 @@ most drops you never even see. If a command *does* surface the error:
 
 > **Don't serialize agents to dodge fragility.** Relay drops are transient and
 > self-heal; they are *not* a sign that the shared browser can't be driven
-> concurrently. Concurrent multi-agent **is** supported — each `--session` gets
-> its own tab group and drives only its own tabs (see *Strict multi-agent
+> concurrently. Concurrent multi-agent **is** supported — each `--session`
+> drives only its own tabs (sessions of one project share its tab group) (see *Strict multi-agent
 > isolation* below). Give each agent a distinct `--session` and let them run in
 > parallel; you don't need to run them one at a time.
 5. **Can't restore the browser at all?** Don't stall waiting for a screenshot —

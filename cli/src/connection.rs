@@ -177,6 +177,23 @@ pub fn lock_session_lifecycle(session: &str) -> Result<SessionLifecycleLock, Str
     Ok(SessionLifecycleLock { _file: file })
 }
 
+/// [`lock_session_lifecycle`] without waiting: `None` when another process
+/// holds it (that session is starting or stopping right now).
+pub fn try_lock_session_lifecycle(session: &str) -> Option<SessionLifecycleLock> {
+    let path = get_socket_dir().join(format!("{session}.lifecycle.lock"));
+    fs::create_dir_all(get_socket_dir()).ok()?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    file.try_lock().ok()?;
+    Some(SessionLifecycleLock {
+        _file: FileLockGuard { file },
+    })
+}
+
 pub fn lock_relay_recovery() -> Result<RelayRecoveryLock, String> {
     let path = config_home().join("relay-recovery.lock");
     let file = acquire_file_lock(&path, "relay recovery")?;
@@ -611,6 +628,49 @@ fn get_created_targets_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.created-targets.json", session))
 }
 
+/// Where a session's tab ownership record lives, for its modification time.
+pub(crate) fn created_targets_path(session: &str) -> PathBuf {
+    get_created_targets_path(session)
+}
+
+/// Hand `from`'s tab ownership record to `to`: the targets join `to`'s record
+/// (or become it), keeping the endpoint and browser identity they were
+/// recorded under, so they grant `to` exactly what they granted `from` and
+/// nothing on another browser. Records of two different browsers are not
+/// merged. The caller holds `from`'s lifecycle lock and has checked its
+/// daemon is gone.
+pub(crate) fn merge_created_targets(from: &str, to: &str) -> Result<(), String> {
+    let source = get_created_targets_path(from);
+    let destination = get_created_targets_path(to);
+    let Some(theirs) = read_created_target_registry(from) else {
+        return Err(format!("session {from} has no readable tab record"));
+    };
+    let Some(mut ours) = read_created_target_registry(to) else {
+        if destination.exists() {
+            return Err(format!("session {to}'s tab record is unreadable"));
+        }
+        return fs::rename(&source, &destination).map_err(|e| e.to_string());
+    };
+    let same_browser = ours.endpoint_sha256 == theirs.endpoint_sha256
+        || (ours.browser_sha256.is_some() && ours.browser_sha256 == theirs.browser_sha256);
+    if !same_browser {
+        return Err(format!(
+            "sessions {from} and {to} recorded tabs in different browsers"
+        ));
+    }
+    for target in theirs.target_ids {
+        if !ours.target_ids.contains(&target) {
+            ours.target_ids.push(target);
+        }
+    }
+    ours.target_ids.sort_unstable();
+    let encoded = serde_json::to_vec(&ours).map_err(|e| e.to_string())?;
+    let temporary = destination.with_extension(format!("json.{}.tmp", std::process::id()));
+    fs::write(&temporary, encoded).map_err(|e| e.to_string())?;
+    fs::rename(&temporary, &destination).map_err(|e| e.to_string())?;
+    fs::remove_file(&source).map_err(|e| e.to_string())
+}
+
 /// Ask a running daemon to relabel this session's existing tab group.
 ///
 /// Returns whether the group was actually relabelled. Best effort by design:
@@ -835,7 +895,7 @@ fn owned_registry_targets(
     }
 }
 
-const CREATED_TARGETS_SUFFIX: &str = ".created-targets.json";
+pub(crate) const CREATED_TARGETS_SUFFIX: &str = ".created-targets.json";
 
 /// Target ids that any session other than `session` records as created.
 fn targets_claimed_by_other_sessions(session: &str) -> Result<HashSet<String>, String> {
@@ -1015,6 +1075,8 @@ fn write_created_targets_in(
 ) -> Result<(), String> {
     let path = get_created_targets_path(session);
     if targets.is_empty() {
+        // A session with no tabs left has nothing to be swept for.
+        let _ = fs::remove_file(get_socket_dir().join(format!("{session}.activity")));
         return match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

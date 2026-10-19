@@ -35,6 +35,7 @@ import {
 import { attachTabById } from './attach-by-id.js';
 import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
+import { DWELL_MS, UserTouchedTabs } from './user-touched.js';
 import { removeAgentTab } from './remove-agent-tab.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
 import { clearDownloads, listDownloads, startDownload } from './download-manager.js';
@@ -480,6 +481,19 @@ if (chrome.windows && chrome.windows.onFocusChanged) {
 // not the whole window. (Issue: banner occludes the user's foreground tab.)
 const ownedTabs = new Set();
 
+// Agent tabs the user switched to and stayed on (see user-touched.js). The
+// CLI's cleanup of an ended session leaves these open for the user. Kept in
+// storage.session: a tab id means nothing after Chrome restarts.
+const userTouched = new UserTouchedTabs({ isAgentTab: (id) => ownedTabs.has(id) || agentPopups.has(id) });
+const USER_TOUCHED_KEY = 'ab_user_touched_tabs';
+const userTouchedLoaded = chrome.storage.session
+  .get(USER_TOUCHED_KEY)
+  .then((g) => userTouched.restore(g?.[USER_TOUCHED_KEY]))
+  .catch(() => {});
+function saveUserTouched() {
+  chrome.storage.session.set({ [USER_TOUCHED_KEY]: userTouched.list() }).catch(() => {});
+}
+
 // "Let the agent use this tab" (0.5.62): user tabs lent to one side-panel
 // conversation, and tabs taken back from one (refused until granted again or
 // closed). See tab-grant.js.
@@ -905,9 +919,12 @@ function cursorOverlayExpression(x, y, click) {
     '(d.documentElement||d.body).appendChild(host);' +
     'var sr=host.attachShadow?host.attachShadow({mode:"open"}):host;' +
     'var glow=d.createElement("div");glow.style.cssText="position:fixed;left:0;top:0;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;pointer-events:none;opacity:0;background:radial-gradient(circle,rgba(247,168,35,.55),rgba(247,168,35,0) 70%);transition:transform .13s cubic-bezier(.2,.7,.3,1),opacity .3s";' +
-    'var cur=d.createElement("div");cur.style.cssText="position:fixed;left:0;top:0;width:24px;height:24px;margin:-2px 0 0 -2px;pointer-events:none;opacity:0;transition:transform .13s cubic-bezier(.2,.7,.3,1),opacity .3s";' +
+    'var cur=d.createElement("div");cur.style.cssText="position:fixed;left:0;top:0;width:24px;height:24px;margin:-2px 0 0 -4px;pointer-events:none;opacity:0;transition:transform .13s cubic-bezier(.2,.7,.3,1),opacity .3s";' +
     'cur.innerHTML=\'<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 2 L4 19 L9 14.5 L12 21 L14.6 19.8 L11.6 13.4 L18 13 Z" fill="#fff" stroke="#1bb6c9" stroke-width="1.6" stroke-linejoin="round"/></svg>\';' +
-    'sr.appendChild(glow);sr.appendChild(cur);c=w.__abCursor={host:host,sr:sr,cur:cur,glow:glow,t:0};' +
+    // A new cursor starts where it is drawn: placed at (X,Y) with its
+    // transition off, so it does not slide in from the corner of the page.
+    'cur.style.transform=glow.style.transform="translate("+X+"px,"+Y+"px)";var tr=cur.style.transition,gt=glow.style.transition;cur.style.transition=glow.style.transition="opacity .3s";' +
+    'sr.appendChild(glow);sr.appendChild(cur);cur.getBoundingClientRect();cur.style.transition=tr;glow.style.transition=gt;c=w.__abCursor={host:host,sr:sr,cur:cur,glow:glow,t:0};' +
     '}' +
     'var el=c.cur,gl=c.glow;el.style.opacity="1";gl.style.opacity="1";' +
     'el.style.transform="translate("+X+"px,"+Y+"px)";gl.style.transform="translate("+X+"px,"+Y+"px)";' +
@@ -1431,6 +1448,26 @@ async function handleForwardCdpCommand(msg) {
     return { ungrouped: tabId ?? null };
   }
 
+  // `done --keep` (0.5.77): a tab the agent created is handed to the user. It
+  // stops being the extension's: no longer re-attached after a worker restart
+  // (so no debugging banner on it), no longer closable through the agent
+  // ownership gate. Only an agent-created tab; anything else is not ours to
+  // hand over.
+  if (method === 'ABExt.releaseOwnedTab') {
+    await loadOwnedTabs();
+    const tid = typeof params?.targetId === 'string' ? params.targetId : '';
+    const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab) ?? (tid ? tabForTarget(tid) : null);
+    if (tabId == null) return { released: false, reason: 'not-attached' };
+    if (!ownedTabs.has(tabId)) return { released: false, tabId, reason: 'not-owned' };
+    await unmarkOwned(tabId);
+    if (userTouched.removed(tabId)) saveUserTouched();
+    releasedTabs.add(tabId);
+    setTimeout(() => releasedTabs.delete(tabId), 10_000);
+    detachTab(tabId, true);
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+    return { released: true, tabId };
+  }
+
   // Relabel this session's existing tab group. `session name` writes the new
   // label for tabs opened from then on; without this, tabs already open would
   // keep the old label forever and the user would see the task split across two
@@ -1679,7 +1716,10 @@ async function handleForwardCdpCommand(msg) {
         detachTab(tabId, true);
         await chrome.debugger.detach({ tabId }).catch(() => {});
       },
-      activateTab: (tabId) => chrome.tabs.update(tabId, { active: true }),
+      activateTab: (tabId) => {
+        userTouched.agentActivating(tabId);
+        return chrome.tabs.update(tabId, { active: true });
+      },
       focusWindow: (windowId) => chrome.windows.update(windowId, { focused: true }),
       removeTab: async (tabId) => {
         try {
@@ -1740,6 +1780,10 @@ async function handleForwardCdpCommand(msg) {
     // After a service-worker restart the persisted ownership set is loaded
     // lazily; a mutation arriving before that would be refused as "not owned".
     await loadOwnedTabs();
+    // An agent raising its own tab is not the user switching to it.
+    if (params?.namespace === 'tabs' && params?.method === 'update' && params?.args?.[1]?.active === true) {
+      for (const id of [params.args[0]].flat()) if (Number.isInteger(id)) userTouched.agentActivating(id);
+    }
     return await executeCall(params, {
       api: chrome,
       isOwned: (tabId) => ownedTabs.has(tabId),
@@ -1763,6 +1807,8 @@ async function handleForwardCdpCommand(msg) {
       connected: port != null,
       attachedTargets: attachedTargetsFrom(tabs.entries()),
       ownedTabs: [...ownedTabs],
+      // Agent tabs the user switched to (0.5.77): cleanup leaves them open.
+      userTouchedTabs: await userTouchedLoaded.then(() => userTouched.list()),
       groups: [...groupIdByName.entries()].map(([name, id]) => ({ name, id })),
       unresolvedOperations: relayUnresolvedOperations(),
       // Whether a downloaded update waits, and how many attached tabs would
@@ -1867,6 +1913,7 @@ async function handleForwardCdpCommand(msg) {
       const tab = await chrome.tabs.get(tabId).catch(() => null);
       if (tab?.windowId)
         await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+      userTouched.agentActivating(tabId);
       await chrome.tabs.update(tabId, { active: true }).catch(() => {});
     }
     return {};
@@ -3052,6 +3099,20 @@ const bringBack = tabId => { if (Number.isInteger(tabId)) void chrome.tabs.updat
 void chrome.tabs.query({ active: true }).then(list => { for (const tab of list) frontTabGuard.activated(tab.windowId, tab.id); }).catch(() => {});
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => bringBack(frontTabGuard.activated(windowId, tabId)));
 chrome.tabs.onRemoved.addListener(tabId => frontTabGuard.removed(tabId));
+// Which agent tabs the user switched to and stayed on (see userTouched).
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  void (async () => {
+    await Promise.all([loadOwnedTabs(), loadAgentPopups(), userTouchedLoaded]);
+    if (!userTouched.activated(tabId)) return;
+    setTimeout(async () => {
+      const tab = await chrome.tabs.get(tabId).catch(() => null);
+      if (userTouched.confirm(tabId, tab?.active === true)) saveUserTouched();
+    }, DWELL_MS);
+  })().catch(() => {});
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (userTouched.removed(tabId)) saveUserTouched();
+});
 // The same event is the one trustworthy record of who opened the tab, so it
 // also marks the pop-up as the agent's and keeps it in the source's group: in
 // a window with user tabs, the click's attach check could not tell otherwise.

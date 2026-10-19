@@ -185,21 +185,31 @@ loads clear it.
 
 ## Sessions and tabs
 
-On the extension relay, all AI sessions share one background agent window per
-Chrome profile, using separate tab groups. Keep the user's window separate.
-An all-agent fullscreen window is reused too. Lost window records recover only
-windows with verified agent tabs. If the user mixes their own tabs into the agent
-window, it becomes theirs: its agent tabs keep working and new agent tabs
-go to one fresh agent window that later sessions share.
-Uncertain ownership or placeholder cleanup refuses instead of opening more
-windows. `tab list --all` uses a passive connection: even a fresh session
+On the extension relay your tabs open in the background of the user's own
+window, in your project's tab group (`✦ <project>`: the panel's project
+folder, else the git repository, else the working directory), shared by every
+session working on that project; each session drives only the tabs it opened.
+`status` names the group. `open <url>` switches to your tab already showing
+that page instead of opening it twice; `open --new-tab <url>` opens another. `tab list --all` uses a passive connection: even a fresh session
 starts no daemon, opens no window or tab, and attaches to no page.
+
+**End every task that opened tabs with `done`.** Decide yourself which tabs
+the user still needs; do not ask them. `done --keep <tab>` (repeat it; bare
+`--keep` is the active tab) leaves a page the user asked to see, a result they
+will act on, or a logged-in page left for them to finish, as a plain tab
+outside your group. Every other tab you opened closes, and the session ends.
+Close searches, sources, intermediate steps, errors and duplicates. A session
+that ends without `done` has its tabs closed after 30 idle minutes
+(`AGENT_BROWSER_GROUP_CLEANUP_MS`; `0` turns this off), except a
+tab the user is looking at or switched to. A new task in the same project
+takes over the tabs of the project's ended sessions. `tabs cleanup` clears
+ended sessions' groups now, when the user asks for that.
 Extension 0.5.48 has a separate guarded native-grouping capability for Thermo;
 it does not grant chrome-use sessions ownership of the user's tabs.
 
 Use one session name per task and reuse it. After "session unresponsive",
 make the one move it names. Do not close, navigate, or reconfigure tabs or
-sessions you did not create or adopt. `close` only your own session when done;
+sessions you did not create or adopt. `done` (or `close`) only your own session;
 `close --all` would close other agents' sessions, so it refuses; never force it.
 `close` reads every tab back and reports `tabsClosed` and `verifiedAbsent: true`;
 `close incomplete` means a tab is still open or unconfirmed, and the session is
@@ -212,7 +222,7 @@ The user is working in the same Chrome. Never use `--activate`, `--front` or
 `bringToFront` unless the user asked to see the tab: each one switches the tab
 in front of a window and can bring Chrome over whatever the user is doing.
 Never `tab adopt` a tab the user opened unless they asked you to work in it;
-your own tabs live in a background agent window and that is where you work.
+your own tabs are the ones in your group, and that is where you work.
 When the user asks which tabs they have open, or to find one of their tabs,
 run `tab list --all`: every tab of the connected profile, across windows, by
 observation only (nothing is attached or activated, no page is read). Each

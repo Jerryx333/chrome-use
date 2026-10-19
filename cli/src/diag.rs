@@ -2205,6 +2205,46 @@ pub fn list_all_tabs(flags: &Flags, limit: usize, full: bool) -> Result<Value, S
     })
 }
 
+/// `tabs cleanup`: close the tab groups of chrome-use sessions that have
+/// ended, leaving the tabs the user has to them. Runs before any daemon, like
+/// `tab list --all`: nothing is started, opened or attached for it. `auto` is
+/// the background sweep a new daemon starts: only sessions idle past
+/// [`crate::group_lifecycle::cleanup_idle`]; by hand, every ended session,
+/// every unrecorded ✦ group and the groups of older builds.
+pub fn cleanup_tab_groups(flags: &Flags, auto: bool) -> Result<Value, String> {
+    let opts = if auto {
+        let Some(idle) = crate::group_lifecycle::cleanup_idle() else {
+            return Ok(json!({ "disabled": true }));
+        };
+        crate::group_lifecycle::SweepOptions {
+            idle: Some(idle),
+            orphans: false,
+        }
+    } else {
+        crate::group_lifecycle::SweepOptions {
+            idle: None,
+            orphans: true,
+        }
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    runtime.block_on(async {
+        let endpoint = resolve_endpoint(flags).await.map_err(|e| match e {
+            Unresolved::NotConnected(message) | Unresolved::Invalid(message) => message,
+        })?;
+        let report = tokio::time::timeout(
+            Duration::from_secs(90),
+            crate::group_lifecycle::sweep(&endpoint.ws, opts),
+        )
+        .await
+        .map_err(|_| "tabs cleanup timed out".to_string())??;
+        Ok(report.to_json())
+    })
+}
+
 /// `chrome-use diag <args>`; returns the exit code.
 pub fn run(args: &[String], flags: &Flags) -> i32 {
     let opts = match parse_args(args) {

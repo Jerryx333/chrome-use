@@ -19,6 +19,7 @@ mod error_envelope;
 mod findurl;
 mod flags;
 mod friction;
+mod group_lifecycle;
 mod install;
 mod jev;
 #[cfg(target_os = "macos")]
@@ -1156,6 +1157,80 @@ fn run_daemon(args: &[String], json_mode: bool) {
 /// CLI, real-Chrome extension relay, driving profile, and current session.
 /// Keeping this path local means it still answers when a session daemon is the
 /// component that is stuck (issue #145).
+fn run_tabs_cleanup(flags: &flags::Flags, rest: &[String]) {
+    let mut auto = false;
+    for arg in rest {
+        match arg.as_str() {
+            "--auto" => auto = true,
+            other => fail_command(
+                flags,
+                &format!("unknown option `{other}` for tabs cleanup (usage: tabs cleanup)"),
+            ),
+        }
+    }
+    let result = diag::cleanup_tab_groups(flags, auto);
+    if flags.json {
+        match result {
+            Ok(data) => print_json_value(json!({ "success": true, "data": data })),
+            Err(e) => {
+                print_json_error(e);
+                exit(1);
+            }
+        }
+        return;
+    }
+    let data = match result {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("{} {e}", color::error_indicator());
+            exit(1);
+        }
+    };
+    if data["disabled"] == json!(true) {
+        println!(
+            "Automatic tab group cleanup is off ({}=0)",
+            group_lifecycle::CLEANUP_ENV
+        );
+        return;
+    }
+    let count = |key: &str| data[key].as_array().map(Vec::len).unwrap_or(0);
+    let (closed, left) = (count("closed"), count("leftForUser"));
+    if closed == 0 && left == 0 {
+        println!("{} no leftover agent tabs", color::success_indicator());
+    } else {
+        println!(
+            "{} closed {closed} leftover agent tab{}; left {left} the user has open, ungrouped",
+            color::success_indicator(),
+            if closed == 1 { "" } else { "s" }
+        );
+    }
+    for row in data["leftForUser"].as_array().into_iter().flatten() {
+        println!("  kept: {}", row["title"].as_str().unwrap_or("(untitled)"));
+    }
+    for skipped in data["skipped"].as_array().into_iter().flatten() {
+        println!(
+            "  {}",
+            color::dim(&format!(
+                "skipped session {}: {}",
+                skipped["session"].as_str().unwrap_or(""),
+                skipped["reason"].as_str().unwrap_or("")
+            ))
+        );
+    }
+    let errors: Vec<&str> = data["errors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.as_str())
+        .collect();
+    for e in &errors {
+        eprintln!("{} {e}", color::warning_indicator());
+    }
+    if !errors.is_empty() {
+        exit(1);
+    }
+}
+
 fn run_status(session: &str, json_mode: bool) {
     let inventory = walk_daemons();
     let host_report = connect::native_host_report();
@@ -1203,7 +1278,7 @@ fn run_status(session: &str, json_mode: bool) {
                 })
             })
             .collect();
-        let current_session = current
+        let mut current_session = current
             .map(|item| {
                 json!({
                     "name": item.name,
@@ -1220,6 +1295,9 @@ fn run_status(session: &str, json_mode: bool) {
                     "version": null,
                 })
             });
+        // Where an agent finds its tabs again: the group they sit in.
+        current_session["tabGroup"] = json!(session_title::display_name(session));
+        current_session["tabsRecorded"] = json!(connection::created_target_count(session));
         let (profile_id, profile_email) = profile
             .as_ref()
             .map(|(id, email)| (Some(id.as_str()), email.as_deref()))
@@ -1315,6 +1393,13 @@ fn run_status(session: &str, json_mode: bool) {
     } else {
         println!("Current session: {} (not running)", session);
     }
+    let recorded = connection::created_target_count(session);
+    println!(
+        "  tab group: {} ({} tab{} recorded)",
+        session_title::display_name(session),
+        recorded,
+        if recorded == 1 { "" } else { "s" }
+    );
 
     if inventory.sessions.is_empty() {
         println!("Session daemons: none");
@@ -2697,10 +2782,17 @@ fn main() {
     // With no daemon and nothing recorded, there is nothing to close; tabs
     // whose ownership was saved are closed by the daemon over the endpoint
     // their record names, without creating anything.
+    // `done --keep` needs the session's tabs, so after an idle exit it
+    // reconnects like any command: only then can it name the tab to keep.
+    // Without --keep, or with no tabs recorded, it only ends what is there.
+    let done_reconnects = clean.first().map(String::as_str) == Some("done")
+        && clean.iter().any(|a| a == "--keep")
+        && (connection::daemon_ready(&flags.session)
+            || connection::has_created_targets(&flags.session));
     let is_close = matches!(
         clean.first().map(String::as_str),
-        Some("close") | Some("quit") | Some("exit")
-    );
+        Some("close") | Some("quit") | Some("exit") | Some("done")
+    ) && !done_reconnects;
     // `--profile` / AGENT_BROWSER_PROFILE doubles as a profile selector when it
     // names a Chrome profile (display name, directory, email, id). A path or
     // an unknown name keeps its launch-mode meaning.
@@ -3013,6 +3105,17 @@ fn main() {
         return;
     }
 
+    // `tabs cleanup`: close ended sessions' tab groups now. Passive like
+    // `tab list --all`: no daemon is started for it.
+    if matches!(
+        clean.first().map(|s| s.as_str()),
+        Some("tab") | Some("tabs")
+    ) && clean.get(1).map(|s| s.as_str()) == Some("cleanup")
+    {
+        run_tabs_cleanup(&flags, &clean[2..]);
+        return;
+    }
+
     // One stable health command for the recovery guidance used by the bundled
     // skills. It intentionally runs before daemon bootstrap so a wedged daemon
     // cannot make the health check hang (issue #145).
@@ -3317,7 +3420,18 @@ fn main() {
             // connected Chrome profiles" without ever starting Chrome (#213).
             // Start it into a specific profile (respecting --browser), which
             // also sidesteps the profile picker on multi-profile installs.
-            if !connect::chrome_running() {
+            let process = connect::chrome_process();
+            let extension_connected =
+                connect::relay_url().is_some() || !connect::list_relay_profiles().is_empty();
+            if !extension_connected && process == connect::ChromeProcess::Unknown {
+                eprintln!(
+                    "{} cannot tell from here whether Chrome is running (the process list is \
+                     hidden, as in a sandbox), so not starting another Chrome; if it is closed, \
+                     open it and rerun",
+                    color::warning_indicator()
+                );
+            }
+            if connect::should_launch_chrome(extension_connected, process) {
                 match connect::launch_chrome_for_relay(flags.browser.as_deref()) {
                     Some(what) => eprintln!(
                         "{} Chrome is not running — starting {what} so the extension relay can come up…",
@@ -3388,6 +3502,16 @@ fn main() {
         no_auto_dialog: flags.no_auto_dialog,
     };
 
+    // On the extension relay a session's tabs go in its project's group, and
+    // it takes over the tabs of the project's sessions that have ended,
+    // instead of opening yet another group (see group_lifecycle). Only the
+    // extension relay has tab groups.
+    let relay_bound = flags.cdp.is_none() && !flags.force_launch && flags.provider.is_none();
+    let mut joined = None;
+    if relay_bound && !connection::daemon_ready(&flags.session) {
+        joined = group_lifecycle::join_project_group(&flags.session);
+    }
+
     let daemon_result =
         match connection::ensure_daemon_with_lifecycle_lock(&flags.session, &daemon_opts) {
             Ok(result) => result,
@@ -3401,6 +3525,33 @@ fn main() {
             }
         };
     drop(_session_lifecycle_lock);
+    if !daemon_result.already_running && relay_bound {
+        if let Some(joined) = joined.as_ref().filter(|j| !j.took_over.is_empty()) {
+            if !flags.json {
+                eprintln!(
+                    "{}",
+                    color::dim(&format!(
+                        "continuing in this project's tab group ✦ {}, with the tabs of ended \
+                         session(s) {}",
+                        joined.title,
+                        joined.took_over.join(", ")
+                    ))
+                );
+            }
+        }
+        if let Some(to) = group_lifecycle::take_moved_note(&flags.session) {
+            if !flags.json {
+                eprintln!(
+                    "{}",
+                    color::dim(&format!(
+                        "this session's earlier tabs were taken over by session {to}, a later \
+                         task in the same project"
+                    ))
+                );
+            }
+        }
+        group_lifecycle::maybe_spawn_auto_sweep(&flags.session);
+    }
     if let Some((row, why)) = profile_record.take() {
         profiles::record_session_profile(&flags.session, &row, &why);
         profile_note = profiles::session_profile(&flags.session);

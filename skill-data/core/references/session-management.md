@@ -1,16 +1,70 @@
 # Session Management
 
-On the extension relay, sessions share one background agent window per Chrome
-profile. Each session has its own tab group and references; cookies and login
-state belong to the profile and are shared. Your own window stays separate.
-Full screen does not change agent ownership. A lost window record is recovered
-from verified agent tabs before creating a replacement; user tabs and unknown
-blank pages are never moved or deleted to reclaim a window. A window the user
-mixed their own tabs into becomes theirs: its agent tabs keep working and new
-agent tabs go to one fresh agent window that later sessions share. Failed placeholder
-cleanup retains its identity and refuses success so the next call can retry.
+On the extension relay, agent tabs open in the background of the user's own
+window, in the tab group of the project the session works on, titled
+`✦ <project>`. The project is the side panel conversation's project folder,
+else the git repository around the working directory, else the working
+directory, so two terminals in one repository share one group. A title
+another project already uses gets its parent folder added, once. With no
+project (no working directory) a session has a group of its own. Each session
+has its own references and drives only its own tabs: a tab another running
+session opened is that session's lease, never adopted. Cookies and login
+state belong to the profile and are shared.
+
+`open <url>` does not open a page twice: when another of the session's tabs
+already shows it (same url without its `#fragment` and tracking parameters
+such as `utm_*`, `fbclid`, `gclid`), it switches to that tab in the
+background without reloading it (`reusedTab: true`). `open --new-tab <url>` opens
+another tab anyway; `tab new <url>` always does. Different
+projects never share tabs. The user's own tabs are never moved or grouped.
+`AGENT_BROWSER_DEDICATED_WINDOW=1` puts them in a separate agent window instead.
 `tab list --all` uses a passive connection even in a fresh session: no daemon,
 window, tab or page attachment is created.
+
+## Ending a task: `done`
+
+```bash
+chrome-use done                      # close every tab this session opened
+chrome-use done --keep t3            # leave t3 for the user, close the rest
+chrome-use done --keep --keep docs   # the active tab and the tab labelled docs
+```
+
+Run it at the end of every task that opened tabs, and decide yourself what to
+keep; the user should never be asked. Keep only what they need to see or
+continue: a page they asked to open, a result to act on, a logged-in page left
+for them. A kept tab leaves the group and becomes a plain tab (extension
+0.5.77+ also detaches from it); the rest close and are read back like `close`.
+Tabs you adopted or the user lent stay open either way, and a `--keep` that
+names one (or a blank tab) is not kept; the reply's `notes` say so. `done` is
+safe to repeat: with nothing open it closes nothing and succeeds. After the
+daemon's idle exit, `done --keep` reconnects first so it can find the tab. The MCP form is
+`chrome_use_tabs` with `action: "done"` and `keep: ["t3"]`.
+
+What happens without it:
+
+- The daemon exits after 10 idle minutes but leaves its tabs open, so the next
+  command of the same session picks them up again.
+- Once a session's daemon is gone and it has been idle for 30 minutes
+  (`AGENT_BROWSER_GROUP_CLEANUP_MS`, `0` turns this off), the next new session
+  on the machine closes its tabs in the background. A tab the user is looking
+  at, or has switched to (extension 0.5.77+), is left for them, ungrouped and
+  recorded as kept.
+- A tab the session opened and never loaded a page into (still `about:blank`
+  or the new tab page) closes when the session idles out, and the cleanup
+  closes such tabs of an ended session at once. It never counts as the user's.
+- When the last session working in a project's group idles out, the group is
+  collapsed in the user's window at once; its tabs wait there for the
+  project's next session, or for the 30-minute cleanup.
+- A new session of the project takes over the tabs of the project's sessions
+  whose daemon is gone (their lease has ended) and reuses them, the same page
+  included, instead of opening more. Running sessions keep theirs.
+- `done` in one of two running sessions of a project closes only the tabs
+  that session opened or took over.
+- A session from an older build, whose tabs are in a group named after the
+  session, moves them under its project's group the first time it runs again.
+- `chrome-use tabs cleanup` does all of that now for every ended session and
+  also clears groups left by older builds (`⬉`, `🤖` or a bare session id in
+  the title). Only tabs an agent created are ever closed.
 
 With ab-connect 0.5.50+, native-host disconnect schedules a first connection retry after 1 second.
 Repeated failures back off through 2, 4, 8, 16 and at most 30 seconds; a

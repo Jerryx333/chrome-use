@@ -36,7 +36,8 @@ the same browser's existing targets, so a second session's first `open` can
 navigate a sibling's tab. For concurrent agents on one real Chrome, use the
 extension (each with a distinct `--session`), not raw `--cdp`.
 
-Each session owns its own tab group and assigns its own `t<N>` indices (the same
+Each session drives only its own tabs (sessions of one project share the
+project's tab group) and assigns its own `t<N>` indices (the same
 physical tab is `t8` in one session, `t1` in another), so `t<N>` is **not** a
 stable cross-session handle. To reach a *specific* tab from another session — e.g.
 a tab that was filled in a session whose handle later died — use the **stable CDP

@@ -53,10 +53,15 @@ pub fn sanitize_title(raw: &str) -> Option<String> {
 /// takes the group's colour instead of adding its own.
 pub const GROUP_MARK: &str = "✦";
 
-/// The label to put on this session's tab group: the chosen title when there is
-/// one, otherwise the session id, starting with [`GROUP_MARK`].
+/// The label to put on this session's tab group, starting with
+/// [`GROUP_MARK`]: its project group's title when it has one (every session
+/// of the project shares that group), otherwise the chosen title, otherwise
+/// the session id.
 pub fn display_name(session: &str) -> String {
-    with_mark(&title_of(session).unwrap_or_else(|| session.to_string()))
+    let label = crate::group_lifecycle::group_title(session)
+        .or_else(|| title_of(session))
+        .unwrap_or_else(|| session.to_string());
+    with_mark(&label)
 }
 
 /// A title the user already started with the mark keeps a single one. The
@@ -84,6 +89,8 @@ pub fn set_title(session: &str, raw: &str) -> Result<String, String> {
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     std::fs::write(&path, &title).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    // In a project group the name is the group's, shared by its sessions.
+    crate::group_lifecycle::set_group_title(session, &title)?;
     Ok(title)
 }
 
