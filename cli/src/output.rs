@@ -2652,6 +2652,44 @@ fn print_warning(resp: &Response) {
 /// Print command-specific help. Returns true if help was printed, false if command unknown.
 pub fn print_command_help(command: &str) -> bool {
     let help = match command {
+        "read" => {
+            r##"
+chrome-use read - Read a URL or the active page as text
+
+Usage: chrome-use read [url] [options]
+
+With a URL, prefers Markdown and falls back to extracted page text.
+Without a URL, reads the rendered active tab. Check source, finalUrl,
+contentType and truncated in JSON before treating the result as complete.
+
+Options:
+  --filter <text>     Literal, ASCII-case-insensitive filter, not a regex.
+                      Page reads prefer matching headings and their descendants,
+                      then matching Markdown sections. In outline mode it filters
+                      headings; in llms index mode it filters links.
+  --outline           Return the page's heading outline
+  --llms index|full   Read the nearest llms.txt or llms-full.txt
+  --raw               Return the original body instead of processed text
+  --require-md        Require Content-Type: text/markdown; fail otherwise
+  --links             Append absolute links (default maximum: 100)
+  --max-links <n>     Set the link maximum (1-1000); implies --links
+  --timeout <ms>      Set the HTTP request timeout in milliseconds
+  --headers <json>    Add HTTP headers; an explicit Accept disables negotiation
+  --json              Return content and source metadata as JSON
+  --session <name>    Use your task's isolated session
+
+This filter differs from snapshot --filter, which accepts a regex.
+A no-match message is not proof that the page lacks a fact: inspect the
+outline, use a relevant literal heading, or read the surrounding section.
+
+Examples:
+  chrome-use read https://example.com/docs
+  chrome-use read https://example.com/docs --filter "Other configuration options"
+  chrome-use read https://example.com/docs --outline
+  chrome-use read https://example.com/docs --llms index
+  chrome-use read --links
+"##
+        }
         // === Navigation ===
         "open" | "goto" | "navigate" => {
             r##"

@@ -348,7 +348,7 @@ fn core_tools() -> Vec<Value> {
                 ("requireMd", json!({ "type": "boolean", "description": "Fail instead of falling back to raw text if markdown conversion is unavailable." })),
                 ("llms", json!({ "type": "string", "enum": ["index", "full"], "description": "Read from the site's llms.txt instead of the page itself." })),
                 ("outline", json!({ "type": "boolean", "description": "Return only the heading outline instead of full content." })),
-                ("filter", json!({ "type": "string", "description": "Keep only lines matching this text/regex filter." })),
+                ("filter", json!({ "type": "string", "description": "Literal, ASCII-case-insensitive filter for page sections, llms links/sections or outline headings. Not a regex; page reads prefer matching headings and their descendants." })),
                 ("links", json!({ "type": "boolean", "description": "Append the page's links as absolute URLs (a `## Links` section; at most 100 unless maxLinks)." })),
                 ("maxLinks", json!({ "type": "integer", "minimum": 1, "maximum": 1000, "description": "Cap for links (1-1000); implies links." })),
                 ("timeoutMs", json!({ "type": "integer", "description": "Read-specific timeout in ms (distinct from the top-level timeoutMs, which bounds the whole child process)." })),

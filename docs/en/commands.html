@@ -70,6 +70,7 @@
 
       <!-- ============================================================ -->
       <p>Valid incremental snapshots return JSON <code>refs</code> only for nodes in the delta. A no-change delta has empty <code>refs</code>; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.</p>
+      <p><code>read --filter</code> uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use <code>read --outline</code> to find a heading. <code>snapshot --filter</code> separately accepts a regex. <code>read --help</code> lists the reading options.</p>
       <h2>Navigation</h2>
       <p>
         Open, navigate, go back/forward, and close the browser. Without a URL, <code>open</code> just launches

@@ -197,3 +197,5 @@ image: for a known ref, `box @ref` returns CSS-pixel bounds and `centerX/centerY
 Prefer semantic refs for ordinary controls; see the canvas guidance above
 when the target has no semantic representation. Screenshots serve as requested
 assets and visual evidence; they are not a default extra check after a click.
+
+`read --filter` uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use `read --outline` to find a heading. `snapshot --filter` separately accepts a regex. `read --help` lists the reading options.

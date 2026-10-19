@@ -1122,3 +1122,5 @@ AGENT_BROWSER_ADAPTIVE_REF="0"        # Disable adaptive @ref relocation (on by 
 > domain disabled (a known bot signal) for the common automation path.
 
 Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.
+
+`read --filter` uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use `read --outline` to find a heading. `snapshot --filter` separately accepts a regex. `read --help` lists the reading options.
