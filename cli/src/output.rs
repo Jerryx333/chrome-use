@@ -6224,6 +6224,8 @@ Navigation:
   Re-read the page before retrying a failed frame action.
   action_outcome_unknown means an interrupted action may have executed; it was
   not replayed (JSON retryable: false). Observe the page before acting again.
+  element_occluded (JSON retryable: false) means a hit-test guard refused the
+  click. No click was dispatched. Snapshot and resolve the blocker before retrying.
   kept_ref_unverified (JSON retryable: false, whatever cause it quotes) means a
   ref kept after a failed post-action capture could not be confirmed live:
   nothing was acted on and nothing is retried. Run snapshot -i.

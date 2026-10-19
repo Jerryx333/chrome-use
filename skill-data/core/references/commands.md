@@ -325,6 +325,8 @@ curl -fsS -X POST "$ORIGIN/api/v1/command" \
 Failure envelopes expose `success`, `error`, `code`, and `retryable` through
 CLI JSON, MCP structured content, and HTTP.
 
+A click refused by the hit-test guard reports `element_occluded` with `retryable: false`, even when the covering element says "timeout" or "connection". No click was dispatched. Read a fresh snapshot and resolve the blocker before trying again; repeating the same command does not resolve an overlay.
+
 ## Account identity (whoami / --as) — never act as the wrong account
 
 Needs the [cookie-use](https://github.com/leeguooooo/cookie-use) vault (the
