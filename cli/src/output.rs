@@ -2841,7 +2841,8 @@ focusRestoredAfterMs, or false with focusNote saying why). Windows and Linux:
 not done. AGENT_BROWSER_RESTORE_FOCUS=0 turns it off (read when the daemon
 starts).
 
-AGENT_BROWSER_BACKGROUND_LINKS=cross-site (opt-in; also `1`/`on`): in a tab
+AGENT_BROWSER_BACKGROUND_LINKS=cross-site (also `1`/`on`; the default while
+agent tabs share your window, off with --window dedicated): in a tab
 the session created, a plain left click on a CROSS-SITE target=_blank link
 (another registrable domain by the Public Suffix List on both ends; http/https;
 no rel=opener, download or ping) is taken over after the page's own click

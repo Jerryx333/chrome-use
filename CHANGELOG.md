@@ -2,10 +2,14 @@
 
 ## 1.5.237
 
+Works with extension ab-connect 0.5.72.
+
 <!-- release:start -->
 ### Bug Fixes
 
-- **A link the agent opens in a new tab no longer takes over the tab you are looking at.** Since 1.5.236 agent tabs share your window, and Chrome opens a page's `target=_blank` link or pop-up as the window's front tab, so an agent click switched you from your page to the agent's pop-up. After such a click chrome-use now brings back the tab that was in front; the pop-up stays open behind it and the agent keeps working in it. The click reports `frontTabRestored`. `AGENT_BROWSER_RESTORE_FOCUS=0` turns it off, together with putting your app back in front.
+- **A link the agent opens in a new tab no longer takes over the tab you are looking at.** Since 1.5.236 agent tabs share your window, and Chrome opens a page's `target=_blank` link or pop-up as the window's front tab, so an agent click switched you from your page to the agent's pop-up.
+  - Cross-site `target=_blank` links are now opened by chrome-use in a background tab while agent tabs share your window, so Chrome neither switches your tab nor comes to the front (`AGENT_BROWSER_BACKGROUND_LINKS`, now `cross-site` by default in that mode; `off` turns it off). Cost, as before: a link that redirects back to the page's site arrives without its `SameSite=Strict` cookies.
+  - ab-connect 0.5.72 brings back the tab that was in front for every other tab an agent tab opens (same-site links, `window.open`): the pop-up stays open behind it and the agent keeps working in it. Until Chrome updates the extension, those still switch your tab.
 
 ### Changes
 
@@ -15,18 +19,6 @@
 
 - @leeguooooo
 <!-- release:end -->
-
-## 1.5.237
-
-Works with extension ab-connect 0.5.72 (no CLI change; this release ships the extension fix).
-
-### Bug Fixes
-
-- **The /resume confirmation no longer overlaps the panel.** Choosing a session that is still running in a terminal showed "continue here anyway / cancel" below the picker's box, on top of the status line and the lent-tab bar. The picker's list now shrinks and scrolls so the question stays inside it.
-
-### Contributors
-
-- @leeguooooo
 
 ## 1.5.236
 
