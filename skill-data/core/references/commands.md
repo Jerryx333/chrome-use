@@ -1120,3 +1120,5 @@ AGENT_BROWSER_ADAPTIVE_REF="0"        # Disable adaptive @ref relocation (on by 
 > fork. Both commands return `{"messages":[]}` / `{"errors":[]}` plus a `hint` until you
 > launch the session with `AGENT_BROWSER_CAPTURE_CONSOLE=1`. This keeps the CDP `Runtime`
 > domain disabled (a known bot signal) for the common automation path.
+
+Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.

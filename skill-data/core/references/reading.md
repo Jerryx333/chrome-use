@@ -15,6 +15,8 @@ chrome-use snapshot -i --json          # machine-readable output
 chrome-use snapshot -i --reveal-values # print card / password / code values
 ```
 
+Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.
+
 For scoped, depth-limited, regex-filtered or budgeted snapshots, JSON `refs` contains only references rendered in the returned excerpt. The session keeps its complete live ref map; narrowing output does not invalidate a previously captured ref. Sparse-page detection still uses the complete map.
 
 ## Keep model input focused

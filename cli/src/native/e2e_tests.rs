@@ -5776,7 +5776,7 @@ async fn e2e_snapshot_incremental_filter_baselines_and_live_refs() {
     let filler = (0..30)
         .map(|n| format!("<button>Control {n}</button>"))
         .collect::<String>();
-    let html = format!("data:text/html,<button>Alpha</button><button onclick=\"this.textContent='Beta changed';document.body.dataset.receipt='clicked'\">Beta</button>{filler}");
+    let html = format!("data:text/html,<button onclick=\"document.body.dataset.alpha='clicked'\">Alpha</button><button onclick=\"this.textContent='Beta changed';document.body.dataset.receipt='clicked'\">Beta</button>{filler}");
     let navigate = run(
         &mut state,
         json!({"id":"nav","action":"navigate","url":html}),
@@ -5792,6 +5792,21 @@ async fn e2e_snapshot_incremental_filter_baselines_and_live_refs() {
         json!({"id":"same","action":"snapshot","interactive":true,"diff":true}),
     )
     .await;
+    let live_refs_after_unchanged = state.ref_map.entries_sorted().len();
+    let alpha_ref = first["data"]["refs"]
+        .as_object()
+        .and_then(|refs| {
+            refs.iter()
+                .find(|(_, entry)| entry["name"] == "Alpha")
+                .map(|(id, _)| format!("@{id}"))
+        })
+        .unwrap_or_else(|| "@unavailable".to_string());
+    let click_after_unchanged = run(
+        &mut state,
+        json!({"id":"prior-ref","action":"click","selector":alpha_ref}),
+    )
+    .await;
+    let prior_ref_receipt = run(&mut state, json!({"id":"prior-ref-receipt","action":"evaluate","script":"document.body.dataset.alpha"})).await;
     let alpha = run(
         &mut state,
         json!({"id":"alpha","action":"snapshot","interactive":true,"filter":"Alpha","diff":true}),
@@ -5829,8 +5844,19 @@ async fn e2e_snapshot_incremental_filter_baselines_and_live_refs() {
     let close = run(&mut state, json!({"id":"close","action":"close"})).await;
     // Close our isolated browser before assertions, including failed assertions.
     for response in [
-        &launch, &navigate, &first, &unchanged, &alpha, &beta, &same_beta, &click, &receipt,
-        &changed, &close,
+        &launch,
+        &navigate,
+        &first,
+        &unchanged,
+        &click_after_unchanged,
+        &prior_ref_receipt,
+        &alpha,
+        &beta,
+        &same_beta,
+        &click,
+        &receipt,
+        &changed,
+        &close,
     ] {
         assert_success(response);
     }
@@ -5839,6 +5865,13 @@ async fn e2e_snapshot_incremental_filter_baselines_and_live_refs() {
         .unwrap()
         .contains("no previous snapshot"));
     assert_eq!(unchanged["data"]["snapshot"], "");
+    assert!(unchanged["data"]["refs"].as_object().unwrap().is_empty());
+    assert!(unchanged["data"].get("screenshot").is_none());
+    assert_eq!(
+        live_refs_after_unchanged,
+        first["data"]["refs"].as_object().unwrap().len()
+    );
+    assert_eq!(prior_ref_receipt["data"]["result"], "clicked");
     assert!(unchanged["data"]["diffNote"]
         .as_str()
         .unwrap()
@@ -5853,6 +5886,13 @@ async fn e2e_snapshot_incremental_filter_baselines_and_live_refs() {
     assert_eq!(same_beta["data"]["snapshot"], "");
     assert_eq!(receipt["data"]["result"], "clicked");
     assert_eq!(changed["data"]["diffMode"], true);
+    let displayed_refs =
+        super::snapshot::rendered_ref_ids(changed["data"]["snapshot"].as_str().unwrap());
+    assert!(changed["data"]["refs"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|id| displayed_refs.contains(id)));
     assert!(changed["data"]["snapshot"]
         .as_str()
         .unwrap()

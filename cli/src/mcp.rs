@@ -362,7 +362,7 @@ fn core_tools() -> Vec<Value> {
             "inputSchema": build_schema(obj(&[
                 ("interactive", json!({ "type": "boolean", "description": "Only interactive elements (-i)." })),
                 ("compact", json!({ "type": "boolean", "description": "Remove empty structural elements (-c)." })),
-                ("diff", json!({ "type": "boolean", "description": "Only changes since this session last read the same page with the same options (--diff). Without a valid baseline returns the full tree and a diffNote. Omit or false for a full snapshot." })),
+                ("diff", json!({ "type": "boolean", "description": "Only changes since this session last read the same page with the same options (--diff). Without a valid baseline returns the full tree and a diffNote. Omit or false for a full snapshot. Valid deltas include only excerpt refs; unchanged deltas have empty refs while the live session map is kept." })),
                 ("cursor", json!({ "type": "boolean", "description": "Include the current cursor position marker (-C)." })),
                 ("urls", json!({ "type": "boolean", "description": "Include link/image URLs (-u)." })),
                 ("depth", json!({ "type": "integer", "description": "Limit tree depth (-d)." })),

@@ -3967,7 +3967,7 @@ Options:
                        mid-node). Reports what was omitted and a --from cursor.
                        For long feeds/comment threads whose bulk is prose.
   --from <n>           Resume a budgeted snapshot at node n.
-  Scoped/depth-limited/filtered/budgeted JSON refs contain only excerpt refs;
+  Scoped/depth-limited/filtered/budgeted/incremental JSON refs contain only excerpt refs;
   the session's complete live ref map is preserved.
   -f, --filter <regex> Keep only lines matching <regex> (case-insensitive) + their
                        ancestor context; refs preserved. For desktop-shell apps

@@ -293,7 +293,7 @@ chrome-use click @e3 --observe         # act, and watch for the page's reaction
 chrome-use snapshot -i --diff          # only what changed since the last snapshot
 ```
 
-For scoped, depth-limited, regex-filtered or budgeted snapshots, JSON `refs` contains only references rendered in the returned excerpt. The session keeps its complete live ref map; narrowing output does not invalidate a previously captured ref. Sparse-page detection still uses the complete map.
+For scoped, depth-limited, regex-filtered or budgeted snapshots, JSON `refs` contains only references rendered in the returned excerpt. The session keeps its complete live ref map; narrowing output does not invalidate a previously captured ref. Sparse-page detection still uses the complete map. Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.
 
 Interactive snapshots add `context` only to repeated controls with the same role and name when named parent lines do not already distinguish them. Context omits the control’s own name and punctuation, stays within about 100 characters (60 for unnamed controls), and must differ between controls. Unique controls have no context; use a scoped or full snapshot for missing details such as a unique product’s price.
 

@@ -61,6 +61,7 @@
       </p>
 
       <!-- ============ SECTION ======= -->
+      <p>Valid incremental snapshots return JSON <code>refs</code> only for nodes in the delta. A no-change delta has empty <code>refs</code>; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.</p>
       <h2>snapshot: a structured view of the page</h2>
       <p>
         <code>snapshot</code> generates the page structure from the accessibility tree. By default it prints the full tree (fairly verbose);
