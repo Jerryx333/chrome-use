@@ -3,6 +3,21 @@
 ## 1.5.237
 
 <!-- release:start -->
+### Bug Fixes
+
+- **A link the agent opens in a new tab no longer takes over the tab you are looking at.** Since 1.5.236 agent tabs share your window, and Chrome opens a page's `target=_blank` link or pop-up as the window's front tab, so an agent click switched you from your page to the agent's pop-up. After such a click chrome-use now brings back the tab that was in front; the pop-up stays open behind it and the agent keeps working in it. The click reports `frontTabRestored`. `AGENT_BROWSER_RESTORE_FOCUS=0` turns it off, together with putting your app back in front.
+
+### Changes
+
+- **Agent tab groups are marked `✦`** instead of `⬉`: one plain character that takes the group's colour. A session running during the upgrade opens a new `✦` group next to its `⬉` one, once.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.237
+
 Works with extension ab-connect 0.5.72 (no CLI change; this release ships the extension fix).
 
 ### Bug Fixes
@@ -12,7 +27,6 @@ Works with extension ab-connect 0.5.72 (no CLI change; this release ships the ex
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.236
 
