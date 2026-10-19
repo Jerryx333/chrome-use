@@ -5763,6 +5763,110 @@ async fn e2e_domain_filter() {
 
 #[tokio::test]
 #[ignore]
+async fn e2e_snapshot_incremental_filter_baselines_and_live_refs() {
+    async fn run(state: &mut DaemonState, command: Value) -> Value {
+        Box::pin(execute_command(&command, state)).await
+    }
+    let mut state = DaemonState::new();
+    let launch = run(
+        &mut state,
+        json!({"id":"launch","action":"launch","headless":true}),
+    )
+    .await;
+    let filler = (0..30)
+        .map(|n| format!("<button>Control {n}</button>"))
+        .collect::<String>();
+    let html = format!("data:text/html,<button>Alpha</button><button onclick=\"this.textContent='Beta changed';document.body.dataset.receipt='clicked'\">Beta</button>{filler}");
+    let navigate = run(
+        &mut state,
+        json!({"id":"nav","action":"navigate","url":html}),
+    )
+    .await;
+    let first = run(
+        &mut state,
+        json!({"id":"first","action":"snapshot","interactive":true,"diff":true}),
+    )
+    .await;
+    let unchanged = run(
+        &mut state,
+        json!({"id":"same","action":"snapshot","interactive":true,"diff":true}),
+    )
+    .await;
+    let alpha = run(
+        &mut state,
+        json!({"id":"alpha","action":"snapshot","interactive":true,"filter":"Alpha","diff":true}),
+    )
+    .await;
+    let beta = run(
+        &mut state,
+        json!({"id":"beta","action":"snapshot","interactive":true,"filter":"Beta","diff":true}),
+    )
+    .await;
+    let beta_ref = beta["data"]["refs"]
+        .as_object()
+        .and_then(|refs| {
+            refs.iter()
+                .find(|(_, entry)| entry["name"] == "Beta")
+                .map(|(id, _)| format!("@{id}"))
+        })
+        .unwrap_or_else(|| "@unavailable".to_string());
+    let same_beta = run(&mut state, json!({"id":"same-beta","action":"snapshot","interactive":true,"filter":"Beta","diff":true})).await;
+    let click = run(
+        &mut state,
+        json!({"id":"click","action":"click","selector":beta_ref}),
+    )
+    .await;
+    let receipt = run(
+        &mut state,
+        json!({"id":"receipt","action":"evaluate","script":"document.body.dataset.receipt"}),
+    )
+    .await;
+    let changed = run(
+        &mut state,
+        json!({"id":"changed","action":"snapshot","interactive":true,"filter":"Beta","diff":true}),
+    )
+    .await;
+    let close = run(&mut state, json!({"id":"close","action":"close"})).await;
+    // Close our isolated browser before assertions, including failed assertions.
+    for response in [
+        &launch, &navigate, &first, &unchanged, &alpha, &beta, &same_beta, &click, &receipt,
+        &changed, &close,
+    ] {
+        assert_success(response);
+    }
+    assert!(first["data"]["diffNote"]
+        .as_str()
+        .unwrap()
+        .contains("no previous snapshot"));
+    assert_eq!(unchanged["data"]["snapshot"], "");
+    assert!(unchanged["data"]["diffNote"]
+        .as_str()
+        .unwrap()
+        .contains("no change"));
+    for response in [&alpha, &beta] {
+        assert!(response["data"]["diffNote"]
+            .as_str()
+            .unwrap()
+            .contains("different snapshot options"));
+        assert_eq!(response["data"]["diffMode"], false);
+    }
+    assert_eq!(same_beta["data"]["snapshot"], "");
+    assert_eq!(receipt["data"]["result"], "clicked");
+    assert_eq!(changed["data"]["diffMode"], true);
+    assert!(changed["data"]["snapshot"]
+        .as_str()
+        .unwrap()
+        .contains("Beta changed"));
+    assert!(unchanged.to_string().len() < first.to_string().len());
+    println!(
+        "incremental_fixture_bytes full={} unchanged={}",
+        first.to_string().len(),
+        unchanged.to_string().len()
+    );
+}
+
+#[tokio::test]
+#[ignore]
 async fn e2e_diff_snapshot() {
     let mut state = DaemonState::new();
 

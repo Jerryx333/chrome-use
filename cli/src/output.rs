@@ -3961,6 +3961,8 @@ Options:
   --diff               Only what changed since this session's last snapshot of
                        the same page (same options). Falls back to the full tree
                        — and says why — when there is no valid baseline.
+  MCP chrome_use_snapshot accepts diff: true for the same incremental read;
+  changing the filter also requires a new full baseline.
   --max-bytes <n>      Cap the tree at n bytes, cut between nodes (never
                        mid-node). Reports what was omitted and a --from cursor.
                        For long feeds/comment threads whose bulk is prose.

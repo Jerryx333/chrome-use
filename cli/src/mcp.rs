@@ -362,6 +362,7 @@ fn core_tools() -> Vec<Value> {
             "inputSchema": build_schema(obj(&[
                 ("interactive", json!({ "type": "boolean", "description": "Only interactive elements (-i)." })),
                 ("compact", json!({ "type": "boolean", "description": "Remove empty structural elements (-c)." })),
+                ("diff", json!({ "type": "boolean", "description": "Only changes since this session last read the same page with the same options (--diff). Without a valid baseline returns the full tree and a diffNote. Omit or false for a full snapshot." })),
                 ("cursor", json!({ "type": "boolean", "description": "Include the current cursor position marker (-C)." })),
                 ("urls", json!({ "type": "boolean", "description": "Include link/image URLs (-u)." })),
                 ("depth", json!({ "type": "integer", "description": "Limit tree depth (-d)." })),
@@ -933,7 +934,14 @@ fn call_read(arguments: &Value) -> Result<Value, ProtocolError> {
 }
 
 fn call_snapshot(arguments: &Value) -> Result<Value, ProtocolError> {
+    run_tool(arguments, snapshot_args(arguments)?)
+}
+
+fn snapshot_args(arguments: &Value) -> Result<Vec<String>, ProtocolError> {
     let mut args = vec!["snapshot".to_string()];
+    if optional_bool(arguments, "diff")?.unwrap_or(false) {
+        args.push("--diff".to_string());
+    }
     if optional_bool(arguments, "interactive")?.unwrap_or(false) {
         args.push("-i".to_string());
     }
@@ -965,7 +973,7 @@ fn call_snapshot(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push("--force".to_string());
         }
     }
-    run_tool(arguments, args)
+    Ok(args)
 }
 
 fn call_click(arguments: &Value) -> Result<Value, ProtocolError> {
@@ -2300,6 +2308,30 @@ mod tests {
                 assert!(props.get("force").is_some(), "{}", tool["name"]);
             }
         }
+    }
+
+    #[test]
+    fn snapshot_diff_reaches_the_real_cli_parser_and_is_optional() {
+        let _guard = crate::test_utils::EnvGuard::new(&[]);
+        let args = snapshot_args(&json!({"diff":true,"compact":true,"filter":"Save|Done"}))
+            .ok()
+            .expect("valid snapshot");
+        let flags = crate::flags::parse_flags(&args);
+        let command = crate::commands::parse_command(&args, &flags).unwrap();
+        assert_eq!(command["action"], "snapshot");
+        assert_eq!(command["diff"], true);
+        assert_eq!(command["filter"], "Save|Done");
+        for arguments in [json!({}), json!({"diff":false})] {
+            let args = snapshot_args(&arguments).ok().expect("valid snapshot");
+            assert!(!args.iter().any(|arg| arg == "--diff"));
+        }
+        assert!(snapshot_args(&json!({"diff":"true"})).is_err());
+        let tools = tools_for(Profile::Core);
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == TOOL_SNAPSHOT)
+            .unwrap();
+        assert_eq!(tool["inputSchema"]["properties"]["diff"]["type"], "boolean");
     }
 
     #[test]
