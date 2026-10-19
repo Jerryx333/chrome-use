@@ -2807,34 +2807,12 @@ fn relay_popup_attach_verdict(resp: &Value, tab_id: i64) -> RelayPopupVerdict {
 #[derive(Debug, Clone, Default)]
 pub struct RelayTabBaseline {
     tab_ids: HashSet<i64>,
-    /// The tab in front of each window (window id -> tab id).
-    active_by_window: HashMap<i64, i64>,
 }
 
 impl RelayTabBaseline {
     pub fn tab_ids(&self) -> &HashSet<i64> {
         &self.tab_ids
     }
-}
-
-/// Window id -> the tab in front of it, from a `chrome.tabs.query` result.
-fn active_tab_by_window(tabs: &[Value]) -> HashMap<i64, i64> {
-    tabs.iter()
-        .filter(|t| t.get("active").and_then(Value::as_bool) == Some(true))
-        .filter_map(|t| Some((t.get("windowId")?.as_i64()?, t.get("id")?.as_i64()?)))
-        .collect()
-}
-
-/// The tabs to bring back to the front: for each window whose front tab is
-/// now one that did not exist before the click, the tab in front of it then.
-fn tabs_to_bring_back(before: &RelayTabBaseline, now: &HashMap<i64, i64>) -> Vec<i64> {
-    let mut back: Vec<i64> = now
-        .iter()
-        .filter(|(_, front)| !before.tab_ids.contains(front))
-        .filter_map(|(window, _)| before.active_by_window.get(window).copied())
-        .collect();
-    back.sort_unstable();
-    back
 }
 
 /// Budget for finding a relay pop-up in chrome.tabs and waiting for it to
@@ -7468,48 +7446,12 @@ impl BrowserManager {
             return None;
         }
         let tabs = self.chrome_call("tabs", "query", json!([{}])).await.ok()?;
-        let tabs = tabs.as_array()?;
         let tab_ids = tabs
+            .as_array()?
             .iter()
             .filter_map(|t| t.get("id").and_then(Value::as_i64))
             .collect();
-        Some(RelayTabBaseline {
-            tab_ids,
-            active_by_window: active_tab_by_window(tabs),
-        })
-    }
-
-    /// Put back the tab that was in front of a window before a click, where
-    /// a tab the click opened took its place.
-    ///
-    /// Chrome opens a page's `target=_blank` link or pop-up as the foreground
-    /// tab of the opener's window, and no extension or CDP setting stops it.
-    /// With agent tabs in the user's window that switched the page the user
-    /// was reading to the agent's pop-up. The pop-up stays open, now behind,
-    /// and the session still drives it. Returns the tabs brought back.
-    pub async fn restore_tabs_in_front(&self, before: &RelayTabBaseline) -> Vec<i64> {
-        let Ok(now) = self
-            .chrome_call("tabs", "query", json!([{ "active": true }]))
-            .await
-        else {
-            return Vec::new();
-        };
-        let now = now
-            .as_array()
-            .map(|t| active_tab_by_window(t))
-            .unwrap_or_default();
-        let mut restored = Vec::new();
-        for tab in tabs_to_bring_back(before, &now) {
-            // Fails when that tab closed meanwhile: nothing to bring back.
-            if self
-                .chrome_call("tabs", "update", json!([tab, { "active": true }]))
-                .await
-                .is_ok()
-            {
-                restored.push(tab);
-            }
-        }
-        restored
+        Some(RelayTabBaseline { tab_ids })
     }
 
     /// Chrome tab ids of the tabs this session drives over the relay, read
@@ -10988,25 +10930,6 @@ mod tests {
         assert!(!is_valid_label("2docs"));
         assert!(!is_valid_label("-docs"));
         assert!(!is_valid_label("docs!"));
-    }
-
-    /// Only a window whose front tab is new since the click gets its old
-    /// front tab back; a window the click did not touch is left alone.
-    #[test]
-    fn a_tab_a_click_put_in_front_gives_way_to_the_old_one() {
-        let before = RelayTabBaseline {
-            tab_ids: [1, 2, 3, 4].into_iter().collect(),
-            active_by_window: [(10, 1), (20, 3)].into_iter().collect(),
-        };
-        // Window 10: pop-up 5 came to the front. Window 20: unchanged.
-        let now: HashMap<i64, i64> = [(10, 5), (20, 3)].into_iter().collect();
-        assert_eq!(tabs_to_bring_back(&before, &now), vec![1]);
-        // The user switched to another existing tab: not ours to undo.
-        let now: HashMap<i64, i64> = [(10, 2), (20, 3)].into_iter().collect();
-        assert!(tabs_to_bring_back(&before, &now).is_empty());
-        // A new window (dedicated pop-up window) has no old front tab.
-        let now: HashMap<i64, i64> = [(10, 1), (30, 6)].into_iter().collect();
-        assert!(tabs_to_bring_back(&before, &now).is_empty());
     }
 
     #[test]

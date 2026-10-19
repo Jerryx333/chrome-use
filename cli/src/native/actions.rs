@@ -8752,18 +8752,6 @@ async fn finish_click_tab_check(state: &mut DaemonState, pending: DeferredClickT
     if let Some(status) = check.status {
         out["openedTabStatus"] = json!(status);
     }
-    // Chrome put a tab the click opened in front of its window: with agent
-    // tabs in the user's window, that hid the page the user was on. Put the
-    // tab that was in front back (the pop-up stays open behind it). Not keyed
-    // on the adoption above: Chrome can credit the pop-up to the user's tab.
-    if let Some(before) = pending.relay_before.as_ref() {
-        let restore = std::env::var(super::focus_restore::RESTORE_FOCUS_ENV).ok();
-        if super::focus_restore::enabled(restore.as_deref())
-            && !mgr.restore_tabs_in_front(before).await.is_empty()
-        {
-            out["frontTabRestored"] = json!(true);
-        }
-    }
     // Whether the page opened a tab (adopted or not), and whether the focus
     // watch put the user's app back in front after Chrome raised itself.
     let tab_opened = check.opened.is_some() || out.get("openedTabStatus").is_some();
