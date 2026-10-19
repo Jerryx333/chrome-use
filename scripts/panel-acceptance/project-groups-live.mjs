@@ -78,9 +78,11 @@ try {
   check(g1.length === 1 && byUrl(t1, '/b')[0]?.groupId === g1[0].id && byUrl(t1, '/c')[0]?.groupId === g1[0].id, 'their tabs share one group');
 
   // 2. B opens the page A has open: its own tab, A keeps its own.
-  ok(cu(2001, '%82', ['open', '--new', rig.site + '/e'], { cwd: sub }), 'B open --new');
-  ok(cu(2001, '%82', ['open', rig.site + '/b'], { cwd: sub }), 'B open A\'s page');
+  const bNew = ok(cu(2001, '%82', ['open', '--new', rig.site + '/e'], { cwd: sub }), 'B open --new');
+  const tNew = (await tabs()).map(t => `${t.id} ${t.groupId} ${t.url}`);
+  const bOpen = ok(cu(2001, '%82', ['open', rig.site + '/b'], { cwd: sub }), 'B open A\'s page');
   const t2 = await tabs();
+  step('debug', { t1: t1.map(t => `${t.id} ${t.groupId} ${t.url}`), bNew: bNew.data, tNew, bOpen: bOpen.data, t2: t2.map(t => `${t.id} ${t.groupId} ${t.url}`) });
   const listB = JSON.stringify(ok(cu(2001, '%82', ['tab', 'list'], { cwd: sub }), 'B tab list').data);
   const aUrl = urlOf(1001, '%81');
   step('B opened the page A has', { bTabs: byUrl(t2, '/b').length, aUrl, listB: listB.slice(0, 300) });
