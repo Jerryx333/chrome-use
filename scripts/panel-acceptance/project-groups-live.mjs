@@ -18,7 +18,7 @@
 //      under its project's group;
 //   8. with the extension relay unreachable and a process list that cannot
 //      see Chrome (a sandbox), no second Chrome is started; with one that
-//      can, it would be.
+//      can, chrome-use decides to start it (the rig has no profile to start).
 // Evidence goes to $OUT (default <work>/out).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -163,7 +163,9 @@ try {
   for (const f of relayFiles) fs.renameSync(path.join(hidden, f), path.join(socketDir, f));
   step('Chrome start guard', { relayFiles, sandboxed, visible });
   check(sandboxed.opened === '' && /cannot tell/.test(sandboxed.stderr), 'no Chrome start when the process list is hidden');
-  check(visible.opened.includes('-na'), 'control: with Chrome provably not running it would start one');
+  // The rig's HOME has no Chrome profile to start, so the control stops at
+  // "no profile could be started" — after deciding to start Chrome.
+  check(visible.opened.includes('-na') || /Chrome is not running/.test(visible.stderr), 'control: with Chrome provably not running it would start one');
   check(byUrl(await tabs(), '/a?user').length === 1, 'the user\'s tab is untouched');
 
   step('PASS', { sessions: [A.name, B.name, C.name, L.name] });
