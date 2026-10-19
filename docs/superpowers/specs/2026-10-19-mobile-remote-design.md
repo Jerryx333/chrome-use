@@ -93,12 +93,39 @@ Allowed ops (mapped 1:1 to panel operations unless noted):
 - Conversation and schedule ids must be UUIDs.
 - `subscribe {conversationId, after?}` / `unsubscribe {conversationId}` — gateway-side polling of `conversationRead` every 600 ms while the conversation is busy (starting/running/waitingInput/stopping), 1800 ms otherwise, immediately again while `more` is true. At most 16 per connection; subscribing again to the same conversation restarts it from the new `after`. Subscriptions end with the connection.
 - `pushRegister {relayToken}` / `pushUnregister {}` — stores the push relay token for this device (see Notifications) → `{registered:true}`. If the Worker has already refused that exact token, nothing is stored and the reply is `{registered:false, reason}` (`invalid` | `expired` | `unregistered`); the app should get a new token from `/v1/register`. The app should send `pushRegister` on every connection.
-- `hello {}` → `{computerName, gatewayVersion}`: the computer's display name (as in the QR `n`, current value) and the chrome-use version of the gateway. Sent inside the encrypted channel, so it is authenticated, unlike the plaintext `ready` frame.
+- `hello {}` → `{computerName, gatewayVersion, pushMutes}`: the computer's display name (as in the QR `n`, current value), the chrome-use version of the gateway, and this device's muted conversation ids. Sent inside the encrypted channel, so it is authenticated, unlike the plaintext `ready` frame.
+- `pushMute {conversationId, muted}` — per-device mute, stored in `devices.json` (at most 512 per device); the push watcher sends that device nothing for a muted conversation. Notices without a conversation (`test`) are never muted.
+- `agentInspect {agentId}` (`codex` | `claude` | `opencode` | `pi`) — the agent CLI's model list for the create screen. It runs the installed CLI's metadata probe (`--version`, then its protocol's model listing in a deleted scratch folder; OpenCode's transient ACP session is deleted) and changes no configuration. `executable` is refused (it would run any program). At most one real inspection per agent and profile every 30 s; within that window the previous result or refusal is returned again, and a request while one is running gets `rateLimited`.
 - `screenshot {conversationId}` — the conversation's browser session is `panel-<conversationId>` (the panel service's own name for it: `summary().target.session`, used by `close_browser_session` / `adopt_granted_tab`). The conversation must be in this device's profile. The gateway runs `chrome-use screenshot <tmp>.png` with `AGENT_BROWSER_BROWSER=<profile>` and `AGENT_BROWSER_SESSION=panel-<id>`, only if that session's daemon is already running (`connection::daemon_ready`): a phone never starts a daemon or opens a browser. Result `{mediaType:"image/jpeg", width, height, data:<base64>}`, at most 1080 px wide, JPEG quality 70; ≤1 per 2 s per conversation (`rateLimited`); no running session → error `screenshot`.
+
+Op results (`result` of a successful reply). Panel-forwarded results are the panel service's own objects, passed through unchanged; they all carry `schemaVersion:1`. `Conversation` is the panel summary `{id, agentId, title, created, updated, phase, control, generation, model, requestedModel, options, queued, queuePaused, directMessageId, activeMessageId, lastError, lastSequence, fullAccess, site, scheduleId, lastTurn:{messageId, outcome, ended, preview?}|null, waitingRequest, target:{mode, session}, project?, resumed?}`; `phase` is one of `idle` `starting` `running` `waitingInput` `stopping` `failed` `interrupted` `recoveryRequired`. `Schedule` is `{id, name, prompt, agentId, model, options, fullAccess, rule:{kind:"interval",minutes}|{kind:"daily"|"weekdays",time:"HH:MM"}|{kind:"cron",expression}, enabled, nextRun, skillId, activeChat, lastChat, lastResult, lastRun, finishedAt}` (times are Unix ms).
+
+| Op | `result` |
+|---|---|
+| `hello` | `{computerName, gatewayVersion, pushMutes:[conversationId]}` |
+| `discover` | `{schemaVersion, agents:[{id, name, executable, configDirectory, configFiles, directoryEvidence, authentication, runtime, warnings}]}` |
+| `agentInspect` | `{schemaVersion, inspection:{agentId, executable, versionReported, source, observedAt, models:[{id, label, efforts, isDefault, supportsFastMode}], complete, account:{status}, modelAccessVerified, processExitConfirmed}}` (model fields vary slightly by agent; `id` and `label` are always there) |
+| `conversationList` | `{schemaVersion, conversations:[Conversation]}` (most recently updated first) |
+| `conversationCreate` | `{schemaVersion, conversation}` |
+| `conversationSend`, `conversationSendDirect` | `{schemaVersion, conversation, message:{id, accepted, replayed}}`; `accepted:false` means this message id was already accepted (a retry), not a refusal |
+| `conversationStop`, `conversationSetOptions` | `{schemaVersion, conversation}` |
+| `conversationRespond` | `{schemaVersion, conversation, response:{dispatched:true, confirmed:false}}`; the outcome shows up in the journal |
+| `conversationRead` | `{schemaVersion, conversation, journal:{events:[{sequence, at, kind, data}], cursor, more}, queuedMessages:[{id, text, truncated, attachments, direct}]}` |
+| `conversationAttachmentPut` | `{schemaVersion, conversation, attachment:{id, mediaType, bytes}, data:null}`; pass `attachment` as-is in `conversationSend.attachments` |
+| `conversationDelete` | `{schemaVersion, deleted:{id, cliHistory:{…}, browserSession:{…}}}` |
+| `scheduleList` | `{schemaVersion, schedules:[Schedule], timeZone:"hostLocal", serviceRunning}` |
+| `scheduleRun` | `{schemaVersion, schedule, run:{conversationId, dispatched:true, completed:false}}` |
+| `scheduleSave` (`{id, enabled}`) | `{schemaVersion, schedule}` |
+| `subscribe` | `{subscribed:conversationId, after}`; events follow as `journal` frames |
+| `unsubscribe` | `{unsubscribed:bool}` (false: there was no such subscription) |
+| `pushRegister` | `{registered:true}` or `{registered:false, reason:"invalid"\|"expired"\|"unregistered"}` |
+| `pushUnregister` | `{registered:false}` |
+| `pushMute` | `{conversationId, muted, pushMutes:[conversationId]}` |
+| `screenshot` | `{mediaType:"image/jpeg", width, height, data:<base64>}` |
 
 Denied from the phone in v1:
 - `conversationSetAccess` / any `fullAccess=true`, `conversationProjectChoose` (opens a native dialog on the desktop), `serviceStop`, skill writes/imports, schedule create/edit beyond `enabled`, `config*`, recovery/evidence ops, `conversationResume` of sessions not created from the panel.
-- Added during implementation: `conversationCreate.executable` (an arbitrary program path) and `.project` (an arbitrary folder); `conversationSend.page`, `.tabGrant` (lends a desktop tab), `.skillId` (needs `conversationSkillSelect`, not allowed), `record:true`; `conversationRespond.result`; `conversationAttachmentRead`, `conversationArtifactRead`, queue edits, `conversationTabGrant`, `conversationSkillSelect`, `conversationSessionList`, `conversationProjectList`, `health`/`serviceHealth`, `agent*` tool operations, inspect operations, `imageConvert`; `scheduleDelete`; raising tool access through `conversationSetOptions`.
+- Added during implementation: `agentInspect.executable`, `conversationCreate.executable` (an arbitrary program path) and `.project` (an arbitrary folder); `conversationSend.page`, `.tabGrant` (lends a desktop tab), `.skillId` (needs `conversationSkillSelect`, not allowed), `record:true`; `conversationRespond.result`; `conversationAttachmentRead`, `conversationArtifactRead`, queue edits, `conversationTabGrant`, `conversationSkillSelect`, `conversationSessionList`, `conversationProjectList`, `health`/`serviceHealth`, `agent*` tool operations, inspect operations, `imageConvert`; `scheduleDelete`; raising tool access through `conversationSetOptions`.
 - Any op not on the allowlist is rejected by the gateway, not forwarded.
 
 ## "Needs you" path
@@ -106,7 +133,7 @@ Denied from the phone in v1:
 - Captcha/2FA: not wired in v1 (no panel event exists). Later phase: emit a panel event from `human_check_verdict` / login-wall detection, and let the phone answer via screenshot + tap using the stream server's `input_touch` behind the gateway.
 
 ## Notifications
-Push goes through our Cloudflare Worker `push.chrome-use.leeguoo.com` (OPEN: final hostname), which holds the APNs key and FCM service account and nothing else.
+Push goes through our Cloudflare Worker `chrome-use-push.leeguoo.com` (one level under `leeguoo.com`, so Cloudflare Universal SSL covers it), which holds the APNs key and FCM service account and nothing else.
 
 ```
 gateway ──POST /v1/push {relayToken, ciphertext}──▶ push Worker ──▶ APNs / FCM ──▶ phone (decrypts locally)
@@ -118,12 +145,12 @@ gateway ──POST /v1/push {relayToken, ciphertext}──▶ push Worker ──
   - Android: FCM data message; the app decrypts and posts the notification itself.
 - Triggers: `waitingInput` (high priority, time-sensitive on iOS), turn end (`terminal`, normal priority), scheduled run finished/failed. Per-conversation mute on the phone; the gateway debounces to ≤1 push per conversation per 10 s.
 - Gateway watcher (implemented): every 2 s, for each profile that has an active device with a relay token (only the `--profile` one on a filtered gateway), it polls `conversationList` and `scheduleList` of the running service (never starting one). The first poll of a profile is a baseline and announces nothing. Then:
-  - a conversation entering `waitingInput` (from any other phase, or new) → `needsInput`, `high`, title = conversation title (first line, ≤80 chars), body `"Waiting for your approval"` (the request itself is not read for the push);
-  - a conversation leaving a busy phase for a non-busy one, without `scheduleId` → `turnEnded`, `normal`, body = `lastTurn.preview` (already redacted, ≤120 chars) or Finished/Stopped/Failed;
+  - a conversation entering `waitingInput` (from any other phase, or new) → `needsInput` (code `needsInput`), `high`, title = conversation title (first line, ≤80 chars), body `"Waiting for your approval"` (the request itself is not read for the push);
+  - a conversation leaving a busy phase for a non-busy one, without `scheduleId` → `turnEnded` (code `finished` / `stopped` / `failed` by the new phase), `normal`, body = `lastTurn.preview` (already redacted, ≤120 chars) or Finished/Stopped/Failed;
   - a schedule whose `finishedAt` changed → `scheduleDone` (`lastResult == "completed"`) or `scheduleFailed` (body = `lastResult`, ≤120 chars), conversationId = `lastChat`, title = schedule name.
   - Debounce key is the conversation id (the schedule name when there is none). A notice inside the 10 s window waits and replaces the waiting one, except that a waiting `needsInput` is not replaced by a lesser kind; it goes out when the window closes.
   - `collapseId` = conversation id. Worker replies: 410 (`unregistered`), 401 `expired_token` (`expired`) or any other 401 (`invalid`) remove that token from the device and remember it as rejected with that reason in `devices.json` (`rejectedToken`, `rejectedReason`), so registering it again is refused; registering a different token clears the record. Connected phones get `pushTokenRejected`; 429 pauses pushes to that device for `retryAfter` seconds; other failures are logged.
-  - Worker URL: `--push-url`, else `CHROME_USE_PUSH_URL`, else `https://push.chrome-use.leeguoo.com`.
+  - Worker URL: `--push-url`, else `CHROME_USE_PUSH_URL`, else `https://chrome-use-push.leeguoo.com`.
 - `chrome-use mobile push-test <deviceId>` sends `kind:"test"` (title "chrome-use", body "Test notification (<unix time>)", empty conversationId, no collapseId). Apps should treat unknown kinds like `test`: show title/body, open the app.
 - Summary text is capped (≤120 chars) and comes from the agent's final text or the redacted request; even encrypted, page content and tool output are not included.
 - Abuse limits in the Worker: per-minute burst caps via the Workers Rate Limiting binding: per `relayToken` (10/60 s), per source IP on push (120/60 s) and on register (10/60 s); `relayToken` expires after 90 days and the app silently refreshes it. APNs `410 Unregistered` / FCM `UNREGISTERED` is returned to the gateway, which drops the token.
@@ -132,7 +159,8 @@ gateway ──POST /v1/push {relayToken, ciphertext}──▶ push Worker ──
 - Worker API (JSON over HTTPS):
   - `POST /v1/register {platform: "ios"|"android", deviceToken, env?: "sandbox"|"production"}` → `{relayToken, expiresAt}`. `relayToken = base64url(JSON{p,d,e,iat,exp}) "." base64url(HMAC-SHA256(RELAY_SECRET, first part))`.
   - `POST /v1/push {relayToken, payload, priority: "high"|"normal", collapseId?}` → `200 {status:"sent"}` | `401 {status:"invalid_token"|"expired_token"}` | `410 {status:"unregistered"}` | `429 {status:"rate_limited", retryAfter}` | `502 {status:"upstream_error"}`.
-  - `payload` = base64(nonce(12) ‖ AES-256-GCM ciphertext+tag) of UTF-8 JSON `{v:1, conversationId, kind:"needsInput"|"turnEnded"|"scheduleDone"|"scheduleFailed"|"test", title, body}` under the push key; ≤ 2 KiB. The Worker never parses it.
+  - `payload` = standard base64 of `kid(4) ‖ nonce(12) ‖ AES-256-GCM ciphertext+tag` of UTF-8 JSON `{v:1, conversationId, kind:"needsInput"|"turnEnded"|"scheduleDone"|"scheduleFailed"|"test", code, title, body}` under the push key, no associated data; ≤ 2048 characters. The Worker never parses it. `kid` = first 4 bytes of `HMAC-SHA256(push_key, "chrome-use mobile v1 kid")`: not secret; a phone paired with several computers (or a Notification Service Extension) uses it to pick the key, and drops a payload whose kid matches none.
+  - `code` is the stable reason to localize by, never the English `body`: `needsInput`, `finished` (turn ended idle), `stopped` (interrupted), `failed` (failed or unconfirmed), `scheduleDone`, `scheduleFailed`, `test`. `title` is the conversation title or schedule name; `body` is the turn's redacted preview, the schedule's result, or an English fallback.
   - APNs: alert `{title:"chrome-use", body:"chrome-use needs you"}` (generic fallback), `mutable-content:1`, custom key `e` = payload, `apns-priority` 10/5, `interruption-level: time-sensitive` for `high`. FCM HTTP v1: data-only message `{e: payload}`, `android.priority` HIGH/NORMAL.
 - Fallback when push is unavailable (no Google Play services, user denied permission): optional Bark/ntfy webhook with the same generic, content-free body.
 
@@ -211,9 +239,9 @@ First phone frame of a paired connection (p2c, sequence 0), plaintext `{"id":1,"
 00000000000000003d3fea079d6d776461ebe1024f75712d9eb0b8324463906d3735ad868274cd09d2ed59f4fc423448e2dccb847c9f6b202838c5922a0c6c496cdb5726
 ```
 
-Push payload under the paired `push_key`, nonce `60 61 … 6b`, plaintext
-`{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","title":"Weekly report","body":"Waiting for your approval"}` (standard base64):
+Push under the paired `push_key`: `kid` = `0fd39a46`. With nonce `60 61 … 6b` and plaintext
+`{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","code":"needsInput","title":"Weekly report","body":"Waiting for your approval"}` the payload (standard base64 of kid ‖ nonce ‖ ciphertext ‖ tag) is:
 
 ```
-YGFiY2RlZmdoaWprktav2wx9J+xArK4OvMDeVT9U88nqCouE9dpVi+i/sKRwrzQjUvK7YtXeHXjTSmiHAsnECRF00kOkE4HpgVcGP4qqcSRM3J51n02XKKZbglkIsNYdTiSgI72lAHJe/QpUul9s0W7solBQAJgEcxn+pmpcK8kHC7c5RjpK/lr+ZPVaAYhkZRR2bryeNaF6akuOC+m/FQmWvXOT/L1sD7M=
+D9OaRmBhYmNkZWZnaGlqa5LWr9sMfSfsQKyuDrzA3lU/VPPJ6gqLhPXaVYvov7CkcK80I1Lyu2LV3h1400pohwLJxAkRdNJDpBOB6YFXBj+KqnEkTNyedZ9NlyimW4JZCLDWHVkisCr6vRg+bP0LTJ9IPNZ/vuEAUEvASnRUoP0fA2z1ChvjIk0tBepBrmiuVxuePSZeJEuygSCkNnBbEVQAqk2LryQAdNZH2Fn72U5ucwevM2p9auOluknJ1H1AWrc=
 ```
