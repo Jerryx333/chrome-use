@@ -81,10 +81,15 @@ ingress:
       </div>
       <div class="du-code">
         <div class="du-code-head"><span class="du-code-name">bash</span></div>
-<pre><code>chrome-use mobile serve
+<pre><code>chrome-use mobile serve --trust-cf-header
 cloudflared tunnel run chrome-use-mobile
 chrome-use mobile pair --url wss://mobile.example.com --name "My Pixel"</code></pre>
       </div>
+      <p>
+        Through a tunnel every connection reaches the computer from 127.0.0.1.
+        <code>--trust-cf-header</code> makes the gateway rate-limit by the <code>CF-Connecting-IP</code>
+        that cloudflared sets; turn it on only when cloudflared runs on this computer.
+      </p>
       <p>
         Cloudflare terminates TLS at its edge, so every frame between the phone and the gateway is also
         encrypted end to end: the tunnel cannot read instructions, page text or screenshots.
@@ -123,12 +128,14 @@ chrome-use mobile pair --url wss://mobile.example.com --json   # just the chrome
         <tbody>
           <tr><td><code>chrome-use mobile devices [--json]</code></td><td>Lists devices: name, state, when paired, last connection time and IP, whether push is on.</td></tr>
           <tr><td><code>chrome-use mobile revoke &lt;id&gt;</code></td><td>Deletes the device's key and push token. A running gateway drops its connection within a second.</td></tr>
+          <tr><td><code>chrome-use mobile access &lt;id&gt; full|limited</code></td><td>Whether this phone may drive high-access conversations (below). <code>pair --allow-full-access</code> sets it when pairing.</td></tr>
           <tr><td><code>chrome-use mobile push-test &lt;id&gt;</code></td><td>Sends a test notification to that device.</td></tr>
         </tbody>
       </table>
       <p>
-        Ten failed handshakes in a row disable a device until it is paired again. A source address with
-        repeated failures waits longer before each new attempt.
+        A source address with repeated failed handshakes waits longer before each new attempt (up to
+        5 minutes); a device itself is never disabled by failures. Connections from browsers (any
+        <code>Origin</code> header) are refused.
       </p>
 
       <h2>What the phone can do</h2>
@@ -141,7 +148,11 @@ chrome-use mobile pair --url wss://mobile.example.com --json   # just the chrome
       </ul>
       <p>The phone gets less than the desktop:</p>
       <ul>
-        <li>No full access. Conversations created from the phone go up to <code>writeFiles</code>, and the phone cannot raise an existing conversation's tool access.</li>
+        <li>No full access. Conversations created from the phone go up to <code>writeFiles</code>, Pi gets browser tools only, and the phone cannot raise an existing conversation's tool access.</li>
+        <li>High-access conversations (full access, command execution, or Pi with more than browser tools)
+          can only be read, stopped and declined by default. To send to them, approve, or run such a
+          schedule from the phone, run <code>chrome-use mobile access &lt;id&gt; full</code> on the computer;
+          the app then asks for its lock.</li>
         <li>No project folder choice, agent executable, configuration, skill edits, new or edited schedules, or stopping the service.</li>
         <li>Deleting a conversation needs an explicit confirmation in the request.</li>
       </ul>

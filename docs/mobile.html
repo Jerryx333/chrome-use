@@ -80,10 +80,14 @@ ingress:
       </div>
       <div class="du-code">
         <div class="du-code-head"><span class="du-code-name">bash</span></div>
-<pre><code>chrome-use mobile serve
+<pre><code>chrome-use mobile serve --trust-cf-header
 cloudflared tunnel run chrome-use-mobile
 chrome-use mobile pair --url wss://mobile.example.com --name "我的 Pixel"</code></pre>
       </div>
+      <p>
+        经隧道来的连接在电脑上都来自 127.0.0.1。<code>--trust-cf-header</code> 让网关按
+        cloudflared 填的 <code>CF-Connecting-IP</code> 区分来源做限流；只在 cloudflared 跑在这台电脑上时打开。
+      </p>
       <p>
         Cloudflare 会在边缘解开 TLS，所以手机和网关之间的每一帧另外做了端到端加密，隧道看不到指令、
         页面文字或截图。<code>trycloudflare.com</code> 快速隧道每次启动换地址，换了就得重新配对，只适合试用。
@@ -119,11 +123,13 @@ chrome-use mobile pair --url wss://mobile.example.com --json   # 只输出 chrom
         <tbody>
           <tr><td><code>chrome-use mobile devices [--json]</code></td><td>列出设备：名称、状态、配对时间、最后连接时间和 IP、是否开了推送。</td></tr>
           <tr><td><code>chrome-use mobile revoke &lt;id&gt;</code></td><td>删除设备的密钥和推送 token。正在运行的网关在一秒内断开它的连接。</td></tr>
+          <tr><td><code>chrome-use mobile access &lt;id&gt; full|limited</code></td><td>是否允许这台手机操作高权限对话（见下文）。配对时也可以用 <code>pair --allow-full-access</code>。</td></tr>
           <tr><td><code>chrome-use mobile push-test &lt;id&gt;</code></td><td>给这台设备发一条测试通知。</td></tr>
         </tbody>
       </table>
       <p>
-        同一台设备连续 10 次握手失败会被停用，要重新配对。失败次数多的来源地址会被逐步延长等待时间。
+        握手失败多的来源地址会被逐步延长等待时间（最长 5 分钟）。设备本身不会因为失败被停用。
+        浏览器发起的连接（带 <code>Origin</code> 头）一律拒绝。
       </p>
 
       <h2>手机能做什么</h2>
@@ -136,7 +142,10 @@ chrome-use mobile pair --url wss://mobile.example.com --json   # 只输出 chrom
       </ul>
       <p>手机拿到的权限比电脑少：</p>
       <ul>
-        <li>不能打开完全访问，从手机新建的对话最多到 <code>writeFiles</code>，也不能提高已有对话的工具权限。</li>
+        <li>不能打开完全访问，从手机新建的对话最多到 <code>writeFiles</code>，Pi 只能用浏览器工具，也不能提高已有对话的工具权限。</li>
+        <li>高权限对话（完全访问、能执行命令、或 Pi 有浏览器以外的工具）默认只能看、停止、拒绝审批；
+          要从手机发消息、批准或运行这类定时任务，先在电脑上执行 <code>chrome-use mobile access &lt;id&gt; full</code>，
+          App 随后会要求解锁。</li>
         <li>不能选项目文件夹、指定 agent 可执行文件、改配置、改技能、新建或编辑定时任务、停止服务。</li>
         <li>删除对话要在请求里明确确认。</li>
       </ul>
