@@ -126,9 +126,8 @@ async fn collect_storage_via_temp_target(
                 // user's window like every other agent tab.
                 agent_group: None,
                 background: None,
-                dedicated_window: (on_relay
-                    && crate::native::browser::dedicated_window_enabled())
-                .then_some(true),
+                dedicated_window: (on_relay && crate::native::browser::dedicated_window_enabled())
+                    .then_some(true),
             },
             None,
         )
