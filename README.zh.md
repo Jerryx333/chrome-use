@@ -65,7 +65,7 @@
 
 **不用开新 Chrome。不用重新登录。不用跟"你是不是机器人"较劲。**
 
-chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚本）直接操作你**已经登录了所有网站**的那个 Chrome。它在**AI 共用的后台窗口里**点击，你看着它干活，撞到 2FA / 验证码的瞬间你接管一下，它接着跑。因为它**就是你的真实浏览器**（一键装的扩展、原生消息、无调试端口），在公开 CreepJS 测试中：**[CreepJS 实测 0% 机器人](#反检测)。**
+chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚本）直接操作你**已经登录了所有网站**的那个 Chrome。它在**你的窗口里、以 ✦ 开头的标签组中**点击，你看着它干活，撞到 2FA / 验证码的瞬间你接管一下，它接着跑。因为它**就是你的真实浏览器**（一键装的扩展、原生消息、无调试端口），在公开 CreepJS 测试中：**[CreepJS 实测 0% 机器人](#反检测)。**
 
 **新建浏览器上下文**没有现有登录态。Playwright / Puppeteer 也支持持久化配置或已有浏览器连接，需要比较实际配置。**chrome-use** 连接你**现有**的 Chrome：cookies、会话、浏览器指纹全是真的，因为它**就是**你的真实浏览器。Chrome 136 限制默认配置文件的远程调试；授权要求随 Chrome 版本和连接方式而变。我们的扩展改用原生消息：**装一次，之后零确认。**
 
@@ -158,7 +158,7 @@ npx skills add leeguooooo/chrome-use -g
 
 无论哪种方式，agent 都会拿到正确的用法和 `chrome-use` 的预授权 bash 权限；二进制缺失时 skill 会自动重跑上面对应平台的一行安装命令来修复。专项指南（`electron`、`slack`、`agentcore` 等）由二进制自己通过 `chrome-use skills get <name>` 提供，所以说明永远和已安装版本一致。
 
-升级二进制**不会**更新已经拷到 runner 里的 SKILL.md；那份副本在二进制之外。`chrome-use upgrade` 两样都管：先装最新的 GitHub Release，再逐个刷新找到的 skill 副本（Claude Code 插件、git checkout、安装脚本写入的目录；`npx skills add` 拷的副本会提示运行 `npx skills update chrome-use`）。`chrome-use upgrade --check`（或 `--json`）什么都不改，只报告当前版本、最新版本和 skill 装在哪；退出码 2 表示检查失败。其他命令每天最多在后台检查一次；只要有新版本，每次运行都会往 stderr 打一行提示；设 `CHROME_USE_NO_UPDATE_CHECK=1` 或全家通用的 `USE_NO_UPDATE_CHECK=1` 可关闭。只刷新 skill 用 `chrome-use skills update`（`refresh` / `install` 是同一个命令；加 `--project` 装到 `./` 而不是全局）。
+升级二进制**不会**更新已经拷到 runner 里的 SKILL.md；那份副本在二进制之外。`chrome-use upgrade` 两样都管：先装最新的 GitHub Release，再逐个刷新找到的 skill 副本（Claude Code 插件、git checkout、安装脚本写入的目录；`npx skills add` 拷的副本会提示运行 `npx skills update chrome-use`）。`chrome-use upgrade --check`（或 `--json`）什么都不改，只报告当前版本、最新版本和 skill 装在哪；退出码 2 表示检查失败。其他命令，以及 Chrome 每次启动本机连接时，每天最多在后台检查一次；有新版本就在后台原地安装（下次运行生效），并刷新 skill 副本。设 `CHROME_USE_AUTO_UPGRADE=0` 可关掉自动安装，改为每次在 stderr 打一行提示；设 `CHROME_USE_NO_UPDATE_CHECK=1` 或全家通用的 `USE_NO_UPDATE_CHECK=1` 连检查一起关掉。装在没有写权限的位置（包管理器的路径）时不会替换，只提示要运行的命令。扩展的弹窗和侧边栏也会显示 CLI 是否过旧，带"更新 CLI"按钮，扩展自己有更新待装时同样会提示。只刷新 skill 用 `chrome-use skills update`（`refresh` / `install` 是同一个命令；加 `--project` 装到 `./` 而不是全局）。
 
 ### 从 MCP 客户端使用（Claude Desktop 等）
 
@@ -234,7 +234,7 @@ chrome-use status                 # 中继、profile、扩展与会话健康总�
 
 `extension install` 是一次性的安装步骤。`chrome-use extension connect`（别名 `chrome-use reconnect`）在扩展已装好的前提下重新连上它的中继，不重装任何东西。被 attach 的 agent 标签页上 Chrome 仍会显示「chrome-use started debugging this browser」提示条；`chrome-use extension connect --silent` 会带 `--silent-debugger-extension-api` 把 Chrome 重启一次来去掉它（标签和登录自动恢复；同时开着多个 Chrome 实例时不会重启）。`--keep-banner` 完全不碰浏览器；两个 flag 都不带时，交互终端里会先问一句。详见[静音提示条](https://chrome-use.leeguoo.com/debugger-banner-silence.html)。
 
-同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口，每个会话有独立标签组；人使用自己的窗口。已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。你在 AI 窗口里开了或拖进了自己的页面，这个窗口就归你：里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它。
+AI 标签默认开在你正在用的窗口里，以后台标签打开、不抢焦点；每个会话有自己的标签组，组名前面带 ✦，一眼能和你自己的标签分开。加 `--window dedicated` 则改为同一 Chrome profile 的所有 AI 会话共用一个后台专用窗口：已有窗口只要标签归属都能确认是 AI，就会复用，全屏也不另开窗口。归属不明或空白占位页清理失败时会报错，避免继续增加窗口。不会为回收窗口而搬走或删除用户页。你在 AI 窗口里开了或拖进了自己的页面，这个窗口就归你：里面已有的 AI 标签照常工作，新的 AI 标签开到一个新的 AI 窗口，之后的会话共用它。
 
 自动化开始前，你的 Chrome profile 里必须已经开着一个窗口：没有窗口时它会停下并报 `profile not open`（错误码 `profile_not_open`），先在那个 profile 里打开一个窗口再重跑。如果它判断不了有没有窗口，会报 `profile window unavailable`（错误码 `profile_window_unavailable`），判断不了就什么都不创建。第一个标签页清理相关的错误码见[故障排查](https://chrome-use.leeguoo.com/troubleshooting.html)。
 
@@ -283,7 +283,7 @@ chrome-use click @e3 --observe         # 操作，并观察页面的反应
 chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的部分
 ```
 
-限定范围、深度、正则筛选或字节预算的快照，JSON `refs` 只返回正文摘录中出现的引用。会话仍保留完整的实时 ref 映射，缩小输出不会让先前已捕获的 ref 失效；稀疏页面检测仍使用完整映射。
+限定范围、深度、正则筛选或字节预算的快照，JSON `refs` 只返回正文摘录中出现的引用。会话仍保留完整的实时 ref 映射，缩小输出不会让先前已捕获的 ref 失效；稀疏页面检测仍使用完整映射。 有效增量快照的 JSON `refs` 只包含增量片段中的节点；无变化时为空。会话仍保留完整实时映射和先前引用；回退完整树时保持普通完整快照的行为。
 
 交互快照只给角色和名称重复、且父级命名行无法区分的控件添加 `context`。上下文去掉控件自身名称和纯标点，最多约 100 个字符（无名称控件约 60 个），且不同控件的上下文必须不同。名称唯一的控件不带上下文；缺少商品价格等信息时，读取对应区域或完整快照。
 
@@ -322,7 +322,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 
 | 命令 | 用途 |
 |---|---|
-| `--window dedicated`（默认）/ `--window user` | 扩展连接：同一 profile 的所有 AI 会话共用一个后台窗口，各有独立标签组；`user` 表示改用用户窗口 |
+| `--window user`（默认）/ `--window dedicated` | 扩展连接：AI 标签开在你当前的窗口里，每个会话一个标签组，组名前面带 ✦；`dedicated` 改为同一 profile 的所有 AI 会话共用一个后台窗口 |
 | `chrome-use open <url>` | 连接你的 Chrome 并导航。25 秒后 `load` 仍没到、但标签页里的页面明显可用时算成功，附 ⚠ 警告；如果无法确认这个页面来自这次请求（走扩展中继时总是如此），返回里带 `commit: "unverified"` 和标签页的真实 URL。页面不可用时报 `navigation_incomplete:`，写明已知的信息（是否提交、readyState、候选资源） |
 | `chrome-use snapshot -i` | 读页面；每次交互的起点（`-u` 给每个链接带上绝对 URL） |
 | `chrome-use read --links` | 页面正文，外加一段有上限的 `## Links`：`[文字](绝对 URL)`（默认前 100 个，`--max-links <n>` 最多 1000） |
@@ -335,7 +335,7 @@ Agent 在你的 Chrome 里操作：你能实时看到开标签、加载、点击
 | `chrome-use solve-slider 1` · `skills get core/captcha` | 尝试易盾拼图（未通过时非零退出）；加载点选与结果核验流程 |
 | `chrome-use find "edit web service settings button"` | 按自然语言描述返回排序后的候选，不自动执行 |
 | `chrome-use actions @e15` · `do @e15 expand` | 这个元素此刻支持什么，并只做其中之一 |
-| `chrome-use click @e2 --follow` | 点击打开的新标签（`target=_blank`、`window.open`）以 `openedTab` 报告并归入会话；`--follow` 切过去。在你自己的 Chrome 里只接管由本会话标签打开的标签，并按标签 id 附加（需要 ab-connect 0.5.30+）；否则由 `openedTabWarning` / `openedTabStatus`（`unadopted`、`unknown`）说明原因。从不属于本会话的标签（`tab adopt`、`--tab … --force`、侧边栏操作你的标签）打开的新标签仍归你：只报告，`followed: false`，用 `tab adopt <url>` 接管。网页打开的标签会让 Chrome 跑到你的应用前面，`openedTabWarning` 会说明；在 macOS 上 chrome-use 会把你原来的应用切回前台（`focusRestored`；`AGENT_BROWSER_RESTORE_FOCUS=0` 关闭）。需主动开启的 `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`（会话的 daemon 启动时读取）会把跨站的 `target=_blank` 链接改在后台标签打开（`openedTabMode: background`）；代价：重定向回当前站点的链接收不到 `SameSite=Strict` cookie |
+| `chrome-use click @e2 --follow` | 点击打开的新标签（`target=_blank`、`window.open`）以 `openedTab` 报告并归入会话；`--follow` 切过去。在你自己的 Chrome 里只接管由本会话标签打开的标签，并按标签 id 附加（需要 ab-connect 0.5.30+）；否则由 `openedTabWarning` / `openedTabStatus`（`unadopted`、`unknown`）说明原因。从不属于本会话的标签（`tab adopt`、`--tab … --force`、侧边栏操作你的标签）打开的新标签仍归你：只报告，`followed: false`，用 `tab adopt <url>` 接管。网页打开的标签会让 Chrome 跑到你的应用前面，`openedTabWarning` 会说明；在 macOS 上 chrome-use 会把你原来的应用切回前台（`focusRestored`；`AGENT_BROWSER_RESTORE_FOCUS=0` 关闭）。`AGENT_BROWSER_BACKGROUND_LINKS=cross-site`（AI 标签和你共用窗口时默认开启，设 `off` 关闭；会话的 daemon 启动时读取）会把跨站的 `target=_blank` 链接改在后台标签打开（`openedTabMode: background`）；代价：重定向回当前站点的链接收不到 `SameSite=Strict` cookie |
 | `chrome-use tab list` · `tab select t2` · `tab adopt <url-substring\|targetId>` | 列出标签；选择已创建或已接管的标签；通过扩展或直接 CDP 连接，不导航地接管已打开的标签 |
 | `chrome-use tab new [url] --activate` · `tab select t2 --activate` · `tab adopt <targetId> --activate` | 在初始化或存活探针之前激活目标；`--front` 是别名 |
 | `chrome-use tab list --all [--limit <n>]` | 列出当前 Chrome profile 所有窗口里的全部标签，包括用户自己的和其他会话的：handle、窗口、是否当前标签、标题、URL、归属（本会话 / `session <名字>` / 用户）。首次查询也只读，不启动 daemon、不开窗口或标签、不 attach 页面。首次 open 被拒绝后，仍可通过会话绑定的 profile 或已配置的 CDP 地址只读查询，不建立页面驱动连接、不绕过混合窗口保护。URL 按 Chrome 原样给出，可能带 token |

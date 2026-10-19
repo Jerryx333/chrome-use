@@ -1,7 +1,7 @@
 import './test-i18n.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createProjectChoice, folderLabel, siteOf, PRIVATE } from './project-picker.js';
+import { createProjectChoice, folderLabel, siteOf, scopeName, rememberScopes, readableName, queryOf, PRIVATE } from './project-picker.js';
 
 class Node {
   constructor(tag = 'div') { this.tag = tag; this.children = []; this.listeners = {}; this.textContent = ''; this.hidden = false; this.value = ''; this.title = ''; this.disabled = false; this.dataset = {}; }
@@ -17,14 +17,14 @@ const all = (node, predicate) => [...(predicate(node) ? [node] : []), ...node.ch
 const settle = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
 const page = { url: 'http://localhost:3000/app/settings' };
 
-function setup(answers = {}) {
+function setup(answers = {}, matchesRepositories = false, pageName = async () => '') {
   const calls = [], select = new Node('select'), host = new Node();
   const api = async (operation, params) => {
     calls.push([operation, params]);
     const answer = answers[operation];
     return typeof answer === 'function' ? answer(params) : answer ?? {};
   };
-  const choice = createProjectChoice({ document, api, select, host, supported: () => true, onError: error => { throw error; } });
+  const choice = createProjectChoice({ document, api, select, host, supported: () => true, matchesRepositories: () => matchesRepositories, pageName, onError: error => { throw error; } });
   return { choice, calls, select, host };
 }
 const list = { projects: [{ path: '/work/app', sources: ['claude'] }, { path: '/work/site', sources: ['site'] }] };
@@ -80,21 +80,163 @@ test('after creating a conversation in another project, the site may remember it
   const binds = [];
   const f = setup({ conversationProjectList: list, inspectProject: bound, inspectProjectBind: params => { binds.push(params); return { binding: { origin: params.origin, root: params.root, pathScope: '/', fingerprint: 'fp2' } }; } });
   await f.choice.refresh(page);
-  f.choice.created('/work/site', page);
+  await f.choice.created('/work/site', page);
   assert.equal(all(f.host, n => n.className === 'project-remember')[0].hidden, true, 'the remembered project is not asked about');
-  f.choice.created('/work/app', page);
+  await f.choice.created('/work/app', page);
   const box = all(f.host, n => n.className === 'project-remember')[0];
   assert.equal(box.hidden, false);
-  assert.match(text(box), /Use this project for http:\/\/localhost:3000 from now on\?/);
+  assert.match(text(box), /Use this project for localhost:3000 from now on\?/);
   all(box, n => n.tag === 'button' && n.textContent === 'Remember')[0].fire('click'); await settle();
   assert.deepEqual(binds, [{ origin: 'http://localhost:3000', pathScope: '/', root: '/work/app', replaces: 'fp1' }]);
   assert.match(text(box), /now uses this project/);
   // Without a binding, nothing is replaced; a non-web page is never asked about.
   const g = setup({ conversationProjectList: list, inspectProject: { binding: null }, inspectProjectBind: params => { binds.push(params); return { binding: { origin: params.origin, root: params.root } }; } });
   await g.choice.refresh(page);
-  g.choice.created('/work/app', page);
+  await g.choice.created('/work/app', page);
   all(g.host, n => n.tag === 'button' && n.textContent === 'Remember')[0].fire('click'); await settle();
   assert.equal(binds.at(-1).replaces, null);
-  g.choice.created('/work/app', { url: 'chrome://newtab' });
+  await g.choice.created('/work/app', { url: 'chrome://newtab' });
   assert.equal(all(g.host, n => n.className === 'project-remember')[0].hidden, true);
+});
+
+test('scope names and the scopes the remember bar offers', () => {
+  assert.equal(scopeName('https://github.com', '/o/r'), 'github.com/o/r');
+  assert.equal(scopeName('http://localhost:3000', '/'), 'localhost:3000');
+  const scopes = (url, info, bound) => rememberScopes(siteOf(url), info, bound).map(s => `${s.kind}:${s.pathScope}`);
+  // A repository page: the repository first, never the bare host.
+  assert.deepEqual(scopes('https://github.com/leeguooooo/image-use/pull/55', { multiProject: true, project: { kind: 'repository', key: 'leeguooooo/image-use', pathScope: '/leeguooooo/image-use' } }),
+    ['repository:/leeguooooo/image-use', 'path:/leeguooooo/image-use/pull', 'site:/']);
+  assert.deepEqual(scopes('https://gitlab.com/g/sub/app/-/issues/1', { multiProject: true, project: { kind: 'repository', key: 'g/sub/app', pathScope: '/g/sub/app' } }),
+    ['repository:/g/sub/app', 'path:/g/sub/app/-/issues', 'site:/']);
+  // A code host's other pages: a path first; its home page is not asked about.
+  assert.deepEqual(scopes('https://github.com/settings/profile', { multiProject: true, project: null }), ['path:/settings', 'site:/']);
+  assert.deepEqual(scopes('https://github.com/', { multiProject: true, project: null }), []);
+  // Any other site: the whole site (or its current binding's scope) first.
+  assert.deepEqual(scopes('http://localhost:3000/app/settings', { multiProject: false, project: null }), ['site:/', 'path:/app']);
+  assert.deepEqual(scopes('http://localhost:3000/admin/users/7', null, '/admin'), ['path:/admin', 'site:/', 'path:/admin/users']);
+  // A host too old to say: known code hosts still default to the repository.
+  assert.deepEqual(scopes('https://github.com/o/r/issues', null), ['repository:/o/r', 'site:/']);
+});
+
+const repoPage = { url: 'https://github.com/leeguooooo/image-use/pull/55' };
+const repoList = {
+  projects: [{ path: '/w/chatgpt-imagegen', sources: ['site'] }, { path: '/w/image-use', sources: ['claude'] }],
+  page: {
+    origin: 'https://github.com', multiProject: true, project: { kind: 'repository', key: 'leeguooooo/image-use', pathScope: '/leeguooooo/image-use' },
+    suggestion: { root: '/w/image-use', reason: 'repository', pathScope: '/leeguooooo/image-use', remote: 'origin' },
+    bindings: [{ pathScope: '/', root: '/w/chatgpt-imagegen', exists: true, fingerprint: 'site-fp' }],
+  },
+};
+
+test('a repository page preselects its checkout and says why', async () => {
+  const f = setup({ conversationProjectList: repoList }, true);
+  await f.choice.refresh(repoPage);
+  assert.deepEqual(f.calls, [['conversationProjectList', { origin: 'https://github.com', pagePath: '/leeguooooo/image-use/pull/55', query: '' }]], 'one call; no site lookup');
+  assert.equal(f.choice.value(), '/w/image-use');
+  assert.equal(f.choice.preferred, '/w/image-use');
+  assert.equal(f.select.dataset.reason, 'repository');
+  assert.equal(f.select.title, 'Matched by repository github.com/leeguooooo/image-use');
+  const note = all(f.host, n => n.className === 'project-match hint')[0];
+  assert.equal(note.hidden, false);
+  assert.equal(note.textContent, 'Matched by repository github.com/leeguooooo/image-use');
+  // Creating there asks nothing: the project was matched, not picked.
+  await f.choice.created('/w/image-use', repoPage);
+  assert.equal(all(f.host, n => n.className === 'project-remember')[0].hidden, true);
+  assert.equal(note.hidden, true, 'the note leaves with the new conversation');
+  // Another pick is the user's own; the note goes.
+  await f.choice.refresh(repoPage);
+  f.select.value = '/w/chatgpt-imagegen'; f.select.fire('change');
+  assert.equal(note.hidden, true);
+  assert.equal(f.select.dataset.reason, '');
+});
+
+test('remembering on a repository page defaults to the repository and can widen in place', async () => {
+  const binds = [];
+  const f = setup({ conversationProjectList: repoList, inspectProjectBind: params => { binds.push(params); return { binding: { origin: params.origin, root: params.root, pathScope: params.pathScope, fingerprint: 'new' } }; } }, true);
+  await f.choice.refresh(repoPage);
+  await f.choice.created('/w/chatgpt-imagegen', repoPage);
+  const box = all(f.host, n => n.className === 'project-remember')[0];
+  assert.equal(box.hidden, false);
+  assert.match(text(box), /Use this project for github\.com\/leeguooooo\/image-use from now on\?/);
+  const picker = all(box, n => n.tag === 'select')[0];
+  assert.deepEqual(picker.children.map(o => [o.value, o.textContent]), [
+    ['/leeguooooo/image-use', 'This repository · github.com/leeguooooo/image-use'],
+    ['/leeguooooo/image-use/pull', 'This path · github.com/leeguooooo/image-use/pull'],
+    ['/', 'Whole site · github.com'],
+  ]);
+  all(box, n => n.tag === 'button' && n.textContent === 'Remember')[0].fire('click'); await settle();
+  assert.deepEqual(binds.at(-1), { origin: 'https://github.com', pathScope: '/leeguooooo/image-use', root: '/w/chatgpt-imagegen', replaces: null });
+  assert.match(text(box), /github\.com\/leeguooooo\/image-use now uses this project/);
+  // It stays on this page and leaves with it.
+  await f.choice.refresh(repoPage);
+  assert.equal(box.hidden, false);
+  await f.choice.refresh({ url: 'https://github.com/other/repo' });
+  assert.equal(box.hidden, true);
+  await f.choice.refresh(repoPage);
+  // Widening to the whole site replaces the binding shown for it.
+  await f.choice.created('/w/other', repoPage);
+  const again = all(f.host, n => n.className === 'project-remember')[0];
+  const widen = all(again, n => n.tag === 'select')[0];
+  widen.value = '/'; widen.fire('change');
+  assert.match(text(again), /Use this project for github\.com from now on\?/);
+  all(again, n => n.tag === 'button' && n.textContent === 'Remember')[0].fire('click'); await settle();
+  assert.deepEqual(binds.at(-1), { origin: 'https://github.com', pathScope: '/', root: '/w/other', replaces: 'site-fp' });
+});
+
+test('a conversation created on another page asks the host about that page', async () => {
+  const f = setup({ conversationProjectList: params => params?.pagePath === '/leeguooooo/image-use/pull/55' ? repoList : { projects: [], page: { origin: 'https://github.com', multiProject: true, project: { kind: 'repository', key: 'o/r', pathScope: '/o/r' }, suggestion: null, bindings: [] } } }, true);
+  await f.choice.refresh(repoPage);
+  await f.choice.created('/w/image-use', { url: 'https://github.com/o/r' });
+  const box = all(f.host, n => n.className === 'project-remember')[0];
+  assert.equal(box.hidden, false, '/w/image-use is not o/r\'s project');
+  assert.match(text(box), /github\.com\/o\/r/);
+  assert.deepEqual(f.calls.at(-1), ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r', query: '' }]);
+});
+
+test('readable project names and page queries', () => {
+  assert.equal(readableName('Hellow - App Store Connect'), 'Hellow');
+  assert.equal(readableName('App Store Connect'), '');
+  assert.equal(readableName('marketing-site – Overview – Vercel'), 'marketing-site');
+  assert.equal(readableName('Cloudflare | api-gateway'), 'api-gateway');
+  assert.equal(readableName('x'.repeat(80)).length, 60);
+  assert.equal(queryOf('https://console.cloud.google.com/run?project=p1&x=2'), '?project=p1&x=2');
+  const scopes = (url, info) => rememberScopes(siteOf(url), info).map(s => `${s.kind}:${s.pathScope}`);
+  // A site of many projects defaults to the page's project, never the site.
+  assert.deepEqual(scopes('https://appstoreconnect.apple.com/apps/1234567890/testflight/ios', { multiProject: true, project: { kind: 'appStoreApp', key: '1234567890', pathScope: '/apps/1234567890' } }),
+    ['app:/apps/1234567890', 'path:/apps/1234567890/testflight', 'site:/']);
+  assert.deepEqual(scopes('https://vercel.com/acme/marketing-site', { multiProject: true, project: { kind: 'vercel', key: 'acme/marketing-site', pathScope: '/acme/marketing-site' } }),
+    ['project:/acme/marketing-site', 'site:/']);
+  // A project named only in the query cannot be a scope: a path goes first.
+  assert.deepEqual(scopes('https://console.cloud.google.com/run/detail?project=p1', { multiProject: true, project: { kind: 'googleCloud', key: 'p1', pathScope: null } }),
+    ['path:/run', 'site:/']);
+});
+
+test('an App Store Connect app: matched by its project files, remembered as "this app" by name', async () => {
+  const appPage = { url: 'https://appstoreconnect.apple.com/apps/1234567890/testflight/ios', title: 'Hellow - App Store Connect', tabId: 7 };
+  const appList = {
+    projects: [{ path: '/w/ios', sources: ['claude'] }, { path: '/w/web', sources: ['panel'] }],
+    page: { origin: 'https://appstoreconnect.apple.com', multiProject: true, project: { kind: 'appStoreApp', key: '1234567890', pathScope: '/apps/1234567890' }, suggestion: { root: '/w/ios', reason: 'project', pathScope: '/apps/1234567890' }, bindings: [] },
+  };
+  const binds = [];
+  const f = setup({ conversationProjectList: appList, inspectProjectBind: params => { binds.push(params); return { binding: { ...params, fingerprint: 'n' } }; } }, true, async page => [page.title, 'Hellow']);
+  await f.choice.refresh(appPage);
+  assert.equal(f.choice.value(), '/w/ios');
+  assert.equal(f.select.dataset.reason, 'project');
+  const note = all(f.host, n => n.className === 'project-match hint')[0];
+  assert.equal(note.textContent, 'Matched by project appstoreconnect.apple.com/apps/1234567890');
+  await f.choice.created('/w/web', appPage);
+  const box = all(f.host, n => n.className === 'project-remember')[0];
+  assert.match(text(box), /Use this project for Hellow \(appstoreconnect\.apple\.com\/apps\/1234567890\) from now on\?/);
+  assert.deepEqual(all(box, n => n.tag === 'select')[0].children.map(o => o.textContent), [
+    'This app · Hellow (appstoreconnect.apple.com/apps/1234567890)',
+    'This path · appstoreconnect.apple.com/apps/1234567890/testflight',
+    'Whole site · appstoreconnect.apple.com',
+  ]);
+  all(box, n => n.tag === 'button' && n.textContent === 'Remember')[0].fire('click'); await settle();
+  assert.deepEqual(binds, [{ origin: 'https://appstoreconnect.apple.com', pathScope: '/apps/1234567890', root: '/w/web', replaces: null }]);
+  // A project named in the query: sent to the host, shown by its key.
+  const g = setup({ conversationProjectList: { projects: [], page: { multiProject: true, project: { kind: 'googleCloud', key: 'p1', pathScope: null }, suggestion: { root: '/w/gcp', reason: 'project', pathScope: null }, bindings: [] } } }, true);
+  await g.choice.refresh({ url: 'https://console.cloud.google.com/run?project=p1' });
+  assert.deepEqual(g.calls[0], ['conversationProjectList', { origin: 'https://console.cloud.google.com', pagePath: '/run', query: '?project=p1' }]);
+  assert.equal(g.select.title, 'Matched by project console.cloud.google.com · p1');
 });

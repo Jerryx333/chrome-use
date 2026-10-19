@@ -971,7 +971,7 @@
     "message": "已绑定到项目的网站"
   },
   "options_inspect_bindings_hint": {
-    "message": "一个网站（可限定到某个路径）只发给一个 agent 会话。解除绑定后可以重新选择；会话也可以用 `chrome-use inspect link <url>` 认领网站。在该网站上新开的侧栏会话也会默认使用它的项目。"
+    "message": "一个网站（可限定到某个路径）只发给一个 agent 会话。解除绑定后可以重新选择；会话也可以用 `chrome-use inspect link <url>` 认领网站。在该网站上新开的侧栏会话也会默认使用它的项目。仓库页面默认使用最近用过的该仓库本地副本，除非你把这个仓库绑定到了别的项目。"
   },
   "options_inspect_bindings_loading": {
     "message": "正在加载…"
@@ -1070,6 +1070,24 @@
   },
   "options_inspect_unbind": {
     "message": "解除绑定"
+  },
+  "options_inspect_rescope": {
+    "message": "修改范围"
+  },
+  "options_inspect_rescope_hint": {
+    "message": "绑定覆盖的 $ORIGIN$ 路径，例如 /owner/repo；/ 表示整个网站。",
+    "placeholders": {
+      "origin": {
+        "content": "$1",
+        "example": "https://github.com"
+      }
+    }
+  },
+  "options_inspect_rescope_save": {
+    "message": "保存"
+  },
+  "options_inspect_rescope_cancel": {
+    "message": "取消"
   },
   "options_notifications_heading": {
     "message": "通知"
@@ -2109,6 +2127,80 @@
     "placeholders": {
       "site": {
         "content": "$1"
+      }
+    }
+  },
+  "panel_project_repo_hint": {
+    "message": "按仓库匹配：$REPO$",
+    "placeholders": {
+      "repo": {
+        "content": "$1",
+        "example": "github.com/owner/repo"
+      }
+    }
+  },
+  "panel_project_key_hint": {
+    "message": "按项目匹配：$PROJECT$",
+    "placeholders": {
+      "project": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_scope_label": {
+    "message": "记住的范围"
+  },
+  "panel_project_scope_repository": {
+    "message": "这个仓库 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "github.com/owner/repo"
+      }
+    }
+  },
+  "panel_project_scope_app": {
+    "message": "这个应用 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_scope_project": {
+    "message": "这个项目 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_scope_site": {
+    "message": "整个网站 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "github.com"
+      }
+    }
+  },
+  "panel_project_scope_path": {
+    "message": "这个路径 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "example.com/docs"
+      }
+    }
+  },
+  "panel_project_named": {
+    "message": "$NAME$（$SCOPE$）",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      },
+      "scope": {
+        "content": "$2"
       }
     }
   },
@@ -3432,5 +3524,95 @@
   },
   "options_pick_all_hint": {
     "message": "Chrome 只问一次，不用在每个网站第一次选择元素时再问。插件仍然只在你选择元素时才接触页面。"
+  },
+  "ext_version_cli_outdated": {
+    "message": "chrome-use CLI 有新版本 $LATEST$（当前 $CURRENT$）。",
+    "placeholders": {
+      "latest": {
+        "content": "$1"
+      },
+      "current": {
+        "content": "$2"
+      }
+    }
+  },
+  "ext_version_cli_too_old": {
+    "message": "chrome-use CLI $CURRENT$ 太旧，这个扩展用不了。请更新到 $LATEST$。",
+    "placeholders": {
+      "current": {
+        "content": "$1"
+      },
+      "latest": {
+        "content": "$2"
+      }
+    }
+  },
+  "ext_version_cli_switch": {
+    "message": "新版 CLI $VERSION$ 已安装，agent 空闲后切换。",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_cli_upgrading": {
+    "message": "正在更新 chrome-use CLI…"
+  },
+  "ext_version_cli_failed": {
+    "message": "CLI 没更新成功。请在终端运行："
+  },
+  "ext_version_cli_auto_failed": {
+    "message": "chrome-use CLI $LATEST$ 自动安装失败。请在终端运行：",
+    "placeholders": {
+      "latest": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_ext_pending": {
+    "message": "扩展新版本 $VERSION$ 已下载，agent 空闲后自动更新。",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_ext_updated": {
+    "message": "扩展已更新到 $VERSION$。",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_hold_busy": {
+    "message": "等待中：有命令正在执行。"
+  },
+  "ext_version_hold_recent": {
+    "message": "等待中：agent 一分钟内用过浏览器。"
+  },
+  "ext_version_hold_applying": {
+    "message": "正在安装…"
+  },
+  "ext_version_action_upgrade_cli": {
+    "message": "更新 CLI"
+  },
+  "ext_version_action_apply_update": {
+    "message": "立即更新"
+  },
+  "bg_cli_upgrade_timeout": {
+    "message": "CLI 更新超过五分钟没完成，已放弃。"
+  },
+  "bg_cli_upgrade_no_host": {
+    "message": "chrome-use CLI 没有连接，无法自动更新。"
+  },
+  "bg_update_not_now": {
+    "message": "现在不能安装更新，agent 空闲后会自动安装。"
+  },
+  "popup_update_failed": {
+    "message": "没能开始更新。"
+  },
+  "ext_version_cli_legacy": {
+    "message": "chrome-use CLI 太旧，没法在这里自动更新。请在终端重新安装："
   }
 }

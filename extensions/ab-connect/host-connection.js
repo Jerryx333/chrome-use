@@ -1,6 +1,8 @@
 // Connection state is evidence-based: constructing a Port is not a handshake.
 // The token is the actual Port object so late callbacks cannot confirm or clear
 // a newer connection after the service worker reconnects.
+import { parseCliStatus } from './version-notice.js'
+
 // Host feature flags the panel may rely on. Boolean ones are `true`; versioned
 // ones are positive integers so a later host can raise the version.
 const BOOLEAN_FEATURES = ['conversationOptions','imageAttachments','heicConvert','skillLibrary','schedules','inspect','inspectResolve'];
@@ -12,6 +14,9 @@ export class HostConnectionState {
     this.confirmed = false
     this.error = null
     this.agentPanel = null
+    this.cli = null
+    this.pongWithoutCli = false
+    this.pongs = 0
   }
 
   begin(port) {
@@ -19,11 +24,16 @@ export class HostConnectionState {
     this.confirmed = false
     this.error = null
     this.agentPanel = null
+    this.cli = null
+    // A host that puts `cli` on its pongs does so on every one, so the first
+    // pong decides: one without it means a CLI from before the record.
+    this.pongWithoutCli = false
+    this.pongs = 0
   }
 
   receive(port, message) {
     if (port !== this.port || !port || !message || typeof message !== 'object') return false
-    const recognized = ['pong', 'ping', 'attachAll'].includes(message.method) ||
+    const recognized = ['pong', 'ping', 'attachAll', 'upgradeCliResult'].includes(message.method) ||
       (message.method === 'forwardCDPCommand' && typeof message.params?.method === 'string')
     if (!recognized) return false
     const reported = message.params?.agentPanel
@@ -39,9 +49,21 @@ export class HostConnectionState {
     const featuresChanged = [...BOOLEAN_FEATURES, ...VERSIONED_FEATURES].some(key => features[key] !== this.agentPanel?.[key]);
     const changed = (valid && featuresChanged) || !this.confirmed || (valid && (reported.mode !== this.agentPanel?.mode || reported.modelInspection !== this.agentPanel?.modelInspection || conversationDelete !== this.agentPanel?.conversationDelete || fullAccess !== this.agentPanel?.fullAccess || pageContext !== this.agentPanel?.pageContext || JSON.stringify(chatAgents) !== JSON.stringify(this.agentPanel?.chatAgents)))
     if (valid) this.agentPanel = {schemaVersion:1,mode:reported.mode,modelInspection:reported.modelInspection,conversationDelete,fullAccess,pageContext,chatAgents,...features}
+    // A pong may carry the CLI's version record; a message without one keeps
+    // the last (an older host never sends it, so it stays null).
+    let cliChanged = false
+    if (message.method === 'pong' && message.params && 'cli' in message.params) {
+      const cli = parseCliStatus(message.params?.cli)
+      cliChanged = JSON.stringify(cli) !== JSON.stringify(this.cli)
+      this.cli = cli
+    }
+    if (message.method === 'pong' && this.pongs++ === 0 && !(message.params && 'cli' in message.params)) {
+      this.pongWithoutCli = true
+      cliChanged = true
+    }
     this.confirmed = true
     this.error = null
-    return changed
+    return changed || cliChanged
   }
 
   end(port, error) {
@@ -50,6 +72,8 @@ export class HostConnectionState {
     this.confirmed = false
     this.error = error || null
     this.agentPanel = null
+    this.cli = null
+    this.pongWithoutCli = false
     return true
   }
 
@@ -59,6 +83,9 @@ export class HostConnectionState {
       connectionState: this.port ? (this.confirmed ? 'connected' : 'connecting') : 'disconnected',
       connectionError: this.error,
       agentPanel: this.agentPanel,
+      cli: this.cli,
+      // Connected to a CLI too old to report its version or update itself.
+      legacyCli: this.confirmed && this.pongWithoutCli,
     }
   }
 }

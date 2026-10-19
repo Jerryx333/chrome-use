@@ -1,8 +1,89 @@
 # Changelog
 
-## 1.5.235
+## 1.5.241
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.76.
+
+### Changes
+
+- **Sites that hold many projects go by project, not by domain.** App Store Connect apps (`/apps/<appId>`, TestFlight pages included), Vercel projects, Netlify sites, Cloudflare Workers and Pages, Firebase and Google Cloud projects (in the path or `?project=`) and Sentry projects are read from the URL by a rule table in the CLI (one row per URL shape, so another site is one more row). A recent folder is preselected, shown as "Matched by project", when a file in its root names that project: an App Store Connect app id on an `apple_id`/`app_id` line of fastlane's Fastfile, Appfile or Deliverfile, `.vercel/project.json` or `vercel.json`, `wrangler.toml`/`.json`, `.firebaserc`, `.sentryclirc` or `sentry.properties`. As with repositories, a project bound to that app or project still wins and a site-wide binding does not.
+- **The remember question names the app or project.** It defaults to "This app" / "This project" and calls it by the page's own name (the tab title without the site's name, else the page heading when the extension may read the site): "Use this project for Hellow (appstoreconnect.apple.com/apps/1234567890) from now on?". Such sites are never bound whole by default. Projects named only in `?project=` (Google Cloud, some Sentry pages) are matched automatically but can be remembered by path only.
+- **Repository remotes behind an ssh host alias match too.** A remote such as `git@github-work:owner/repo` is resolved through the `HostName` of that alias in `~/.ssh/config` (read only; `Include` is not followed).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.240
+
+Works with extension ab-connect 0.5.75.
+
+### Changes
+
+- **A repository page starts in your checkout of that repository, not in whatever project the whole site was bound to.** On github.com/owner/repo (and GitLab with subgroups, Gitee, Bitbucket, Codeberg, self-hosted Gitea, Gogs and GitLab) the side panel now finds the recent folder whose git remote (origin, upstream or any other; https, ssh or `git@host:owner/repo`) is the page's repository and preselects it, shown as "Matched by repository". Before, remembering a project once on github.com made every repository there open in it. Remotes are read from `.git/config`, worktrees included, cached by modification time; git is not run. A project bound to the repository itself still wins; a broader binding (the whole site) no longer overrides the match. Nothing already stored is removed.
+- **Remembering a project asks for the narrowest sensible scope, editable in place.** On a repository page the bar asks "Use this project for github.com/owner/repo from now on?" with "this path" and "whole site" as alternatives; other sites default to the site with a path option. A code host is never bound whole by default. The options page shows each binding's scope and can change it in one write.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.239
+
+Works with extension ab-connect 0.5.74.
+
+### New Features
+
+- **The CLI keeps itself current.** Most installs stayed on the version they started with: background upgrades were opt-in and the only signal was a stderr line. When a newer release exists, any command, and the native host whenever Chrome starts it, now installs it in place in the background (it takes effect on the next run) and refreshes the skill copies afterwards. `CHROME_USE_AUTO_UPGRADE=0` turns it off and leaves the notice. A CLI installed where it cannot write, or a cargo build, is never replaced. On macOS the upgrade runs as a launchd job, because started from inside Chrome it would install a binary carrying Chrome's quarantine. How the last background upgrade ended is kept, and `doctor` says why a CLI is still behind and what to run.
+- **The extension shows version state** (ab-connect 0.5.74). The popup and side panel say when the CLI is out of date, with an **Update CLI** button when it can replace itself and the command to run when it cannot; when a background upgrade failed, and why; and, for a CLI from before this release, that it must be reinstalled once. Once a new CLI is installed, the extension switches to it when no agent is working. Its own update gets a banner too: downloaded and waiting for the agent to go idle (with what it is waiting for), an **Update now** button when that is safe, and "updated to X" for a day afterwards.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.238
+
+Works with extension ab-connect 0.5.73.
+
+### Bug Fixes
+
+- **A link the agent opens in a new tab no longer takes over the tab you are looking at.** Since 1.5.236 agent tabs share your window, and Chrome opens a page's `target=_blank` link or pop-up as the window's front tab, so an agent click switched you from your page to the agent's pop-up.
+  - Cross-site `target=_blank` links are now opened by chrome-use in a background tab while agent tabs share your window, so Chrome neither switches your tab nor comes to the front (`AGENT_BROWSER_BACKGROUND_LINKS`, now `cross-site` by default in that mode; `off` turns it off). Cost, as before: a link that redirects back to the page's site arrives without its `SameSite=Strict` cookies.
+  - ab-connect 0.5.73 brings back the tab that was in front for every other tab an agent tab opens (same-site links, `window.open`): the pop-up stays open behind it and the agent keeps working in it. It also adopts such a pop-up into the session again (and `--follow` follows it), which in your window failed because Chrome names your front tab as its opener. Until Chrome updates the extension, those still switch your tab and are not adopted.
+
+### Changes
+
+- **Agent tab groups are marked `✦`** instead of `⬉`: one plain character that takes the group's colour. A session running during the upgrade opens a new `✦` group next to its `⬉` one, once.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.237
+
+Works with extension ab-connect 0.5.72 (no CLI change; this release ships the extension fix).
+
+### Bug Fixes
+
+- **The /resume confirmation no longer overlaps the panel.** Choosing a session that is still running in a terminal showed "continue here anyway / cancel" below the picker's box, on top of the status line and the lent-tab bar. The picker's list now shrinks and scrolls so the question stays inside it.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.236
+
+### Changes
+
+- **Agent tabs open in your own window again, in a tab group marked ⬉.** The separate agent window made it hard to watch the agent or take over: you had to go find a second window. AI tabs now open as background tabs in the window you are using, without taking focus, each session in its own tab group whose title starts with `⬉` (`⬉ 🔎 track a parcel`). `--window dedicated` or `AGENT_BROWSER_DEDICATED_WINDOW=1` brings back the shared background window. Groups made by an older build have no mark, so a session that is running during the upgrade opens a new `⬉` group next to its old one once. Closing a password-manager menu on a pinned tab now needs you in a shared window, as it did with `--window user`.
+
+### Contributors
+
+- @leeguooooo
+
+## 1.5.235
+
 ### New Features
 
 - **macOS: chrome-use installs as `ChromeUse.app`, so privacy settings list it once, by name and icon.** System Settings → Privacy & Security → Files and Folders keyed the bare `chrome-use` binary by its path and showed it with no name or icon, and every other copy of the binary (each build, each test run) became one more anonymous entry. On a Mac, install.sh now puts a signed, notarized and stapled `ChromeUse.app` (bundle id `com.leeguoo.chrome-use`) in `<prefix>/share/chrome-use/` and makes `<prefix>/bin/chrome-use` a symlink into it, so the panel service, the agents it runs and the native-messaging host all run as that one app. Its prompts say why access is asked for. `upgrade` keeps installing into the symlink's directory, archives without the bundle (older tags) still install the bare binary, and `AGENT_BROWSER_NO_APP_BUNDLE=1` opts out. Linux and Windows are unchanged.
@@ -10,7 +91,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.234
 

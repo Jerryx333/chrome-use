@@ -660,7 +660,8 @@ tab. It does not launch anything or open windows. Windows and Linux: not done
 (`focusNote` says so). `AGENT_BROWSER_RESTORE_FOCUS=0` turns it off; read when
 the session's daemon starts.
 
-`AGENT_BROWSER_BACKGROUND_LINKS=cross-site` (opt-in; also `1` / `on`) makes
+`AGENT_BROWSER_BACKGROUND_LINKS=cross-site` (also `1` / `on`; the default while
+agent tabs share the user's window, off with `--window dedicated`) makes
 chrome-use open **cross-site** `target=_blank` links itself, in a tab the
 session created: a left click without modifiers on an `<a>`/`<area>` with an
 http(s) href to another registrable domain (eTLD+1 by the Public Suffix List,
@@ -679,7 +680,8 @@ policy (ab-connect 0.5.31+). The cost, measured against Chrome's own click:
 
 `AGENT_BROWSER_BACKGROUND_LINKS=all` also takes same-site links, which then
 count as cross-site (`Sec-Fetch-Site: cross-site`) and always lose their
-`SameSite=Strict` cookies. Unset, `0` or `off`: never (the default).
+`SameSite=Strict` cookies. `0` or `off`: never. Unset: `cross-site` in the
+user's window, never in the dedicated agent window.
 
 Even when turned on, these always go through Chrome, which comes to the front,
 and the click says so in `openedTabWarning`: same-site links (unless `all`), IP
@@ -1068,8 +1070,9 @@ AGENT_BROWSER_DASHBOARD_ALLOWED_HOSTS="ws.example.com"  # Extra hostnames the da
 AGENT_BROWSER_CLICK_MODE="dom"               # Click strategy: "" (default: scroll-in + coordinate
                                              #   click, DOM-dispatch fallback), "coord" (strict
                                              #   coordinate only), "dom" (always element.click())
-AGENT_BROWSER_BACKGROUND_LINKS="cross-site"  # Opt-in (#468): open cross-site target=_blank links in a
-                                             #   background tab. Unset/"off"/"0" (default) = never;
+AGENT_BROWSER_BACKGROUND_LINKS="cross-site"  # (#468) open cross-site target=_blank links in a
+                                             #   background tab. Unset = this in the user's window,
+                                             #   never with --window dedicated; "off"/"0" = never;
                                              #   "cross-site"/"1"/"on"; "all" = same-site too. Cost:
                                              #   redirect-back links lose SameSite=Strict cookies.
                                              #   Read at daemon start
@@ -1117,3 +1120,5 @@ AGENT_BROWSER_ADAPTIVE_REF="0"        # Disable adaptive @ref relocation (on by 
 > fork. Both commands return `{"messages":[]}` / `{"errors":[]}` plus a `hint` until you
 > launch the session with `AGENT_BROWSER_CAPTURE_CONSOLE=1`. This keeps the CDP `Runtime`
 > domain disabled (a known bot signal) for the common automation path.
+
+Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.

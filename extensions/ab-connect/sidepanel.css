@@ -41,6 +41,13 @@ h3 { font-size:14px; font-weight:600; }
 .conversation-picker:hover:not(:disabled) { background:var(--surface); }
 .connection { font-size:12px; color:var(--error); padding:8px 14px; background:var(--error-bg); }
 .connection.ok { display:none; }
+.version-notices { display:grid; grid-template-columns:minmax(0,1fr); gap:6px; padding:8px 12px 0; align-self:stretch; min-width:0; }
+.version-notice { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; min-width:0; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font-size:12px; background:var(--surface); }
+.version-notice.warn { border-color:var(--ink); background:var(--bg); }
+.version-notice .version-text { flex:1 1 180px; min-width:0; }
+.version-notice .version-reason { flex-basis:100%; color:var(--muted); overflow-wrap:anywhere; }
+.version-notice code { flex-basis:100%; padding:4px 7px; background:var(--bg); border:1px solid var(--line); border-radius:6px; font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace; user-select:all; overflow-wrap:anywhere; color:var(--ink); }
+.version-notice button { padding:2px 9px; font-size:12px; }
 .notice { margin:8px 12px 0; padding:8px 10px; border-radius:8px; background:var(--error-bg); color:var(--error); white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
 
 .chat-view { flex:1; min-height:0; display:flex; flex-direction:column; position:relative; }
@@ -415,7 +422,13 @@ button.tool:hover:not(:disabled),.composer-controls #turnOptions > summary:hover
 .inspect-reply-body { overflow-wrap: anywhere; }
 
 /* /resume: the session picker and the history imported from a CLI session. */
-.resume-picker { margin:8px 12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--bg); display:grid; gap:6px; max-height:min(70vh,520px); grid-template-rows:auto auto auto minmax(0,1fr) auto auto; }
+/* A column flex box, not a grid: with only max-height, a grid's 1fr row grows
+   with its content and pushes the running-session confirmation out of the box
+   over the panel below. Flex lets the list shrink and scroll instead. */
+.resume-picker { margin:8px 12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--bg); display:flex; flex-direction:column; gap:6px; max-height:min(70vh,520px); overflow:hidden; }
+.resume-picker > * { flex:0 0 auto; }
+.resume-picker > .resume-items { flex:1 1 auto; }
+.resume-picker > .delete-confirm { margin:0; background:var(--bg); }
 .resume-picker .resume-head { display:flex; align-items:center; gap:8px; }
 .resume-picker .resume-head strong { flex:1; font-size:13px; }
 .resume-picker input[type=search] { width:100%; box-sizing:border-box; }
@@ -452,6 +465,8 @@ button.tool:hover:not(:disabled),.composer-controls #turnOptions > summary:hover
 .project-host .project-manual input { flex:1; min-width:160px; }
 .project-host .project-manual .hint { flex-basis:100%; margin:0; }
 .project-host .project-remember > span { flex-basis:100%; }
+.project-host > div.project-match { border:0; padding:0 2px; margin:6px 12px 0; font-size:11px; }
+.project-host .project-remember select { max-width:100%; font-size:12px; }
 
 /* "Let the agent use this tab" */
 .grant-bar { display:flex; align-items:center; gap:8px; margin:8px 12px 0; padding:7px 10px; border:1px solid #7c3aed; border-radius:10px; background:rgb(124 58 237 / .08); font-size:12px; }

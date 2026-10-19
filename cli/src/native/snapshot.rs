@@ -2396,8 +2396,13 @@ pub fn rendered_ref_ids(tree: &str) -> std::collections::HashSet<String> {
 
 fn rendered_line_ref(line: &str) -> Option<String> {
     let mut line = line.trim_start();
-    if let Some(rest) = line.strip_prefix("+ ") {
-        line = rest.trim_start();
+    // A unified diff prefixes a root node with "+- ", without an extra space.
+    if let Some(rest) = line.strip_prefix('+') {
+        let inserted = rest.trim_start();
+        if !inserted.starts_with("- ") {
+            return None;
+        }
+        line = inserted;
     }
     if let Some(rest) = line.strip_prefix("- ") {
         if rest.trim_start().starts_with("- ") {
@@ -3238,6 +3243,8 @@ mod tests {
 - alert: "Message [ref=e77]"
 - textbox "Name" [ref=e3] value="Text [ref=e66]"
 - button "No real ref"
++- button "Inserted root" [ref=e99]
+-- button "Removed root" [ref=e98]
 - note: use [ref=e50] later
 +     - button "New child" [ref=e5]
 - checkbox "Agree" [checked=false, ref=e6] value=[ref=e44]
@@ -3249,7 +3256,8 @@ mod tests {
                 "e20".to_string(),
                 "e3".to_string(),
                 "e5".to_string(),
-                "e6".to_string()
+                "e6".to_string(),
+                "e99".to_string()
             ])
         );
     }

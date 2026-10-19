@@ -478,32 +478,6 @@ fn spawn_detached(
         .map_err(|_| "Agent service could not be started".into())
 }
 
-/// `launchctl` with `args`, quietly; whether it succeeded.
-#[cfg(target_os = "macos")]
-fn launchctl(args: &[&std::ffi::OsStr]) -> bool {
-    std::process::Command::new("/bin/launchctl")
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
-/// The pid of a launchd job's running process, if it has one.
-#[cfg(target_os = "macos")]
-fn launchd_job_pid(target: &str) -> Option<u32> {
-    let out = std::process::Command::new("/bin/launchctl")
-        .args(["print", target])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("pid = ")?.trim().parse().ok())
-}
-
 /// The launchd job (`gui/<uid>/<label>`) that starts the service of a data
 /// directory; one label per directory.
 #[cfg(target_os = "macos")]
@@ -513,7 +487,7 @@ fn launchd_target(directory: &Path) -> (String, String) {
         "com.chrome-use.panel-service.{}",
         &hex::encode(digest)[..16]
     );
-    let domain = format!("gui/{}", unsafe { libc::getuid() });
+    let domain = crate::launchd::gui_domain();
     (format!("{domain}/{label}"), domain)
 }
 
@@ -524,8 +498,8 @@ fn launchd_target(directory: &Path) -> (String, String) {
 #[cfg(target_os = "macos")]
 fn unload_finished_job(directory: &Path) {
     let (target, _) = launchd_target(directory);
-    if launchd_job_pid(&target) != Some(std::process::id()) {
-        let _ = launchctl(&["bootout".as_ref(), target.as_ref()]);
+    if crate::launchd::job_pid(&target) != Some(std::process::id()) {
+        let _ = crate::launchd::launchctl(&["bootout".as_ref(), target.as_ref()]);
     }
 }
 
@@ -543,90 +517,14 @@ fn launchd_start(
     // Named by its place in ChromeUse.app when installed as one, so the job
     // shows what macOS attributes the service's file access to.
     let executable = crate::app_bundle::resolved(executable);
-    let plist = launchd_plist(&label, &executable, arguments)?;
+    let plist = crate::launchd::plist(&label, &executable, arguments)?;
     let path = directory.join("service.plist");
     atomic_write(&path, plist.as_bytes(), None)?;
-    // A quarantined writer quarantines the plist too, and launchd refuses
-    // to load a quarantined job definition.
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let file = std::ffi::CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| "Invalid agent-service plist path")?;
-        unsafe { libc::removexattr(file.as_ptr(), c"com.apple.quarantine".as_ptr(), 0) };
-    }
-    let _ = launchctl(&["bootout".as_ref(), target.as_ref()]);
-    // bootout returns before launchd forgets the label; retry briefly.
-    let mut loaded = false;
-    for _ in 0..20 {
-        if launchctl(&["bootstrap".as_ref(), domain.as_ref(), path.as_os_str()]) {
-            loaded = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let _ = std::fs::remove_file(&path);
-    if loaded {
+    if crate::launchd::bootstrap(&domain, &target, &path) {
         Ok(())
     } else {
         Err("launchd did not accept the agent service".into())
     }
-}
-
-#[cfg(target_os = "macos")]
-fn launchd_plist(
-    label: &str,
-    executable: &Path,
-    arguments: &[std::ffi::OsString],
-) -> Result<String, String> {
-    fn text(value: &std::ffi::OsStr) -> Option<String> {
-        let value = value.to_str()?;
-        if value
-            .chars()
-            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
-        {
-            return None;
-        }
-        Some(
-            value
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;"),
-        )
-    }
-    let mut program = String::new();
-    for argument in
-        std::iter::once(executable.as_os_str()).chain(arguments.iter().map(|a| a.as_os_str()))
-    {
-        let argument = text(argument).ok_or("Agent-service arguments are not plist text")?;
-        program.push_str(&format!("<string>{argument}</string>"));
-    }
-    let mut environment = String::new();
-    for (key, value) in std::env::vars_os() {
-        if let (Some(key), Some(value)) = (text(&key), text(&value)) {
-            environment.push_str(&format!("<key>{key}</key><string>{value}</string>"));
-        }
-    }
-    let directory = std::env::current_dir()
-        .ok()
-        .and_then(|d| text(d.as_os_str()))
-        .unwrap_or_else(|| "/".into());
-    Ok(format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-<key>Label</key><string>{label}</string>
-<key>ProgramArguments</key><array>{program}</array>
-<key>EnvironmentVariables</key><dict>{environment}</dict>
-<key>WorkingDirectory</key><string>{directory}</string>
-<key>RunAtLoad</key><true/>
-<key>KeepAlive</key><false/>
-<key>ProcessType</key><string>Interactive</string>
-<key>AbandonProcessGroup</key><true/>
-</dict>
-</plist>
-"#
-    ))
 }
 
 /// Panel evidence calls from a tool: reach the running service of this
@@ -2323,9 +2221,20 @@ async fn dispatch(
             Ok(json!({"schemaVersion":1,"agentId":p.agent_id,"supported":true,"sessions":rows}))
         }
         "conversationProjectList" => {
-            if params != &json!({}) {
-                return Err("conversationProjectList takes no parameters".into());
+            // With the page's origin and path it also says which project a
+            // new conversation there starts in (a checkout of the repository
+            // the page names, or the site's remembered project).
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct ProjectList {
+                origin: Option<String>,
+                page_path: Option<String>,
+                /// The page's `location.search`: some sites name the project there.
+                query: Option<String>,
             }
+            let page: ProjectList = serde_json::from_value(params.clone()).map_err(|_| {
+                "conversationProjectList takes an optional origin, pagePath and query"
+            })?;
             let (panel, roots) = {
                 let e = engine.lock().await;
                 let panel: Vec<_> = e
@@ -2360,13 +2269,29 @@ async fn dispatch(
                         .into_iter()
                         .map(|(path, site, at)| (path, "site", at, Some(site))),
                 );
-                super::projects::merge(seen, &root)
+                let mut rows = super::projects::merge(seen, &root);
+                // Every recent checkout may be the page's repository; the
+                // panel offers only the newest.
+                let page = match (page.origin, page.page_path) {
+                    (Some(origin), Some(path)) => {
+                        let recent: Vec<PathBuf> = rows.iter().map(|r| r.path.clone()).collect();
+                        let query = page.query.unwrap_or_default();
+                        Some(super::inspect::suggest(&origin, &path, &query, &recent))
+                    }
+                    _ => None,
+                };
+                rows.truncate(super::projects::MAX_RECENT);
+                (rows, page)
             })
             .await
             .map_err(|_| "Project folders could not be listed")?;
-            Ok(
-                json!({"schemaVersion":1,"projects":rows.iter().map(super::projects::row).collect::<Vec<_>>()}),
-            )
+            let (rows, page) = rows;
+            let mut result = json!({"schemaVersion":1,"projects":rows.iter().map(super::projects::row).collect::<Vec<_>>()});
+            // A store that cannot be read costs the suggestion, not the list.
+            if let Some(page) = page {
+                result["page"] = page.unwrap_or(Value::Null);
+            }
+            Ok(result)
         }
         "conversationProjectChoose" => {
             #[derive(Deserialize)]
@@ -4412,6 +4337,28 @@ mod schedule_tests {
             .cloned()
             .unwrap();
         assert!(row["sources"].as_array().unwrap().contains(&json!("panel")));
+        assert!(listed.get("page").is_none());
+        // A page of the repository the folder is a checkout of names it.
+        std::fs::create_dir(project.join(".git")).unwrap();
+        std::fs::write(
+            project.join(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:example-owner/panel-test-repo.git\n",
+        )
+        .unwrap();
+        let page = dispatch(
+            &engine,
+            "conversationProjectList",
+            &json!({"origin":"https://github.com","pagePath":"/example-owner/panel-test-repo/pull/1"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page["page"]["suggestion"]["root"], json!(canonical));
+        assert_eq!(page["page"]["suggestion"]["reason"], "repository");
+        assert!(
+            dispatch(&engine, "conversationProjectList", &json!({"path":"/"}))
+                .await
+                .is_err()
+        );
         // The default stays the private folder.
         let plain = dispatch(&engine, "conversationCreate", &json!({"agentId":"codex"}))
             .await

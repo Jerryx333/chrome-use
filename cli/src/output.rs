@@ -2680,9 +2680,10 @@ Global Options:
   --session <name>     Use specific session
   --headers <json>     Set HTTP headers (scoped to this origin)
   --headed             Show browser window (default; headless is forbidden — it's a bot tell)
-  --window <mode>      dedicated (default) = all agent sessions share one
-                       background window per profile, with separate tab groups;
-                       your own window stays separate. user = interleave tabs.
+  --window <mode>      user (default) = agent tabs open in your current window,
+                       each session in its own tab group starting with ✦.
+                       dedicated = all agent sessions share one background
+                       window per profile instead.
                        Extension-relay path only; applies when the session starts.
                        Env: AGENT_BROWSER_DEDICATED_WINDOW=1 (on) / 0 (off).
   --enable react-devtools   Inject the React DevTools hook before any page JS
@@ -2704,9 +2705,7 @@ Examples:
   chrome-use open https://github.com
   chrome-use open localhost:3000
   chrome-use open example.com --window dedicated
-    # ^ Agent tabs open in a separate window; your current window stays clean
-  chrome-use open example.com --window user
-    # ^ Opt out: interleave agent tabs into your current window (or AGENT_BROWSER_DEDICATED_WINDOW=0)
+    # ^ Opt in: agent tabs open in a separate window (or AGENT_BROWSER_DEDICATED_WINDOW=1)
   chrome-use open api.example.com --headers '{"Authorization": "Bearer token"}'
     # ^ Headers only sent to api.example.com, not other domains
 
@@ -2842,7 +2841,8 @@ focusRestoredAfterMs, or false with focusNote saying why). Windows and Linux:
 not done. AGENT_BROWSER_RESTORE_FOCUS=0 turns it off (read when the daemon
 starts).
 
-AGENT_BROWSER_BACKGROUND_LINKS=cross-site (opt-in; also `1`/`on`): in a tab
+AGENT_BROWSER_BACKGROUND_LINKS=cross-site (also `1`/`on`; the default while
+agent tabs share your window, off with --window dedicated): in a tab
 the session created, a plain left click on a CROSS-SITE target=_blank link
 (another registrable domain by the Public Suffix List on both ends; http/https;
 no rel=opener, download or ping) is taken over after the page's own click
@@ -3967,7 +3967,7 @@ Options:
                        mid-node). Reports what was omitted and a --from cursor.
                        For long feeds/comment threads whose bulk is prose.
   --from <n>           Resume a budgeted snapshot at node n.
-  Scoped/depth-limited/filtered/budgeted JSON refs contain only excerpt refs;
+  Scoped/depth-limited/filtered/budgeted/incremental JSON refs contain only excerpt refs;
   the session's complete live ref map is preserved.
   -f, --filter <regex> Keep only lines matching <regex> (case-insensitive) + their
                        ancestor context; refs preserved. For desktop-shell apps

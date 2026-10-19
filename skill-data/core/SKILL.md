@@ -123,9 +123,9 @@ reread. Keep its baseline; omit it when a complete current tree is needed.
    opens brings Chrome to the front over the user's app, and
    `openedTabWarning` says so; on macOS chrome-use puts the user's app back
    in front (`focusRestored`; `AGENT_BROWSER_RESTORE_FOCUS=0` turns it
-   off). `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`
-   (opt-in, read when the session's daemon starts) opens cross-site
-   `target=_blank` links in a background tab instead; cost: a link that
+   off). Cross-site `target=_blank` links open in a background tab instead
+   (`AGENT_BROWSER_BACKGROUND_LINKS`, default `cross-site` in the user's
+   window, read when the session's daemon starts); cost: a link that
    redirects back to the page's site loses its SameSite=Strict cookies (see
    `click --help`).
 3. Follow the error's instructions: its last line says what to do next.
@@ -295,3 +295,5 @@ Run `chrome-use skills get <name>` with one name below.
 | Cloud browsers | `vercel-sandbox` or `agentcore` |
 
 For repeated control names, discover the container with `find query`, then use semantic `find ... --within <CSS|@ref>`. Semantic queries refuse multiple visible matches; see core/interacting for bounded candidate diagnostics and explicit first/nth selection. A CSS selector or XPath given to `click`/`fill`/`hover`/… is refused the same way when it matches several elements (`selector_ambiguous`, with each match's text and position): narrow it, use a `@ref`, or `find nth <index> <selector> <action>`.
+
+Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.

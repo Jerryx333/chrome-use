@@ -145,7 +145,8 @@ pub(super) struct Recent {
 }
 
 /// Merge `(path, source, last used, site)` sightings into the offered list:
-/// existing, allowed directories, one row each, most recent first.
+/// existing, allowed directories, one row each, most recent first. The
+/// caller offers the first `MAX_RECENT`.
 pub(super) fn merge(
     seen: impl IntoIterator<Item = (PathBuf, &'static str, u64, Option<String>)>,
     panel_root: &Path,
@@ -177,7 +178,6 @@ pub(super) fn merge(
         }
     }
     rows.sort_by_key(|r| std::cmp::Reverse(r.last_used));
-    rows.truncate(MAX_RECENT);
     rows
 }
 

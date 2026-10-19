@@ -7320,9 +7320,11 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     );
     let mut diff_note: Option<&'static str> = None;
     let full_tree = tree.clone();
+    let mut diff_is_excerpt = false;
     let tree = if want_diff {
         match snapshot_diff_basis(state.last_snapshot.as_ref(), &url, &opts_key) {
             SnapshotDiffBasis::Compare(prev_tree) => {
+                diff_is_excerpt = true;
                 let d = diff::diff_snapshots(
                     &format!("{}\n", prev_tree.trim_end()),
                     &format!("{}\n", tree.trim_end()),
@@ -7376,7 +7378,10 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     // Sparse-page detection uses the complete live map, not an intentionally
     // limited excerpt. Filtering output metadata must not trigger screenshots.
     let ref_count = refs.len();
-    let limited = options.selector.is_some()
+    // A valid diff, including an empty one, exposes only refs in its excerpt.
+    // The complete live state.ref_map stays intact for actions using prior refs.
+    let limited = diff_is_excerpt
+        || options.selector.is_some()
         || options.depth.is_some()
         || budget.is_some()
         || from > 0

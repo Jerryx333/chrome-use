@@ -3,6 +3,8 @@
 // chrome-use CLI is live, and renders a paired / not-paired indicator.
 
 import { t, applyI18n } from './i18n.js'
+import { versionNotices } from './version-notice.js'
+import { renderVersionNotices } from './version-banner.js'
 
 applyI18n(document)
 
@@ -17,8 +19,27 @@ const hintCommand = document.getElementById('hintCommand')
 let resolved = false
 let statusEpoch = 0
 
+// CLI / extension version banners. Shown whatever the connection state: a
+// pending extension update matters even while the CLI is not paired.
+function renderVersions(state) {
+  renderVersionNotices(document.getElementById('versionNotices'), versionNotices({
+    cli: state?.cli, legacyCli: state?.legacyCli === true, platform: globalThis.navigator?.userAgentData?.platform || globalThis.navigator?.platform || '',
+    cliUpgrade: state?.cliUpgrade, update: state?.update, extensionVersion: state?.extensionVersion,
+  }), { document, t, onAction: versionAction })
+}
+
+async function versionAction(action) {
+  const note = document.getElementById('versionError')
+  note.hidden = true
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) return
+  const type = action === 'upgradeCli' ? 'ab-cli-upgrade' : 'ab-apply-update'
+  const response = await chrome.runtime.sendMessage({ type }).catch((error) => ({ success: false, error: String(error.message || error) }))
+  if (!response?.success) { note.hidden = false; note.textContent = response?.error || t('popup_update_failed') }
+}
+
 function render(state) {
   resolved = true
+  renderVersions(state)
   const connected = !!(state && state.connected)
   dot.classList.remove('on', 'off')
   if (connected) {

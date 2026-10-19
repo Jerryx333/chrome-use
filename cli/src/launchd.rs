@@ -1,0 +1,128 @@
+//! One-shot launchd jobs: start a process of ours outside the caller's
+//! process tree.
+//!
+//! Under Chrome every descendant of the native-messaging host inherits
+//! Chrome's process quarantine, and every file it writes is quarantined. The
+//! panel service and a background upgrade started from the host therefore run
+//! as a launchd job in the user's GUI domain instead of as a child.
+
+#![cfg(target_os = "macos")]
+
+use std::ffi::OsStr;
+use std::path::Path;
+use std::time::Duration;
+
+/// `launchctl` with `args`, quietly; whether it succeeded.
+pub fn launchctl(args: &[&OsStr]) -> bool {
+    std::process::Command::new("/bin/launchctl")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The pid of a launchd job's running process, if it has one.
+pub fn job_pid(target: &str) -> Option<u32> {
+    let out = std::process::Command::new("/bin/launchctl")
+        .args(["print", target])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("pid = ")?.trim().parse().ok())
+}
+
+/// `gui/<uid>`, the domain of the logged-in user's jobs.
+pub fn gui_domain() -> String {
+    format!("gui/{}", unsafe { libc::getuid() })
+}
+
+/// Load the job defined at `plist` into `domain`, replacing a job of the same
+/// `target` left loaded by an earlier start. The file is removed afterwards:
+/// it carries the caller's environment, so it lives only until launchd has
+/// read it.
+pub fn bootstrap(domain: &str, target: &str, plist: &Path) -> bool {
+    // A quarantined writer quarantines the plist too, and launchd refuses to
+    // load a quarantined job definition.
+    {
+        use std::os::unix::ffi::OsStrExt;
+        if let Ok(file) = std::ffi::CString::new(plist.as_os_str().as_bytes()) {
+            unsafe { libc::removexattr(file.as_ptr(), c"com.apple.quarantine".as_ptr(), 0) };
+        }
+    }
+    let _ = launchctl(&["bootout".as_ref(), target.as_ref()]);
+    // bootout returns before launchd forgets the label; retry briefly.
+    let mut loaded = false;
+    for _ in 0..20 {
+        if launchctl(&["bootstrap".as_ref(), domain.as_ref(), plist.as_os_str()]) {
+            loaded = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = std::fs::remove_file(plist);
+    loaded
+}
+
+/// A job that runs `executable arguments` once at load, with this process's
+/// environment and working directory, and is not restarted.
+pub fn plist(
+    label: &str,
+    executable: &Path,
+    arguments: &[std::ffi::OsString],
+) -> Result<String, String> {
+    fn text(value: &OsStr) -> Option<String> {
+        let value = value.to_str()?;
+        if value
+            .chars()
+            .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r'))
+        {
+            return None;
+        }
+        Some(
+            value
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;"),
+        )
+    }
+    let mut program = String::new();
+    for argument in
+        std::iter::once(executable.as_os_str()).chain(arguments.iter().map(|a| a.as_os_str()))
+    {
+        let argument = text(argument).ok_or("launchd job arguments are not plist text")?;
+        program.push_str(&format!("<string>{argument}</string>"));
+    }
+    let mut environment = String::new();
+    // A job runs outside Chrome's tree, whatever the caller's marker says.
+    for (key, value) in std::env::vars_os().filter(|(k, _)| k != crate::upgrade::UNDER_CHROME_ENV) {
+        if let (Some(key), Some(value)) = (text(&key), text(&value)) {
+            environment.push_str(&format!("<key>{key}</key><string>{value}</string>"));
+        }
+    }
+    let directory = std::env::current_dir()
+        .ok()
+        .and_then(|d| text(d.as_os_str()))
+        .unwrap_or_else(|| "/".into());
+    Ok(format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+<key>Label</key><string>{label}</string>
+<key>ProgramArguments</key><array>{program}</array>
+<key>EnvironmentVariables</key><dict>{environment}</dict>
+<key>WorkingDirectory</key><string>{directory}</string>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><false/>
+<key>ProcessType</key><string>Interactive</string>
+<key>AbandonProcessGroup</key><true/>
+</dict>
+</plist>
+"#
+    ))
+}

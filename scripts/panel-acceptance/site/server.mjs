@@ -25,6 +25,13 @@ const routes = {
   '/a': () => page('Page A', '<h1 id="title">Page A</h1><p>Sent from here.</p><a id="to-b" href="/b">Go to B</a>'),
   '/b': q => page('Page B', `<h1 id="title">Page B</h1><p id="where">${q.get('landed') ? 'landed by redirect' : q.get('popup') ? 'opened as popup' : 'direct'}</p><button id="act" onclick="document.getElementById('done').textContent='Acted on B'">Act</button><p id="done"></p><a id="redirect" href="/redirect">Redirecting link</a> <a id="popup" href="/b?popup=1" target="_blank">Popup link</a>`),
   '/c': () => page('Page C', '<h1 id="title">Page C</h1><p>The user switched here.</p>'),
+  // A code-host shaped repository page (site-project-live): a checkout whose
+  // remote is <site>/acme/widget.git belongs to it.
+  '/acme/widget': () => page('acme/widget', '<h1 id="title">acme/widget</h1><a href="/acme/widget/pulls/7">Pull 7</a>'),
+  '/acme/widget/pulls/7': () => page('Pull 7 · acme/widget', '<h1 id="title">Pull 7</h1><p>Make the widget spin.</p>'),
+  // An App Store Connect app page, served under that host name through
+  // Chrome's --host-resolver-rules (site-project-live).
+  '/apps/1234567890/testflight/ios': () => page('Hellow - App Store Connect', '<h1 id="title">Hellow</h1><p>TestFlight builds</p>'),
   // A form whose save the server rejects; the page reports what the server said.
   '/form': () => page('Order form', `<h1>Order form</h1><label>Name <input id="name" name="name"></label>
 <button id="save" onclick="save()">Save</button><button id="save-ok" onclick="saveOk()">Save draft</button><p id="status"></p>

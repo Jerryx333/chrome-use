@@ -1368,13 +1368,12 @@ pub fn parse_flags(args: &[String]) -> Flags {
             }
             "--window" => {
                 // Where agent tabs open on the extension-relay path:
-                //   dedicated (default) → a separate window in the user's profile,
-                //                so agent tabs don't clutter the window the user is
-                //                using
-                //   user       → interleave into the user's active window (legacy)
+                //   user (default) → the user's active window, in the session's
+                //                own tab group
+                //   dedicated  → a separate window in the user's profile
                 // Surfaced as AGENT_BROWSER_DEDICATED_WINDOW so the daemon (a child
                 // that inherits this env) picks it up when its session launches.
-                // Dedicated is the default (unset env), so `user` sets the opt-out.
+                // Shared is the default (unset env), so `dedicated` sets the opt-in.
                 if let Some(s) = args.get(i + 1) {
                     match s.trim() {
                         "dedicated" | "separate" | "own" => {
