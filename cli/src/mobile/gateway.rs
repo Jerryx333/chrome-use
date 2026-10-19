@@ -923,14 +923,17 @@ async fn perform(
                 .call("scheduleList", json!({}), profile)
                 .await
                 .map_err(panel_error)?;
-            let exists = list["schedules"]
+            let schedule = list["schedules"]
                 .as_array()
-                .is_some_and(|s| s.iter().any(|s| s["id"] == id.as_str()));
-            if !exists {
-                return Err(Refusal {
+                .and_then(|s| s.iter().find(|s| s["id"] == id.as_str()))
+                .ok_or_else(|| Refusal {
                     code: "notFound",
                     message: "Schedule not found; the phone cannot create schedules".into(),
-                });
+                })?;
+            // Turning a schedule on lets it run by itself later; turning one
+            // off is always allowed.
+            if enabled {
+                require_access(shared, session, schedule).await?;
             }
             shared
                 .panel

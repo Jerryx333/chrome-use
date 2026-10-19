@@ -58,14 +58,14 @@
 <div class="scroll"><table>
 <tr><th>Data</th><th>Where it goes</th></tr>
 <tr><td>Tasks, images, agent replies, screenshots</td><td>Only between the app and your paired computer, end-to-end encrypted. Cached on the device to show history; deleted when you remove the computer or uninstall the app.</td></tr>
-<tr><td>Pairing keys</td><td>Device keychain/keystore and your computer. Never sent to the developer.</td></tr>
+<tr><td>Pairing keys</td><td>Device keychain/keystore and your computer. Never sent to the developer. Deleted when you remove the computer in the app; on iOS, keychain entries can remain after the app is uninstalled, so revoke the device on the computer to make them useless.</td></tr>
 <tr><td>Push device token</td><td>Sent to the push relay to obtain a relay token and to deliver notifications; not stored by the relay.</td></tr>
 <tr><td>Camera</td><td>Used only to scan the pairing QR code; images are not saved or sent.</td></tr>
 <tr><td>Face ID / passcode</td><td>Handled by the operating system; the app only receives success or failure.</td></tr>
 </table></div>
 
 <h2>Your control</h2>
-<p>Remove a computer in the app, or run <code>chrome-use mobile revoke &lt;id&gt;</code> on the computer, to end access immediately. Uninstalling the app deletes its local data. The app is not directed at children.</p>
+<p>Remove a computer in the app, or run <code>chrome-use mobile revoke &lt;id&gt;</code> on the computer, to end access immediately. Uninstalling the app deletes its cached history; pairing keys in the iOS keychain can remain until you remove the computer in the app or revoke the device on the computer. The app is not directed at children.</p>
 
 <h2>Contact</h2>
 <p>Questions: <a href="mailto:leeguoooo@gmail.com">leeguoooo@gmail.com</a> · Source: <a href="https://github.com/leeguooooo/chrome-use">github.com/leeguooooo/chrome-use</a></p>

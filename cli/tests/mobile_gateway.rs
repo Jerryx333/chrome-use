@@ -25,6 +25,8 @@ const PROFILE: &str = "mobile-fixture";
 const CONVERSATION: &str = "7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e";
 /// A desktop conversation with full access.
 const ELEVATED: &str = "5a1f2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+/// A schedule with full access.
+const NIGHTLY: &str = "6b2e3c4d-5e6f-4a70-8b8c-9d0e1f2a3b4c";
 
 fn test_binary() -> PathBuf {
     std::env::var_os("CHROME_USE_TEST_BIN")
@@ -107,7 +109,12 @@ fn serve_panel(listener: TcpListener, hash: String, state: Arc<Mutex<Panel>>) {
                     let elevated = json!({"id":ELEVATED,"agentId":"codex","title":"Deploy","phase":"idle","fullAccess":true,"options":{"toolAccess":"writeFiles"},"scheduleId":null,"lastTurn":null,"updated":1});
                     json!({"result":{"schemaVersion":1,"conversations":[summary, elevated]}})
                 }
-                "scheduleList" => json!({"result":{"schemaVersion":1,"schedules":[]}}),
+                "scheduleList" => {
+                    json!({"result":{"schemaVersion":1,"schedules":[{"id":NIGHTLY,"name":"Nightly","agentId":"codex","fullAccess":true,"options":{},"enabled":false,"finishedAt":null}]}})
+                }
+                "scheduleSave" => {
+                    json!({"result":{"schemaVersion":1,"schedule":{"id":params["id"],"enabled":params["enabled"]}}})
+                }
                 "conversationSend" => {
                     panel.phase = "running".into();
                     let n = panel.events.len() as u64 + 1;
@@ -784,6 +791,14 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
         .request("conversationRead", json!({"conversationId":ELEVATED}))
         .await;
     assert!(read.get("result").is_some(), "{read}");
+    let enable = second
+        .request("scheduleSave", json!({"id":NIGHTLY,"enabled":true}))
+        .await;
+    assert_eq!(enable["error"]["code"], "accessTooHigh");
+    let disable = second
+        .request("scheduleSave", json!({"id":NIGHTLY,"enabled":false}))
+        .await;
+    assert_eq!(disable["result"]["schedule"]["enabled"], false);
     let hello = second.request("hello", json!({})).await;
     assert_eq!(hello["result"]["fullAccessAllowed"], false);
     let granted = cli(&relay, &home, &["access", &device, "full", "--json"]);
