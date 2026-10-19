@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mobile Remote · chrome-use docs</title>
+  <meta name="description" content="Pair a phone with the desktop agent chat using chrome-use mobile serve and pair, then send turns, answer approvals and get push notifications over Tailscale, a Cloudflare named tunnel or your LAN." />
+  <meta name="theme-color" content="#fcfbf4" />
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/en/mobile.html" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/mobile.html" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/mobile.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/mobile.html" />
+</head>
+<body data-page="mobile" data-lang="en">
+  <div id="du-topbar"></div>
+  <div class="du-shell">
+    <nav id="du-sidebar"></nav>
+    <main class="du-main"><nav aria-label="Documentation"><a href="/en/">chrome-use</a> · <a href="/en/install.html">Install</a> · <a href="/en/logged-in-browser.html">Logged-in browser guide</a> · <a href="/en/mcp.html">MCP</a> · <a href="/en/compare.html">Compare</a></nav>
+      <p class="du-eyebrow">Agent chat / Phone</p>
+      <div class="du-title-row">
+        <h1>Mobile Remote</h1>
+        <button class="du-copy-page" type="button" aria-label="Copy page">
+          <span class="du-copy-page-label">Copy page</span>
+        </button>
+      </div>
+      <p class="du-lede">
+        Away from the computer, keep using the <a href="/en/agent-panel.html">agent chat</a> from your
+        phone: start a turn, watch it run, answer the agent's approval prompts, take a screenshot of its
+        page and get notified when it finishes. The agent and your logged-in Chrome stay on the computer;
+        the phone is a remote.
+      </p>
+
+      <h2>Start the gateway</h2>
+      <p>
+        <code>chrome-use mobile serve</code> is the only process a phone connects to. By default it
+        listens on <code>127.0.0.1:17345</code>, for a Cloudflare tunnel running on the same computer.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use mobile serve                        # 127.0.0.1:17345
+chrome-use mobile serve --bind 100.101.102.103 # the Tailscale address only
+chrome-use mobile serve --bind 0.0.0.0 --allow-all-interfaces</code></pre>
+      </div>
+      <p>
+        Listening on a non-loopback address prints a warning; every interface needs
+        <code>--allow-all-interfaces</code>. The gateway never forwards <code>/api/v1/*</code> or the
+        stream WebSocket, and never exposes the panel service's port or capability.
+      </p>
+
+      <h2>Pick a way in</h2>
+      <p>The phone needs an address that reaches the gateway. We run no relay; you bring the route.</p>
+
+      <h3>Tailscale</h3>
+      <p>Simplest when the computer and the phone share a tailnet:</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>IP=$(tailscale ip -4)
+chrome-use mobile serve --bind "$IP"
+chrome-use mobile pair --url "ws://$IP:17345" --name "My iPhone"</code></pre>
+      </div>
+
+      <h3>Cloudflare named tunnel</h3>
+      <p>Without Tailscale on the phone, a named tunnel gives the gateway a stable <code>wss://</code> hostname:</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>cloudflared tunnel login
+cloudflared tunnel create chrome-use-mobile
+cloudflared tunnel route dns chrome-use-mobile mobile.example.com</code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">~/.cloudflared/config.yml</span></div>
+<pre><code>tunnel: chrome-use-mobile
+credentials-file: /Users/you/.cloudflared/&lt;tunnel-id&gt;.json
+ingress:
+  - hostname: mobile.example.com
+    service: http://127.0.0.1:17345
+  - service: http_status:404</code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use mobile serve
+cloudflared tunnel run chrome-use-mobile
+chrome-use mobile pair --url wss://mobile.example.com --name "My Pixel"</code></pre>
+      </div>
+      <p>
+        Cloudflare terminates TLS at its edge, so every frame between the phone and the gateway is also
+        encrypted end to end: the tunnel cannot read instructions, page text or screenshots.
+        <code>trycloudflare.com</code> quick tunnels get a new address on every start, which means pairing
+        again; use them only to try things out.
+      </p>
+
+      <h3>Same LAN</h3>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use mobile serve --bind 192.168.1.20
+chrome-use mobile pair --url ws://192.168.1.20:17345</code></pre>
+      </div>
+      <p>Running <code>pair</code> without <code>--url</code> lists the Tailscale and LAN addresses it finds.</p>
+
+      <h2>Pair</h2>
+      <p>
+        <code>pair</code> prints a QR code for the chrome-use app. It is valid for 10 minutes and works
+        once; scanning it again fails. When several Chrome profiles use the agent chat, choose the one
+        this phone may drive with <code>--profile</code>; every request from the phone is bound to it.
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use mobile pair --url wss://mobile.example.com --name "My iPhone"
+chrome-use mobile pair --url wss://mobile.example.com --json   # just the chromeuse://pair link</code></pre>
+      </div>
+      <p>
+        The link in the QR code carries the phone's key. It stays in your terminal's scrollback; do not
+        screenshot or paste it anywhere.
+      </p>
+
+      <h2>Manage devices</h2>
+      <table>
+        <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td><code>chrome-use mobile devices [--json]</code></td><td>Lists devices: name, state, when paired, last connection time and IP, whether push is on.</td></tr>
+          <tr><td><code>chrome-use mobile revoke &lt;id&gt;</code></td><td>Deletes the device's key and push token. A running gateway drops its connection within a second.</td></tr>
+          <tr><td><code>chrome-use mobile push-test &lt;id&gt;</code></td><td>Sends a test notification to that device.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        Ten failed handshakes in a row disable a device until it is paired again. A source address with
+        repeated failures waits longer before each new attempt.
+      </p>
+
+      <h2>What the phone can do</h2>
+      <ul>
+        <li>See conversations, start one, send text and up to 5 images (512 KiB each), stop the current turn.</li>
+        <li>Follow progress live. After a dropped connection it resumes where it left off, with no missing or repeated events.</li>
+        <li>Answer approval requests from Claude Code, Codex and the other agents.</li>
+        <li>Screenshot the conversation's own browser session (at most one every 2 seconds per conversation). If that session is not running it reports so; it never opens a browser.</li>
+        <li>See scheduled tasks, run one now, turn one on or off.</li>
+      </ul>
+      <p>The phone gets less than the desktop:</p>
+      <ul>
+        <li>No full access. Conversations created from the phone go up to <code>writeFiles</code>, and the phone cannot raise an existing conversation's tool access.</li>
+        <li>No project folder choice, agent executable, configuration, skill edits, new or edited schedules, or stopping the service.</li>
+        <li>Deleting a conversation needs an explicit confirmation in the request.</li>
+      </ul>
+
+      <h2>Push notifications</h2>
+      <p>
+        Once the app turns on notifications, the gateway notifies the phone when an agent waits for your
+        approval, a turn ends, or a scheduled run finishes or fails, at most once per conversation every
+        10 seconds. Notifications are encrypted on the computer; the push service only forwards ciphertext,
+        and they never contain page content or tool output. The default push service is
+        <code>https://push.chrome-use.leeguoo.com</code>; point <code>--push-url</code> or
+        <code>CHROME_USE_PUSH_URL</code> at your own deployment instead.
+      </p>
+
+      <h2>Where data lives</h2>
+      <p>
+        The device list and keys live in <code>~/.chrome-use/mobile/</code> (directory 0700, files 0600;
+        current user only on Windows), or in <code>mobile/</code> under <code>CHROME_USE_RELAY_DIR</code>
+        when that is set.
+      </p>
+    </main>
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

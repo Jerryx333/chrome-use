@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>手机遥控 · chrome-use 文档</title>
+  <meta name="description" content="用 chrome-use mobile serve 和 pair 把手机配对到电脑上的插件对话，经 Tailscale、Cloudflare 命名隧道或局域网远程发消息、审批和接收推送。" />
+  <meta name="theme-color" content="#fcfbf4" />
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/mobile.html" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/mobile.html" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/mobile.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/mobile.html" />
+</head>
+<body data-page="mobile" data-lang="zh">
+  <div id="du-topbar"></div>
+  <div class="du-shell">
+    <nav id="du-sidebar"></nav>
+    <main class="du-main"><nav aria-label="文档"><a href="/">chrome-use</a> · <a href="/install.html">安装</a> · <a href="/logged-in-browser.html">已登录浏览器指南</a> · <a href="/mcp.html">MCP</a> · <a href="/compare.html">选型</a></nav>
+      <p class="du-eyebrow">插件对话 / 手机</p>
+      <div class="du-title-row">
+        <h1>手机遥控</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+      <p class="du-lede">
+        离开电脑时，用手机继续<a href="/agent-panel.html">插件对话</a>：发起新一轮、看进度、回答
+        agent 的审批、截一张当前页面的图、收到完成通知。agent 和已登录的 Chrome 仍在电脑上运行，
+        手机只是遥控器。
+      </p>
+
+      <h2>启动网关</h2>
+      <p>
+        <code>chrome-use mobile serve</code> 是手机唯一能连到的进程。默认只监听
+        <code>127.0.0.1:17345</code>，配合同一台电脑上的 Cloudflare 隧道使用。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use mobile serve                        # 127.0.0.1:17345
+chrome-use mobile serve --bind 100.101.102.103 # 只监听 Tailscale 地址
+chrome-use mobile serve --bind 0.0.0.0 --allow-all-interfaces</code></pre>
+      </div>
+      <p>
+        监听非 loopback 地址时会打印警告；监听所有网卡必须加
+        <code>--allow-all-interfaces</code>。网关不转发 <code>/api/v1/*</code>、stream
+        WebSocket，也不暴露侧栏服务的端口和 capability。
+      </p>
+
+      <h2>选一种连接方式</h2>
+      <p>手机要能访问网关的地址。我们不运营中转服务器，地址由你自己提供。</p>
+
+      <h3>Tailscale</h3>
+      <p>电脑和手机在同一个 tailnet 里时最省事：</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>IP=$(tailscale ip -4)
+chrome-use mobile serve --bind "$IP"
+chrome-use mobile pair --url "ws://$IP:17345" --name "我的 iPhone"</code></pre>
+      </div>
+
+      <h3>Cloudflare 命名隧道</h3>
+      <p>手机不装 Tailscale 时，用命名隧道给网关一个固定的 <code>wss://</code> 域名：</p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>cloudflared tunnel login
+cloudflared tunnel create chrome-use-mobile
+cloudflared tunnel route dns chrome-use-mobile mobile.example.com</code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">~/.cloudflared/config.yml</span></div>
+<pre><code>tunnel: chrome-use-mobile
+credentials-file: /Users/you/.cloudflared/&lt;tunnel-id&gt;.json
+ingress:
+  - hostname: mobile.example.com
+    service: http://127.0.0.1:17345
+  - service: http_status:404</code></pre>
+      </div>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use mobile serve
+cloudflared tunnel run chrome-use-mobile
+chrome-use mobile pair --url wss://mobile.example.com --name "我的 Pixel"</code></pre>
+      </div>
+      <p>
+        Cloudflare 会在边缘解开 TLS，所以手机和网关之间的每一帧另外做了端到端加密，隧道看不到指令、
+        页面文字或截图。<code>trycloudflare.com</code> 快速隧道每次启动换地址，换了就得重新配对，只适合试用。
+      </p>
+
+      <h3>同一局域网</h3>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use mobile serve --bind 192.168.1.20
+chrome-use mobile pair --url ws://192.168.1.20:17345</code></pre>
+      </div>
+      <p>不带 <code>--url</code> 运行 <code>pair</code> 会列出本机检测到的 Tailscale 和局域网地址。</p>
+
+      <h2>配对</h2>
+      <p>
+        <code>pair</code> 在终端打印二维码，用 chrome-use App 扫描。二维码 10 分钟内有效，只能用一次，
+        再扫会失败。电脑上有多个 Chrome profile 使用侧栏时，用 <code>--profile</code>
+        指定这台手机能操作哪一个；配对后手机的所有请求都固定在这个 profile 上。
+      </p>
+      <div class="du-code">
+        <div class="du-code-head"><span class="du-code-name">bash</span></div>
+<pre><code>chrome-use mobile pair --url wss://mobile.example.com --name "我的 iPhone"
+chrome-use mobile pair --url wss://mobile.example.com --json   # 只输出 chromeuse://pair 链接</code></pre>
+      </div>
+      <p>
+        二维码里的链接带着这台手机的密钥。它会留在终端的滚动记录里，不要截图或贴到别处。
+      </p>
+
+      <h2>管理设备</h2>
+      <table>
+        <thead><tr><th>命令</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>chrome-use mobile devices [--json]</code></td><td>列出设备：名称、状态、配对时间、最后连接时间和 IP、是否开了推送。</td></tr>
+          <tr><td><code>chrome-use mobile revoke &lt;id&gt;</code></td><td>删除设备的密钥和推送 token。正在运行的网关在一秒内断开它的连接。</td></tr>
+          <tr><td><code>chrome-use mobile push-test &lt;id&gt;</code></td><td>给这台设备发一条测试通知。</td></tr>
+        </tbody>
+      </table>
+      <p>
+        同一台设备连续 10 次握手失败会被停用，要重新配对。失败次数多的来源地址会被逐步延长等待时间。
+      </p>
+
+      <h2>手机能做什么</h2>
+      <ul>
+        <li>查看对话列表，新建对话，发文字和最多 5 张图（每张 512 KiB 以内），停止当前一轮。</li>
+        <li>实时看进度。断网重连后从上次的位置继续，事件不丢也不重复。</li>
+        <li>回答 Claude Code、Codex 等的审批请求。</li>
+        <li>给对话自己的浏览器 session 截图（每个对话 2 秒最多一张）。session 没在运行时只报错，不会打开浏览器。</li>
+        <li>查看定时任务，立即运行，开关定时任务。</li>
+      </ul>
+      <p>手机拿到的权限比电脑少：</p>
+      <ul>
+        <li>不能打开完全访问，从手机新建的对话最多到 <code>writeFiles</code>，也不能提高已有对话的工具权限。</li>
+        <li>不能选项目文件夹、指定 agent 可执行文件、改配置、改技能、新建或编辑定时任务、停止服务。</li>
+        <li>删除对话要在请求里明确确认。</li>
+      </ul>
+
+      <h2>推送通知</h2>
+      <p>
+        App 打开推送后，网关会在这些时候通知手机：agent 等你审批、一轮结束、定时任务完成或失败。
+        同一个对话 10 秒内最多一条。通知内容在电脑上加密，推送服务只转发密文；它不含页面内容和工具输出。
+        默认推送服务是 <code>https://push.chrome-use.leeguoo.com</code>，可用 <code>--push-url</code>
+        或环境变量 <code>CHROME_USE_PUSH_URL</code> 换成自己部署的。
+      </p>
+
+      <h2>数据位置</h2>
+      <p>
+        设备列表和密钥在 <code>~/.chrome-use/mobile/</code>，目录 0700、文件 0600，Windows
+        上只有当前用户可读。设置了 <code>CHROME_USE_RELAY_DIR</code> 时改用该目录下的 <code>mobile/</code>。
+      </p>
+    </main>
+    <aside id="du-toc"></aside>
+  </div>
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
