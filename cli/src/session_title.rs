@@ -47,27 +47,27 @@ pub fn sanitize_title(raw: &str) -> Option<String> {
     Some(truncated)
 }
 
-/// Appended to every group title so the user can tell our groups from their
-/// own at a glance now that agent tabs share their window. The robot is the
-/// extension's icon; a tab group title is text-only, so the emoji stands in.
-pub const GROUP_MARK: &str = "🤖";
+/// Put in front of every group title so the user can tell our groups from
+/// their own at a glance now that agent tabs share their window. A pointer,
+/// because the agent is the one clicking in those tabs; a tab group title is
+/// text-only, so a character stands in for an icon.
+pub const GROUP_MARK: &str = "⬉";
 
 /// The label to put on this session's tab group: the chosen title when there is
-/// one, otherwise the session id, ending with [`GROUP_MARK`].
+/// one, otherwise the session id, starting with [`GROUP_MARK`].
 pub fn display_name(session: &str) -> String {
     with_mark(&title_of(session).unwrap_or_else(|| session.to_string()))
 }
 
-/// A title the user already ended with the mark keeps a single one. The label
-/// is cut to make room, so a long title never pushes the mark out of the
-/// length Chrome shows.
+/// A title the user already started with the mark keeps a single one. The
+/// label is cut to make room, so the result stays within the length cap.
 fn with_mark(label: &str) -> String {
-    if label.ends_with(GROUP_MARK) {
+    if label.starts_with(GROUP_MARK) {
         return label.to_string();
     }
     let room = MAX_TITLE_CHARS - 1 - GROUP_MARK.chars().count();
     let label: String = label.chars().take(room).collect();
-    format!("{} {GROUP_MARK}", label.trim_end())
+    format!("{GROUP_MARK} {}", label.trim_end())
 }
 
 pub fn title_of(session: &str) -> Option<String> {
@@ -140,24 +140,24 @@ mod tests {
     fn display_name_falls_back_to_the_session_id() {
         let session = "no-such-session-for-title-test";
         clear_title(session);
-        assert_eq!(display_name(session), format!("{session} 🤖"));
+        assert_eq!(display_name(session), format!("⬉ {session}"));
     }
 
-    /// Every group we create ends with the mark, once — also when the user's
-    /// own title already ends with it.
+    /// Every group we create starts with the mark, once — also when the
+    /// user's own title already starts with it.
     #[test]
-    fn group_label_ends_with_a_single_mark() {
+    fn group_label_starts_with_a_single_mark() {
         let session = "chrome-use-title-mark-test";
-        set_title(session, "🔎 查快递 🤖").unwrap();
-        assert_eq!(display_name(session), "🔎 查快递 🤖");
+        set_title(session, "⬉ 查快递").unwrap();
+        assert_eq!(display_name(session), "⬉ 查快递");
         clear_title(session);
     }
 
-    /// A title at the length cap still ends with the mark, inside the cap.
+    /// A title at the length cap still gets the mark, inside the cap.
     #[test]
     fn a_long_title_keeps_the_mark_within_the_cap() {
         let label = with_mark(&"查".repeat(MAX_TITLE_CHARS));
-        assert!(label.ends_with(" 🤖"), "{label}");
+        assert!(label.starts_with("⬉ "), "{label}");
         assert_eq!(label.chars().count(), MAX_TITLE_CHARS);
     }
 
@@ -168,10 +168,10 @@ mod tests {
     fn clearing_restores_the_session_id_as_the_label() {
         let session = "chrome-use-title-clear-test";
         set_title(session, "🔎 old task").unwrap();
-        assert_eq!(display_name(session), "🔎 old task 🤖");
+        assert_eq!(display_name(session), "⬉ 🔎 old task");
         clear_title(session);
         assert_eq!(title_of(session), None);
-        assert_eq!(display_name(session), format!("{session} 🤖"));
+        assert_eq!(display_name(session), format!("⬉ {session}"));
     }
 
     /// A label must survive the stale-file cleanup that runs whenever a daemon
@@ -202,7 +202,7 @@ mod tests {
         let stored = set_title(session, "  🔎  查快递单号 \n").unwrap();
         assert_eq!(stored, "🔎 查快递单号");
         assert_eq!(title_of(session).as_deref(), Some("🔎 查快递单号"));
-        assert_eq!(display_name(session), "🔎 查快递单号 🤖");
+        assert_eq!(display_name(session), "⬉ 🔎 查快递单号");
         clear_title(session);
         assert_eq!(title_of(session), None);
     }

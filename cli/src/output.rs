@@ -2681,7 +2681,7 @@ Global Options:
   --headers <json>     Set HTTP headers (scoped to this origin)
   --headed             Show browser window (default; headless is forbidden — it's a bot tell)
   --window <mode>      user (default) = agent tabs open in your current window,
-                       each session in its own tab group ending with 🤖.
+                       each session in its own tab group starting with ⬉.
                        dedicated = all agent sessions share one background
                        window per profile instead.
                        Extension-relay path only; applies when the session starts.

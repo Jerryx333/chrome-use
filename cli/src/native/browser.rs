@@ -3255,7 +3255,7 @@ pub fn is_valid_label(s: &str) -> bool {
 /// Whether the agent should place its tabs in a dedicated agent window instead
 /// of the user's active window. **Default: off** — agent tabs open in the
 /// window the user is working in, inside the session's own tab group (whose
-/// title ends with the chrome-use mark, see `session_title`). A separate window
+/// title starts with the chrome-use mark, see `session_title`). A separate window
 /// proved hard to use: the user had to go looking for it to watch or take over.
 /// Opt in via `AGENT_BROWSER_DEDICATED_WINDOW` set to an on value
 /// (`1`/`true`/`on`/`dedicated`) or the `--window dedicated` flag; unset or any
