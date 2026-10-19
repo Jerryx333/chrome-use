@@ -4,10 +4,12 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { t, applyI18n } from './i18n.js'
+import { versionNotices } from './version-notice.js'
+import { renderVersionNotices } from './version-banner.js'
 
 // popup.js is a module; vm runs it as a script with its i18n import supplied.
 const source = readFileSync(new URL('./popup.js', import.meta.url), 'utf8')
-  .replace(/^import \{ t, applyI18n \} from '\.\/i18n\.js'\n/m, '')
+  .replace(/^import .*\n/gm, '')
 
 function popup(initial, extensionAvailable = true, deferred = false) {
   const callbacks = [], timers = []
@@ -16,18 +18,19 @@ function popup(initial, extensionAvailable = true, deferred = false) {
   const context = {
     document: {
       getElementById(id) {
-        if (!nodes.has(id)) nodes.set(id, { textContent: '', style: {},
-          classList: { add() {}, remove() {} } })
+        if (!nodes.has(id)) nodes.set(id, { textContent: '', style: {}, children: [],
+          classList: { add() {}, remove() {} }, replaceChildren(...c) { this.children = c } })
         return nodes.get(id)
       },
       querySelectorAll() { return [] },
+      createElement: tag => ({ tag, children: [], dataset: {}, textContent: '', append(...c) { this.children.push(...c) }, addEventListener() {} }),
     },
     chrome: { runtime: {
       sendMessage(_request, callback) { if (deferred) callbacks.push(callback); else callback(initial) },
       onMessage: { addListener(fn) { changed = fn } },
     } },
     setTimeout(callback, delay) { timers.push({ callback, delay }) },
-    t, applyI18n,
+    t, applyI18n, versionNotices, renderVersionNotices,
   }
   if (!extensionAvailable) delete context.chrome
   vm.runInNewContext(source, context)
@@ -93,4 +96,17 @@ test('popup text follows the Chrome UI language', async () => {
     assert.equal(p.nodes.get('statusLabel').textContent, '已连接')
     assert.equal(p.nodes.get('tabPill').textContent, '2 个标签页')
   } finally { installI18n('en') }
+})
+
+test('popup shows an outdated CLI and a waiting extension update', () => {
+  const p = popup({ connected: true, connectionState: 'connected', tabCount: 0,
+    cli: { version: '1.5.235', latest: '1.5.240', onDisk: '1.5.235', autoUpgrade: false, selfUpgrade: 'ready', lastAutoUpgrade: null },
+    update: { pending: true, version: '0.5.80', reason: 'recent_activity', canApplyNow: false } })
+  const box = p.nodes.get('versionNotices')
+  assert.equal(box.hidden, false)
+  const texts = box.children.map(b => b.children[0].textContent)
+  assert.match(texts[0], /1\.5\.240 is available \(you have 1\.5\.235\)/)
+  assert.match(texts[1], /0\.5\.80 is downloaded/)
+  p.change({ connected: true, connectionState: 'connected', tabCount: 0 })
+  assert.equal(box.hidden, true)
 })

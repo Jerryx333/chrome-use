@@ -8,6 +8,8 @@ import { createResumePicker, parseResumeCommand, importedView, RESUME_TEXT } fro
 import { createProjectChoice, folderLabel } from './project-picker.js';
 import { grantRefusal, originOf } from './tab-grant.js';
 import { panelTabKey, panelTabFrom } from './panel-tabs.js';
+import { versionNotices } from './version-notice.js';
+import { renderVersionNotices } from './version-banner.js';
 import { inspectChipsKey, inspectPickKey, chipTitle, composeMessage, removeChip, withinLabel, splitElementContext, sourceShort } from './inspect-chips.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
@@ -235,7 +237,18 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     return reply.result;
   }
   const convertHeif = heifConverter(api);
+  // Version banners: what needs doing about the CLI or this extension. The
+  // "updated to X" note stays in the popup; the panel keeps to actionable ones.
+  function renderVersions(state) {
+    const notices = versionNotices({ cli: state?.cli, legacyCli: state?.legacyCli === true, platform: globalThis.navigator?.userAgentData?.platform || globalThis.navigator?.platform || '', cliUpgrade: state?.cliUpgrade, update: state?.update, extensionVersion: state?.extensionVersion }).filter(notice => notice.id !== 'ext-updated');
+    renderVersionNotices(document.getElementById('versionNotices'), notices, { document, t, onAction: async action => {
+      if (!runtime?.sendMessage) return;
+      const reply = await runtime.sendMessage({ type: action === 'upgradeCli' ? 'ab-cli-upgrade' : 'ab-apply-update' });
+      if (!reply?.success) error(new Error(reply?.error || t('popup_update_failed')));
+    } });
+  }
   function renderConnection(state) {
+    renderVersions(state);
     connected = state?.connected === true;
     panelSupport = state?.agentPanel?.schemaVersion === 1 ? state.agentPanel : null;
     nodes.connection.classList.toggle('disconnected', !connected);

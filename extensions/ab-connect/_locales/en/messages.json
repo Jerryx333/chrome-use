@@ -3432,5 +3432,95 @@
   },
   "options_pick_all_hint": {
     "message": "Chrome asks once, instead of the first time you pick an element on each site. The extension still touches a page only when you pick an element there."
+  },
+  "ext_version_cli_outdated": {
+    "message": "chrome-use CLI $LATEST$ is available (you have $CURRENT$).",
+    "placeholders": {
+      "latest": {
+        "content": "$1"
+      },
+      "current": {
+        "content": "$2"
+      }
+    }
+  },
+  "ext_version_cli_too_old": {
+    "message": "Your chrome-use CLI $CURRENT$ is too old for this extension. Update it to $LATEST$.",
+    "placeholders": {
+      "current": {
+        "content": "$1"
+      },
+      "latest": {
+        "content": "$2"
+      }
+    }
+  },
+  "ext_version_cli_switch": {
+    "message": "chrome-use CLI $VERSION$ is installed. It takes over once the agent is idle.",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_cli_upgrading": {
+    "message": "Updating the chrome-use CLI…"
+  },
+  "ext_version_cli_failed": {
+    "message": "The CLI update did not finish. Run this in a terminal:"
+  },
+  "ext_version_cli_auto_failed": {
+    "message": "chrome-use CLI $LATEST$ could not be installed automatically. Run this in a terminal:",
+    "placeholders": {
+      "latest": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_ext_pending": {
+    "message": "Extension $VERSION$ is downloaded and installs once the agent is idle.",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_ext_updated": {
+    "message": "Extension updated to $VERSION$.",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_hold_busy": {
+    "message": "Waiting: a command is running."
+  },
+  "ext_version_hold_recent": {
+    "message": "Waiting: the agent used the browser in the last minute."
+  },
+  "ext_version_hold_applying": {
+    "message": "Installing…"
+  },
+  "ext_version_action_upgrade_cli": {
+    "message": "Update CLI"
+  },
+  "ext_version_action_apply_update": {
+    "message": "Update now"
+  },
+  "bg_cli_upgrade_timeout": {
+    "message": "The CLI update took more than five minutes and was given up on."
+  },
+  "bg_cli_upgrade_no_host": {
+    "message": "The chrome-use CLI is not connected, so it cannot update itself."
+  },
+  "bg_update_not_now": {
+    "message": "The update can't be installed right now; it installs once the agent is idle."
+  },
+  "popup_update_failed": {
+    "message": "Couldn't start the update."
+  },
+  "ext_version_cli_legacy": {
+    "message": "Your chrome-use CLI is too old to update itself from here. Reinstall it in a terminal:"
   }
 }

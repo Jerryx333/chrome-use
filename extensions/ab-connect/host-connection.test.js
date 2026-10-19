@@ -62,7 +62,7 @@ test('creating a Port never claims the native host is connected', () => {
   const state = new HostConnectionState()
   state.begin({})
   assert.deepEqual(state.snapshot(), {
-    connected: false, connectionState: 'connecting', connectionError: null, agentPanel:null,
+    connected: false, connectionState: 'connecting', connectionError: null, agentPanel:null, cli:null, legacyCli:false,
   })
 })
 
@@ -73,7 +73,7 @@ test('missing native host preserves its concrete error and never confirms', () =
   state.end(port, 'Specified native messaging host not found.')
   assert.deepEqual(state.snapshot(), {
     connected: false, connectionState: 'disconnected',
-    connectionError: 'Specified native messaging host not found.', agentPanel:null,
+    connectionError: 'Specified native messaging host not found.', agentPanel:null, cli:null, legacyCli:false,
   })
 })
 
@@ -169,3 +169,61 @@ test('every flag the real host capabilities() reports reaches the panel', async 
   assert.equal(state.snapshot().agentPanel.turnEvidence, undefined);
   assert.equal(state.snapshot().agentPanel.recording, undefined);
 });
+
+test('a pong carries the CLI version record; a change is reported once and a disconnect clears it', () => {
+  const state = new HostConnectionState()
+  const port = {}
+  state.begin(port)
+  const cli = { version: '1.5.230', latest: '1.5.240', onDisk: '1.5.230', autoUpgrade: true, selfUpgrade: 'ready', lastAutoUpgrade: null }
+  assert.equal(state.receive(port, { method: 'pong', params: { cli } }), true)
+  assert.deepEqual(state.snapshot().cli, cli)
+  assert.equal(state.receive(port, { method: 'pong', params: { cli } }), false)
+  assert.equal(state.receive(port, { method: 'pong', params: { cli: { ...cli, onDisk: '1.5.240' } } }), true)
+  assert.equal(state.snapshot().cli.onDisk, '1.5.240')
+  // Messages without a record (a hello-reply pong of an older shape, a ping) keep it.
+  state.receive(port, { method: 'pong', params: { agentPanel: null } })
+  state.receive(port, { method: 'ping' })
+  assert.equal(state.snapshot().cli.onDisk, '1.5.240')
+  state.end(port)
+  assert.equal(state.snapshot().cli, null)
+})
+
+test('an older host without a cli record, or a malformed one, reports none', () => {
+  const state = new HostConnectionState()
+  const port = {}
+  state.begin(port)
+  state.receive(port, { method: 'pong' })
+  assert.equal(state.snapshot().cli, null)
+  state.receive(port, { method: 'pong', params: { cli: { version: 'nope' } } })
+  assert.equal(state.snapshot().cli, null)
+})
+
+test('an upgradeCliResult reply confirms the host like any recognized message', () => {
+  const state = new HostConnectionState()
+  const port = {}
+  state.begin(port)
+  state.receive(port, { method: 'upgradeCliResult', params: { started: true } })
+  assert.equal(state.snapshot().connected, true)
+})
+
+test('a first pong without a cli record marks a legacy CLI; nothing shows before it', () => {
+  const state = new HostConnectionState()
+  const port = {}
+  state.begin(port)
+  assert.equal(state.snapshot().legacyCli, false, 'not while connecting')
+  state.receive(port, { method: 'attachAll' })
+  assert.equal(state.snapshot().legacyCli, false, 'confirmed, but no pong yet')
+  assert.equal(state.receive(port, { method: 'pong', params: { agentPanel: null } }), true)
+  assert.equal(state.snapshot().legacyCli, true)
+  state.end(port)
+  assert.equal(state.snapshot().legacyCli, false)
+})
+
+test('a host whose first pong carries cli is never legacy, even if a later one lacks it', () => {
+  const state = new HostConnectionState()
+  const port = {}
+  state.begin(port)
+  state.receive(port, { method: 'pong', params: { cli: { version: '1.5.240' } } })
+  state.receive(port, { method: 'pong' })
+  assert.equal(state.snapshot().legacyCli, false)
+})

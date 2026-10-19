@@ -10,8 +10,12 @@
 //! - Exit 0 on success (upgraded, already current, or a check that ran),
 //!   2 when the check or the download failed.
 //! - Any other command checks GitHub at most once a day (in the background)
-//!   and, while the cached release is newer than the running binary, prints
-//!   one stderr line per run.
+//!   and, while the cached release is newer than the running binary, starts a
+//!   background in-place upgrade (on by default, `CHROME_USE_AUTO_UPGRADE=0`
+//!   turns it off) or prints one stderr line per run.
+//! - The native-messaging host does the same when Chrome starts it, and
+//!   reports the CLI's version to the extension, whose banner can start the
+//!   upgrade too.
 
 use crate::color;
 use serde::Serialize;
@@ -376,58 +380,73 @@ pub fn maybe_notify_update() {
         return;
     }
 
-    let path = update_cache_path();
-    let cache = read_cache_at(&path);
-
+    let cache = read_cache_at(&update_cache_path());
     if is_newer(&cache.latest, CURRENT_VERSION) {
-        // Opt-in auto-update (`CHROME_USE_AUTO_UPGRADE=1`): like the Web Store
-        // extension, keep the CLI current with zero manual steps. We NEVER swap
-        // the running binary mid-command — we fire a detached background upgrade
-        // that install.sh applies in place, so the user's NEXT run is on the new
-        // version. Guarded: only when the binary dir is writable (an install.sh
-        // ~/.local/bin, not a package-manager/system path), not Windows, and
-        // debounced so repeated commands don't spawn a swarm of upgraders.
-        if auto_upgrade_enabled() && !recently_attempted_auto_upgrade() && binary_dir_writable() {
-            touch_auto_upgrade_marker();
-            if let Ok(exe) = std::env::current_exe() {
-                let _ = Command::new(exe)
-                    .arg("__auto-upgrade")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn();
-            }
-            if !update_notice_silenced(get) {
+        // Background auto-update, on by default (`CHROME_USE_AUTO_UPGRADE=0`
+        // turns it off): like the Web Store extension, keep the CLI current
+        // with zero manual steps. We NEVER swap the running binary mid-command
+        // — a detached background upgrade applies install.sh in place, so the
+        // user's NEXT run is on the new version.
+        let started = auto_upgrade_enabled() && start_background_upgrade() == Ok(true);
+        if !update_notice_silenced(get) {
+            if started {
                 eprintln!(
                     "{NAME} {} is being installed in the background (you have {CURRENT_VERSION}); it takes effect on your next run",
                     cache.latest
                 );
+            } else {
+                write_notice(&mut std::io::stderr(), &cache.latest, CURRENT_VERSION);
             }
-        } else if !update_notice_silenced(get) {
-            write_notice(&mut std::io::stderr(), &cache.latest, CURRENT_VERSION);
         }
     }
+    refresh_latest_if_due();
+}
 
-    // Refresh at most once a day. Bump the timestamp first (keeping the
-    // last-known latest) so a failed or offline check is not retried on every
-    // call and concurrent runs don't all spawn a checker.
+/// The native-messaging host's share of [`maybe_notify_update`]: start the
+/// background upgrade when the cached latest release is newer. Chrome starts
+/// the host whenever it starts, so this reaches people who never run a
+/// command themselves.
+pub fn maybe_auto_upgrade_from_host() {
+    if update_check_disabled(|k: &str| std::env::var_os(k)) || !auto_upgrade_enabled() {
+        return;
+    }
+    if is_newer(&read_cache_at(&update_cache_path()).latest, CURRENT_VERSION) {
+        let _ = start_background_upgrade();
+    }
+}
+
+/// Refresh the cached latest version at most once a day, through a detached
+/// `__update-check` child so nothing waits on the network. Bumps the timestamp
+/// first (keeping the last-known latest) so a failed or offline check is not
+/// retried on every call and concurrent runs don't all spawn a checker.
+///
+/// Also called by the native-messaging host: someone who only uses the side
+/// panel never runs a command, and the extension's "out of date" banner would
+/// otherwise compare against a release from whenever they last did.
+pub fn refresh_latest_if_due() {
+    if update_check_disabled(|k: &str| std::env::var_os(k)) {
+        return;
+    }
+    let path = update_cache_path();
+    let cache = read_cache_at(&path);
     let now = now_secs();
-    if check_due(&cache, now) {
-        write_cache_at(
-            &path,
-            &UpdateCache {
-                checked_at: now,
-                latest: cache.latest.clone(),
-            },
-        );
-        if let Ok(exe) = std::env::current_exe() {
-            let _ = Command::new(exe)
-                .arg("__update-check")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-        }
+    if !check_due(&cache, now) {
+        return;
+    }
+    write_cache_at(
+        &path,
+        &UpdateCache {
+            checked_at: now,
+            latest: cache.latest.clone(),
+        },
+    );
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = Command::new(exe)
+            .arg("__update-check")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
     }
 }
 
@@ -439,12 +458,154 @@ fn write_notice(err: &mut dyn Write, latest: &str, current: &str) {
     }
 }
 
-/// Opt-in flag for background CLI auto-update.
+/// Background CLI auto-update: on unless `CHROME_USE_AUTO_UPGRADE` says off.
 fn auto_upgrade_enabled() -> bool {
-    matches!(
-        std::env::var("CHROME_USE_AUTO_UPGRADE").ok().as_deref(),
-        Some("1") | Some("true") | Some("yes")
+    auto_upgrade_enabled_by(std::env::var("CHROME_USE_AUTO_UPGRADE").ok().as_deref())
+}
+
+fn auto_upgrade_enabled_by(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(str::trim),
+        Some("0") | Some("false") | Some("no") | Some("off")
     )
+}
+
+/// Whether this install can replace itself, and if not, why. Reported to the
+/// extension, which offers the update button only for `Ready`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfUpgrade {
+    Ready,
+    /// `CHROME_USE_AUTO_UPGRADE=0`: no automatic upgrade, a click still works.
+    Disabled,
+    /// Installed somewhere we cannot write (a package manager's path).
+    Unwritable,
+    /// install.sh does not run on Windows; install.ps1 is a manual step.
+    Windows,
+}
+
+impl SelfUpgrade {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SelfUpgrade::Ready => "ready",
+            SelfUpgrade::Disabled => "disabled",
+            SelfUpgrade::Unwritable => "unwritable",
+            SelfUpgrade::Windows => "windows",
+        }
+    }
+}
+
+pub fn self_upgrade() -> SelfUpgrade {
+    if cfg!(windows) {
+        SelfUpgrade::Windows
+    } else if !binary_dir_writable() {
+        SelfUpgrade::Unwritable
+    } else if !auto_upgrade_enabled() {
+        SelfUpgrade::Disabled
+    } else {
+        SelfUpgrade::Ready
+    }
+}
+
+/// What to run by hand when this install cannot replace itself.
+pub fn manual_upgrade_command() -> String {
+    if cfg!(windows) {
+        "irm https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.ps1 | iex"
+            .to_string()
+    } else {
+        format!("curl -fsSL {INSTALL_URL} | sh")
+    }
+}
+
+/// Start a background in-place upgrade. `Ok(false)`: one started in the last
+/// ten minutes and is probably still running. Never blocks on the install.
+///
+/// On macOS the upgrade runs as a launchd job, not as our child: started from
+/// the native-messaging host, a child would inherit Chrome's quarantine and
+/// so would the binary it writes. Elsewhere it is a detached child.
+pub fn start_background_upgrade() -> Result<bool, String> {
+    match self_upgrade() {
+        SelfUpgrade::Ready | SelfUpgrade::Disabled => {}
+        SelfUpgrade::Unwritable => {
+            return Err(format!(
+                "{NAME} is installed in a folder it cannot write to; run: {}",
+                manual_upgrade_command()
+            ))
+        }
+        SelfUpgrade::Windows => {
+            return Err(format!(
+                "automatic upgrade is not supported on Windows; in PowerShell run: {}",
+                manual_upgrade_command()
+            ))
+        }
+    }
+    if recently_attempted_auto_upgrade() {
+        return Ok(false);
+    }
+    touch_auto_upgrade_marker();
+    let exe = std::env::current_exe().map_err(|e| format!("cannot locate {NAME}: {e}"))?;
+    let args: Vec<OsString> = vec!["__auto-upgrade".into()];
+    #[cfg(target_os = "macos")]
+    if launchd_upgrade(&exe, &args) {
+        return Ok(true);
+    }
+    // A child of Chrome's tree would write a quarantined binary, which
+    // Gatekeeper then refuses to run: better no upgrade than a broken one.
+    if cfg!(target_os = "macos") && std::env::var_os(UNDER_CHROME_ENV).is_some() {
+        return Err(format!(
+            "could not start the upgrade outside Chrome; run: {}",
+            manual_upgrade_command()
+        ));
+    }
+    detached(&exe, &args).map(|()| true)
+}
+
+/// Set by the native-messaging host for itself and its children, which all
+/// carry Chrome's process quarantine. launchd jobs do not inherit it.
+pub const UNDER_CHROME_ENV: &str = "CHROME_USE_UNDER_CHROME";
+
+#[cfg(target_os = "macos")]
+fn launchd_upgrade(exe: &Path, args: &[OsString]) -> bool {
+    let label = "com.chrome-use.auto-upgrade";
+    let domain = crate::launchd::gui_domain();
+    let target = format!("{domain}/{label}");
+    let Ok(plist) = crate::launchd::plist(label, &crate::app_bundle::resolved(exe), args) else {
+        return false;
+    };
+    let dir = crate::connection::config_home();
+    let path = dir.join(format!("auto-upgrade.{}.plist", uuid::Uuid::new_v4()));
+    // The plist carries our environment: readable by us only.
+    let written = std::fs::create_dir_all(&dir).is_ok() && {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .and_then(|mut f| f.write_all(plist.as_bytes()))
+            .is_ok()
+    };
+    written && crate::launchd::bootstrap(&domain, &target, &path)
+}
+
+fn detached(exe: &Path, args: &[OsString]) -> Result<(), String> {
+    let mut cmd = Command::new(exe);
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not start the background upgrade: {e}"))
 }
 
 fn auto_upgrade_marker() -> PathBuf {
@@ -493,25 +654,137 @@ fn current_bin_dir() -> Option<PathBuf> {
     crate::app_bundle::install_dir(&std::env::current_exe().ok()?)
 }
 
+/// How the last background upgrade ended, so a failure is reported (by the
+/// extension and `doctor`) instead of being retried silently forever.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoUpgradeOutcome {
+    /// Milliseconds since the epoch.
+    pub at: u64,
+    pub ok: bool,
+    pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn auto_upgrade_outcome_path() -> PathBuf {
+    crate::connection::config_home().join("auto-upgrade-last.json")
+}
+
+pub fn last_auto_upgrade() -> Option<AutoUpgradeOutcome> {
+    serde_json::from_str(&std::fs::read_to_string(auto_upgrade_outcome_path()).ok()?).ok()
+}
+
+/// Judge an install by the version that ended up on disk, not by install.sh's
+/// exit status: its closing self-check can fail (no extension yet, Chrome
+/// closed) after the new binary is already in place.
+fn auto_upgrade_outcome(
+    from: &str,
+    installed: Option<String>,
+    latest: Option<&str>,
+    installer_error: Option<String>,
+    at: u64,
+) -> AutoUpgradeOutcome {
+    let ok = match (&installed, latest) {
+        (Some(now), Some(latest)) => !is_newer(latest, now),
+        // No release known yet: trust a clean install, or any step forward.
+        (Some(now), None) => installer_error.is_none() || is_newer(now, from),
+        (None, _) => false,
+    };
+    let error = (!ok).then(|| {
+        installer_error
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| match &installed {
+                Some(now) => format!("still {now} after the install"),
+                None => "the installed binary did not run".to_string(),
+            })
+    });
+    AutoUpgradeOutcome {
+        at,
+        ok,
+        from: from.to_string(),
+        to: installed,
+        error,
+    }
+}
+
 /// Quiet, non-interactive in-place upgrade for the detached `__auto-upgrade`
-/// child spawned by [`maybe_notify_update`]. Runs install.sh into the running
-/// binary's directory with all output suppressed; failures are silent (the
-/// notice reappears next run and the user can `chrome-use upgrade` manually).
+/// job started by [`start_background_upgrade`]. Runs install.sh into the
+/// running binary's directory, records how it ended, and refreshes the skill
+/// copies install.sh does not own (plugin, git checkouts, copied folders).
 pub fn run_auto_upgrade() {
     #[cfg(not(windows))]
     {
-        let install_cmd = format!("curl -fsSL {} | sh", INSTALL_URL);
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|p| p.canonicalize().unwrap_or(p));
+        // Read before install.sh replaces the binary under us.
+        let skill_scan = SkillScan::from_env();
+        let skills = detect_skills(&skill_scan);
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
-            .arg(&install_cmd)
+            .arg(format!("curl -fsSL {INSTALL_URL} | sh"))
+            .env("AGENT_BROWSER_NO_SETUP", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         if let Some(ref dir) = current_bin_dir() {
             cmd.env("AGENT_BROWSER_BIN_DIR", dir);
         }
-        let _ = cmd.status();
+        let installer_error = match cmd.output() {
+            Ok(out) if out.status.success() => None,
+            Ok(out) => String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .map(|l| l.trim().chars().take(300).collect()),
+            Err(e) => Some(format!("could not run install.sh: {e}")),
+        };
+        let latest = cached_latest_version();
+        let outcome = auto_upgrade_outcome(
+            CURRENT_VERSION,
+            installed_version(exe.as_deref()),
+            latest.as_deref(),
+            installer_error,
+            now_secs() * 1000,
+        );
+        if let Ok(body) = serde_json::to_string(&outcome) {
+            let _ = std::fs::write(auto_upgrade_outcome_path(), body);
+        }
+        if outcome.ok {
+            refresh_git_skills(&skills);
+            let installer = if skill_opt_out() {
+                InstallerRefresh::Skip
+            } else {
+                InstallerRefresh::Ran
+            };
+            refresh_other_skills(&skills, &skill_scan, installer);
+        }
     }
+}
+
+/// What the native-messaging host tells the extension about this CLI, in its
+/// `pong`: enough for the extension to say "out of date", offer the update
+/// button only when an in-place upgrade can work, and notice when a newer
+/// binary has landed on disk while this host process is still the old one.
+pub fn host_report(on_disk: Option<String>) -> serde_json::Value {
+    serde_json::json!({
+        "version": CURRENT_VERSION,
+        "latest": cached_latest_version(),
+        "onDisk": on_disk,
+        "autoUpgrade": auto_upgrade_enabled(),
+        "selfUpgrade": self_upgrade().as_str(),
+        "lastAutoUpgrade": last_auto_upgrade(),
+    })
+}
+
+/// The version of the binary now at the running executable's path, which a
+/// background upgrade may have replaced. Spawns it, so callers cache it.
+pub fn on_disk_version() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    installed_version(Some(&exe))
 }
 
 // ---------------------------------------------------------------------------
@@ -1241,6 +1514,65 @@ mod tests {
         }
         assert!(!skip_for_args(&args(&["open", "https://example.com"])));
         assert!(!skip_for_args(&args(&["snapshot", "--json"])));
+    }
+
+    /// On unless explicitly switched off: an opt-in kept almost everyone on
+    /// whatever version they first installed.
+    #[test]
+    fn auto_upgrade_is_on_unless_switched_off() {
+        for on in [None, Some("1"), Some("true"), Some(""), Some("yes")] {
+            assert!(auto_upgrade_enabled_by(on), "{on:?}");
+        }
+        for off in ["0", "false", "no", "off", " off "] {
+            assert!(!auto_upgrade_enabled_by(Some(off)), "{off:?}");
+        }
+    }
+
+    /// The outcome follows the version on disk: install.sh's closing
+    /// self-check may fail after the new binary is already in place.
+    #[test]
+    fn auto_upgrade_outcome_is_judged_by_the_installed_version() {
+        let landed = auto_upgrade_outcome(
+            "1.5.200",
+            Some("1.5.240".into()),
+            Some("1.5.240"),
+            Some("self-check failed".into()),
+            7,
+        );
+        assert!(landed.ok);
+        assert_eq!(landed.error, None);
+        assert_eq!(landed.to.as_deref(), Some("1.5.240"));
+
+        let stuck =
+            auto_upgrade_outcome("1.5.200", Some("1.5.200".into()), Some("1.5.240"), None, 7);
+        assert!(!stuck.ok);
+        assert_eq!(
+            stuck.error.as_deref(),
+            Some("still 1.5.200 after the install")
+        );
+
+        let failed = auto_upgrade_outcome(
+            "1.5.200",
+            None,
+            Some("1.5.240"),
+            Some("curl: (6) Could not resolve host".into()),
+            7,
+        );
+        assert!(!failed.ok);
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("curl: (6) Could not resolve host")
+        );
+
+        // No cached latest: a clean install or any step forward counts (the
+        // button can run before the first check has landed).
+        assert!(
+            auto_upgrade_outcome("1.5.200", Some("1.5.201".into()), None, Some("x".into()), 7).ok
+        );
+        assert!(auto_upgrade_outcome("1.5.200", Some("1.5.200".into()), None, None, 7).ok);
+        assert!(
+            !auto_upgrade_outcome("1.5.200", Some("1.5.200".into()), None, Some("x".into()), 7).ok
+        );
     }
 
     #[test]
