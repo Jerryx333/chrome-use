@@ -632,9 +632,17 @@ impl Conversation {
 pub(super) struct Store {
     pub directory: PathBuf,
     index: BTreeMap<String, Value>,
-    cursors: Mutex<HashMap<String, JournalCursor>>,
+    /// Verified journal prefixes per conversation, a few per conversation so
+    /// readers at different cursors (the side panel and the mobile gateway)
+    /// each resume from their own position instead of rescanning.
+    cursors: Mutex<HashMap<String, Vec<JournalCursor>>>,
 }
 
+/// Prefixes kept per conversation; the least recently used one is dropped.
+const CURSORS_PER_JOURNAL: usize = 4;
+
+/// The journal up to `offset` was read and validated, and its last event is
+/// `sequence` (0 at offset 0).
 struct JournalCursor {
     sequence: u64,
     offset: u64,
@@ -834,16 +842,16 @@ impl Store {
             .cursors
             .lock()
             .map_err(|_| "Journal cursor cache unavailable")?;
-        if let Some(cursor) = cache.get_mut(&chat.id) {
-            if cursor.length == before.len()
-                && cursor.modified.is_some()
-                && cursor.modified == before.modified().ok()
-                && cursor.identity == file_identity
-            {
+        if let Some(cursors) = cache.get_mut(&chat.id) {
+            cursors.retain(|c| {
+                c.length == before.len()
+                    && c.modified.is_some()
+                    && c.modified == before.modified().ok()
+                    && c.identity == file_identity
+            });
+            for cursor in cursors.iter_mut() {
                 cursor.length = after.len();
                 cursor.modified = after.modified().ok();
-            } else {
-                cache.remove(&chat.id);
             }
         }
         drop(cache);
@@ -870,17 +878,21 @@ impl Store {
             .lock()
             .map_err(|_| "Journal cursor cache unavailable")?;
         let file_identity = journal_identity(&file, &meta)?;
-        let offset = cached
+        // The furthest verified prefix that does not pass `after`.
+        let (base, offset) = cached
             .get(id)
+            .into_iter()
+            .flatten()
             .filter(|c| {
-                c.sequence == after
+                c.sequence <= after
                     && c.length == meta.len()
                     && c.modified.is_some()
                     && c.modified == meta.modified().ok()
                     && c.identity == file_identity
             })
-            .map(|c| c.offset)
-            .unwrap_or(0);
+            .max_by_key(|c| c.sequence)
+            .map(|c| (c.sequence, c.offset))
+            .unwrap_or((0, 0));
         drop(cached);
         file.seek(SeekFrom::Start(offset))
             .map_err(|_| "Cannot seek journal")?;
@@ -888,10 +900,12 @@ impl Store {
         let mut bytes = 0;
         let mut cursor = after;
         let mut more = false;
-        let mut previous = if offset == 0 { 0 } else { after };
+        let mut previous = base;
         let mut reader = BufReader::new(file);
         let mut position = offset;
-        let mut accepted_offset = offset;
+        // The verified prefix this read ends on: skipped and returned events
+        // count, the event that did not fit in the page does not.
+        let mut verified = (base, offset);
         let mut line = Vec::new();
         loop {
             line.clear();
@@ -917,6 +931,7 @@ impl Store {
             }
             previous = event.sequence;
             if event.sequence <= after {
+                verified = (event.sequence, position);
                 continue;
             }
             if rows.len() >= 128 || bytes + line.len() > 512 * 1024 {
@@ -925,26 +940,29 @@ impl Store {
             }
             bytes += line.len();
             cursor = event.sequence;
-            accepted_offset = position;
+            verified = (event.sequence, position);
             rows.push(event);
         }
         let mut cache = self
             .cursors
             .lock()
             .map_err(|_| "Journal cursor cache unavailable")?;
-        if cache.len() >= 64 {
+        if cache.len() >= 64 && !cache.contains_key(id) {
             cache.clear();
         }
-        cache.insert(
-            id.into(),
-            JournalCursor {
-                sequence: cursor,
-                offset: accepted_offset,
-                length: meta.len(),
-                modified: meta.modified().ok(),
-                identity: file_identity,
-            },
-        );
+        let cursors = cache.entry(id.into()).or_default();
+        // Most recently used last; one entry per prefix.
+        cursors.retain(|c| c.sequence != verified.0);
+        if cursors.len() >= CURSORS_PER_JOURNAL {
+            cursors.remove(0);
+        }
+        cursors.push(JournalCursor {
+            sequence: verified.0,
+            offset: verified.1,
+            length: meta.len(),
+            modified: meta.modified().ok(),
+            identity: file_identity,
+        });
         Ok(json!({"events":rows,"cursor":cursor,"more":more}))
     }
 
@@ -1355,7 +1373,7 @@ mod tests {
         store.save(&chat).unwrap();
         assert_eq!(store.load(&chat.id).unwrap().next_sequence, 301);
         assert_eq!(store.events(&chat.id, 0).unwrap()["cursor"], 128);
-        let offset = store.cursors.lock().unwrap()[&chat.id].offset;
+        let offset = store.cursors.lock().unwrap()[&chat.id][0].offset;
         assert!(offset > 0);
         store
             .event(
@@ -1364,7 +1382,7 @@ mod tests {
                 Redacted::raw_for_tests(json!({"text":"tail"})),
             )
             .unwrap();
-        assert_eq!(store.cursors.lock().unwrap()[&chat.id].offset, offset);
+        assert_eq!(store.cursors.lock().unwrap()[&chat.id][0].offset, offset);
         assert_eq!(
             store.events(&chat.id, 128).unwrap()["events"][0]["sequence"],
             129
@@ -1387,6 +1405,56 @@ mod tests {
         }
         std::fs::write(path, b"corrupt\n").unwrap();
         assert!(store.events(&chat.id, 301).is_err());
+    }
+    #[test]
+    fn readers_at_different_cursors_each_resume_without_rescanning() {
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path().join("chats")).unwrap();
+        let mut chat = Conversation::new("codex", None, None).unwrap();
+        store.create(&chat).unwrap();
+        let append = |store: &mut Store, chat: &mut Conversation, n: usize| {
+            for _ in 0..n {
+                store
+                    .event(
+                        chat,
+                        "textDelta",
+                        Redacted::raw_for_tests(json!({"text":"x"})),
+                    )
+                    .unwrap();
+            }
+        };
+        append(&mut store, &mut chat, 20);
+        // The side panel and the gateway have both read up to 20.
+        assert_eq!(store.events(&chat.id, 0).unwrap()["cursor"], 20);
+        append(&mut store, &mut chat, 3);
+        // One reader moves on to 23 first; the other is still at 20.
+        assert_eq!(store.events(&chat.id, 20).unwrap()["cursor"], 23);
+        let path = store.folder(&chat.id).unwrap().join("events.jsonl");
+        // Corrupt the already-verified prefix in place (same file, length
+        // and stamp): a resumed read never looks at it again, a rescan would.
+        let raw = std::fs::read(&path).unwrap();
+        let first_line_end = raw.iter().position(|b| *b == b'\n').unwrap();
+        let stamp = std::fs::metadata(&path).unwrap().modified().unwrap();
+        {
+            let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.seek(SeekFrom::Start(first_line_end as u64 - 1))
+                .unwrap();
+            file.write_all(b" ").unwrap();
+            file.set_times(std::fs::FileTimes::new().set_modified(stamp))
+                .unwrap();
+        }
+        let slow = store.events(&chat.id, 20).unwrap();
+        assert_eq!(slow["events"][0]["sequence"], 21);
+        assert_eq!(slow["cursor"], 23);
+        // A cursor between cached prefixes resumes from the nearest below it.
+        assert_eq!(
+            store.events(&chat.id, 21).unwrap()["events"][0]["sequence"],
+            22
+        );
+        assert_eq!(store.events(&chat.id, 23).unwrap()["events"], json!([]));
+        // Only a reader with no usable prefix rescans and sees the damage.
+        store.cursors.lock().unwrap().clear();
+        assert!(store.events(&chat.id, 20).is_err());
     }
     #[test]
     fn duplicate_send_is_idempotent_but_reusing_an_id_for_other_text_is_refused() {
