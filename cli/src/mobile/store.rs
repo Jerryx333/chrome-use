@@ -143,7 +143,7 @@ impl Store {
         Ok(Self { directory })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn directory(&self) -> &std::path::Path {
         &self.directory
     }
@@ -402,6 +402,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::path::Path;
 
     #[test]
