@@ -415,7 +415,13 @@ button.tool:hover:not(:disabled),.composer-controls #turnOptions > summary:hover
 .inspect-reply-body { overflow-wrap: anywhere; }
 
 /* /resume: the session picker and the history imported from a CLI session. */
-.resume-picker { margin:8px 12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--bg); display:grid; gap:6px; max-height:min(70vh,520px); grid-template-rows:auto auto auto minmax(0,1fr) auto auto; }
+/* A column flex box, not a grid: with only max-height, a grid's 1fr row grows
+   with its content and pushes the running-session confirmation out of the box
+   over the panel below. Flex lets the list shrink and scroll instead. */
+.resume-picker { margin:8px 12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--bg); display:flex; flex-direction:column; gap:6px; max-height:min(70vh,520px); overflow:hidden; }
+.resume-picker > * { flex:0 0 auto; }
+.resume-picker > .resume-items { flex:1 1 auto; }
+.resume-picker > .delete-confirm { margin:0; background:var(--bg); }
 .resume-picker .resume-head { display:flex; align-items:center; gap:8px; }
 .resume-picker .resume-head strong { flex:1; font-size:13px; }
 .resume-picker input[type=search] { width:100%; box-sizing:border-box; }
