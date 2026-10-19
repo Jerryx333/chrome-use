@@ -2657,7 +2657,7 @@ pub fn print_command_help(command: &str) -> bool {
             r##"
 chrome-use open - Launch the browser, optionally navigate
 
-Usage: chrome-use open [url] [--new]
+Usage: chrome-use open [url] [--new-tab]
 
 Without a URL, launches the browser but stays on about:blank. This lets
 you stage state (network routes, cookies, init scripts) before the first
@@ -2672,8 +2672,8 @@ The `goto` and `navigate` aliases still require a URL.
 On your own Chrome, a page another of the session's tabs already shows (same
 url without its #fragment and tracking parameters such as utm_*) is not
 opened twice: `open` switches to that tab in the background, without
-reloading it, and says so (`reusedTab: true`). `--new` (or `--new-tab`, `-t`)
-opens it in a new tab anyway.
+reloading it, and says so (`reusedTab: true`). `--new-tab` (or `-t`) opens it in a
+new tab anyway.
 
 On your own Chrome (the extension relay) the profile must have a window
 open: chrome-use never opens one itself. With no window, `open` stops with
@@ -6515,7 +6515,7 @@ Sessions:
   are grouped per project (git repository or working directory): a project's
   group collapses when its last session idles out, and its next session
   takes over the ended sessions' tabs. `open` reuses the session's tab
-  already on a page; `open --new` opens another.
+  already on a page; `open --new-tab` opens another.
   If a registered daemon loses its socket, the next command stops the unreachable
   process and starts a clean replacement for the same session automatically.
   A session under `session handoff` is never reaped — the human's window stays

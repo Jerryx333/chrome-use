@@ -5076,7 +5076,7 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     // In the user's Chrome a page this session already has open is not
     // opened twice: `open` switches to that tab (in the background, without
-    // reloading it). `open --new` opens another one anyway.
+    // reloading it). `open --new-tab` opens another one anyway.
     if mgr.on_relay() {
         if let Some(tab_id) = mgr.same_page_tab(url) {
             let mut switched = mgr.tab_switch_by_id(tab_id).await?;
@@ -5086,7 +5086,7 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
                     "note".to_string(),
                     json!(
                         "this session already had the page open; switched to that tab \
-                         instead of opening it again (`open --new` for another tab)"
+                         instead of opening it again (`open --new-tab` for another tab)"
                     ),
                 );
             }

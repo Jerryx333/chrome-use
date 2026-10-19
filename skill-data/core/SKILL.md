@@ -185,7 +185,7 @@ window, in your project's tab group (`✦ <project>`: the panel's project
 folder, else the git repository, else the working directory), shared by every
 session working on that project; each session drives only the tabs it opened.
 `status` names the group. `open <url>` switches to your tab already showing
-that page instead of opening it twice; `open --new <url>` opens another. `tab list --all` uses a passive connection: even a fresh session
+that page instead of opening it twice; `open --new-tab <url>` opens another. `tab list --all` uses a passive connection: even a fresh session
 starts no daemon, opens no window or tab, and attaches to no page.
 
 **End every task that opened tabs with `done`.** Decide yourself which tabs

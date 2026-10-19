@@ -78,7 +78,7 @@ try {
   check(g1.length === 1 && byUrl(t1, '/b')[0]?.groupId === g1[0].id && byUrl(t1, '/c')[0]?.groupId === g1[0].id, 'their tabs share one group');
 
   // 2. B opens the page A has open: its own tab, A keeps its own.
-  const bNew = ok(cu(2001, '%82', ['open', '--new', rig.site + '/e'], { cwd: sub }), 'B open --new');
+  const bNew = ok(cu(2001, '%82', ['open', '--new-tab', rig.site + '/e'], { cwd: sub }), 'B open --new-tab');
   const tNew = (await tabs()).map(t => `${t.id} ${t.groupId} ${t.url}`);
   const bOpen = ok(cu(2001, '%82', ['open', rig.site + '/b'], { cwd: sub }), 'B open A\'s page');
   const t2 = await tabs();
@@ -91,7 +91,7 @@ try {
   check(!listB.includes('/d'), 'B does not list A\'s tabs');
 
   // 3. A opens another page, then the first again: no duplicate.
-  ok(cu(1001, '%81', ['open', '--new', rig.site + '/d']), 'A open --new');
+  ok(cu(1001, '%81', ['open', '--new-tab', rig.site + '/d']), 'A open --new-tab');
   const before = byUrl(await tabs(), '/b').length;
   const reuse = ok(cu(1001, '%81', ['open', rig.site + '/b#section']), 'A open same page again');
   const after = byUrl(await tabs(), '/b').length;

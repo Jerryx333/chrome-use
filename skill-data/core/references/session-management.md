@@ -14,8 +14,8 @@ state belong to the profile and are shared.
 `open <url>` does not open a page twice: when another of the session's tabs
 already shows it (same url without its `#fragment` and tracking parameters
 such as `utm_*`, `fbclid`, `gclid`), it switches to that tab in the
-background without reloading it (`reusedTab: true`). `open --new <url>` (or
-`--new-tab`) opens another tab anyway; `tab new <url>` always does. Different
+background without reloading it (`reusedTab: true`). `open --new-tab <url>` opens
+another tab anyway; `tab new <url>` always does. Different
 projects never share tabs. The user's own tabs are never moved or grouped.
 `AGENT_BROWSER_DEDICATED_WINDOW=1` puts them in a separate agent window instead.
 `tab list --all` uses a passive connection even in a fresh session: no daemon,
