@@ -110,12 +110,18 @@ chrome-use auth login --bwu --passkey       # sign in with the vault passkey
 ```
 
 - **Picking the account.** It asks `bwu login --domain <page> --list`, which
-  sees masked entries only. One match is used. bwu matches by registrable
-  domain, so `app.example.com` also lists every other `*.example.com` login;
-  when exactly one of them is named exactly the page's host, that one is used.
-  Otherwise several are listed most recently used first, each with an
-  `--item` to pass back. Use the first unless the user asked for a particular
-  account, and ask when that is unclear. It never picks one by itself.
+  sees masked entries only (names and folders, not URIs). One match is used.
+  bwu matches by registrable domain, so `app.example.com` also lists every
+  other `*.example.com` login. Among several it uses, in order: the item that
+  signed in to this host last time (recorded after a confirmed login, by id
+  only, in `~/.chrome-use/bwu-items.json`); the one item named exactly the
+  page's host; the one item named exactly the host of the page's sign-in
+  frame (App Store Connect signs in through an `idmsa.apple.com` iframe). It
+  says which and why on stderr, even with `--json`. Otherwise all are listed,
+  those named for the page, its sign-in frame or its site first, then most
+  recently used, each with an `--item` to pass back (an id, or a name in any
+  case). Ask the user when it is unclear which account they mean; an item it
+  cannot tell apart is never picked.
 - **Values never pass through you.** chrome-use runs itself again under
   `bwu run`, which logs the read and hands the values to that child process
   only. By default it asks the user once with Touch ID (not for items in a
@@ -257,8 +263,13 @@ leaves the value one stray `echo` away from the transcript.
 
 Bitwarden's own inline menu (the dropdown next to a focused login field) is an
 extension frame chrome-use cannot click; while it is open Chrome blocks the tab
-for debugger commands. chrome-use closes it and carries on by itself for a tab
-in front. Filling through `bwu run` does not need that menu at all.
+for debugger commands. chrome-use closes it and carries on by itself: for a
+tab in front, and for a background tab in your own window (where agent tabs
+open), by showing a blank tab in its agent window for a moment, which leaves
+your window and the tab you are on alone. Only a tab you are looking at in
+your own window is left to you (press Escape there). `auth login` also takes
+the cursor out of each field it filled, so the menu usually closes before it
+gets in the way. Filling through `bwu run` does not need that menu at all.
 
 This pairs with the local auth vault (`chrome-use auth`) above: keep credentials
 in Bitwarden, pull them at login time, and never put a password in shell history.

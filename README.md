@@ -397,8 +397,11 @@ on the current tab are refused until it picks one with `tab select <ref>`,
 
 ### Bitwarden login
 
-Open the site's login page, then run `chrome-use auth login --bwu`. When several
-accounts match and none is named exactly the site's host, select one with `--item <id|name>`. Add `--passkey` to use only a
+Open the site's login page, then run `chrome-use auth login --bwu`. Among
+several matching accounts it uses the one that signed in to that host last time,
+else the one named exactly the site's host or its sign-in frame's host (App
+Store Connect signs in through an `idmsa.apple.com` iframe); otherwise select
+one with `--item <id|name>`. Add `--passkey` to use only a
 vault passkey in a `--launch` browser (bitwarden-use 0.9.0+); passwords, TOTP
 and custom fields are not read in that mode. On the extension relay, passkeys
 are unsupported: passkey-only login fails immediately, while ordinary login
