@@ -6,7 +6,7 @@
 // plain `chrome-use` processes with the environment an agent CLI gives them:
 // an agent id (CLAUDE_PID) that changes per task, a terminal id (TMUX_PANE)
 // and a working directory that do not. Steps:
-//   1. task A opens two tabs; its daemon idle-exits (3 s) with the tabs open;
+//   1. task A opens two tabs; its daemon idle-exits (8 s) with the tabs open;
 //   2. task B, same pane and directory, new agent id: its session takes over
 //      A's group: its tab list has A's tabs, a new tab joins the same group,
 //      and there is still one ✦ group;
@@ -45,7 +45,7 @@ const socketDir = path.join(rig.home, '.chrome-use');
 
 // One agent command, as an agent CLI in `pane` would run it.
 function cu(agent, pane, args, extra = {}) {
-  const env = { ...process.env, HOME: rig.home, CHROME_USE_NO_UPDATE_CHECK: '1', CLAUDE_PID: String(agent), TMUX_PANE: pane, AGENT_BROWSER_IDLE_TIMEOUT_MS: '3000', ...extra };
+  const env = { ...process.env, HOME: rig.home, CHROME_USE_NO_UPDATE_CHECK: '1', CLAUDE_PID: String(agent), TMUX_PANE: pane, AGENT_BROWSER_IDLE_TIMEOUT_MS: '8000', ...extra };
   for (const k of ['AGENT_BROWSER_SESSION', 'CMUX_SURFACE_ID', 'CMUX_CLAUDE_PID', 'TERM_SESSION_ID', 'ITERM_SESSION_ID', 'GHOSTTY_SURFACE_ID', 'CODEX_THREAD_ID']) delete env[k];
   const r = spawnSync(rig.hostBin, ['--json', ...args], { cwd: project, env, encoding: 'utf8', timeout: 90000 });
   let json = null;
