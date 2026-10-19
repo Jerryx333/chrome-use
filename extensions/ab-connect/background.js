@@ -2906,12 +2906,18 @@ const bringBack = tabId => { if (Number.isInteger(tabId)) void chrome.tabs.updat
 void chrome.tabs.query({ active: true }).then(list => { for (const tab of list) frontTabGuard.activated(tab.windowId, tab.id); }).catch(() => {});
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => bringBack(frontTabGuard.activated(windowId, tabId)));
 chrome.tabs.onRemoved.addListener(tabId => frontTabGuard.removed(tabId));
+// The same event is the one trustworthy record of who opened the tab, so it
+// also marks the pop-up as the agent's and keeps it in the source's group: in
+// a window with user tabs, the click's attach check could not tell otherwise.
 chrome.webNavigation?.onCreatedNavigationTarget?.addListener(({ sourceTabId, tabId }) =>
   void whenReady(async () => {
-    if (!ownedTabs.has(sourceTabId)) {
-      await loadAgentPopups();
-      if (!agentPopups.has(sourceTabId)) return;
-    }
+    await loadAgentPopups();
+    if (!ownedTabs.has(sourceTabId) && !agentPopups.has(sourceTabId)) return;
     const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (tab) bringBack(frontTabGuard.agentOpened(tabId, tab.windowId, tab.active));
+    if (!tab) return;
+    bringBack(frontTabGuard.agentOpened(tabId, tab.windowId, tab.active));
+    await markAgentPopup(tabId);
+    const source = await chrome.tabs.get(sourceTabId).catch(() => null);
+    if (source?.groupId >= 0 && source.windowId === tab.windowId && tab.groupId !== source.groupId)
+      await chrome.tabs.group({ groupId: source.groupId, tabIds: tabId }).catch(() => {});
   }));
