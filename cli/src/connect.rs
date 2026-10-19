@@ -4103,7 +4103,37 @@ pub fn most_recently_focused_profile() -> Option<(String, Option<String>, String
 /// Target discovery. The ws URL carries an unguessable guid (written to a 600
 /// file) so only this user's chrome-use — not arbitrary local processes —
 /// can drive the browser. No token, no user interaction.
+/// The version of the binary at this host's path, re-read only when the file
+/// changes: a background upgrade replaces it while this host keeps running
+/// the old image, and the extension switches over once it sees the new one.
+#[derive(Default)]
+struct OnDiskVersion {
+    modified: Option<std::time::SystemTime>,
+    version: Option<String>,
+}
+
+async fn cli_report(on_disk: &tokio::sync::Mutex<OnDiskVersion>) -> serde_json::Value {
+    let modified = std::env::current_exe()
+        .ok()
+        .and_then(|exe| std::fs::metadata(exe).ok())
+        .and_then(|m| m.modified().ok());
+    let mut cached = on_disk.lock().await;
+    if cached.version.is_none() || cached.modified != modified {
+        cached.version = tokio::task::spawn_blocking(crate::upgrade::on_disk_version)
+            .await
+            .ok()
+            .flatten();
+        cached.modified = modified;
+    }
+    let version = cached.version.clone();
+    drop(cached);
+    tokio::task::spawn_blocking(move || crate::upgrade::host_report(version))
+        .await
+        .unwrap_or(serde_json::Value::Null)
+}
+
 pub fn run_nm_host() {
+    std::env::set_var(crate::upgrade::UNDER_CHROME_ENV, "1");
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -4203,6 +4233,16 @@ async fn nm_host_main() {
         });
     }
 
+    // Keep the CLI current for people who only use the side panel and never
+    // run a command: refresh the cached latest release, and start the
+    // background upgrade when it is newer (it runs outside Chrome's process
+    // tree, see `upgrade::start_background_upgrade`).
+    tokio::task::spawn_blocking(|| {
+        crate::upgrade::refresh_latest_if_due();
+        crate::upgrade::maybe_auto_upgrade_from_host();
+    });
+    let cli_on_disk = Arc::new(Mutex::new(OnDiskVersion::default()));
+
     // Extension → host frames.
     let mut stdin = tokio::io::stdin();
     // The profileId this host got from `hello` — so we can clean up our
@@ -4224,6 +4264,40 @@ async fn nm_host_main() {
             Ok(v) => v,
             Err(_) => continue,
         };
+        // Answered here rather than by the relay so the reply can carry the
+        // CLI's version report (`cli`), which the extension's "out of date"
+        // banner reads; the extension pings again while an upgrade runs.
+        if v.get("method").and_then(|m| m.as_str()) == Some("ping") {
+            let tx = to_ext.clone();
+            let on_disk = cli_on_disk.clone();
+            tokio::spawn(async move {
+                let cli = cli_report(&on_disk).await;
+                let reply = serde_json::json!({"method": "pong", "params": {"cli": cli}});
+                let _ = tx.send(reply.to_string().into_bytes()).await;
+            });
+            continue;
+        }
+        // The extension's "update CLI" button.
+        if v.get("method").and_then(|m| m.as_str()) == Some("upgradeCli") {
+            let tx = to_ext.clone();
+            tokio::spawn(async move {
+                let started = tokio::task::spawn_blocking(crate::upgrade::start_background_upgrade)
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                let params = match started {
+                    // false: one is already running, which is what was asked.
+                    Ok(_) => serde_json::json!({"started": true}),
+                    Err(error) => serde_json::json!({
+                        "started": false,
+                        "error": error,
+                        "command": crate::upgrade::manual_upgrade_command(),
+                    }),
+                };
+                let reply = serde_json::json!({"method": "upgradeCliResult", "params": params});
+                let _ = tx.send(reply.to_string().into_bytes()).await;
+            });
+            continue;
+        }
         if v.get("method").and_then(|m| m.as_str()) == Some("agentPanel") {
             let Some(request_id) = v
                 .get("requestId")
@@ -4318,7 +4392,8 @@ async fn nm_host_main() {
             }
             // Explicit panel capabilities distinguish new hosts from a legacy
             // relay that answers pings but cannot execute panel operations.
-            let reply = serde_json::json!({"method":"pong","params":{"agentPanel":crate::agent_panel::capabilities()}});
+            let cli = cli_report(&cli_on_disk).await;
+            let reply = serde_json::json!({"method":"pong","params":{"agentPanel":crate::agent_panel::capabilities(),"cli":cli}});
             let _ = to_ext.send(reply.to_string().into_bytes()).await;
             continue;
         }

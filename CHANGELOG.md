@@ -1,10 +1,24 @@
 # Changelog
 
+## 1.5.239
+
+Works with extension ab-connect 0.5.74.
+
+<!-- release:start -->
+### New Features
+
+- **The CLI keeps itself current.** Most installs stayed on the version they started with: background upgrades were opt-in and the only signal was a stderr line. When a newer release exists, any command, and the native host whenever Chrome starts it, now installs it in place in the background (it takes effect on the next run) and refreshes the skill copies afterwards. `CHROME_USE_AUTO_UPGRADE=0` turns it off and leaves the notice. A CLI installed where it cannot write, or a cargo build, is never replaced. On macOS the upgrade runs as a launchd job, because started from inside Chrome it would install a binary carrying Chrome's quarantine. How the last background upgrade ended is kept, and `doctor` says why a CLI is still behind and what to run.
+- **The extension shows version state** (ab-connect 0.5.74). The popup and side panel say when the CLI is out of date, with an **Update CLI** button when it can replace itself and the command to run when it cannot; when a background upgrade failed, and why; and, for a CLI from before this release, that it must be reinstalled once. Once a new CLI is installed, the extension switches to it when no agent is working. Its own update gets a banner too: downloaded and waiting for the agent to go idle (with what it is waiting for), an **Update now** button when that is safe, and "updated to X" for a day afterwards.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
 ## 1.5.238
 
 Works with extension ab-connect 0.5.73.
 
-<!-- release:start -->
 ### Bug Fixes
 
 - **A link the agent opens in a new tab no longer takes over the tab you are looking at.** Since 1.5.236 agent tabs share your window, and Chrome opens a page's `target=_blank` link or pop-up as the window's front tab, so an agent click switched you from your page to the agent's pop-up.
@@ -18,7 +32,6 @@ Works with extension ab-connect 0.5.73.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.237
 

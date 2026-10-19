@@ -21,6 +21,8 @@ mod flags;
 mod friction;
 mod install;
 mod jev;
+#[cfg(target_os = "macos")]
+mod launchd;
 mod mcp;
 mod native;
 mod opencli;
@@ -1732,9 +1734,10 @@ fn main() {
         return;
     }
 
-    // Hidden background auto-upgrade worker, spawned detached by
-    // maybe_notify_update() when CHROME_USE_AUTO_UPGRADE=1 and a newer release
-    // exists — applies the install.sh in place for the user's next run.
+    // Hidden background auto-upgrade worker, started by
+    // upgrade::start_background_upgrade() (a command or the native host seeing
+    // a newer release, or the extension's update button) — applies install.sh
+    // in place for the user's next run.
     if env::args().nth(1).as_deref() == Some("__auto-upgrade") {
         upgrade::run_auto_upgrade();
         return;

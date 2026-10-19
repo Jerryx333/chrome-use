@@ -15,14 +15,35 @@ pub(super) fn check(checks: &mut Vec<Check>) {
     // CLI — compare against the latest seen by the background update check.
     match upgrade::cached_latest_version() {
         Some(latest) if upgrade::version_is_newer(&latest, cli_version) => {
+            // Say why the background upgrade has not kept it current, so the
+            // fix line is the step that actually works.
+            let why = match (upgrade::last_auto_upgrade(), upgrade::self_upgrade()) {
+                (Some(last), _) if !last.ok => format!(
+                    "; the background upgrade failed: {}",
+                    last.error.unwrap_or_default()
+                ),
+                (_, upgrade::SelfUpgrade::Disabled) => {
+                    "; background upgrades are off (CHROME_USE_AUTO_UPGRADE=0)".to_string()
+                }
+                (_, upgrade::SelfUpgrade::Unwritable) => {
+                    "; installed where it cannot upgrade itself".to_string()
+                }
+                _ => String::new(),
+            };
+            let fix = match upgrade::self_upgrade() {
+                upgrade::SelfUpgrade::Unwritable | upgrade::SelfUpgrade::Windows => {
+                    upgrade::manual_upgrade_command()
+                }
+                _ => "chrome-use upgrade".to_string(),
+            };
             checks.push(
                 Check::new(
                     "versions.cli",
                     category,
                     Status::Warn,
-                    format!("CLI {cli_version} (newer available: {latest})"),
+                    format!("CLI {cli_version} (newer available: {latest}{why})"),
                 )
-                .with_fix("chrome-use upgrade".to_string()),
+                .with_fix(fix),
             );
         }
         _ => {

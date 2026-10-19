@@ -3432,5 +3432,95 @@
   },
   "options_pick_all_hint": {
     "message": "Chrome 只问一次，不用在每个网站第一次选择元素时再问。插件仍然只在你选择元素时才接触页面。"
+  },
+  "ext_version_cli_outdated": {
+    "message": "chrome-use CLI 有新版本 $LATEST$（当前 $CURRENT$）。",
+    "placeholders": {
+      "latest": {
+        "content": "$1"
+      },
+      "current": {
+        "content": "$2"
+      }
+    }
+  },
+  "ext_version_cli_too_old": {
+    "message": "chrome-use CLI $CURRENT$ 太旧，这个扩展用不了。请更新到 $LATEST$。",
+    "placeholders": {
+      "current": {
+        "content": "$1"
+      },
+      "latest": {
+        "content": "$2"
+      }
+    }
+  },
+  "ext_version_cli_switch": {
+    "message": "新版 CLI $VERSION$ 已安装，agent 空闲后切换。",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_cli_upgrading": {
+    "message": "正在更新 chrome-use CLI…"
+  },
+  "ext_version_cli_failed": {
+    "message": "CLI 没更新成功。请在终端运行："
+  },
+  "ext_version_cli_auto_failed": {
+    "message": "chrome-use CLI $LATEST$ 自动安装失败。请在终端运行：",
+    "placeholders": {
+      "latest": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_ext_pending": {
+    "message": "扩展新版本 $VERSION$ 已下载，agent 空闲后自动更新。",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_ext_updated": {
+    "message": "扩展已更新到 $VERSION$。",
+    "placeholders": {
+      "version": {
+        "content": "$1"
+      }
+    }
+  },
+  "ext_version_hold_busy": {
+    "message": "等待中：有命令正在执行。"
+  },
+  "ext_version_hold_recent": {
+    "message": "等待中：agent 一分钟内用过浏览器。"
+  },
+  "ext_version_hold_applying": {
+    "message": "正在安装…"
+  },
+  "ext_version_action_upgrade_cli": {
+    "message": "更新 CLI"
+  },
+  "ext_version_action_apply_update": {
+    "message": "立即更新"
+  },
+  "bg_cli_upgrade_timeout": {
+    "message": "CLI 更新超过五分钟没完成，已放弃。"
+  },
+  "bg_cli_upgrade_no_host": {
+    "message": "chrome-use CLI 没有连接，无法自动更新。"
+  },
+  "bg_update_not_now": {
+    "message": "现在不能安装更新，agent 空闲后会自动安装。"
+  },
+  "popup_update_failed": {
+    "message": "没能开始更新。"
+  },
+  "ext_version_cli_legacy": {
+    "message": "chrome-use CLI 太旧，没法在这里自动更新。请在终端重新安装："
   }
 }

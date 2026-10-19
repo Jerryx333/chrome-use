@@ -146,6 +146,10 @@ function worker({ tabs = [], storage = {} } = {}) {
     withRelayTimeout: (p) => p,
     postToHost: (msg) => calls.posted.push(msg),
     scheduleKeepalivePing() {},
+    // Version banners (popup / side panel) and the CLI record a pong carries.
+    publishHostStatus() {},
+    afterCliStatus() {},
+    onUpgradeCliResult() {},
     reannounceAttachedTabs: async () => {},
     reattachOwnedTabs: async () => {},
     syncRelayTargets() {},

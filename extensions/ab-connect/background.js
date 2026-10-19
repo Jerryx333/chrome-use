@@ -22,6 +22,7 @@ import { TurnNotifications, openFromNotification } from './turn-notifications.js
 import { AgentPanelBridge, isAgentPanelSender, pageOperationAllowed } from './agent-panel-bridge.js';
 import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
+import { cliSwitchPending, compareVersions } from './version-notice.js';
 import { t } from './i18n.js';
 import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
@@ -921,9 +922,121 @@ function cursorOverlayExpression(x, y, click) {
 function publishHostStatus() {
   try {
     chrome.runtime
-      .sendMessage({ type: 'ab-host-state', ...hostConnection.snapshot(), tabCount: tabs.size })
+      .sendMessage({ type: 'ab-host-state', ...hostConnection.snapshot(), tabCount: tabs.size, ...versionState() })
       .catch(() => {}); // Popup may be closed; state still lives in the worker.
   } catch {}
+}
+
+// ---- keeping the CLI and this extension current ---------------------------
+//
+// The host reports its version record in every pong (`cli`, see
+// version-notice.js). The popup and side panel show it; their "Update CLI"
+// button lands here as `ab-cli-upgrade`, which asks the host to upgrade itself
+// in the background. Once the installed binary is newer than the running host
+// (`cli.onDisk`), the worker reconnects so Chrome starts the new one — but only
+// when the relay is idle by the same rule as this extension's own update, so a
+// running task is never cut.
+
+// A button-started upgrade: { state: 'running'|'failed', error?, command?, at }.
+let cliUpgrade = null;
+// Fast pings while an upgrade runs, so the pong's `onDisk` arrives promptly.
+const CLI_UPGRADE_PING_MS = 3000;
+const CLI_UPGRADE_TIMEOUT_MS = 5 * 60 * 1000;
+let cliUpgradeTimer = null;
+// The on-disk version the worker last reconnected for. A host that still
+// reports an older version afterwards (the install went to another path) is
+// not reconnected again for the same version.
+let cliSwitchedTo = null;
+let cliSwitchTimer = null;
+
+// What the popup and side panel need to show version notices.
+function versionState() {
+  let update = null;
+  try {
+    update = { ...updateStateSnapshot(), canApplyNow: updatePending && !applyingUpdate && currentUpdatePlan().apply };
+  } catch {} // Before the update state is initialised at startup.
+  return { cliUpgrade, update, extensionVersion: chrome.runtime.getManifest().version };
+}
+
+function stopCliUpgradePings() {
+  if (cliUpgradeTimer) clearTimeout(cliUpgradeTimer);
+  cliUpgradeTimer = null;
+}
+
+function pingWhileCliUpgrades() {
+  stopCliUpgradePings();
+  if (cliUpgrade?.state !== 'running') return;
+  if (Date.now() - cliUpgrade.at > CLI_UPGRADE_TIMEOUT_MS) {
+    cliUpgrade = { state: 'failed', error: t('bg_cli_upgrade_timeout'), at: Date.now() };
+    publishHostStatus();
+    return;
+  }
+  cliUpgradeTimer = setTimeout(() => {
+    cliUpgradeTimer = null;
+    postToHost({ method: 'ping' });
+    pingWhileCliUpgrades();
+  }, CLI_UPGRADE_PING_MS);
+}
+
+function startCliUpgrade() {
+  const cli = hostConnection.snapshot().cli;
+  if (!port || !cli) throw new Error(t('bg_cli_upgrade_no_host'));
+  if (cliUpgrade?.state === 'running') return;
+  cliUpgrade = { state: 'running', at: Date.now() };
+  postToHost({ method: 'upgradeCli' });
+  pingWhileCliUpgrades();
+  publishHostStatus();
+}
+
+function onUpgradeCliResult(params) {
+  if (cliUpgrade?.state !== 'running') return;
+  if (params?.started === true) return; // the pong's onDisk reports the outcome
+  cliUpgrade = {
+    state: 'failed',
+    error: typeof params?.error === 'string' ? params.error.slice(0, 300) : '',
+    ...(typeof params?.command === 'string' && params.command ? { command: params.command.slice(0, 300) } : {}),
+    at: Date.now(),
+  };
+  stopCliUpgradePings();
+  publishHostStatus();
+}
+
+// After each pong: settle a running upgrade, and hand over to a newer binary.
+function afterCliStatus() {
+  const cli = hostConnection.snapshot().cli;
+  if (!cli) return;
+  if (cliUpgrade && cli.latest && compareVersions(cli.version, cli.latest) !== -1 && !cliSwitchPending(cli)) {
+    // The running host is current: whatever was started has landed.
+    cliUpgrade = null;
+    stopCliUpgradePings();
+    publishHostStatus();
+  } else if (cliUpgrade?.state === 'running' && cliSwitchPending(cli)) {
+    cliUpgrade = null; // installed; the switch notice takes over
+    stopCliUpgradePings();
+    publishHostStatus();
+  } else if (cliUpgrade?.state === 'running' && cli.lastAutoUpgrade && !cli.lastAutoUpgrade.ok && cli.lastAutoUpgrade.at >= cliUpgrade.at) {
+    onUpgradeCliResult({ started: false, error: cli.lastAutoUpgrade.error || '' });
+  }
+  switchToNewCliWhenIdle();
+}
+
+function switchToNewCliWhenIdle() {
+  if (cliSwitchTimer) clearTimeout(cliSwitchTimer);
+  cliSwitchTimer = null;
+  const cli = hostConnection.snapshot().cli;
+  if (!port || !cliSwitchPending(cli) || cliSwitchedTo === cli.onDisk) return;
+  const plan = currentUpdatePlan();
+  // Side panel requests ride the same port; let them finish too.
+  if (!plan.apply || agentPanelBridge.pending.size > 0) {
+    if (plan.appliesInMs != null) cliSwitchTimer = setTimeout(switchToNewCliWhenIdle, plan.appliesInMs + 250);
+    return; // a command's end re-arms through the next pong
+  }
+  cliSwitchedTo = cli.onDisk;
+  const old = port;
+  try { old.disconnect(); } catch {}
+  // disconnect() from this side fires no onDisconnect: clean up the same way.
+  hostGone(old, 'Switching to the updated chrome-use CLI');
+  connectHost();
 }
 
 function connectHost() {
@@ -954,17 +1067,7 @@ function connectHost() {
     });
   });
   connectedPort.onDisconnect.addListener(() => {
-    const error = chrome.runtime.lastError?.message || 'Native host disconnected';
-    if (port !== connectedPort) return;
-    const wasConnected = hostConnection.snapshot().connected;
-    hostConnection.end(connectedPort, error);
-    agentPanelBridge.disconnect(error);
-    port = null;
-    hostReconnect.failed();
-    publishHostStatus();
-    if (wasConnected) notifyConnChange(false);
-    // Retain tab records; the new host will rediscover them after reconnect.
-    for (const tabId of tabs.keys()) setBadge(tabId, 'connecting');
+    hostGone(connectedPort, chrome.runtime.lastError?.message || 'Native host disconnected');
   });
   // A response proves that the native host exists and can exchange messages.
   // Older hosts can instead confirm themselves with their first real command.
@@ -1000,6 +1103,9 @@ function connectHost() {
           'batchCommands',
           'attachTabById',
           'releaseTab',
+          // `cliUpdate` (0.5.72): shows the CLI's version notices and sends
+          // `upgradeCli` from the popup / side panel button.
+          'cliUpdate',
         ],
         ...extra,
       });
@@ -1015,12 +1121,34 @@ function connectHost() {
   scheduleKeepalivePing();
 }
 
+// The host port closed, or this worker closed it to start an updated CLI
+// (`disconnect()` from this side fires no onDisconnect): forget it and retry.
+function hostGone(connectedPort, error) {
+  if (port !== connectedPort) return;
+  const wasConnected = hostConnection.snapshot().connected;
+  hostConnection.end(connectedPort, error);
+  agentPanelBridge.disconnect(error);
+  port = null;
+  hostReconnect.failed();
+  publishHostStatus();
+  if (wasConnected) notifyConnChange(false);
+  // Retain tab records; the new host will rediscover them after reconnect.
+  for (const tabId of tabs.keys()) setBadge(tabId, 'connecting');
+}
+
 async function onHostMessage(msg) {
   if (!msg || typeof msg !== 'object') return;
   // Active host commands refresh the keepalive window so working sessions never go cold.
   scheduleKeepalivePing();
-  // Optional keepalive.
-  if (msg.method === 'pong') return;
+  // Optional keepalive; a newer host's pong also carries its version record.
+  if (msg.method === 'pong') {
+    afterCliStatus();
+    return;
+  }
+  if (msg.method === 'upgradeCliResult') {
+    onUpgradeCliResult(msg.params);
+    return;
+  }
   if (msg.method === 'ping') {
     postToHost({ method: 'pong' });
     return;
@@ -2626,6 +2754,7 @@ function markUpdatePending(version) {
   if (!updatePending) updatePendingSince = Date.now();
   updatePending = true;
   if (typeof version === 'string' && version) updateVersion = version;
+  publishHostStatus();
   void applyUpdateWhenIdle();
 }
 
@@ -2832,13 +2961,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     );
     return true;
   }
+  // Version banners in the popup and side panel (version-notice.js).
+  if (msg?.type === 'ab-cli-upgrade' || msg?.type === 'ab-apply-update') {
+    const popup = _sender?.id === chrome.runtime.id && !_sender.tab && _sender.url === chrome.runtime.getURL('popup.html');
+    if (!popup && !isAgentPanelSender(_sender, chrome.runtime)) {
+      sendResponse({ success: false, error: 'Updates start from the extension popup or panel' });
+      return false;
+    }
+    try {
+      if (msg.type === 'ab-cli-upgrade') startCliUpgrade();
+      else if (versionState().update?.canApplyNow) void applyUpdateWhenIdle();
+      else throw new Error(t('bg_update_not_now'));
+      sendResponse({ success: true, ...versionState() });
+    } catch (error) {
+      sendResponse({ success: false, error: String(error.message || error) });
+    }
+    return false;
+  }
   if (msg && msg.type === 'ab-status') {
     if (!port) {
       try {
         connectHost();
       } catch (e) {}
     }
-    sendResponse({ ...hostConnection.snapshot(), tabCount: tabs.size, host: HOST_NAME, agentPanelEntry });
+    sendResponse({ ...hostConnection.snapshot(), tabCount: tabs.size, host: HOST_NAME, agentPanelEntry, ...versionState() });
   }
   return false;
 });
