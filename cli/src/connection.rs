@@ -633,17 +633,42 @@ pub(crate) fn created_targets_path(session: &str) -> PathBuf {
     get_created_targets_path(session)
 }
 
-/// Hand `from`'s whole tab ownership record to `to`, which must have none:
-/// the record moves as it is, endpoint and browser identity included, so it
-/// grants `to` exactly what it granted `from` and nothing on another browser.
-/// The caller holds `from`'s lifecycle lock and has checked its daemon is gone.
-pub(crate) fn move_created_targets(from: &str, to: &str) -> Result<(), String> {
+/// Hand `from`'s tab ownership record to `to`: the targets join `to`'s record
+/// (or become it), keeping the endpoint and browser identity they were
+/// recorded under, so they grant `to` exactly what they granted `from` and
+/// nothing on another browser. Records of two different browsers are not
+/// merged. The caller holds `from`'s lifecycle lock and has checked its
+/// daemon is gone.
+pub(crate) fn merge_created_targets(from: &str, to: &str) -> Result<(), String> {
     let source = get_created_targets_path(from);
     let destination = get_created_targets_path(to);
-    if destination.exists() {
-        return Err(format!("session {to} already has a tab record"));
+    let Some(theirs) = read_created_target_registry(from) else {
+        return Err(format!("session {from} has no readable tab record"));
+    };
+    let Some(mut ours) = read_created_target_registry(to) else {
+        if destination.exists() {
+            return Err(format!("session {to}'s tab record is unreadable"));
+        }
+        return fs::rename(&source, &destination).map_err(|e| e.to_string());
+    };
+    let same_browser = ours.endpoint_sha256 == theirs.endpoint_sha256
+        || (ours.browser_sha256.is_some() && ours.browser_sha256 == theirs.browser_sha256);
+    if !same_browser {
+        return Err(format!(
+            "sessions {from} and {to} recorded tabs in different browsers"
+        ));
     }
-    fs::rename(&source, &destination).map_err(|e| e.to_string())
+    for target in theirs.target_ids {
+        if !ours.target_ids.contains(&target) {
+            ours.target_ids.push(target);
+        }
+    }
+    ours.target_ids.sort_unstable();
+    let encoded = serde_json::to_vec(&ours).map_err(|e| e.to_string())?;
+    let temporary = destination.with_extension(format!("json.{}.tmp", std::process::id()));
+    fs::write(&temporary, encoded).map_err(|e| e.to_string())?;
+    fs::rename(&temporary, &destination).map_err(|e| e.to_string())?;
+    fs::remove_file(&source).map_err(|e| e.to_string())
 }
 
 /// Ask a running daemon to relabel this session's existing tab group.
@@ -1050,10 +1075,8 @@ fn write_created_targets_in(
 ) -> Result<(), String> {
     let path = get_created_targets_path(session);
     if targets.is_empty() {
-        // A session with no tabs left has nothing to be continued or swept
-        // for; its next start writes these again.
+        // A session with no tabs left has nothing to be swept for.
         let _ = fs::remove_file(get_socket_dir().join(format!("{session}.activity")));
-        let _ = fs::remove_file(get_socket_dir().join(format!("{session}.lineage")));
         return match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

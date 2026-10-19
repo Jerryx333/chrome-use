@@ -7,10 +7,11 @@
 //! stop` ever closed them. Agents rarely ran either, so groups piled up in
 //! the user's window by the dozen. Three things end that:
 //!
-//! - **Reuse.** A new session from the same terminal and working directory
-//!   takes over the tab group of the one before it, once that one's daemon
-//!   has exited ([`inherit_predecessor`]). Its tabs become the new session's
-//!   tabs and new tabs join the same group.
+//! - **One group per project.** A session's tabs go in its project's group
+//!   (`✦ <project>`), shared by every session working on that project
+//!   ([`join_project_group`]). A session holds a lease on the tabs it opened;
+//!   the lease ends with its daemon, and the project's next session takes
+//!   those tabs over instead of opening another group.
 //! - **Sweep.** Sessions whose daemon has exited and that saw no command for
 //!   [`cleanup_idle`] get their tabs closed ([`sweep`]). A tab the user is
 //!   looking at, or has switched to, is left for them instead: ungrouped and
@@ -120,95 +121,190 @@ fn millis(t: SystemTime) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Lineage: which earlier session a new one continues
+// Project groups
 // ---------------------------------------------------------------------------
 
-/// Terminal ids, finest first: a tmux pane inside a terminal tab is the more
-/// specific of the two. One of these plus the working directory says "the
-/// same place the user works in", which is what a follow-up task shares with
-/// the one before it. Agent ids are left out on purpose: they are what
-/// changes between those two tasks.
-const LINEAGE_TERMINAL_VARS: &[&str] = &[
-    "CMUX_SURFACE_ID",
-    "TMUX_PANE",
-    "STY",
-    "WEZTERM_PANE",
-    "KITTY_WINDOW_ID",
-    "GHOSTTY_SURFACE_ID",
-    "ITERM_SESSION_ID",
-    "TERM_SESSION_ID",
-    "WT_SESSION",
-    "WINDOWID",
-    "SHELL_SESSION_ID",
-];
+/// The project folder a side-panel conversation works in, set by the panel
+/// for its agents. It names the project even when the agent runs elsewhere.
+pub const PROJECT_DIR_ENV: &str = "CHROME_USE_PROJECT_DIR";
 
-/// The lineage key of an agent working in `cwd` with environment `vars`.
-/// Without a terminal id (an agent app with no terminal) it is the directory
-/// alone.
-pub fn lineage_of(cwd: &Path, vars: &[(String, String)]) -> String {
-    let terminal = LINEAGE_TERMINAL_VARS.iter().find_map(|name| {
-        vars.iter()
-            .find(|(k, v)| k == name && !v.is_empty())
-            .map(|(k, v)| format!("{k}={v}"))
-    });
-    let mut hasher = Sha256::new();
-    hasher.update(cwd.to_string_lossy().as_bytes());
-    hasher.update([0]);
-    hasher.update(terminal.unwrap_or_default().as_bytes());
-    let digest = format!("{:x}", hasher.finalize());
+/// The project a session works for: the panel conversation's project folder,
+/// else the git repository around `cwd`, else `cwd` itself.
+pub fn project_root_from(cwd: &Path, panel_project: Option<&Path>) -> PathBuf {
+    if let Some(project) = panel_project.filter(|p| p.is_dir()) {
+        return project.to_path_buf();
+    }
+    cwd.ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(cwd)
+        .to_path_buf()
+}
+
+fn current_project_root() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let panel = std::env::var_os(PROJECT_DIR_ENV).map(PathBuf::from);
+    let root = project_root_from(&cwd, panel.as_deref());
+    Some(std::fs::canonicalize(&root).unwrap_or(root))
+}
+
+/// A project's group key: stable for the folder, short enough for a file name.
+pub fn group_key(root: &Path) -> String {
+    let digest = format!("{:x}", Sha256::digest(root.to_string_lossy().as_bytes()));
     digest[..16].to_string()
 }
 
-fn current_lineage() -> Option<String> {
-    let cwd = std::env::current_dir().ok()?;
-    Some(lineage_of(&cwd, &std::env::vars().collect::<Vec<_>>()))
+fn groups_dir() -> PathBuf {
+    get_socket_dir().join("groups")
 }
 
-fn lineage_path(session: &str) -> PathBuf {
-    get_socket_dir().join(format!("{session}.lineage"))
+fn group_path(key: &str) -> PathBuf {
+    groups_dir().join(format!("{key}.json"))
 }
 
-fn read_lineage(session: &str) -> Option<String> {
-    std::fs::read_to_string(lineage_path(session))
+/// One project's tab group. The title is chosen once, when the group is
+/// first made, and read back from here ever after: recomputing it could
+/// rename the group under the sessions using it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct GroupRecord {
+    pub version: u32,
+    pub root: String,
+    pub title: String,
+}
+
+fn read_group(key: &str) -> Option<GroupRecord> {
+    std::fs::read_to_string(group_path(key))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
+/// The title for a new project group: the folder's name, or when another
+/// project already uses that, the name with its parent folder; failing that,
+/// with the start of its key.
+pub fn choose_title(root: &Path, key: &str, taken: &HashSet<String>) -> String {
+    let name = |p: &Path| {
+        p.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| p.to_string_lossy().into_owned())
+    };
+    let base = crate::session_title::sanitize_title(&name(root))
+        .unwrap_or_else(|| format!("project {}", &key[..6]));
+    if !taken.contains(&base) {
+        return base;
+    }
+    if let Some(parent) = root.parent().filter(|p| p.file_name().is_some()) {
+        let with_parent = format!("{base} ({})", name(parent));
+        if !taken.contains(&with_parent) {
+            return with_parent;
+        }
+    }
+    format!("{base} ({})", &key[..6])
+}
+
+/// The record of the group for `root`, made under a lock the first time.
+fn ensure_group(root: &Path) -> Option<(String, GroupRecord)> {
+    let key = group_key(root);
+    if let Some(record) = read_group(&key) {
+        return Some((key, record));
+    }
+    std::fs::create_dir_all(groups_dir()).ok()?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(groups_dir().join(".lock"))
+        .ok()?;
+    lock.lock().ok()?;
+    if let Some(record) = read_group(&key) {
+        return Some((key, record));
+    }
+    let taken: HashSet<String> = std::fs::read_dir(groups_dir())
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            read_group(name.strip_suffix(".json")?).map(|g| g.title)
+        })
+        .collect();
+    let record = GroupRecord {
+        version: 1,
+        root: root.to_string_lossy().into_owned(),
+        title: choose_title(root, &key, &taken),
+    };
+    let encoded = serde_json::to_vec(&record).ok()?;
+    std::fs::write(group_path(&key), encoded).ok()?;
+    Some((key, record))
+}
+
+fn pointer_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{session}.group"))
+}
+
+/// The project group `session` belongs to, by key.
+pub fn session_group(session: &str) -> Option<String> {
+    std::fs::read_to_string(pointer_path(session))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+/// The title of the project group `session` belongs to.
+pub fn group_title(session: &str) -> Option<String> {
+    read_group(&session_group(session)?).map(|g| g.title)
+}
+
+/// Rename the project group of `session`; every session of the project sees
+/// the new title. Returns false when the session has no project group.
+pub fn set_group_title(session: &str, title: &str) -> Result<bool, String> {
+    let Some(key) = session_group(session) else {
+        return Ok(false);
+    };
+    let mut record = read_group(&key).ok_or("the project group record is missing")?;
+    record.title = title.to_string();
+    let encoded = serde_json::to_vec(&record).map_err(|e| e.to_string())?;
+    std::fs::write(group_path(&key), encoded).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+fn legacy_label_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{session}.legacy-label"))
+}
+
+/// The group label a session used before it joined its project group, left
+/// for its daemon to move the session's open tabs under the project title.
+/// Taken once.
+pub fn take_legacy_label(session: &str) -> Option<String> {
+    let path = legacy_label_path(session);
+    let label = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    Some(label.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 fn moved_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{session}.moved-to"))
 }
 
-/// An earlier session as [`pick_predecessor`] sees it.
+/// Another session as [`expired_leases`] sees it.
 #[derive(Debug, Clone)]
-pub struct PriorSession {
+pub struct GroupMember {
     pub name: String,
-    pub lineage: Option<String>,
+    pub group: Option<String>,
     pub live: bool,
     pub has_record: bool,
-    pub last_activity: Option<SystemTime>,
 }
 
-/// The session whose tab group `own` should continue: same lineage, daemon
-/// gone, tabs still recorded; the most recently active of them.
-pub fn pick_predecessor<'a>(
-    own: &str,
-    lineage: &str,
-    sessions: &'a [PriorSession],
-) -> Option<&'a PriorSession> {
-    sessions
+/// The sessions of group `key` whose tabs `own` may take over: their daemon
+/// is gone, so their lease on those tabs has ended.
+pub fn expired_leases<'a>(own: &str, key: &str, members: &'a [GroupMember]) -> Vec<&'a str> {
+    let mut out: Vec<&str> = members
         .iter()
-        .filter(|s| {
-            s.name != own && !s.live && s.has_record && s.lineage.as_deref() == Some(lineage)
-        })
-        .max_by(|a, b| {
-            a.last_activity
-                .cmp(&b.last_activity)
-                .then_with(|| a.name.cmp(&b.name))
-        })
+        .filter(|m| m.name != own && !m.live && m.has_record && m.group.as_deref() == Some(key))
+        .map(|m| m.name.as_str())
+        .collect();
+    out.sort_unstable();
+    out
 }
 
-fn prior_sessions() -> Vec<PriorSession> {
+fn group_members() -> Vec<GroupMember> {
     let Ok(entries) = std::fs::read_dir(get_socket_dir()) else {
         return Vec::new();
     };
@@ -217,53 +313,78 @@ fn prior_sessions() -> Vec<PriorSession> {
         .filter_map(|e| {
             e.file_name()
                 .to_str()?
-                .strip_suffix(".lineage")
+                .strip_suffix(".group")
                 .map(str::to_string)
         })
-        .map(|name| PriorSession {
-            lineage: read_lineage(&name),
+        .map(|name| GroupMember {
+            group: session_group(&name),
             live: crate::connection::daemon_ready(&name),
             has_record: crate::connection::has_created_targets(&name),
-            last_activity: last_activity(&name),
             name,
         })
         .collect()
 }
 
-/// Called before a derived (not `--session`) session's daemon starts. Records
-/// where this session runs, and when it is starting from nothing — no record,
-/// no title — takes over the most recent exited session from the same
-/// terminal and directory: its tab record moves here and its group label
-/// with it, so the relay attributes its tabs to this session and new tabs
-/// join the same group. Returns the session taken over.
-pub fn inherit_predecessor(session: &str) -> Option<String> {
-    let lineage = current_lineage()?;
-    if read_lineage(session).is_none() {
-        let _ = std::fs::write(lineage_path(session), &lineage);
+/// Whether some other session of `session`'s project group is running.
+pub fn group_has_other_live_session(session: &str) -> bool {
+    let Some(key) = session_group(session) else {
+        return false;
+    };
+    group_members()
+        .iter()
+        .any(|m| m.name != session && m.live && m.group.as_deref() == Some(key.as_str()))
+}
+
+/// What joining a project group did.
+#[derive(Debug, Default)]
+pub struct Joined {
+    pub title: String,
+    /// The session had tabs under its own group from an older build; its
+    /// daemon moves them under the project title.
+    pub migrated: bool,
+    /// Ended sessions of the project whose tabs this session took over.
+    pub took_over: Vec<String>,
+}
+
+/// Called before a session's daemon starts on the extension relay. Puts the
+/// session in its project's group (first time only: a session never changes
+/// group), migrates its own record from an older build, and takes over the
+/// tabs of the project's ended sessions: their daemons are gone, so their
+/// lease on those tabs has ended and this session may reuse them. Legacy
+/// records of other sessions are left alone; the sweep handles them.
+pub fn join_project_group(session: &str) -> Option<Joined> {
+    let root = current_project_root()?;
+    let mut joined = Joined::default();
+    let key = match session_group(session) {
+        Some(key) => key,
+        None => {
+            let (key, _) = ensure_group(&root)?;
+            if crate::connection::has_created_targets(session) {
+                // Its tabs sit in a group titled after the session; the label
+                // must be read before the pointer changes what it says.
+                let old = crate::session_title::display_name(session);
+                std::fs::write(legacy_label_path(session), &old).ok()?;
+                joined.migrated = true;
+            }
+            std::fs::write(pointer_path(session), &key).ok()?;
+            key
+        }
+    };
+    joined.title = read_group(&key)?.title;
+    for other in expired_leases(session, &key, &group_members()) {
+        // Never wait: a lock held means that session is starting again.
+        let Some(_lock) = crate::connection::try_lock_session_lifecycle(other) else {
+            continue;
+        };
+        if crate::connection::daemon_ready(other) {
+            continue;
+        }
+        if crate::connection::merge_created_targets(other, session).is_ok() {
+            let _ = std::fs::write(moved_path(other), session);
+            joined.took_over.push(other.to_string());
+        }
     }
-    if crate::connection::has_created_targets(session)
-        || crate::session_title::title_of(session).is_some()
-    {
-        return None;
-    }
-    let sessions = prior_sessions();
-    let prior = pick_predecessor(session, &lineage, &sessions)?.name.clone();
-    // Never wait here: a lock held means that session is starting again.
-    let _lock = crate::connection::try_lock_session_lifecycle(&prior)?;
-    if crate::connection::daemon_ready(&prior) || !crate::connection::has_created_targets(&prior) {
-        return None;
-    }
-    let label = crate::session_title::title_of(&prior).unwrap_or_else(|| prior.clone());
-    crate::connection::move_created_targets(&prior, session).ok()?;
-    if crate::session_title::set_title(session, &label).is_err() {
-        // Without the label the moved tabs would sit in a group this session
-        // does not own; give them back.
-        let _ = crate::connection::move_created_targets(session, &prior);
-        return None;
-    }
-    crate::session_title::clear_title(&prior);
-    let _ = std::fs::write(moved_path(&prior), session);
-    Some(prior)
+    Some(joined)
 }
 
 /// When this session's tabs were taken over by a later one, which one; the
@@ -273,6 +394,45 @@ pub fn take_moved_note(session: &str) -> Option<String> {
     let to = std::fs::read_to_string(&path).ok()?;
     let _ = std::fs::remove_file(&path);
     Some(to.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+// ---------------------------------------------------------------------------
+// Same page
+// ---------------------------------------------------------------------------
+
+/// Query parameters that only say where a click came from.
+const TRACKING_PARAMS: &[&str] = &[
+    "fbclid", "gclid", "dclid", "gbraid", "wbraid", "msclkid", "yclid", "igshid", "mc_cid",
+    "mc_eid", "_ga", "_gl", "ref_src", "spm",
+];
+
+/// A url reduced to what makes it the same page: no `#fragment`, no tracking
+/// parameters (`utm_*` and the click ids), the rest of the query in a fixed
+/// order, the scheme and host lowercase and a default port dropped (the url
+/// parser does those two). Anything that does not parse is compared as given.
+pub fn normalize_page_url(raw: &str) -> String {
+    let Ok(mut url) = url::Url::parse(raw.trim()) else {
+        return raw.trim().to_string();
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return raw.trim().to_string();
+    }
+    url.set_fragment(None);
+    let mut pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .filter(|(k, _)| {
+            let k = k.to_ascii_lowercase();
+            !k.starts_with("utm_") && !TRACKING_PARAMS.contains(&k.as_str())
+        })
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+    pairs.sort();
+    if pairs.is_empty() {
+        url.set_query(None);
+    } else {
+        url.query_pairs_mut().clear().extend_pairs(pairs);
+    }
+    url.to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -385,6 +545,7 @@ pub fn idle_enough(last: Option<SystemTime>, idle: Option<Duration>, now: System
 /// What a sweep did, for `tabs cleanup` and the log.
 #[derive(Debug, Default)]
 pub struct SweepReport {
+    pub collapsed: Vec<Value>,
     pub closed: Vec<Value>,
     pub left_for_user: Vec<Value>,
     pub skipped: Vec<Value>,
@@ -394,6 +555,7 @@ pub struct SweepReport {
 impl SweepReport {
     pub fn to_json(&self) -> Value {
         json!({
+            "collapsed": self.collapsed,
             "closed": self.closed,
             "leftForUser": self.left_for_user,
             "skipped": self.skipped,
@@ -552,6 +714,7 @@ pub async fn sweep(endpoint: &str, opts: SweepOptions) -> Result<SweepReport, St
         sweep_session(&browser, endpoint, &session, opts, now, &mut report).await;
     }
     sweep_unrecorded_groups(&browser, opts, &mut report).await;
+    collapse_idle_groups(&browser, &mut report).await;
     Ok(report)
 }
 
@@ -573,6 +736,10 @@ async fn sweep_session(
     };
     if crate::connection::daemon_ready(session) {
         return skip(report, "running");
+    }
+    // Another session of the project is working: these tabs are its to reuse.
+    if group_has_other_live_session(session) {
+        return skip(report, "its project group is in use");
     }
     let last = last_activity(session);
     if !idle_enough(last, opts.idle, now) {
@@ -663,6 +830,21 @@ fn live_labels() -> HashSet<String> {
     labels
 }
 
+/// Every tab a session left for the user (`keep`, `done --keep`, or the
+/// sweep). The relay still files such a tab under the group it left, so the
+/// project's sessions must be told it is not theirs.
+pub fn kept_targets() -> HashSet<String> {
+    let Ok(entries) = std::fs::read_dir(get_socket_dir()) else {
+        return HashSet::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter_map(|name| name.strip_suffix(".kept-tabs.json").map(str::to_string))
+        .flat_map(|session| crate::connection::read_kept_tabs(&session).into_keys())
+        .collect()
+}
+
 /// Every target some session's record names, as owned or as kept.
 fn claimed_targets() -> HashSet<String> {
     let mut claimed = HashSet::new();
@@ -737,6 +919,40 @@ async fn sweep_unrecorded_groups(browser: &Browser, opts: SweepOptions, report: 
                     .errors
                     .push(format!("tab {tab_id} in group {title}: {e}")),
             }
+        }
+    }
+}
+
+/// Fold away every agent group nobody is working in: what is left in it
+/// waits for the project's next session, or for the sweep.
+async fn collapse_idle_groups(browser: &Browser, report: &mut SweepReport) {
+    let live = live_labels();
+    for group in &browser.groups {
+        let (Some(id), Some(title)) = (
+            group.get("id").and_then(Value::as_i64),
+            group.get("title").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        let idle = match agent_group_title(title) {
+            Some(AgentGroupTitle::Current(label) | AgentGroupTitle::Legacy(label)) => {
+                !live.contains(&label)
+            }
+            None => false,
+        };
+        if !idle || group.get("collapsed").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        if chrome(
+            &browser.client,
+            "tabGroups",
+            "update",
+            json!([id, { "collapsed": true }]),
+        )
+        .await
+        .is_ok()
+        {
+            report.collapsed.push(json!({ "group": title }));
         }
     }
 }
@@ -816,13 +1032,6 @@ pub fn maybe_spawn_auto_sweep(session: &str) {
 mod tests {
     use super::*;
 
-    fn vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
     #[test]
     fn cleanup_idle_defaults_and_zero_disables() {
         assert_eq!(
@@ -841,58 +1050,103 @@ mod tests {
         );
     }
 
-    /// The same terminal and directory give the same key whatever the agent
-    /// id is; another pane or directory gives another.
+    /// Every terminal and agent in one repository lands in one project; a
+    /// panel conversation's project folder wins over where its agent runs.
     #[test]
-    fn lineage_follows_terminal_and_directory_not_agent() {
-        let cwd = Path::new("/work/repo");
-        let a = lineage_of(cwd, &vars(&[("TMUX_PANE", "%3"), ("CLAUDE_PID", "100")]));
-        let b = lineage_of(cwd, &vars(&[("TMUX_PANE", "%3"), ("CLAUDE_PID", "200")]));
-        assert_eq!(a, b);
-        assert_ne!(a, lineage_of(cwd, &vars(&[("TMUX_PANE", "%4")])));
-        assert_ne!(
-            a,
-            lineage_of(Path::new("/work/other"), &vars(&[("TMUX_PANE", "%3")]))
-        );
-        // A pane is finer than the terminal tab around it.
+    fn project_is_panel_folder_then_git_root_then_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("image-use");
+        let deep = repo.join("src/bin");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        assert_eq!(project_root_from(&deep, None), repo);
+        assert_eq!(project_root_from(&repo, None), repo);
+        let plain = tmp.path().join("notes");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert_eq!(project_root_from(&plain, None), plain);
+        assert_eq!(project_root_from(&deep, Some(&plain)), plain);
+        // A panel folder that is gone is no project.
         assert_eq!(
-            lineage_of(
-                cwd,
-                &vars(&[("TERM_SESSION_ID", "w0"), ("TMUX_PANE", "%3")])
-            ),
-            lineage_of(
-                cwd,
-                &vars(&[("TERM_SESSION_ID", "w1"), ("TMUX_PANE", "%3")])
-            )
+            project_root_from(&deep, Some(&tmp.path().join("missing"))),
+            repo
         );
-        // No terminal: the directory alone.
-        assert_eq!(lineage_of(cwd, &[]), lineage_of(cwd, &vars(&[("X", "1")])));
+        assert_eq!(group_key(&repo), group_key(&repo));
+        assert_ne!(group_key(&repo), group_key(&plain));
     }
 
-    fn prior(name: &str, lineage: &str, live: bool, record: bool, age_s: u64) -> PriorSession {
-        PriorSession {
+    #[test]
+    fn a_title_another_project_has_gets_its_parent_folder() {
+        let key = group_key(Path::new("/w/a/image-use"));
+        let none = HashSet::new();
+        assert_eq!(
+            choose_title(Path::new("/w/a/image-use"), &key, &none),
+            "image-use"
+        );
+        let taken: HashSet<String> = ["image-use".to_string()].into();
+        assert_eq!(
+            choose_title(Path::new("/w/a/image-use"), &key, &taken),
+            "image-use (a)"
+        );
+        let both: HashSet<String> = ["image-use".to_string(), "image-use (a)".to_string()].into();
+        assert_eq!(
+            choose_title(Path::new("/w/a/image-use"), &key, &both),
+            format!("image-use ({})", &key[..6])
+        );
+    }
+
+    fn member(name: &str, group: &str, live: bool, record: bool) -> GroupMember {
+        GroupMember {
             name: name.to_string(),
-            lineage: Some(lineage.to_string()),
+            group: Some(group.to_string()),
             live,
             has_record: record,
-            last_activity: Some(SystemTime::now() - Duration::from_secs(age_s)),
         }
     }
 
+    /// Only ended sessions of the same project give their tabs up; a running
+    /// one keeps its lease.
     #[test]
-    fn predecessor_is_the_latest_exited_session_with_tabs_in_the_same_lineage() {
-        let sessions = vec![
-            prior("cu-a-old", "L", false, true, 3600),
-            prior("cu-a-new", "L", false, true, 60),
-            prior("cu-a-live", "L", true, true, 1),
-            prior("cu-a-empty", "L", false, false, 1),
-            prior("cu-b", "M", false, true, 1),
+    fn only_ended_sessions_of_the_project_give_up_their_tabs() {
+        let members = vec![
+            member("cu-a-old", "K", false, true),
+            member("cu-a-live", "K", true, true),
+            member("cu-a-empty", "K", false, false),
+            member("cu-b", "M", false, true),
+            member("cu-a-me", "K", false, true),
         ];
-        let picked = pick_predecessor("cu-a-me", "L", &sessions).map(|s| s.name.as_str());
-        assert_eq!(picked, Some("cu-a-new"));
-        // Never itself, and nothing from another lineage.
-        assert!(pick_predecessor("cu-b", "M", &sessions[4..]).is_none());
-        assert!(pick_predecessor("cu-x", "N", &sessions).is_none());
+        assert_eq!(expired_leases("cu-a-me", "K", &members), vec!["cu-a-old"]);
+        assert!(expired_leases("cu-x", "N", &members).is_empty());
+    }
+
+    #[test]
+    fn page_urls_compare_without_fragments_and_tracking() {
+        let same = |a: &str, b: &str| normalize_page_url(a) == normalize_page_url(b);
+        assert!(same(
+            "https://Example.com/a?x=1#top",
+            "https://example.com/a?x=1"
+        ));
+        assert!(same(
+            "https://example.com/a?utm_source=t&x=1&fbclid=z",
+            "https://example.com/a?x=1"
+        ));
+        assert!(same(
+            "https://example.com/a?b=2&a=1",
+            "https://example.com/a?a=1&b=2"
+        ));
+        assert!(same("https://example.com:443/", "https://example.com"));
+        assert!(same(
+            "https://example.com/a?gclid=1",
+            "https://example.com/a"
+        ));
+        assert!(!same(
+            "https://example.com/a?x=1",
+            "https://example.com/a?x=2"
+        ));
+        assert!(!same("https://example.com/a", "https://example.com/b"));
+        assert!(!same("http://example.com/a", "https://example.com/a"));
+        assert!(!same("https://example.com/a?x=1", "https://example.com/a"));
+        // Not a url: compared as written.
+        assert_eq!(normalize_page_url("about:blank"), "about:blank");
     }
 
     #[test]

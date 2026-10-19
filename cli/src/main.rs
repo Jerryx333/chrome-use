@@ -3420,7 +3420,18 @@ fn main() {
             // connected Chrome profiles" without ever starting Chrome (#213).
             // Start it into a specific profile (respecting --browser), which
             // also sidesteps the profile picker on multi-profile installs.
-            if !connect::chrome_running() {
+            let process = connect::chrome_process();
+            let extension_connected =
+                connect::relay_url().is_some() || !connect::list_relay_profiles().is_empty();
+            if !extension_connected && process == connect::ChromeProcess::Unknown {
+                eprintln!(
+                    "{} cannot tell from here whether Chrome is running (the process list is \
+                     hidden, as in a sandbox), so not starting another Chrome; if it is closed, \
+                     open it and rerun",
+                    color::warning_indicator()
+                );
+            }
+            if connect::should_launch_chrome(extension_connected, process) {
                 match connect::launch_chrome_for_relay(flags.browser.as_deref()) {
                     Some(what) => eprintln!(
                         "{} Chrome is not running — starting {what} so the extension relay can come up…",
@@ -3491,18 +3502,14 @@ fn main() {
         no_auto_dialog: flags.no_auto_dialog,
     };
 
-    // A derived session starting from nothing continues the tab group of the
-    // previous task in the same terminal and directory, instead of opening
-    // yet another group (see group_lifecycle). Only the extension relay has
-    // tab groups; `--session` names are the caller's to manage.
+    // On the extension relay a session's tabs go in its project's group, and
+    // it takes over the tabs of the project's sessions that have ended,
+    // instead of opening yet another group (see group_lifecycle). Only the
+    // extension relay has tab groups.
     let relay_bound = flags.cdp.is_none() && !flags.force_launch && flags.provider.is_none();
-    let mut inherited = None;
-    if relay_bound
-        && !flags.session_explicit
-        && flags.session != "default"
-        && !connection::daemon_ready(&flags.session)
-    {
-        inherited = group_lifecycle::inherit_predecessor(&flags.session);
+    let mut joined = None;
+    if relay_bound && !connection::daemon_ready(&flags.session) {
+        joined = group_lifecycle::join_project_group(&flags.session);
     }
 
     let daemon_result =
@@ -3519,12 +3526,15 @@ fn main() {
         };
     drop(_session_lifecycle_lock);
     if !daemon_result.already_running && relay_bound {
-        if let Some(prior) = &inherited {
+        if let Some(joined) = joined.as_ref().filter(|j| !j.took_over.is_empty()) {
             if !flags.json {
                 eprintln!(
                     "{}",
                     color::dim(&format!(
-                        "continuing in the tab group of the previous task here (session {prior})"
+                        "continuing in this project's tab group ✦ {}, with the tabs of ended \
+                         session(s) {}",
+                        joined.title,
+                        joined.took_over.join(", ")
                     ))
                 );
             }
@@ -3535,7 +3545,7 @@ fn main() {
                     "{}",
                     color::dim(&format!(
                         "this session's earlier tabs were taken over by session {to}, a later \
-                         task in the same terminal and directory"
+                         task in the same project"
                     ))
                 );
             }

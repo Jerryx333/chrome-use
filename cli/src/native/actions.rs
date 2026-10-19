@@ -5074,6 +5074,26 @@ async fn handle_navigate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
 
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
 
+    // In the user's Chrome a page this session already has open is not
+    // opened twice: `open` switches to that tab (in the background, without
+    // reloading it). `open --new` opens another one anyway.
+    if mgr.on_relay() {
+        if let Some(tab_id) = mgr.same_page_tab(url) {
+            let mut switched = mgr.tab_switch_by_id(tab_id).await?;
+            if let Some(obj) = switched.as_object_mut() {
+                obj.insert("reusedTab".to_string(), json!(true));
+                obj.insert(
+                    "note".to_string(),
+                    json!(
+                        "this session already had the page open; switched to that tab \
+                         instead of opening it again (`open --new` for another tab)"
+                    ),
+                );
+            }
+            return Ok(with_site_hint(switched, url));
+        }
+    }
+
     // `--reuse-tab`: if a tab already shows this URL (same origin+path), switch
     // to it instead of navigating — preserves any in-page state and stops
     // re-`open` from piling up duplicate tabs on rebind (issue #21).
