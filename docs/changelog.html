@@ -81,6 +81,7 @@
 
       <h2>v1.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v1.5.237</strong>（2026-10-19）：/resume 里选择仍在终端运行的会话时，确认提示不再压到下面的面板上。适用扩展 0.5.72。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.236</strong>（2026-10-19）：AI 标签改回开在你自己的窗口里：以后台标签打开、不抢焦点，每个会话一个标签组，组名以 <code>⬉</code> 开头（如 <code>⬉ 🔎 查快递</code>）。独立的 AI 窗口要另外去找，看它干活、接手都不方便；需要时用 <code>--window dedicated</code> 或 <code>AGENT_BROWSER_DEDICATED_WINDOW=1</code> 恢复。旧版本建的组没有标记，升级时正在跑的会话会在旁边另开一个 <code>⬉</code> 组，只发生一次。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.235</strong>（2026-10-17）：macOS 上以 <code>ChromeUse.app</code> 安装：签名、公证并装订票据的应用包放在 <code>&lt;prefix&gt;/share/chrome-use/</code>，<code>chrome-use</code> 是指向它的软链接。系统设置「文件与文件夹」以前按路径记录裸二进制，没有名字和图标，每多一份二进制就多一条；现在侧栏服务、它运行的 agent 和扩展的 native host 都算作这一个带图标的「ChromeUse」，授权提示也说明了用途。<code>upgrade</code> 照旧装回原目录；不带应用包的旧版本仍装裸二进制；<code>AGENT_BROWSER_NO_APP_BUNDLE=1</code> 可关闭。Linux、Windows 不变。贡献者：@leeguooooo。</li>
         <li><strong>v1.5.234</strong>（2026-10-17）：修复 CSS 平滑滚动导致后台表单控件未滚入视口的问题；页面或容器未移动时返回警告，scrollintoview 检查目标是否进入视口。pick 使用真实指针事件打开和选择下拉选项，报告选中后清空搜索文本时的隐藏表单变化，未确认选中时明确警告（#656）。贡献者：@leeguooooo。</li>
