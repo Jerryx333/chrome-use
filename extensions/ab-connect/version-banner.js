@@ -18,6 +18,12 @@ export function renderVersionNotices(container, notices, { document, t, onAction
     text.className = 'version-text';
     text.textContent = t(notice.key, ...(notice.args || []));
     banner.append(text);
+    // The command right under "run this in a terminal", then the why.
+    if (notice.command) {
+      const code = document.createElement('code');
+      code.textContent = notice.command;
+      banner.append(code);
+    }
     if (notice.detail) {
       const detail = document.createElement('span');
       detail.className = 'version-reason';
@@ -29,11 +35,6 @@ export function renderVersionNotices(container, notices, { document, t, onAction
       reason.className = 'version-reason';
       reason.textContent = t(notice.reasonKey);
       banner.append(reason);
-    }
-    if (notice.command) {
-      const code = document.createElement('code');
-      code.textContent = notice.command;
-      banner.append(code);
     }
     if (notice.action) {
       const button = document.createElement('button');
