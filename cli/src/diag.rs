@@ -2209,8 +2209,8 @@ pub fn list_all_tabs(flags: &Flags, limit: usize, full: bool) -> Result<Value, S
 /// ended, leaving the tabs the user has to them. Runs before any daemon, like
 /// `tab list --all`: nothing is started, opened or attached for it. `auto` is
 /// the background sweep a new daemon starts: only sessions idle past
-/// [`crate::group_lifecycle::cleanup_idle`], and only legacy unrecorded
-/// groups; by hand, every ended session and every unrecorded ✦ group.
+/// [`crate::group_lifecycle::cleanup_idle`]; by hand, every ended session,
+/// every unrecorded ✦ group and the groups of older builds.
 pub fn cleanup_tab_groups(flags: &Flags, auto: bool) -> Result<Value, String> {
     let opts = if auto {
         let Some(idle) = crate::group_lifecycle::cleanup_idle() else {

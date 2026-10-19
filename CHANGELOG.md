@@ -1,8 +1,28 @@
 # Changelog
 
-## 1.5.241
+## 1.5.242
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.77.
+
+### Changes
+
+- **Agents end their tasks with `chrome-use done`, and decide themselves what stays open.** `done --keep <tab>` leaves a tab the user still needs (a page they asked to see, a result to act on, a login left for them) as a plain tab outside the ✦ group; every other tab the session opened is closed and read back, like `close`, and the session ends. With extension 0.5.77 the kept tab is also released by the extension, so no debugger stays attached to it. The skill and the core guide now tell agents to run it at the end of every task without asking the user. MCP: `chrome_use_tabs` with `action: "done"`, `keep: [...]`.
+- **Tab groups no longer pile up.** A session's daemon exits after 10 idle minutes and leaves its tabs open, and every new conversation used to get a new group, so groups accumulated by the dozen. Now, once a session's daemon is gone and it has been idle for 30 minutes (`AGENT_BROWSER_GROUP_CLEANUP_MS`, `0` turns it off), the next new session closes its tabs in the background. A tab the user is looking at, or switched to and stayed on (extension 0.5.77), is left for them, ungrouped and recorded as kept. Tabs the user lent, adopted tabs and other people's tabs are never closed.
+- **A new task continues the previous task's group.** A session started from the same terminal and working directory takes over the group and tabs of the previous session there once its daemon has exited, instead of opening another group. `status` names the session's tab group. `--session <name>` sessions are unaffected.
+- **`chrome-use tabs cleanup`** closes the groups of every ended session now, including groups left by older builds (`⬉`, a trailing `🤖` or a bare session id in the title).
+- **`keep` actually ungroups the tab.** The ungroup request was sent without the tab's session, so the extension could not tell which tab was meant and the kept tab stayed in the group.
+- **No more "Apple cannot verify .bun-501-….dylib" from Inspect & Ask on macOS.** Opening Inspect & Ask ran `ocs` (a Bun-built program) inside Chrome's process tree, which inherits Chrome's file quarantine, so the library Bun extracts was blocked by Gatekeeper. These operations now run in the panel service, which launchd starts outside Chrome, and the service clears that quarantine from earlier extractions after each run.
+- **The agent cursor (when turned on) no longer slides in from the top-left corner** of a page, and its tip sits exactly on the point it clicks.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.241
+
+
 Works with extension ab-connect 0.5.76.
 
 ### Changes
@@ -14,7 +34,6 @@ Works with extension ab-connect 0.5.76.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.240
 

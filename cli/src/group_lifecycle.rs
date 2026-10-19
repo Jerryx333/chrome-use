@@ -284,8 +284,8 @@ pub fn take_moved_note(session: &str) -> Option<String> {
 pub struct SweepOptions {
     /// Only sessions idle at least this long; `None` for any exited session.
     pub idle: Option<Duration>,
-    /// Also groups no record explains under a current ✦ title. Legacy titles
-    /// (⬉, a trailing 🤖, a bare session id) are always included.
+    /// Also the groups no record explains: under a ✦ title, and the groups
+    /// of older builds (⬉, a trailing 🤖, a bare session id).
     pub orphans: bool,
 }
 
@@ -693,8 +693,11 @@ async fn sweep_unrecorded_groups(browser: &Browser, opts: SweepOptions, report: 
             continue;
         };
         let label = match agent_group_title(title) {
-            Some(AgentGroupTitle::Legacy(label)) => label,
-            Some(AgentGroupTitle::Current(label)) if opts.orphans => label,
+            Some(AgentGroupTitle::Legacy(label) | AgentGroupTitle::Current(label))
+                if opts.orphans =>
+            {
+                label
+            }
             _ => continue,
         };
         if live.contains(&label) {
@@ -756,6 +759,16 @@ pub fn auto_sweep_due(last: Option<SystemTime>, now: SystemTime) -> bool {
     }
 }
 
+/// Whether some session with recorded tabs has no running daemon and has
+/// been idle for `idle`: the only thing the automatic sweep acts on. Read from
+/// the socket directory alone.
+fn sweep_has_work(idle: Option<Duration>) -> bool {
+    let now = SystemTime::now();
+    recorded_sessions().iter().any(|session| {
+        idle_enough(last_activity(session), idle, now) && !crate::connection::daemon_ready(session)
+    })
+}
+
 /// After a new daemon started for `session`: unless one ran in the last few
 /// minutes, sweep in a detached process, so the command that started the
 /// daemon never waits for it. The child is a plain `chrome-use tabs cleanup
@@ -766,6 +779,10 @@ pub fn maybe_spawn_auto_sweep(session: &str) {
     }
     let stamp = auto_sweep_stamp();
     if !auto_sweep_due(modified(&stamp), SystemTime::now()) {
+        return;
+    }
+    // Nothing ended long enough ago: no process, no connection to Chrome.
+    if !sweep_has_work(cleanup_idle()) {
         return;
     }
     if std::fs::write(&stamp, now_ms().to_string()).is_err() {
