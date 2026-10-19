@@ -127,6 +127,8 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    `click --help`).
 3. Follow the error's instructions: its last line says what to do next.
    Do not pipe output through `tail` or drop stderr.
+   `element_occluded` means no click was dispatched: inspect a fresh snapshot
+   and resolve the blocker before trying again; do not repeat unchanged.
 4. An action that changed nothing: read its `why:` note and ⚠ warnings, fix
    the blocker, then retry the direct semantic verb. Do not repeat blindly or
    switch to coordinate clicks. A field showing your text is not proof it saved.

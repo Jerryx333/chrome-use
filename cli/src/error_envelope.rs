@@ -137,6 +137,21 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // These refusals quote page text, which may itself say "timeout" or
+    // "connection". The hit-test guard dispatched no click; fix the blocker
+    // rather than classifying its label as a retryable transport failure.
+    if (lower.starts_with("ref ")
+        && lower.contains(" is occluded by ")
+        && lower.contains(" at the click point (still occluded after "))
+        || (lower.starts_with("click refused: ")
+            && lower.contains(" is covered by ")
+            && lower.contains(" at its click point, so a click there would hit that instead."))
+    {
+        return ErrorMetadata {
+            code: "element_occluded",
+            retryable: false,
+        };
+    }
     if lower.contains("timeout") || lower.contains("timed out") {
         return ErrorMetadata {
             code: "timeout",
@@ -471,6 +486,35 @@ mod tests {
             assert_eq!(value["code"], "reply_too_large", "{message}");
             assert_eq!(value["retryable"], false, "{message}");
         }
+    }
+
+    #[test]
+    fn click_occlusion_labels_do_not_become_retryable_transport_errors() {
+        for label in [
+            "Overlay",
+            "Connection timeout",
+            "Permission denied",
+            "Unknown ref",
+        ] {
+            for message in [
+                format!("Ref e9 is occluded by DIV text=\"{label}\" at the click point (still occluded after 3 retries / 600ms). Re-run snapshot."),
+                format!("click refused: button is covered by <div> \"{label}\" at its click point, so a click there would hit that instead."),
+            ] {
+                assert_eq!(classify_error(&message), ErrorMetadata {
+                    code: "element_occluded",
+                    retryable: false,
+                }, "{message}");
+            }
+        }
+        assert_ne!(
+            classify_error("Evaluation error: ref is occluded by a variable").code,
+            "element_occluded"
+        );
+        assert_eq!(
+            classify_error("Timeout waiting for a click target").code,
+            "timeout"
+        );
+        assert_eq!(classify_error("action_outcome_unknown: Ref e9 is occluded by DIV at the click point (still occluded after 3 retries / 600ms).").code, "action_outcome_unknown");
     }
 
     #[test]

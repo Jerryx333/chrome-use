@@ -50,6 +50,7 @@ Showcase your product here and support ongoing maintenance.
 </table>
 
 
+
 ## Paid setup and project sponsorship
 
 Need help connecting your agent to your signed-in Chrome or setting up a browser workflow? Email us with your environment, the workflow and expected result, and where you are stuck. We review feasibility and agree on scope, acceptance criteria and a quote before work starts.
@@ -318,6 +319,8 @@ Ordinary CLI/MCP connection preparation preserves this streak only on successful
 Scripts retain these hints in `advisories` (top-level in CLI `script --json`; `data.advisories` in the daemon envelope) (at most 20), including nested scripts and runs that later fail. JSON op-list scripts also keep `noProgress` on the relevant `steps` entry; text output prints the aggregate advisories once. A failed JS script retains `ok:false`, `return:null`, `error`, `logs`, and `advisories`. Nested script daemon-envelope `data.ok:false` fails the parent script even when transport `success` is true; dispatch success does not establish program success.
 
 Ordinary CLI `--json` replies use a `success`/`data`/`timing` envelope; `--no-timing` (or `AGENT_BROWSER_TIMING=0`) leaves `timing` out for a compact reply, and `timing.jsonl` is still written. `batch --json` prints an array of `{command,success,result,error}` entries; `script --json` prints the bare program result (`ok`, `return`, `logs`, `error`, `advisories`, and other program fields). Batch and script CLI output have no top-level `timing`.
+
+A click refused by the hit-test guard reports `element_occluded` with `retryable: false`, even when the covering element says "timeout" or "connection". No click was dispatched. Read a fresh snapshot and resolve the blocker before trying again; repeating the same command does not resolve an overlay.
 
 JSON command timing includes `cdpMs` (sum of completed foreground CDP request durations), `cdpBusyMs` (their interval union within command wall time), and `nonCdpMs` (wall time minus that union). Concurrent requests can make `cdpMs` exceed wall time; these are elapsed durations, not CPU measurements. Background tasks do not inherit the recorder; `nonCdpMs` is not pure daemon processing time. Tool/HTTP calls are not model round trips; only caller traces establish those. See [task measurement](https://chrome-use.leeguoo.com/en/core-loop.html#task-efficiency) for task measurement.
 
