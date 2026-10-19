@@ -558,8 +558,8 @@ fn run_session_name(session: &str, json_mode: bool, zh: bool) {
     // the live extension knows the command. Anything else leaves already-open
     // tabs under the old label, which the caller is told rather than left to
     // discover.
-    let renamed =
-        connection::rename_session_group(session, &previous, &session_title::display_name(session));
+    let label = session_title::display_name(session);
+    let renamed = connection::rename_session_group(session, &previous, &label);
 
     if json_mode {
         println!(
@@ -574,7 +574,7 @@ fn run_session_name(session: &str, json_mode: bool, zh: bool) {
         return;
     }
     if zh {
-        println!("✓ 会话 '{session}' 的标签组名为 {title}");
+        println!("✓ 会话 '{session}' 的标签组名为 {label}");
         if !renamed {
             println!(
                 "  {}",
@@ -582,7 +582,7 @@ fn run_session_name(session: &str, json_mode: bool, zh: bool) {
             );
         }
     } else {
-        println!("✓ tab group for session '{session}' is now {title}");
+        println!("✓ tab group for session '{session}' is now {label}");
         if !renamed {
             println!(
                 "  {}",
