@@ -496,7 +496,7 @@ fn run_session_name(session: &str, json_mode: bool, zh: bool) {
     if clearing {
         let previous = session_title::display_name(session);
         session_title::clear_title(session);
-        let restored = session.to_string();
+        let restored = session_title::display_name(session);
         let renamed = connection::rename_session_group(session, &previous, &restored);
         if json_mode {
             println!(
@@ -558,7 +558,8 @@ fn run_session_name(session: &str, json_mode: bool, zh: bool) {
     // the live extension knows the command. Anything else leaves already-open
     // tabs under the old label, which the caller is told rather than left to
     // discover.
-    let renamed = connection::rename_session_group(session, &previous, &title);
+    let renamed =
+        connection::rename_session_group(session, &previous, &session_title::display_name(session));
 
     if json_mode {
         println!(

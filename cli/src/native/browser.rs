@@ -3253,20 +3253,22 @@ pub fn is_valid_label(s: &str) -> bool {
 }
 
 /// Whether the agent should place its tabs in a dedicated agent window instead
-/// of the user's active window. **Default: on** — agent tabs go to a separate
-/// window in the user's profile so they never clutter the window the user is
-/// working in. Opt out via `AGENT_BROWSER_DEDICATED_WINDOW` set to an off value
-/// (`0`/`false`/`off`/`user`/`shared`) or the `--window user` flag; unset or any
-/// on value (`1`/`true`/`on`/`dedicated`) keeps the default dedicated window.
+/// of the user's active window. **Default: off** — agent tabs open in the
+/// window the user is working in, inside the session's own tab group (whose
+/// title ends with the chrome-use mark, see `session_title`). A separate window
+/// proved hard to use: the user had to go looking for it to watch or take over.
+/// Opt in via `AGENT_BROWSER_DEDICATED_WINDOW` set to an on value
+/// (`1`/`true`/`on`/`dedicated`) or the `--window dedicated` flag; unset or any
+/// off value (`0`/`false`/`off`/`user`/`shared`) keeps the shared window.
 pub fn dedicated_window_enabled() -> bool {
     std::env::var("AGENT_BROWSER_DEDICATED_WINDOW")
         .map(|v| {
-            !matches!(
+            matches!(
                 v.trim(),
-                "0" | "false" | "off" | "no" | "user" | "shared" | "current"
+                "1" | "true" | "on" | "yes" | "dedicated" | "separate" | "own"
             )
         })
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7953,8 +7955,8 @@ impl BrowserManager {
     }
 
     /// Opt-in hint for the `ab-connect` extension to place this session's tabs
-    /// in a dedicated agent window (same profile, separate window) so agent
-    /// activity doesn't clutter the window the user is working in. Only
+    /// in a dedicated agent window (same profile, separate window) instead of
+    /// the window the user is working in. Off by default. Only
     /// meaningful on the relay path — the extension consumes it; `None` on
     /// launched/real-CDP so a strict endpoint never receives an unknown param.
     fn dedicated_window(&self) -> Option<bool> {
@@ -10936,18 +10938,18 @@ mod tests {
 
         guard.remove("AGENT_BROWSER_DEDICATED_WINDOW");
         assert!(
-            dedicated_window_enabled(),
-            "unset → dedicated window is default"
+            !dedicated_window_enabled(),
+            "unset → the user's window is the default"
         );
 
         for on in ["1", "true", "on", "dedicated", " dedicated "] {
             guard.set("AGENT_BROWSER_DEDICATED_WINDOW", on);
-            assert!(dedicated_window_enabled(), "{on:?} should stay dedicated");
+            assert!(dedicated_window_enabled(), "{on:?} should opt in");
         }
 
-        for off in ["0", "false", "off", "user", "shared", "current"] {
+        for off in ["", "0", "false", "off", "user", "shared", "current"] {
             guard.set("AGENT_BROWSER_DEDICATED_WINDOW", off);
-            assert!(!dedicated_window_enabled(), "{off:?} should opt out");
+            assert!(!dedicated_window_enabled(), "{off:?} should stay shared");
         }
     }
 
