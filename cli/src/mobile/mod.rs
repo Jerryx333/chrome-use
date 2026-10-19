@@ -356,6 +356,7 @@ fn devices(json_output: bool) -> Result<(), String> {
 
 /// Non-loopback IPv4 addresses, labelled; Tailscale uses 100.64.0.0/10.
 fn local_addresses() -> Vec<(std::net::Ipv4Addr, &'static str)> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut found = Vec::new();
     #[cfg(unix)]
     unsafe {
