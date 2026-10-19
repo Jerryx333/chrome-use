@@ -12,8 +12,8 @@
 //      and there is still one ✦ group;
 //   3. B ends with `done --keep <tab>`: only the kept tab is left, outside any
 //      group and no longer the extension's; no ✦ group remains;
-//   3b. task E idles out, then `done --keep <label>` reconnects and keeps
-//      that tab; `done` again and `done --keep` with nothing open succeed;
+//   3b. task E idles out, lists its tabs again, then `done --keep <tab>`
+//      keeps that tab; `done` again and `done --keep` with nothing open succeed;
 //   4. task C (another pane) opens two tabs; the user switches to one and
 //      back; C's daemon idle-exits;
 //   5. task D starts with AGENT_BROWSER_GROUP_CLEANUP_MS=1000: its background
@@ -125,7 +125,12 @@ try {
   ok(cu(4001, '%74', ['tab', 'new', '--label', 'keepme', rig.site + '/c?e']), 'E tab new');
   const E = sessionOf(4001, '%74');
   await daemonGone(E.name);
-  const doneE = ok(cu(4001, '%74', ['done', '--keep', 'keepme']), 'E done --keep after idle exit');
+  // Labels do not survive an idle exit; the agent lists its tabs again (the
+  // listing reconnects) and names the tab by its new id.
+  const listE = ok(cu(4001, '%74', ['tab', 'list']), 'E tab list after idle exit').data;
+  const keepE = rowFor(listE, '/c?e')?.tabId;
+  check(keepE, 'E lists its tabs again after the idle exit');
+  const doneE = ok(cu(4001, '%74', ['done', '--keep', keepE]), 'E done --keep after idle exit');
   await sleep(500);
   const tE = await tabs();
   const again = ok(cu(4001, '%74', ['done']), 'E done again');
