@@ -317,3 +317,23 @@ test('attach succeeded but tabs.query failed: agentPopup is false and nothing is
   const notAttached = await confirmAttachedPopup({ attached: false, chromeTabId: 9 }, deps(async () => []))
   assert.equal(notAttached.agentPopup, undefined)
 })
+
+test('a pop-up already recorded as the agent\'s is confirmed in a window with user tabs', async () => {
+  // webNavigation named an agent tab as its source when it was created.
+  const isAgent = agentTabPredicate(new Set([1]), new Set([9]))
+  const popup = { id: 9, windowId: 3, groupId: -1, openerTabId: 2 }
+  const all = [{ id: 1, windowId: 3, groupId: -1 }, { id: 2, windowId: 3, groupId: -1 }, popup]
+  assert.equal(isVerifiedAgentPopup(popup, all, isAgent), false)
+  const r = await confirmAttachedPopup(
+    { attached: true, chromeTabId: 9, targetId: 'T' },
+    { getTab: async () => popup, queryAll: async () => all, isAgentTab: isAgent, mark: async () => {} },
+  )
+  assert.equal(r.agentPopup, true)
+  // Not recorded: the user's own pop-up in the same window stays unconfirmed.
+  const userPopup = { ...popup, id: 8 }
+  const u = await confirmAttachedPopup(
+    { attached: true, chromeTabId: 8, targetId: 'U' },
+    { getTab: async () => userPopup, queryAll: async () => [...all, userPopup], isAgentTab: isAgent, mark: async () => {} },
+  )
+  assert.equal(u.agentPopup, false)
+})

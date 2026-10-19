@@ -120,9 +120,9 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    opens brings Chrome to the front over the user's app, and
    `openedTabWarning` says so; on macOS chrome-use puts the user's app back
    in front (`focusRestored`; `AGENT_BROWSER_RESTORE_FOCUS=0` turns it
-   off). `AGENT_BROWSER_BACKGROUND_LINKS=cross-site`
-   (opt-in, read when the session's daemon starts) opens cross-site
-   `target=_blank` links in a background tab instead; cost: a link that
+   off). Cross-site `target=_blank` links open in a background tab instead
+   (`AGENT_BROWSER_BACKGROUND_LINKS`, default `cross-site` in the user's
+   window, read when the session's daemon starts); cost: a link that
    redirects back to the page's site loses its SameSite=Strict cookies (see
    `click --help`).
 3. Follow the error's instructions: its last line says what to do next.

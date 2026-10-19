@@ -88,7 +88,10 @@ export async function confirmAttachedPopup(result, deps) {
   const all = await Promise.resolve()
     .then(() => deps.queryAll())
     .catch(() => null)
-  const verified = isVerifiedAgentPopup(tab, all, deps.isAgentTab)
+  // Already recorded as the agent's (its source tab was named by
+  // webNavigation when it was created), or shown so by Chrome's tab data.
+  const verified =
+    deps.isAgentTab(result.chromeTabId) === true || isVerifiedAgentPopup(tab, all, deps.isAgentTab)
   if (verified) await deps.mark(result.chromeTabId)
   result.agentPopup = verified
   return result

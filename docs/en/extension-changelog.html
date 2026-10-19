@@ -53,6 +53,7 @@
 
       <h2>0.5.x</h2>
       <ul class="du-changelog">
+        <li><strong>v0.5.73</strong> (Unreleased): A tab an agent tab opens (a link, a pop-up) no longer takes over the tab you are looking at: once Chrome puts it in front, the extension brings back the tab that was there, and the new tab stays open behind it, adopted by the agent's session again (<code>--follow</code> follows it; in your window that failed because Chrome names your front tab as its opener). Contributors: @leeguooooo.</li>
         <li><strong>v0.5.72</strong> (Unreleased): In /resume, the confirmation for a session still running in a terminal stays inside the picker instead of overlapping the panel below.</li>
         <li><strong>v0.5.71</strong> (Unreleased): Messages sent while the agent is working no longer show twice. They used to appear in the conversation with "Checks not recorded" under them, as if they had run, and again in the queue below; now they stay in the queue, where they can be edited or removed, and move into the conversation when their turn starts. Thermo's tab organizer can add tabs to a group it made earlier, and new groups stay in the tabs' own window instead of moving to the focused one. Contributors: @leeguooooo.</li>
         <li><strong>v0.5.70</strong> (Unreleased): Picking a button with Pick element no longer clicks it (picking a search button used to submit the search): the picker swallows the whole click that ended the pick.</li>

@@ -2681,7 +2681,7 @@ Global Options:
   --headers <json>     Set HTTP headers (scoped to this origin)
   --headed             Show browser window (default; headless is forbidden — it's a bot tell)
   --window <mode>      user (default) = agent tabs open in your current window,
-                       each session in its own tab group starting with ⬉.
+                       each session in its own tab group starting with ✦.
                        dedicated = all agent sessions share one background
                        window per profile instead.
                        Extension-relay path only; applies when the session starts.
@@ -2841,7 +2841,8 @@ focusRestoredAfterMs, or false with focusNote saying why). Windows and Linux:
 not done. AGENT_BROWSER_RESTORE_FOCUS=0 turns it off (read when the daemon
 starts).
 
-AGENT_BROWSER_BACKGROUND_LINKS=cross-site (opt-in; also `1`/`on`): in a tab
+AGENT_BROWSER_BACKGROUND_LINKS=cross-site (also `1`/`on`; the default while
+agent tabs share your window, off with --window dedicated): in a tab
 the session created, a plain left click on a CROSS-SITE target=_blank link
 (another registrable domain by the Public Suffix List on both ends; http/https;
 no rel=opener, download or ping) is taken over after the page's own click

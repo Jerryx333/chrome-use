@@ -1,7 +1,9 @@
-//! Opt-in: open cross-site `target=_blank` links an agent clicks in a
-//! background tab, so Chrome does not come to the front (#468). Off by
-//! default: by default every page-opened tab is Chrome's own (which raises
-//! Chrome) and the click says so. What is on by default instead is undoing
+//! Open cross-site `target=_blank` links an agent clicks in a background
+//! tab, so Chrome does not come to the front (#468) or take the front of the
+//! user's window. On by default while agent tabs share the user's window
+//! (1.5.237); off with the dedicated agent window, where every page-opened
+//! tab is Chrome's own (which raises Chrome) and the click says so. What is
+//! on by default either way is undoing
 //! the raise: on macOS `focus_restore` puts the app that was in front before
 //! the click back in front once Chrome has raised itself with a new tab
 //! (measured: Chrome in front ~45–60 ms instead of until the user switches
@@ -50,8 +52,9 @@
 //! changes during the click to a host not classified, a link a ChooseBrowser
 //! rule applies to, and a page whose header referrer policy the daemon did
 //! not see keep Chrome's click, which raises Chrome; the click says so.
-//! [`BACKGROUND_LINKS_ENV`]: unset/`off`/`0` none (default),
-//! `cross-site`/`1`/`on` as above, `all` same-site links too.
+//! [`BACKGROUND_LINKS_ENV`]: unset follows the window mode (see
+//! [`LinkMode::from_env`]), `off`/`0` none, `cross-site`/`1`/`on` as above,
+//! `all` same-site links too.
 //!
 //! The click's default action is taken over only for a plain left
 //! click on an `<a>`/`<area>` whose effective target is `_blank`, with an
@@ -100,10 +103,11 @@ pub const BACKGROUND_LINKS_ENV: &str = "AGENT_BROWSER_BACKGROUND_LINKS";
 /// The [`BACKGROUND_LINKS_ENV`] setting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkMode {
-    /// Unset / `0` / `off` (default): every page-opened tab goes through
-    /// Chrome, which raises its window (#468 is not resolved by default).
+    /// `0` / `off` (unset with the dedicated agent window): every
+    /// page-opened tab goes through Chrome, which raises its window (#468).
     Off,
-    /// `cross-site` / `1` / `on`: links to another registrable domain. Cost:
+    /// `cross-site` / `1` / `on` (unset in the user's window): links to
+    /// another registrable domain. Cost:
     /// one extra history entry, and a cross-site link that redirects back to
     /// the page's site arrives there without `SameSite=Strict` cookies.
     CrossSite,
@@ -124,9 +128,29 @@ impl LinkMode {
         }
     }
 
-    /// The mode this daemon runs with.
+    /// The mode this daemon runs with. Unset, it depends on where agent
+    /// tabs live: in the user's own window (the default since 1.5.236) a
+    /// pop-up Chrome opens takes the front of the window the user is reading,
+    /// so cross-site links are opened in the background there; in the
+    /// dedicated agent window that costs only a raise, and it stays off.
     pub fn from_env() -> Self {
-        Self::parse(std::env::var(BACKGROUND_LINKS_ENV).ok().as_deref())
+        let value = std::env::var(BACKGROUND_LINKS_ENV).ok();
+        Self::parse_or(
+            value.as_deref(),
+            if super::browser::dedicated_window_enabled() {
+                Self::Off
+            } else {
+                Self::CrossSite
+            },
+        )
+    }
+
+    /// [`Self::parse`], with `default` for an unset or empty value.
+    pub fn parse_or(value: Option<&str>, default: Self) -> Self {
+        match value.map(str::trim) {
+            None | Some("") => default,
+            Some(v) => Self::parse(Some(v)),
+        }
     }
 }
 
@@ -1184,6 +1208,22 @@ mod tests {
         assert_eq!(LinkMode::parse(Some("1")), LinkMode::CrossSite);
         assert_eq!(LinkMode::parse(Some(" ON ")), LinkMode::CrossSite);
         assert_eq!(LinkMode::parse(Some(" ALL ")), LinkMode::All);
+        assert_eq!(
+            LinkMode::parse_or(None, LinkMode::CrossSite),
+            LinkMode::CrossSite
+        );
+        assert_eq!(
+            LinkMode::parse_or(Some(" "), LinkMode::CrossSite),
+            LinkMode::CrossSite
+        );
+        assert_eq!(
+            LinkMode::parse_or(Some("off"), LinkMode::CrossSite),
+            LinkMode::Off
+        );
+        assert_eq!(
+            LinkMode::parse_or(Some("all"), LinkMode::Off),
+            LinkMode::All
+        );
     }
 
     #[test]
