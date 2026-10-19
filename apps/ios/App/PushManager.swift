@@ -44,6 +44,18 @@ final class PushManager {
         forgetRegistration()
     }
 
+    @ObservationIgnored private var lastRejection: Date?
+
+    /// A gateway reported that the Worker refused our relay token: register
+    /// again now. At most once a minute, so a misbehaving Worker cannot
+    /// make the phone loop.
+    func tokenRejected(reason: String) {
+        if let lastRejection, Date().timeIntervalSince(lastRejection) < 60 { return }
+        lastRejection = Date()
+        lastError = String(localized: "推送令牌被拒绝（\(reason)），正在重新注册。")
+        forgetRegistration()
+    }
+
     /// A token from another Worker is useless; drop it, also on disk.
     private func forgetRegistration() {
         registration = nil

@@ -35,6 +35,13 @@ public final class GatewayClient: Identifiable {
         }
     }
 
+    /// The gateway refused the relay token (`pushTokenRejected`, or
+    /// `pushRegister` answering `registered:false`); the reason is
+    /// `invalid`, `expired` or `unregistered`. Get a new one from the Worker.
+    @ObservationIgnored public var onPushTokenRejected: ((String) -> Void)?
+    /// The credential changed on its own (name or version from `hello`); persist it.
+    @ObservationIgnored public var onCredentialChanged: ((GatewayCredential) -> Void)?
+
     @ObservationIgnored private var connection: GatewayConnection?
     @ObservationIgnored private var runner: Task<Void, Never>?
     @ObservationIgnored private var subscribed: Set<String> = []
@@ -158,6 +165,7 @@ public final class GatewayClient: Identifiable {
     }
 
     private func afterConnect(_ live: GatewayConnection) async {
+        await hello(on: live)
         await registerPush(on: live)
         for conversationId in subscribed {
             await sendSubscribe(conversationId, on: live)
@@ -167,7 +175,30 @@ public final class GatewayClient: Identifiable {
 
     private func registerPush(on live: GatewayConnection) async {
         guard let relayToken else { return }
-        _ = try? await live.request("pushRegister", ["relayToken": .string(relayToken)])
+        guard let reply = try? await live.request("pushRegister", ["relayToken": .string(relayToken)]) else { return }
+        if reply["registered"] == .bool(false) {
+            onPushTokenRejected?(reply["reason"].string ?? "invalid")
+        }
+    }
+
+    /// `hello {}` → `{computerName, gatewayVersion}`, authenticated inside
+    /// the encrypted channel. The gateway's name is shown unless the user
+    /// typed one.
+    private func hello(on live: GatewayConnection) async {
+        guard let reply = try? await live.request("hello") else { return }
+        applyHello(reply)
+    }
+
+    /// Exposed for tests.
+    public func applyHello(_ reply: JSONValue) {
+        var updated = credential
+        if let version = reply["gatewayVersion"].string { updated.gatewayVersion = version }
+        if !updated.nameIsCustom, let name = reply["computerName"].string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            updated.name = String(name.prefix(80))
+        }
+        guard updated != credential else { return }
+        credential = updated
+        onCredentialChanged?(updated)
     }
 
     // MARK: Requests
@@ -306,6 +337,10 @@ public final class GatewayClient: Identifiable {
 
     /// Apply a server event frame; exposed for tests.
     public func handle(_ frame: JSONValue) {
+        if frame["event"] == "pushTokenRejected" {
+            onPushTokenRejected?(frame["reason"].string ?? "invalid")
+            return
+        }
         guard let conversationId = frame["conversationId"].string else { return }
         switch frame["event"].string {
         case "journal":

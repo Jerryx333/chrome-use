@@ -173,7 +173,17 @@ def main():
                 emit({"register": json.loads(body)})
                 reply = json.dumps({"relayToken": "fixture." + uuid.uuid4().hex, "expiresAt": int(time.time()) + 90 * 86400}).encode()
             else:
-                emit({"push": json.loads(body)})
+                push = json.loads(body)
+                emit({"push": push})
+                if push.get("relayToken", "").startswith("dead."):
+                    # APNs no longer knows this phone.
+                    reply = b'{"status":"unregistered"}'
+                    self.send_response(410)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(reply)))
+                    self.end_headers()
+                    self.wfile.write(reply)
+                    return
                 reply = b'{"status":"sent"}'
             self.send_response(200)
             self.send_header("content-type", "application/json")

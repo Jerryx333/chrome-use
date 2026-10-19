@@ -31,20 +31,16 @@ final class NotificationService: UNNotificationServiceExtension {
         contentHandler(content)
     }
 
-    /// The gateway's bodies are English; the fixed ones are said in the
-    /// user's language, summaries and agent text are shown as sent.
+    /// Fixed bodies are said in the user's language (by the payload's
+    /// `code`); summaries and agent text are shown as sent.
     private func body(for notice: PushNotice) -> String {
-        switch notice.kind {
-        case .needsInput where notice.body == "Waiting for your approval":
-            return String(localized: "等你审批")
-        case .turnEnded where ["Finished", "Stopped", "Failed"].contains(notice.body):
-            switch notice.body {
-            case "Finished": return String(localized: "已完成")
-            case "Stopped": return String(localized: "已停止")
-            default: return String(localized: "失败")
-            }
-        default:
-            return notice.body
+        switch notice.standardBody {
+        case .waitingForApproval: return String(localized: "等你审批")
+        case .finished: return String(localized: "已完成")
+        case .stopped: return String(localized: "已停止")
+        case .failed: return String(localized: "失败")
+        case .test: return String(localized: "测试通知")
+        case nil: return notice.body
         }
     }
 

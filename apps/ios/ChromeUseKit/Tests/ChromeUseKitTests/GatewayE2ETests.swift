@@ -126,6 +126,8 @@ final class GatewayE2ETests: XCTestCase {
         XCTAssertEqual(paired["profile"], "mobile-fixture")
         let link = try PairLink(parsing: try XCTUnwrap(paired["pairUri"].string))
         XCTAssertEqual(link.url.absoluteString, url)
+        let computerName = try XCTUnwrap(link.computerName, "the link names the computer (n=)")
+        XCTAssertEqual(link.suggestedName, computerName)
 
         // A wrong key fails; a pending device cannot skip pairing.
         let wrong = PairLink(url: link.url, deviceId: link.deviceId, pairSecret: Data(repeating: 9, count: 32), gatewayId: link.gatewayId)
@@ -139,6 +141,16 @@ final class GatewayE2ETests: XCTestCase {
         XCTAssertEqual(stored, secret)
         XCTAssertEqual(secret.prefix(32), link.pairSecret)
         XCTAssertEqual(connection.gatewayId, link.gatewayId)
+
+        let hello = try await connection.request("hello")
+        XCTAssertEqual(hello["computerName"].string, computerName)
+        XCTAssertFalse((hello["gatewayVersion"].string ?? "").isEmpty)
+        do {
+            _ = try await connection.request("hello", ["name": "x"])
+            XCTFail("hello takes no parameters")
+        } catch GatewayError.remote(let code, _) {
+            XCTAssertEqual(code, "denied")
+        }
 
         let list = try await connection.request("conversationList")
         XCTAssertEqual(ConversationSummary.list(list).first?.id, conversation)
@@ -175,7 +187,8 @@ final class GatewayE2ETests: XCTestCase {
         XCTAssertEqual(text, "Summarize my inbox")
         XCTAssertEqual(images, 1)
 
-        let registered = try await connection.request("pushRegister", ["relayToken": "eyJwIjoiaW9zIn0.c2ln"])
+        // A token the Worker answers 410 for: the push is still attempted.
+        let registered = try await connection.request("pushRegister", ["relayToken": "dead.e2e"])
         XCTAssertEqual(registered["registered"], true)
         // Let the push watcher record a baseline before the state changes.
         try await Task.sleep(nanoseconds: 4_500_000_000)
@@ -190,6 +203,7 @@ final class GatewayE2ETests: XCTestCase {
 
         // The push decrypts with the paired push key, as the NSE does it.
         let push = try await wait("push", seconds: 12) { panel.first { $0["push"].object != nil } }["push"]
+        XCTAssertEqual(push["relayToken"].string, "dead.e2e")
         XCTAssertEqual(push["priority"], "high")
         XCTAssertEqual(push["collapseId"].string, conversation)
         let credential = GatewayCredential(url: link.url, deviceId: link.deviceId, secret: secret, gatewayId: link.gatewayId, name: "Mac", pairedAt: Date())
@@ -197,6 +211,13 @@ final class GatewayE2ETests: XCTestCase {
         XCTAssertEqual(notice.kind, .needsInput)
         XCTAssertEqual(notice.conversationId, conversation)
         XCTAssertEqual(notice.title, "Weekly report")
+
+        // The Worker refused it: the live connection is told, and the same
+        // token is refused when offered again (the app's client checks
+        // that below, then registers a new one).
+        let rejectedFound = await next(&events) { $0["event"] == "pushTokenRejected" }
+        let rejected = try XCTUnwrap(rejectedFound)
+        XCTAssertEqual(rejected["reason"], "unregistered")
 
         let answer = try await connection.request("conversationRespond", ApprovalForm.respondParams(conversationId: conversation, request: pending, decision: options[0].decision))
         XCTAssertEqual(answer["response"]["dispatched"], true)
@@ -229,7 +250,28 @@ final class GatewayE2ETests: XCTestCase {
         // The app's client: resumes from its cursor across reconnects.
         let cache = InMemoryJournalCache()
         let client = await GatewayClient(credential: credential, cache: cache)
+        // The client offers a refused token on connect and hears why; hello
+        // names the computer and its version.
+        let rejections = Lines()
+        let saved = Lines()
+        await MainActor.run {
+            client.relayToken = "dead.e2e"
+            client.onPushTokenRejected = { rejections.append(.string($0)) }
+            client.onCredentialChanged = { saved.append(.string($0.name)) }
+        }
         await client.start()
+        let reason = try await wait("pushRegister refusal") { rejections.first { _ in true } }
+        XCTAssertEqual(reason, "unregistered")
+        _ = try await wait("hello") { saved.first { _ in true } }
+        let named = await client.credential
+        XCTAssertEqual(named.name, computerName)
+        XCTAssertNotNil(named.gatewayVersion)
+        // The app's answer to the refusal: a new token, which is stored.
+        await MainActor.run { client.relayToken = "eyJwIjoiaW9zIn0.c2ln" }
+        _ = try await wait("new token stored") { () async -> Bool? in
+            let devices = try? self.cli(binary, ["devices", "--json"], env: env)
+            return devices?["devices"][0]["push"] == .bool(true) ? true : nil
+        }
         await client.subscribe(conversation)
         _ = try await wait("client journal") { await client.cursor(of: conversation) >= 4 ? true : nil }
         let rowsBefore = await client.timelines[conversation]!.rows.count

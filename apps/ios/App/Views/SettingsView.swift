@@ -22,6 +22,9 @@ struct SettingsView: View {
                             Text(client.credential.url.absoluteString).font(.caption.monospaced()).foregroundStyle(.secondary)
                             let when = client.credential.pairedAt.formatted(date: .abbreviated, time: .shortened)
                             Text("配对于 \(when)").font(.caption2).foregroundStyle(.secondary)
+                            if let version = client.credential.gatewayVersion {
+                                Text("chrome-use \(version)").font(.caption2).foregroundStyle(.secondary)
+                            }
                         }
                         .swipeActions {
                             Button("移除", role: .destructive) { removing = client }

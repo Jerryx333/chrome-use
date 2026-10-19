@@ -51,6 +51,16 @@
         }
       }
     },
+    "chrome-use %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "chrome-use %@"
+          }
+        }
+      }
+    },
     "chrome-use 已锁定": {
       "localizations": {
         "en": {
@@ -777,6 +787,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Queued messages"
+          }
+        }
+      }
+    },
+    "推送令牌被拒绝（%@），正在重新注册。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The push token was refused (%@); registering again."
           }
         }
       }

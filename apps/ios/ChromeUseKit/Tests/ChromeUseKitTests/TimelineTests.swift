@@ -197,3 +197,55 @@ final class GatewayClientTests: XCTestCase {
         XCTAssertTrue(again.ended.contains(conversation))
     }
 }
+
+@MainActor
+final class HelloAndRejectionTests: XCTestCase {
+    func credential(custom: Bool) -> GatewayCredential {
+        GatewayCredential(url: URL(string: "ws://127.0.0.1:1")!, deviceId: UUID().uuidString.lowercased(), secret: Data(count: 64), gatewayId: "g", name: custom ? "My desk" : "127.0.0.1", pairedAt: Date(), nameIsCustom: custom)
+    }
+
+    func testHelloNamesTheComputerUnlessTheUserDid() {
+        let client = GatewayClient(credential: credential(custom: false), cache: InMemoryJournalCache())
+        var saved: [GatewayCredential] = []
+        client.onCredentialChanged = { saved.append($0) }
+        client.applyHello(["computerName": "Leo’s MacBook Pro", "gatewayVersion": "1.5.250"])
+        XCTAssertEqual(client.credential.name, "Leo’s MacBook Pro")
+        XCTAssertEqual(client.credential.gatewayVersion, "1.5.250")
+        XCTAssertEqual(saved.count, 1)
+        client.applyHello(["computerName": "Leo’s MacBook Pro", "gatewayVersion": "1.5.250"])
+        XCTAssertEqual(saved.count, 1, "nothing changed, nothing saved")
+
+        let custom = GatewayClient(credential: credential(custom: true), cache: InMemoryJournalCache())
+        custom.applyHello(["computerName": "Leo’s MacBook Pro", "gatewayVersion": "1.5.251"])
+        XCTAssertEqual(custom.credential.name, "My desk")
+        XCTAssertEqual(custom.credential.gatewayVersion, "1.5.251")
+    }
+
+    func testRejectedTokenEventReachesTheApp() {
+        let client = GatewayClient(credential: credential(custom: false), cache: InMemoryJournalCache())
+        var reasons: [String] = []
+        client.onPushTokenRejected = { reasons.append($0) }
+        client.handle(["event": "pushTokenRejected", "reason": "expired"])
+        XCTAssertEqual(reasons, ["expired"])
+    }
+
+    func testOlderStoredCredentialsStillDecode() throws {
+        let old = #"{"url":"ws:\/\/127.0.0.1:1","deviceId":"0f8fad5b-d9cb-469f-a165-70867728950e","secret":"AAAA","gatewayId":"g","name":"Mac","pairedAt":0}"#
+        let decoded = try JSONDecoder().decode(GatewayCredential.self, from: Data(old.utf8))
+        XCTAssertFalse(decoded.nameIsCustom)
+        XCTAssertNil(decoded.gatewayVersion)
+        XCTAssertEqual(decoded.name, "Mac")
+    }
+
+    func testPairLinkCarriesTheComputerName() throws {
+        let secret = Base64URL.encode(Data(0x00...0x1f))
+        let fp = Base64URL.encode(Data(repeating: 9, count: 16))
+        let base = "chromeuse://pair?v=1&url=ws%3A%2F%2F100.88.1.2%3A17345&id=0f8fad5b-d9cb-469f-a165-70867728950e&k=\(secret)&fp=\(fp)"
+        let named = try PairLink(parsing: base + "&n=Leo%E2%80%99s%20Mac%20%E5%B7%A5%E4%BD%9C%E5%AE%A4")
+        XCTAssertEqual(named.computerName, "Leo’s Mac 工作室")
+        XCTAssertEqual(named.suggestedName, "Leo’s Mac 工作室")
+        let unnamed = try PairLink(parsing: base)
+        XCTAssertNil(unnamed.computerName)
+        XCTAssertEqual(unnamed.suggestedName, "100.88.1.2")
+    }
+}

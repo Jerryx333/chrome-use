@@ -41,6 +41,16 @@
         }
       }
     },
+    "测试通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Test notification"
+          }
+        }
+      }
+    },
     "等你审批": {
       "localizations": {
         "en": {

@@ -10,14 +10,20 @@ public struct PushNotice: Equatable, Sendable {
     /// Unknown kinds are treated like `test`: show title/body, open the app.
     public let kind: Kind
     public let rawKind: String
+    /// Stable reason to localize by (`needsInput`, `finished`, `stopped`,
+    /// `failed`, `scheduleDone`, `scheduleFailed`, `test`); absent from
+    /// older gateways.
+    public let code: String?
     public let title: String
     public let body: String
     /// The paired computer whose push key opened it.
     public let deviceId: String
 
     public static func open(payload: String, credentials: [GatewayCredential]) -> PushNotice? {
-        // The payload does not name its gateway; the key that authenticates it does.
-        for credential in credentials {
+        // The kid prefix names the key; without a match (older gateways),
+        // the key that authenticates the payload identifies the computer.
+        let named = credentials.filter { PushCrypto.names(payload: payload, pushKey: $0.keys.push) }
+        for credential in named + credentials.filter({ c in !named.contains(c) }) {
             guard let plain = PushCrypto.open(payload: payload, pushKey: credential.keys.push),
                   let value = try? JSONValue.decode(plain), value["v"] == .int(1)
             else { continue }
@@ -26,12 +32,34 @@ public struct PushNotice: Equatable, Sendable {
                 conversationId: value["conversationId"].string ?? "",
                 kind: Kind(rawValue: raw) ?? .test,
                 rawKind: raw,
+                code: value["code"].string,
                 title: value["title"].string ?? "",
                 body: value["body"].string ?? "",
                 deviceId: credential.deviceId
             )
         }
         return nil
+    }
+
+    /// Bodies the phone says in its own language. The gateway's body is
+    /// English boilerplate for these, or an agent summary (kept as is).
+    public enum StandardBody: Equatable, Sendable {
+        case waitingForApproval, finished, stopped, failed, test
+    }
+
+    public var standardBody: StandardBody? {
+        let code = self.code ?? (kind == .needsInput ? "needsInput" : nil)
+        switch code {
+        case "needsInput": return .waitingForApproval
+        case "test": return .test
+        case "finished" where body == "Finished" || body.isEmpty: return .finished
+        case "stopped" where body == "Stopped" || body.isEmpty: return .stopped
+        case "failed" where body == "Failed" || body.isEmpty: return .failed
+        default:
+            // Older gateways: no code, recognise the fixed English bodies.
+            guard self.code == nil, kind == .turnEnded else { return nil }
+            return ["Finished": .finished, "Stopped": .stopped, "Failed": .failed][body]
+        }
     }
 
     /// Keys the notification carries to the app for deep links.
@@ -54,7 +82,7 @@ public struct RelayRegistration: Codable, Equatable, Sendable {
 
 /// Client of the push Worker's `POST /v1/register`.
 public struct PushRegistrar: Sendable {
-    public static let defaultBaseURL = URL(string: "https://push.chrome-use.leeguoo.com")!
+    public static let defaultBaseURL = URL(string: "https://chrome-use-push.leeguoo.com")!
     public let baseURL: URL
     public let session: URLSession
 

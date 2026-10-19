@@ -11,7 +11,7 @@ APP_GROUP = group.com.leeguoo.chromeuse
 // which keeps the team prefix out of this file.
 KEYCHAIN_GROUP = $(APP_GROUP)
 // Default push Worker; changeable in Settings > Advanced.
-PUSH_WORKER_URL = https:/$()/push.chrome-use.leeguoo.com
+PUSH_WORKER_URL = https:/$()/chrome-use-push.leeguoo.com
 // StoreKit products.
 UNLOCK_PRODUCT_ID = $(BUNDLE_ID_BASE).unlock
 TRIAL_PRODUCT_ID = $(BUNDLE_ID_BASE).trial

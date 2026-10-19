@@ -103,6 +103,47 @@ final class VectorTests: XCTestCase {
         )
     }
 
+    /// The key id the gateway puts in front of push payloads
+    /// (`crypto::push_kid`, vector 0fd39a46 for the paired push key).
+    func testPushKeyIdAndPrefixedPayload() throws {
+        let pushKey = DeviceKeys(ikm: pairSecret + phoneSecret).push
+        XCTAssertEqual(PushCrypto.kid(pushKey: pushKey).hex, "0fd39a46")
+        let unprefixed = try XCTUnwrap(Data(base64Encoded: Self.pushPayload))
+        let prefixed = (PushCrypto.kid(pushKey: pushKey) + unprefixed).base64EncodedString()
+        XCTAssertTrue(PushCrypto.names(payload: prefixed, pushKey: pushKey))
+        XCTAssertFalse(PushCrypto.names(payload: Self.pushPayload, pushKey: pushKey))
+        XCTAssertEqual(PushCrypto.open(payload: prefixed, pushKey: pushKey), Data(Self.pushPlaintext.utf8))
+        // Older gateways send no kid; still opens.
+        XCTAssertEqual(PushCrypto.open(payload: Self.pushPayload, pushKey: pushKey), Data(Self.pushPlaintext.utf8))
+    }
+
+    /// The gateway's current push vector: kid prefix and a `code` field.
+    func testGatewayPushVectorWithKidAndCode() throws {
+        let pushKey = DeviceKeys(ikm: pairSecret + phoneSecret).push
+        let payload = "D9OaRmBhYmNkZWZnaGlqa5LWr9sMfSfsQKyuDrzA3lU/VPPJ6gqLhPXaVYvov7CkcK80I1Lyu2LV3h1400pohwLJxAkRdNJDpBOB6YFXBj+KqnEkTNyedZ9NlyimW4JZCLDWHVkisCr6vRg+bP0LTJ9IPNZ/vuEAUEvASnRUoP0fA2z1ChvjIk0tBepBrmiuVxuePSZeJEuygSCkNnBbEVQAqk2LryQAdNZH2Fn72U5ucwevM2p9auOluknJ1H1AWrc="
+        let plain = try XCTUnwrap(PushCrypto.open(payload: payload, pushKey: pushKey))
+        XCTAssertEqual(String(decoding: plain, as: UTF8.self), #"{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","code":"needsInput","title":"Weekly report","body":"Waiting for your approval"}"#)
+        let mine = GatewayCredential(url: URL(string: "ws://b")!, deviceId: deviceId, secret: pairSecret + phoneSecret, gatewayId: "y", name: "mine", pairedAt: Date())
+        let notice = try XCTUnwrap(PushNotice.open(payload: payload, credentials: [mine]))
+        XCTAssertEqual(notice.code, "needsInput")
+        XCTAssertEqual(notice.standardBody, .waitingForApproval)
+    }
+
+    func testStandardBodies() {
+        func notice(_ kind: PushNotice.Kind, _ code: String?, _ body: String) -> PushNotice {
+            PushNotice(conversationId: "c", kind: kind, rawKind: kind.rawValue, code: code, title: "t", body: body, deviceId: "d")
+        }
+        XCTAssertEqual(notice(.turnEnded, "finished", "Finished").standardBody, .finished)
+        XCTAssertNil(notice(.turnEnded, "finished", "Your inbox has 3 unread").standardBody, "agent summaries are kept")
+        XCTAssertEqual(notice(.turnEnded, "stopped", "Stopped").standardBody, .stopped)
+        XCTAssertEqual(notice(.test, "test", "Test notification (1)").standardBody, .test)
+        XCTAssertNil(notice(.scheduleFailed, "scheduleFailed", "failed: timeout").standardBody)
+        // Older gateways: no code.
+        XCTAssertEqual(notice(.needsInput, nil, "Waiting for your approval").standardBody, .waitingForApproval)
+        XCTAssertEqual(notice(.turnEnded, nil, "Failed").standardBody, .failed)
+        XCTAssertNil(notice(.turnEnded, nil, "Done: 3 files").standardBody)
+    }
+
     func testPushNoticeFindsItsComputer() throws {
         let other = GatewayCredential(url: URL(string: "ws://a")!, deviceId: UUID().uuidString, secret: Data(repeating: 7, count: 64), gatewayId: "x", name: "other", pairedAt: Date())
         let mine = GatewayCredential(url: URL(string: "ws://b")!, deviceId: deviceId, secret: pairSecret + phoneSecret, gatewayId: "y", name: "mine", pairedAt: Date())

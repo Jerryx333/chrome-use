@@ -6,6 +6,8 @@ public struct PairLink: Equatable, Sendable {
     public let deviceId: String
     public let pairSecret: Data
     public let gatewayId: String
+    /// The computer's display name (`n`), when the gateway sent one.
+    public let computerName: String?
 
     public enum ParseError: Error, Equatable {
         case notAPairLink
@@ -18,11 +20,12 @@ public struct PairLink: Equatable, Sendable {
         case plaintextToPublicHost
     }
 
-    public init(url: URL, deviceId: String, pairSecret: Data, gatewayId: String) {
+    public init(url: URL, deviceId: String, pairSecret: Data, gatewayId: String, computerName: String? = nil) {
         self.url = url
         self.deviceId = deviceId
         self.pairSecret = pairSecret
         self.gatewayId = gatewayId
+        self.computerName = computerName
     }
 
     public init(parsing text: String) throws {
@@ -48,12 +51,14 @@ public struct PairLink: Equatable, Sendable {
         else { throw ParseError.badSecret }
         guard let fp = query["fp"], let identity = Base64URL.decode(fp), identity.count == 16
         else { throw ParseError.badGatewayId }
-        self.init(url: url, deviceId: id, pairSecret: secret, gatewayId: fp)
+        let name = query["n"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(url: url, deviceId: id, pairSecret: secret, gatewayId: fp, computerName: name?.isEmpty == false ? String(name!.prefix(80)) : nil)
     }
 
-    /// A name for the computer until the user renames it: the URL's host.
+    /// A name for the computer until the user renames it: the gateway's,
+    /// else the URL's host.
     public var suggestedName: String {
-        url.host ?? "chrome-use"
+        computerName ?? url.host ?? "chrome-use"
     }
 }
 
@@ -68,14 +73,39 @@ public struct GatewayCredential: Codable, Identifiable, Hashable, Sendable {
     public var gatewayId: String
     public var name: String
     public var pairedAt: Date
+    /// The user typed `name`; the gateway's name (`hello`) no longer replaces it.
+    public var nameIsCustom: Bool
+    /// The chrome-use version the gateway reported in `hello`.
+    public var gatewayVersion: String?
 
-    public init(url: URL, deviceId: String, secret: Data, gatewayId: String, name: String, pairedAt: Date) {
+    public init(url: URL, deviceId: String, secret: Data, gatewayId: String, name: String, pairedAt: Date, nameIsCustom: Bool = false, gatewayVersion: String? = nil) {
         self.url = url
         self.deviceId = deviceId
         self.secret = secret
         self.gatewayId = gatewayId
         self.name = name
         self.pairedAt = pairedAt
+        self.nameIsCustom = nameIsCustom
+        self.gatewayVersion = gatewayVersion
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case url, deviceId, secret, gatewayId, name, pairedAt, nameIsCustom, gatewayVersion
+    }
+
+    /// Credentials stored by earlier builds lack the newer fields.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            url: try c.decode(URL.self, forKey: .url),
+            deviceId: try c.decode(String.self, forKey: .deviceId),
+            secret: try c.decode(Data.self, forKey: .secret),
+            gatewayId: try c.decode(String.self, forKey: .gatewayId),
+            name: try c.decode(String.self, forKey: .name),
+            pairedAt: try c.decode(Date.self, forKey: .pairedAt),
+            nameIsCustom: try c.decodeIfPresent(Bool.self, forKey: .nameIsCustom) ?? false,
+            gatewayVersion: try c.decodeIfPresent(String.self, forKey: .gatewayVersion)
+        )
     }
 
     public var keys: DeviceKeys { DeviceKeys(ikm: secret) }

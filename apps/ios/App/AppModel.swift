@@ -77,14 +77,22 @@ final class AppModel {
     func load() {
         do {
             for credential in try credentials.all() where client(credential.deviceId) == nil {
-                let client = GatewayClient(credential: credential, cache: cache)
-                client.relayToken = push.relayToken
+                let client = makeClient(credential)
                 clients.append(client)
                 client.start()
             }
         } catch {
             storeError = String(localized: "无法读取钥匙串：\(String(describing: error))")
         }
+    }
+
+    private func makeClient(_ credential: GatewayCredential) -> GatewayClient {
+        let client = GatewayClient(credential: credential, cache: cache)
+        client.relayToken = push.relayToken
+        client.onPushTokenRejected = { [weak self] reason in self?.push.tokenRejected(reason: reason) }
+        let keychain = credentials
+        client.onCredentialChanged = { credential in try? keychain.save(credential) }
+        return client
     }
 
     func client(_ deviceId: String) -> GatewayClient? {
@@ -106,8 +114,12 @@ final class AppModel {
     func pair(_ link: PairLink, name: String) async throws -> GatewayClient {
         let keychain = credentials
         let pairedAt = Date()
+        // A name the user typed (or kept from the computer being re-paired)
+        // wins over the gateway's; otherwise `hello` keeps it current.
+        let replaced = repairing.flatMap(client)?.credential
+        let custom = name != link.suggestedName || (replaced?.nameIsCustom == true && replaced?.name == name)
         let credentialFor = { (secret: Data) in
-            GatewayCredential(url: link.url, deviceId: link.deviceId, secret: secret, gatewayId: link.gatewayId, name: name, pairedAt: pairedAt)
+            GatewayCredential(url: link.url, deviceId: link.deviceId, secret: secret, gatewayId: link.gatewayId, name: name, pairedAt: pairedAt, nameIsCustom: custom)
         }
         let stored = StoredFlag()
         do {
@@ -118,8 +130,7 @@ final class AppModel {
             let credential = credentialFor(secret)
             if let replaced = repairing, replaced != link.deviceId { remove(replaced, tellGateway: false) }
             repairing = nil
-            let client = GatewayClient(credential: credential, cache: cache)
-            client.relayToken = push.relayToken
+            let client = makeClient(credential)
             clients.removeAll { $0.id == credential.deviceId }
             clients.append(client)
             if let connection { client.adopt(connection) } else { client.start() }
@@ -143,6 +154,7 @@ final class AppModel {
         var credential = client.credential
         credential.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !credential.name.isEmpty else { return }
+        credential.nameIsCustom = true
         try? credentials.save(credential)
         client.update(credential: credential)
     }

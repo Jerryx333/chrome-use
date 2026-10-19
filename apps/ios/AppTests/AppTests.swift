@@ -194,3 +194,30 @@ final class NotificationRouteTests: XCTestCase {
         model.remove(device, tellGateway: false)
     }
 }
+
+@MainActor
+final class ComputerNameAndTokenTests: XCTestCase {
+    func testRenameSticksAndRejectionRegistersAgain() throws {
+        let credential = GatewayCredential(url: URL(string: "ws://127.0.0.1:9/")!, deviceId: UUID().uuidString.lowercased(), secret: Data(repeating: 1, count: 64), gatewayId: "g", name: "127.0.0.1", pairedAt: Date())
+        let keychain = InMemoryCredentialStore([credential])
+        let model = AppModel(credentials: keychain, cache: InMemoryJournalCache())
+        let client = try XCTUnwrap(model.client(credential.deviceId))
+
+        // The gateway's name replaces the URL host and is saved.
+        client.applyHello(["computerName": "Studio Mac", "gatewayVersion": "1.5.250"])
+        XCTAssertEqual(try keychain.all().first?.name, "Studio Mac")
+        XCTAssertEqual(try keychain.all().first?.gatewayVersion, "1.5.250")
+        // A name the user typed wins from then on.
+        model.rename(credential.deviceId, to: "工作室")
+        client.applyHello(["computerName": "Studio Mac", "gatewayVersion": "1.5.251"])
+        XCTAssertEqual(client.credential.name, "工作室")
+        XCTAssertEqual(try keychain.all().first?.name, "工作室")
+        XCTAssertEqual(try keychain.all().first?.nameIsCustom, true)
+
+        // A refused relay token makes the app register with the Worker again.
+        client.handle(["event": "pushTokenRejected", "reason": "invalid"])
+        XCTAssertNil(model.push.registration)
+        XCTAssertTrue(model.push.lastError?.contains("invalid") == true)
+        model.remove(credential.deviceId, tellGateway: false)
+    }
+}

@@ -7,6 +7,9 @@
 #   S        scratch dir holding ios/ (this folder), dd/ (DerivedData from
 #            build-for-testing) and chrome-use (CLI built from this branch)
 #   DEV      simulator UDID
+#   LIVE_PUSH=1  use the real push Worker (APNs sandbox to the simulator)
+#            instead of the fixture's stand-in, and capture the delivered
+#            notification after `mobile push-test`
 set -u
 S=${S:-$HOME/cu-ios-scratch}
 DEV=${DEV:-BF28CD2A-E180-4812-A931-48984D59BF04}
@@ -20,6 +23,7 @@ HOME=$T/home python3 $S/ios/ChromeUseKit/Tests/ChromeUseKitTests/Fixtures/fake_p
 PANEL=$!
 sleep 1
 PUSH=$(python3 -c "import json;print(json.loads(open('$T/panel.out').readline())['push'])")
+[ "${LIVE_PUSH:-0}" = 1 ] && PUSH=https://chrome-use-push.leeguoo.com
 HOME=$T/home $S/chrome-use mobile serve --bind 127.0.0.1:0 --push-url $PUSH > $T/gw.out 2>$T/gw.err &
 GW=$!
 sleep 2
@@ -35,16 +39,25 @@ cd $S/ios
 TEST_RUNNER_PAIR_LINK="$LINK" TEST_RUNNER_SHOTS_DIR=$S/shots TEST_RUNNER_SHOTS_LANGUAGE=$LANG_ TEST_RUNNER_PUSH_WORKER=$PUSH xcodebuild test-without-building -project ChromeUse.xcodeproj -scheme ChromeUse -destination id=$DEV -derivedDataPath $S/dd -only-testing:ChromeUseUITests -resultBundlePath $S/shots-$LANG_-$(date +%s).xcresult > $S/shots-$LANG_.log 2>&1
 echo "UITEST EXIT $?"
 # The app registered with the stand-in Worker and gave the gateway its token?
-grep -c '"register"' $T/panel.out | sed 's/^/registrations: /'
+[ "${LIVE_PUSH:-0}" = 1 ] || grep -c '"register"' $T/panel.out | sed 's/^/registrations: /'
 HOME=$T/home $S/chrome-use mobile devices --json | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];print('device push:', [x.get('push') for x in d])"
 # A real push from the gateway, delivered to the simulator with simctl.
 HOME=$T/home $S/chrome-use mobile push-test $DEVICE --push-url $PUSH
 sleep 1
+if [ "${LIVE_PUSH:-0}" = 1 ]; then
+  # The banner shows for a few seconds; keep frames and the caller picks one.
+  for i in 1 2 3 4 5 6 7 8; do
+    sleep 1
+    xcrun simctl io $DEV screenshot $S/shots/notification-$i.png >/dev/null 2>&1
+  done
+  echo "notification frames taken"
+else
 python3 - "$T/panel.out" <<'PY'
 import json, sys
 pushes = [json.loads(l)["push"] for l in open(sys.argv[1]) if '"push": {' in l]
 print("pushes recorded:", len(pushes), "last relayToken starts:", pushes[-1]["relayToken"][:8] if pushes else None)
 PY
+fi
 kill $GW $PANEL $KEEP 2>/dev/null
 rm -rf $T
 echo DONE
