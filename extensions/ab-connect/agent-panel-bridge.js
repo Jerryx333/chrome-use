@@ -87,9 +87,10 @@ export class AgentPanelBridge {
 // What a host with projectDirectory 2 says about the page (absent before).
 function validProjectPage(page) {
   if (page === undefined || page === null) return true;
-  const suggestion = page.suggestion;
-  return typeof page === 'object' && typeof page.codeHost === 'boolean' && (page.repositoryScope === null || typeof page.repositoryScope === 'string') &&
-    (suggestion === null || (typeof suggestion?.root === 'string' && ['repository', 'site'].includes(suggestion.reason))) &&
+  const { suggestion, project } = page;
+  return typeof page === 'object' && typeof page.multiProject === 'boolean' &&
+    (project === null || (typeof project?.kind === 'string' && typeof project.key === 'string' && (project.pathScope === null || typeof project.pathScope === 'string'))) &&
+    (suggestion === null || (typeof suggestion?.root === 'string' && ['repository', 'project', 'site'].includes(suggestion.reason))) &&
     Array.isArray(page.bindings) && page.bindings.every(b => typeof b?.pathScope === 'string' && typeof b.fingerprint === 'string');
 }
 function validResult({ operation, agentId, planId, conversationId, messageId, replacementId, id, skillId, attachmentId, artifactId, offset, requestedOptions, sessionId, project }, result) {

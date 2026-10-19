@@ -11,8 +11,11 @@
 //      over the site-wide binding; picking another project offers to
 //      remember it for the repository (scope select in the bar), and once
 //      remembered that binding wins over the match;
-//   4. the options page lists both bindings;
-//   5. /resume a real Codex session made with `codex exec`, confirm the
+//   4. an App Store Connect app page (the fixture under that host name)
+//      preselects the folder whose fastlane names the app and offers to
+//      remember "this app" by the page's name;
+//   5. the options page lists the bindings;
+//   6. /resume a real Codex session made with `codex exec`, confirm the
 //      "active elsewhere" warning and check the agent remembers it.
 // Evidence and side-panel screenshots go to $OUT (default <work>/out).
 import fs from 'node:fs';
@@ -38,7 +41,9 @@ const save = () => fs.writeFileSync(path.join(out, 'evidence.json'), JSON.string
 const check = (ok, message) => { if (!ok) { save(); throw new Error(message); } };
 
 let failState = async () => {};
-const rig = await startRig({ dir, work, hostBin: process.env.HOST_BIN, chrome: process.env.CHROME, extDir: process.env.EXT_DIR, sitePort: 8920, cdpPort: 9381, serviceEnv: { CODEX_HOME: codexHome } });
+const rig = await startRig({ dir, work, hostBin: process.env.HOST_BIN, chrome: process.env.CHROME, extDir: process.env.EXT_DIR, sitePort: 8920, cdpPort: 9381, serviceEnv: { CODEX_HOME: codexHome },
+  // App Store Connect's name served by the fixture site, over http.
+  chromeArgs: ['--host-resolver-rules=MAP appstoreconnect.apple.com 127.0.0.1'] });
 evidence.chrome = rig.chromeVersion; evidence.extension = rig.extensionVersion;
 const A = rig.cdp, b = rig.browser;
 const project = fs.realpathSync(fs.mkdtempSync(path.join(work, 'project-')));
@@ -46,6 +51,10 @@ const project = fs.realpathSync(fs.mkdtempSync(path.join(work, 'project-')));
 const widget = fs.realpathSync(fs.mkdtempSync(path.join(work, 'widget-')));
 check(spawnSync('git', ['init', '-q', widget]).status === 0, 'git init');
 check(spawnSync('git', ['-C', widget, 'remote', 'add', 'origin', `${rig.site}/acme/widget.git`]).status === 0, 'git remote add');
+// An iOS project whose fastlane names the App Store Connect app.
+const ios = fs.realpathSync(fs.mkdtempSync(path.join(work, 'ios-')));
+fs.mkdirSync(path.join(ios, 'fastlane'));
+fs.writeFileSync(path.join(ios, 'fastlane', 'Fastfile'), 'lane :beta do\n  upload_to_testflight(apple_id: "1234567890")\nend\n');
 try {
   // A localhost page, then its own side panel the way the toolbar button
   // opens it (0.5.63+): setOptions for the tab, then a trusted click in an
@@ -77,6 +86,7 @@ try {
 
   // The folder becomes a recent one through an earlier panel conversation
   // (the native "Other…" dialog cannot be driven headless).
+  await rig.service.call('conversationCreate', { agentId: 'codex', project: ios, executable: rig.backend('codex') });
   await rig.service.call('conversationCreate', { agentId: 'codex', project: widget, executable: rig.backend('codex') });
   await rig.service.call('conversationCreate', { agentId: 'codex', project, executable: rig.backend('codex') });
   await panel(`document.getElementById('newChat').click()`);
@@ -137,18 +147,43 @@ try {
   await panel(`document.getElementById('newChat').click()`);
   await waitFor(() => panel(`document.getElementById('project').value === ${JSON.stringify(project)} && document.getElementById('project').dataset.reason === 'site'`), { timeout: 20000, label: 'repository binding preselected' });
   step('the repository binding wins over the match', { title: await panel(`document.getElementById('project').title`) });
+
+  // A site of many projects: the App Store Connect app page starts in the
+  // folder whose fastlane names the app, and is remembered as "this app".
+  const asc = `http://appstoreconnect.apple.com:${rig.sitePort}`, ascHost = `appstoreconnect.apple.com:${rig.sitePort}`, appScope = '/apps/1234567890';
+  await rig.ev(`chrome.tabs.update(${site.tabId}, { url: ${JSON.stringify(asc + appScope + '/testflight/ios')} })`);
+  await waitFor(() => panel(`document.getElementById('pageTitle').textContent.includes('Hellow')`), { timeout: 20000, label: 'App Store Connect page in the panel' });
+  const appNote = await msg('panel_project_key_hint', ascHost + appScope);
+  await waitFor(() => panel(`document.getElementById('project').value === ${JSON.stringify(ios)} && document.getElementById('project').dataset.reason === 'project'`), { timeout: 20000, label: 'app project preselected' });
+  const appMatched = await panel(`({ value: document.getElementById('project').value, note: document.querySelector('.project-match')?.textContent, noteShown: !document.querySelector('.project-match')?.hidden })`);
+  await shot('4-matched-app');
+  step('App Store Connect page preselects the app project', appMatched);
+  check(appMatched.noteShown && appMatched.note === appNote, 'the panel says the project was matched by the app');
+  await panel(`(() => { const s = document.getElementById('agent'); s.value = 'codex'; s.dispatchEvent(new Event('change')); document.getElementById('executable').value = ${JSON.stringify(rig.backend('codex'))};
+    const p = document.getElementById('project'); p.value = ${JSON.stringify(project)}; p.dispatchEvent(new Event('change'));
+    document.getElementById('message').value = 'Hello from the app page'; document.getElementById('composer').requestSubmit(); return true; })()`);
+  const appQuestion = await msg('panel_project_remember', await msg('panel_project_named', 'Hellow', ascHost + appScope));
+  await waitFor(() => panel(`!document.querySelector('.project-remember')?.hidden && document.querySelector('.project-remember').textContent.includes(${JSON.stringify(appQuestion)})`), { timeout: 30000, label: 'app remember question' });
+  const appBar = await panel(`({ text: document.querySelector('.project-remember span').textContent, scopes: [...document.querySelectorAll('.project-remember select option')].map(o => [o.value, o.textContent]), chosen: document.querySelector('.project-remember select')?.value })`);
+  await shot('4-remember-app');
+  step('app remember bar', appBar);
+  check(appBar.chosen === appScope && appBar.scopes.some(([v]) => v === '/'), 'the bar defaults to the app and offers the whole site');
+  await panel(`[...document.querySelectorAll('.project-remember button')].find(b => b.textContent === ${JSON.stringify(await msg('panel_project_remember_yes'))}).click()`);
+  await waitFor(() => fs.existsSync(path.join(rig.home, '.chrome-use', 'inspect', 'bindings.json')) && JSON.parse(fs.readFileSync(path.join(rig.home, '.chrome-use', 'inspect', 'bindings.json'), 'utf8')).bindings.some(x => x.origin === asc && x.pathScope === appScope && x.root === project), { timeout: 20000, label: 'app binding stored' });
+  step('app binding stored', { origin: asc, pathScope: appScope });
+
   await rig.ev(`chrome.tabs.update(${site.tabId}, { url: ${JSON.stringify(rig.site + '/')} })`);
   await waitFor(() => panel(`!document.getElementById('pageTitle').textContent.includes('Pull 7')`), { timeout: 20000, label: 'back on the home page' });
 
-  // 4. The options page lists both, with their scopes.
+  // 5. The options page lists the bindings, with their scopes.
   const options = await A.openPage(`chrome-extension://${EXT_ID}/options.html`);
   const listed = await waitFor(async () => { const text = await A.evaluate(options.sid, `document.getElementById('inspectBindings').innerText`); return text.includes(project) && text.includes(rig.site + repoScope) && text; }, { timeout: 20000, label: 'bindings on the options page' });
-  const o = await b.send('Page.captureScreenshot', { format: 'png' }, options.sid); fs.writeFileSync(path.join(out, '4-options.png'), Buffer.from(o.data, 'base64'));
+  const o = await b.send('Page.captureScreenshot', { format: 'png' }, options.sid); fs.writeFileSync(path.join(out, '5-options.png'), Buffer.from(o.data, 'base64'));
   step('options page lists the binding', { text: listed.slice(0, 400) });
   await b.send('Target.closeTarget', { targetId: options.targetId });
   await activate(rig, site);
 
-  // 5. /resume a real Codex session.
+  // 6. /resume a real Codex session.
   const word = `HERON-${Math.floor(Math.random() * 90 + 10)}`;
   const codexProject = fs.realpathSync(fs.mkdtempSync(path.join(work, 'codex-project-')));
   const made = spawnSync(codex, ['exec', '--skip-git-repo-check', '-c', 'model_reasoning_effort=low', `Remember the codeword ${word}. Reply with just OK.`], { cwd: codexProject, env: { ...process.env, CODEX_HOME: codexHome }, encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -159,7 +194,7 @@ try {
   await panel(`[...document.querySelectorAll('.resume-item')].find(r => r.title === ${JSON.stringify(codexProject)}).click()`);
   // Written seconds ago: it must ask first.
   await waitFor(() => panel(`document.querySelector('.resume-picker').innerText.includes(${JSON.stringify(unsafe)})`), { timeout: 30000, label: 'active-elsewhere warning' });
-  await shot('5-resume-warning');
+  await shot('6-resume-warning');
   await panel(`[...document.querySelectorAll('.resume-picker button')].find(b => b.textContent === ${JSON.stringify(confirmLabel)}).click()`);
   await waitFor(() => panel(`!!document.querySelector('.imported-history')`), { timeout: 40000, label: 'imported history' });
   const resumed = await panel(`({ header: document.getElementById('projectPath').textContent, imported: document.querySelector('.imported-history').textContent, collapsed: !document.querySelector('.imported-history details').open })`);
@@ -174,7 +209,7 @@ try {
     const ended = r.events.find(e => e.kind === 'turnEnded');
     return ended && { outcome: ended.data.outcome, text: r.events.filter(e => e.kind === 'textFinal').map(e => e.data.text).join('') };
   }, { timeout: 240000, interval: 1000, label: 'codex answer' });
-  await sleep(1500); await shot('6-resume-answer');
+  await sleep(1500); await shot('7-resume-answer');
   step('codex answered', answer);
   check(answer.outcome === 'completed' && answer.text.includes(word), 'the agent remembered the earlier turn');
   evidence.passed = true;

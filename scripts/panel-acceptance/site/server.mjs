@@ -29,6 +29,9 @@ const routes = {
   // remote is <site>/acme/widget.git belongs to it.
   '/acme/widget': () => page('acme/widget', '<h1 id="title">acme/widget</h1><a href="/acme/widget/pulls/7">Pull 7</a>'),
   '/acme/widget/pulls/7': () => page('Pull 7 · acme/widget', '<h1 id="title">Pull 7</h1><p>Make the widget spin.</p>'),
+  // An App Store Connect app page, served under that host name through
+  // Chrome's --host-resolver-rules (site-project-live).
+  '/apps/1234567890/testflight/ios': () => page('Hellow - App Store Connect', '<h1 id="title">Hellow</h1><p>TestFlight builds</p>'),
   // A form whose save the server rejects; the page reports what the server said.
   '/form': () => page('Order form', `<h1>Order form</h1><label>Name <input id="name" name="name"></label>
 <button id="save" onclick="save()">Save</button><button id="save-ok" onclick="saveOk()">Save draft</button><p id="status"></p>
