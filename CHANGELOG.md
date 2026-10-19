@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.236
+## 1.5.237
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.72 (no CLI change; this release ships the extension fix).
+
+### Bug Fixes
+
+- **The /resume confirmation no longer overlaps the panel.** Choosing a session that is still running in a terminal showed "continue here anyway / cancel" below the picker's box, on top of the status line and the lent-tab bar. The picker's list now shrinks and scrolls so the question stays inside it.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.236
+
 ### Changes
 
 - **Agent tabs open in your own window again, in a tab group marked ⬉.** The separate agent window made it hard to watch the agent or take over: you had to go find a second window. AI tabs now open as background tabs in the window you are using, without taking focus, each session in its own tab group whose title starts with `⬉` (`⬉ 🔎 track a parcel`). `--window dedicated` or `AGENT_BROWSER_DEDICATED_WINDOW=1` brings back the shared background window. Groups made by an older build have no mark, so a session that is running during the upgrade opens a new `⬉` group next to its old one once. Closing a password-manager menu on a pinned tab now needs you in a shared window, as it did with `--window user`.
@@ -10,7 +23,6 @@
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.235
 

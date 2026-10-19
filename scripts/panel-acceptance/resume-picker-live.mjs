@@ -159,6 +159,17 @@ try {
   step('searched by path', searched);
   check(searched.headers[0].expanded === 'true' && searched.more.length === 0, 'a search shows all matches');
 
+  // Choosing the session active elsewhere asks first; the question stays
+  // inside the picker (it used to overflow onto the panel below).
+  await panel(`(() => { const s = document.querySelector('.resume-picker input[type=search]'); s.value = 'still working'; s.dispatchEvent(new Event('input')); return true; })()`);
+  await waitFor(async () => (await state()).items.length === 1, { timeout: 20000, label: 'running session found' });
+  await panel(`(() => { document.querySelector('.resume-item').click(); return true; })()`);
+  const box = await waitFor(() => panel(`(() => { const c = document.querySelector('.resume-picker .delete-confirm'); if (!c || c.hidden) return null; const p = c.closest('.resume-picker').getBoundingClientRect(), r = c.getBoundingClientRect(); return { picker: [p.top, p.bottom], confirm: [r.top, r.bottom], buttons: [...c.querySelectorAll('button')].map(b => b.textContent) }; })()`), { timeout: 20000, label: 'running confirmation' });
+  await shot('5-running-confirm');
+  step('running confirmation', box);
+  check(box.confirm[0] >= box.picker[0] && box.confirm[1] <= box.picker[1] + 1, 'the confirmation sits inside the picker');
+  check(box.buttons.length === 2, 'continue and cancel are shown');
+
   evidence.passed = true;
   console.log('[resume-picker] PASS');
 } catch (failure) {
