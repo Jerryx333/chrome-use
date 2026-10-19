@@ -44,10 +44,17 @@ fs.mkdirSync(project, { recursive: true });
 const socketDir = path.join(rig.home, '.chrome-use');
 
 // One agent command, as an agent CLI in `pane` would run it.
+// Each task works in a project folder of its own unless it shares one on
+// purpose: sessions of one project share its tab group.
+const projectFor = pane => {
+  const dir = path.join(work, { '%71': 'proj', '%72': 'projc', '%73': 'projd', '%74': 'proje' }[pane] || 'proj');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+};
 function cu(agent, pane, args, extra = {}) {
   const env = { ...process.env, HOME: rig.home, CHROME_USE_NO_UPDATE_CHECK: '1', CLAUDE_PID: String(agent), TMUX_PANE: pane, AGENT_BROWSER_IDLE_TIMEOUT_MS: '8000', ...extra };
   for (const k of ['AGENT_BROWSER_SESSION', 'CMUX_SURFACE_ID', 'CMUX_CLAUDE_PID', 'TERM_SESSION_ID', 'ITERM_SESSION_ID', 'GHOSTTY_SURFACE_ID', 'CODEX_THREAD_ID']) delete env[k];
-  const r = spawnSync(rig.hostBin, ['--json', ...args], { cwd: project, env, encoding: 'utf8', timeout: 90000 });
+  const r = spawnSync(rig.hostBin, ['--json', ...args], { cwd: projectFor(pane), env, encoding: 'utf8', timeout: 90000 });
   let json = null;
   try { json = JSON.parse(r.stdout.trim().split('\n').at(-1)); } catch {}
   return { code: r.status, json, stdout: r.stdout, stderr: r.stderr };
@@ -141,7 +148,7 @@ try {
   check(byUrl(tE, '/c?e')?.groupId === -1, 'E\'s kept tab is open and ungrouped');
   check((await agentGroups()).length === 0, 'no agent group left after E');
 
-  // 4. Task C in another pane; the user looks at one of its tabs.
+  // 4. Task C in another pane and project; the user looks at one of its tabs.
   ok(cu(2001, '%72', ['open', rig.site + '/b?c1']), 'C open');
   ok(cu(2001, '%72', ['tab', 'new', rig.site + '/c?c2']), 'C tab new');
   const C = sessionOf(2001, '%72');
@@ -156,7 +163,7 @@ try {
   check(touched.includes(c2.id) && !touched.includes(c1.id), 'the extension recorded only the tab the user switched to');
   await daemonGone(C.name);
 
-  // 5. Task D in a third pane; its new daemon sweeps C.
+  // 5. Task D in a third pane and project; its new daemon sweeps C.
   fs.rmSync(path.join(socketDir, '.group-sweep'), { force: true });
   ok(cu(3001, '%73', ['open', rig.site + '/a?d'], { AGENT_BROWSER_GROUP_CLEANUP_MS: '1000' }), 'D open');
   const swept = await waitFor(async () => { const t = await tabs(); return !byUrl(t, '/b?c1') && t; }, { timeout: 45000, label: 'C swept' });

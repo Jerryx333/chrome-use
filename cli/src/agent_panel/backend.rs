@@ -197,6 +197,12 @@ async fn drive(
     #[cfg_attr(not(windows), allow(unused_variables))] held: &mut Option<HeldJob>,
 ) -> Result<(), String> {
     let mut browser_env = json!({"AGENT_BROWSER_BROWSER":setup.profile,"AGENT_BROWSER_SESSION":setup.browser_session,"CHROME_USE_NO_UPDATE_CHECK":"1","CHROME_USE_PANEL_PROFILE":setup.profile,"CHROME_USE_PANEL_CONVERSATION":setup.browser_session.strip_prefix("panel-").ok_or("Panel session has no conversation identity")?,"CHROME_USE_PANEL_GENERATION":setup.generation.to_string()});
+    // The conversation's project folder names the project's tab group, even
+    // for an agent that runs in its private workspace.
+    if let Some(project) = setup.project.as_ref().filter(|p| p.is_dir()) {
+        browser_env[crate::group_lifecycle::PROJECT_DIR_ENV] = serde_json::to_value(project)
+            .map_err(|_| "Cannot encode the conversation's project folder")?;
+    }
     if let Some(directory) = std::env::var_os("CHROME_USE_RELAY_DIR").filter(|v| !v.is_empty()) {
         browser_env["CHROME_USE_RELAY_DIR"] = serde_json::to_value(PathBuf::from(directory))
             .map_err(|_| "Cannot encode the pinned relay registry")?;

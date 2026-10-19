@@ -56,6 +56,9 @@ struct Browser {
     connections: u32,
     /// `Target.createTarget` calls since the counts were last reset (#517).
     created_since_reset: u32,
+    /// A page loads in every tab created blank, as if the agent had used it.
+    /// A tab still blank when its session idles out is closed then.
+    pages_loaded: bool,
 }
 
 #[derive(Clone)]
@@ -105,6 +108,10 @@ impl Fake {
 
     fn lie_about(&self, target: &str) {
         self.0.lock().unwrap().lie.insert(target.to_string());
+    }
+
+    fn load_pages(&self) {
+        self.0.lock().unwrap().pages_loaded = true;
     }
 
     fn refuse(&self, target: &str) {
@@ -198,7 +205,10 @@ impl Fake {
                 b.created_since_reset += 1;
                 let id = format!("T{}", b.created);
                 let tab = 500 + b.created as i64;
-                let url = params["url"].as_str().unwrap_or("about:blank").to_string();
+                let mut url = params["url"].as_str().unwrap_or("about:blank").to_string();
+                if b.pages_loaded && url == "about:blank" {
+                    url = format!("https://example.test/{id}");
+                }
                 b.tabs.push((id.clone(), tab, url));
                 json!({"targetId": id})
             }
@@ -1418,6 +1428,7 @@ fn close_of_a_never_opened_session_creates_nothing_on_a_configured_endpoint() {
 /// to P1 only.
 fn held_rights_case(bound: bool) {
     let (fake, url) = Fake::start(true);
+    fake.load_pages();
     fake.0
         .lock()
         .unwrap()
@@ -1521,12 +1532,31 @@ fn close_with_saved_rights_closes_them_in_the_bound_profile_only() {
     held_rights_case(true);
 }
 
+/// A tab the session opened and never loaded a page into is closed when the
+/// session idles out, record and all: nothing is left in the user's window.
+#[test]
+fn idle_exit_closes_tabs_never_loaded() {
+    let (fake, url) = Fake::start(true);
+    let cli = Cli::new("hc-blank-idle", &url, true);
+    let idle = [("AGENT_BROWSER_IDLE_TIMEOUT_MS", "1500")];
+    let r = cli.run(&["tab", "list"], &idle);
+    assert_eq!(r["success"], true, "{r}");
+    assert_eq!(fake.open_targets().len(), 1);
+    assert!(
+        cli.wait_no_daemon(Duration::from_secs(30)),
+        "daemon did not idle out"
+    );
+    assert!(fake.open_targets().is_empty(), "{:?}", fake.open_targets());
+    assert!(!cli.record_path().exists(), "record left for a closed tab");
+}
+
 /// `close incomplete` with no daemon: a saved tab whose close is refused
 /// keeps its record (and the daemon, which holds the retry), and nothing is
 /// created. The retry once Chrome behaves closes it.
 #[test]
 fn incomplete_close_of_saved_rights_keeps_them() {
     let (fake, url) = Fake::start(true);
+    fake.load_pages();
     let cli = Cli::new("hc517-incomplete", &url, true);
     let idle = [("AGENT_BROWSER_IDLE_TIMEOUT_MS", "1500")];
     let r = cli.run(&["tab", "list"], &idle);

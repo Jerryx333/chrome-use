@@ -181,8 +181,11 @@ loads clear it.
 ## Sessions and tabs
 
 On the extension relay your tabs open in the background of the user's own
-window, in your session's tab group (its title starts with ✦). `status` names
-the group. `tab list --all` uses a passive connection: even a fresh session
+window, in your project's tab group (`✦ <project>`: the panel's project
+folder, else the git repository, else the working directory), shared by every
+session working on that project; each session drives only the tabs it opened.
+`status` names the group. `open <url>` switches to your tab already showing
+that page instead of opening it twice; `open --new-tab <url>` opens another. `tab list --all` uses a passive connection: even a fresh session
 starts no daemon, opens no window or tab, and attaches to no page.
 
 **End every task that opened tabs with `done`.** Decide yourself which tabs
@@ -193,8 +196,8 @@ outside your group. Every other tab you opened closes, and the session ends.
 Close searches, sources, intermediate steps, errors and duplicates. A session
 that ends without `done` has its tabs closed after 30 idle minutes
 (`AGENT_BROWSER_GROUP_CLEANUP_MS`; `0` turns this off), except a
-tab the user is looking at or switched to. A new task from the same terminal
-and directory continues the previous task's group. `tabs cleanup` clears
+tab the user is looking at or switched to. A new task in the same project
+takes over the tabs of the project's ended sessions. `tabs cleanup` clears
 ended sessions' groups now, when the user asks for that.
 Extension 0.5.48 has a separate guarded native-grouping capability for Thermo;
 it does not grant chrome-use sessions ownership of the user's tabs.

@@ -1,8 +1,22 @@
 # Session Management
 
 On the extension relay, agent tabs open in the background of the user's own
-window. Each session has its own tab group (titled `✦ <session or name>`) and
-references; cookies and login state belong to the profile and are shared.
+window, in the tab group of the project the session works on, titled
+`✦ <project>`. The project is the side panel conversation's project folder,
+else the git repository around the working directory, else the working
+directory, so two terminals in one repository share one group. A title
+another project already uses gets its parent folder added, once. With no
+project (no working directory) a session has a group of its own. Each session
+has its own references and drives only its own tabs: a tab another running
+session opened is that session's lease, never adopted. Cookies and login
+state belong to the profile and are shared.
+
+`open <url>` does not open a page twice: when another of the session's tabs
+already shows it (same url without its `#fragment` and tracking parameters
+such as `utm_*`, `fbclid`, `gclid`), it switches to that tab in the
+background without reloading it (`reusedTab: true`). `open --new-tab <url>` opens
+another tab anyway; `tab new <url>` always does. Different
+projects never share tabs. The user's own tabs are never moved or grouped.
 `AGENT_BROWSER_DEDICATED_WINDOW=1` puts them in a separate agent window instead.
 `tab list --all` uses a passive connection even in a fresh session: no daemon,
 window, tab or page attachment is created.
@@ -35,9 +49,19 @@ What happens without it:
   on the machine closes its tabs in the background. A tab the user is looking
   at, or has switched to (extension 0.5.77+), is left for them, ungrouped and
   recorded as kept.
-- A new session started from the same terminal and working directory takes
-  over the previous session's group and tabs once that session's daemon is
-  gone, instead of opening another group. `--session <name>` never does.
+- A tab the session opened and never loaded a page into (still `about:blank`
+  or the new tab page) closes when the session idles out, and the cleanup
+  closes such tabs of an ended session at once. It never counts as the user's.
+- When the last session working in a project's group idles out, the group is
+  collapsed in the user's window at once; its tabs wait there for the
+  project's next session, or for the 30-minute cleanup.
+- A new session of the project takes over the tabs of the project's sessions
+  whose daemon is gone (their lease has ended) and reuses them, the same page
+  included, instead of opening more. Running sessions keep theirs.
+- `done` in one of two running sessions of a project closes only the tabs
+  that session opened or took over.
+- A session from an older build, whose tabs are in a group named after the
+  session, moves them under its project's group the first time it runs again.
 - `chrome-use tabs cleanup` does all of that now for every ended session and
   also clears groups left by older builds (`⬉`, `🤖` or a bare session id in
   the title). Only tabs an agent created are ever closed.

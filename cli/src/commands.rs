@@ -851,7 +851,8 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             if flags.provider.is_some() {
                 nav_cmd["waitUntil"] = json!("none");
             }
-            // `--new-tab` / `-t`: open URL in a fresh tab instead of navigating the active tab
+            // `--new-tab` / `-t`: open URL in a fresh tab instead of navigating the
+            // active tab, even when a tab already shows the page
             if rest.iter().any(|a| *a == "--new-tab" || *a == "-t") {
                 nav_cmd["newTab"] = json!(true);
             }
