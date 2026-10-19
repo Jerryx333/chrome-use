@@ -198,11 +198,15 @@ fn is_loopback(ip: IpAddr) -> bool {
     }
 }
 
+// The upgrade callback's error type is tungstenite's HTTP response.
+#[allow(clippy::result_large_err)]
 async fn connection(shared: Arc<Shared>, stream: TcpStream, peer: SocketAddr) {
     let mut forwarded: Option<IpAddr> = None;
-    let mut config = WebSocketConfig::default();
-    config.max_message_size = Some(MAX_MESSAGE);
-    config.max_frame_size = Some(MAX_MESSAGE);
+    let config = WebSocketConfig {
+        max_message_size: Some(MAX_MESSAGE),
+        max_frame_size: Some(MAX_MESSAGE),
+        ..Default::default()
+    };
     // A tunnel on this machine connects from loopback; its client address
     // header is then the only per-source identity there is.
     let trust_forwarded = is_loopback(peer.ip());

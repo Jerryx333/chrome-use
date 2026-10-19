@@ -83,8 +83,10 @@ fn proof_mac(
     mac
 }
 
-/// The phone's proof of the pair secret. Labels keep the two directions'
+/// The phone's proof of the pair secret (computed by the phone; here for
+/// the test vectors). Labels keep the two directions'
 /// proofs distinct, so neither side's proof can be reflected back.
+#[cfg(test)]
 pub fn phone_proof(
     keys: &DeviceKeys,
     gateway_nonce: &[u8; NONCE_LEN],
@@ -138,14 +140,6 @@ pub fn verify_phone_proof(
     )
     .verify_slice(proof)
     .is_ok()
-}
-
-/// Constant-time byte comparison for secrets that are not MACs.
-pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 pub fn random<const N: usize>() -> Result<[u8; N], String> {
@@ -374,12 +368,5 @@ pub(crate) mod tests {
         let mut wrong = Channel::new(&sequence::<32>(10));
         assert!(wrong.open(&first).is_err());
         assert!(receiver.open(&first[..10]).is_err());
-    }
-
-    #[test]
-    fn constant_time_compare() {
-        assert!(ct_eq(b"abc", b"abc"));
-        assert!(!ct_eq(b"abc", b"abd"));
-        assert!(!ct_eq(b"abc", b"ab"));
     }
 }

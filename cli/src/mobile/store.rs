@@ -6,7 +6,7 @@ use super::crypto::{self, KEY_LEN};
 use crate::agent_panel::private_fs;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A pending pairing is usable for this long, once.
 pub const PAIR_TTL_MS: u64 = 10 * 60 * 1000;
@@ -108,7 +108,8 @@ impl Store {
         Ok(Self { directory })
     }
 
-    pub fn directory(&self) -> &Path {
+    #[cfg(test)]
+    pub fn directory(&self) -> &std::path::Path {
         &self.directory
     }
 
@@ -250,6 +251,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn pairing_records_are_private_and_revocable() {
