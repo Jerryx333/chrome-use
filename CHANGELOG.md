@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.240
+## 1.5.241
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.76.
+
+### Changes
+
+- **Sites that hold many projects go by project, not by domain.** App Store Connect apps (`/apps/<appId>`, TestFlight pages included), Vercel projects, Netlify sites, Cloudflare Workers and Pages, Firebase and Google Cloud projects (in the path or `?project=`) and Sentry projects are read from the URL by a rule table in the CLI (one row per URL shape, so another site is one more row). A recent folder is preselected, shown as "Matched by project", when a file in its root names that project: an App Store Connect app id on an `apple_id`/`app_id` line of fastlane's Fastfile, Appfile or Deliverfile, `.vercel/project.json` or `vercel.json`, `wrangler.toml`/`.json`, `.firebaserc`, `.sentryclirc` or `sentry.properties`. As with repositories, a project bound to that app or project still wins and a site-wide binding does not.
+- **The remember question names the app or project.** It defaults to "This app" / "This project" and calls it by the page's own name (the tab title without the site's name, else the page heading when the extension may read the site): "Use this project for Hellow (appstoreconnect.apple.com/apps/1234567890) from now on?". Such sites are never bound whole by default. Projects named only in `?project=` (Google Cloud, some Sentry pages) are matched automatically but can be remembered by path only.
+- **Repository remotes behind an ssh host alias match too.** A remote such as `git@github-work:owner/repo` is resolved through the `HostName` of that alias in `~/.ssh/config` (read only; `Include` is not followed).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.240
+
 Works with extension ab-connect 0.5.75.
 
 ### Changes
@@ -13,7 +28,6 @@ Works with extension ab-connect 0.5.75.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.239
 
