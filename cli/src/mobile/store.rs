@@ -150,7 +150,17 @@ impl Store {
         let lock = private_fs::open(&self.directory.join("store.lock"), true)?;
         lock.lock()
             .map_err(|_| "Cannot lock the paired-device list")?;
-        self.load()
+        let registry = self.load()?;
+        // The gateway id is created on first use and kept from then on.
+        if !self.registry_path().exists() {
+            self.save(&registry)?;
+        }
+        Ok(registry)
+    }
+
+    fn save(&self, registry: &Registry) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(registry).map_err(|_| "Cannot encode device list")?;
+        private_fs::write(&self.registry_path(), &bytes)
     }
 
     /// Apply one change and write it back atomically.
@@ -163,21 +173,56 @@ impl Store {
             .map_err(|_| "Cannot lock the paired-device list")?;
         let mut registry = self.load()?;
         let result = change(&mut registry)?;
-        let bytes =
-            serde_json::to_vec_pretty(&registry).map_err(|_| "Cannot encode device list")?;
-        private_fs::write(&self.registry_path(), &bytes)?;
+        self.save(&registry)?;
         Ok(result)
     }
 
-    pub fn secret(&self, id: &str) -> Result<[u8; KEY_LEN], String> {
+    /// The device's key material: the 32-byte pair secret while pending,
+    /// `pair_secret || phone_secret` (64 bytes) once paired.
+    pub fn secret(&self, id: &str) -> Result<Vec<u8>, String> {
         let mut bytes = Vec::new();
         private_fs::open(&self.key_path(id)?, false)?
-            .take(KEY_LEN as u64 + 1)
+            .take(2 * KEY_LEN as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|_| "Cannot read the device key")?;
-        bytes
-            .try_into()
-            .map_err(|_| "The device key file is invalid".into())
+        if bytes.len() != KEY_LEN && bytes.len() != 2 * KEY_LEN {
+            return Err("The device key file is invalid".into());
+        }
+        Ok(bytes)
+    }
+
+    /// Finish pairing: append the phone's secret to the device key and make
+    /// the device active, only if it is still pending and unexpired. Of two
+    /// phones racing with one QR code, the first to get here wins.
+    pub fn complete_pairing(
+        &self,
+        id: &str,
+        phone_secret: &[u8; KEY_LEN],
+        ip: String,
+    ) -> Result<(), String> {
+        let key = self.key_path(id)?;
+        self.update(|registry| {
+            let device = registry.device_mut(id).ok_or("The device was revoked")?;
+            if device.state != State::Pending || !device.usable(now_ms()) {
+                return Err("This pairing code was already used or has expired".into());
+            }
+            let mut bytes = Vec::new();
+            private_fs::open(&key, false)?
+                .take(KEY_LEN as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "Cannot read the device key")?;
+            if bytes.len() != KEY_LEN {
+                return Err("The device key file is invalid".into());
+            }
+            bytes.extend_from_slice(phone_secret);
+            private_fs::write(&key, &bytes)?;
+            device.state = State::Active;
+            device.expires = None;
+            device.failures = 0;
+            device.last_seen = Some(now_ms());
+            device.last_ip = Some(ip);
+            Ok(())
+        })
     }
 
     /// A new pending device and its pair secret. Expired pending entries are
@@ -274,6 +319,21 @@ mod tests {
             assert_eq!(mode(&store.directory().join("devices.json")), 0o600);
             assert_eq!(mode(&store.key_path(&device.id).unwrap()), 0o600);
         }
+        // Pairing appends the phone's secret, once.
+        let phone = [7u8; KEY_LEN];
+        store
+            .complete_pairing(&device.id, &phone, "127.0.0.1".into())
+            .unwrap();
+        let mut both = secret.to_vec();
+        both.extend_from_slice(&phone);
+        assert_eq!(store.secret(&device.id).unwrap(), both);
+        assert_eq!(
+            store.read().unwrap().device(&device.id).unwrap().state,
+            State::Active
+        );
+        assert!(store
+            .complete_pairing(&device.id, &phone, "127.0.0.1".into())
+            .is_err());
         // The gateway identity is stable across changes.
         store.create_pending("Tablet", "profile-1").unwrap();
         assert_eq!(store.read().unwrap().gateway_id, gateway);
@@ -282,6 +342,16 @@ mod tests {
         assert!(store.secret(&device.id).is_err());
         assert!(store.revoke(&device.id).is_err());
         assert!(store.secret("../escape").is_err());
+    }
+
+    #[test]
+    fn the_gateway_id_is_kept_from_the_first_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let first = store.read().unwrap().gateway_id;
+        assert_eq!(store.read().unwrap().gateway_id, first);
+        let (_, _, gateway) = store.create_pending("Phone", "p").unwrap();
+        assert_eq!(gateway, first);
     }
 
     #[test]

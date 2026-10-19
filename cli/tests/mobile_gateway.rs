@@ -196,6 +196,28 @@ impl Drop for Gateway {
     }
 }
 
+fn start_gateway(relay: &Path, home: &Path, extra: &[&str]) -> (Gateway, String) {
+    let mut child = Command::new(test_binary())
+        .args(["mobile", "serve", "--bind", "127.0.0.1:0"])
+        .args(extra)
+        .env("CHROME_USE_RELAY_DIR", relay)
+        .env("HOME", home)
+        .env("CHROME_USE_NO_UPDATE_CHECK", "1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let address = serde_json::from_str::<Value>(&line).unwrap()["listening"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (Gateway(child), address)
+}
+
 fn cli(relay: &Path, home: &Path, args: &[&str]) -> Value {
     let output = Command::new(test_binary())
         .arg("mobile")
@@ -225,6 +247,7 @@ struct Phone {
     next_id: u64,
     events: Vec<Value>,
     last_frame: Vec<u8>,
+    ikm: Vec<u8>,
 }
 
 fn nonce(sequence: u64) -> [u8; 12] {
@@ -234,7 +257,10 @@ fn nonce(sequence: u64) -> [u8; 12] {
 }
 
 /// Connect and run the handshake; `Err(close code)` when the gateway refuses.
-async fn connect(address: &str, device: &str, keys: &Keys, pairing: bool) -> Result<Phone, u16> {
+/// `ikm` is the key material the phone holds: the QR's pair secret when
+/// pairing, `pair_secret || phone_secret` afterwards (kept in `Phone::ikm`).
+async fn connect(address: &str, device: &str, ikm: &[u8], pairing: bool) -> Result<Phone, u16> {
+    let keys = &keys(ikm);
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{address}/"))
         .await
         .unwrap();
@@ -278,7 +304,7 @@ async fn connect(address: &str, device: &str, keys: &Keys, pairing: bool) -> Res
             );
             let mut salt = gateway.to_vec();
             salt.extend_from_slice(&phone);
-            Ok(Phone {
+            let session = |ws: Ws, keys: &Keys, ikm: Vec<u8>| Phone {
                 ws,
                 send: Aes256Gcm::new(&hkdf(&keys.frame, &salt, b"p2c").into()),
                 receive: Aes256Gcm::new(&hkdf(&keys.frame, &salt, b"c2p").into()),
@@ -287,7 +313,24 @@ async fn connect(address: &str, device: &str, keys: &Keys, pairing: bool) -> Res
                 next_id: 1,
                 events: Vec::new(),
                 last_frame: Vec::new(),
-            })
+                ikm,
+            };
+            let mut phone_session = session(ws, keys, ikm.to_vec());
+            if !pairing {
+                return Ok(phone_session);
+            }
+            // Pairing: send our own secret under the pair-secret keys, wait
+            // for the acknowledgement, then switch to the combined keys.
+            let phone_secret: [u8; 32] = rand_bytes();
+            phone_session
+                .send_frame(&json!({"id":0,"op":"pairComplete","params":{"phoneSecret":URL_SAFE_NO_PAD.encode(phone_secret)}}))
+                .await;
+            let ack = phone_session.next().await?;
+            assert_eq!(ack, json!({"id":0,"result":{"paired":true}}));
+            let mut combined = ikm.to_vec();
+            combined.extend_from_slice(&phone_secret);
+            let paired = self::keys(&combined);
+            Ok(session(phone_session.ws, &paired, combined))
         }
         Some(Ok(Message::Close(Some(frame)))) => Err(frame.code.into()),
         other => panic!("unexpected handshake reply {other:?}"),
@@ -435,7 +478,6 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     let device = query["id"].clone();
     let secret = URL_SAFE_NO_PAD.decode(&query["k"]).unwrap();
     assert_eq!(secret.len(), 32);
-    let keys = keys(&secret);
     let mobile = relay.join("mobile");
     {
         use std::os::unix::fs::PermissionsExt;
@@ -446,45 +488,22 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     }
     assert!(!home.join(".chrome-use/mobile").exists());
 
-    let mut child = Command::new(test_binary())
-        .args([
-            "mobile",
-            "serve",
-            "--bind",
-            "127.0.0.1:0",
-            "--push-url",
-            &push_url,
-        ])
-        .env("CHROME_USE_RELAY_DIR", &relay)
-        .env("HOME", &home)
-        .env("CHROME_USE_NO_UPDATE_CHECK", "1")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let mut line = String::new();
-    BufReader::new(child.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    let _gateway = Gateway(child);
-    let address = serde_json::from_str::<Value>(&line).unwrap()["listening"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let (_gateway, address) = start_gateway(&relay, &home, &["--push-url", &push_url]);
 
     // A wrong key fails and counts against the device.
-    let wrong = self::keys(&[9u8; 32]);
     assert_eq!(
-        connect(&address, &device, &wrong, true).await.err(),
+        connect(&address, &device, &[9u8; 32], true).await.err(),
         Some(4401)
     );
     // A pending device cannot skip pairing.
     assert_eq!(
-        connect(&address, &device, &keys, false).await.err(),
+        connect(&address, &device, &secret, false).await.err(),
         Some(4401)
     );
 
-    let mut phone = connect(&address, &device, &keys, true).await.unwrap();
+    let mut phone = connect(&address, &device, &secret, true).await.unwrap();
+    let paired = phone.ikm.clone();
+    assert_eq!(paired.len(), 64);
     let list = phone.request("conversationList", json!({})).await;
     assert_eq!(list["result"]["conversations"][0]["id"], CONVERSATION);
 
@@ -557,7 +576,7 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     assert_eq!(push["priority"], "high");
     assert_eq!(push["collapseId"], CONVERSATION);
     let raw = STANDARD.decode(push["payload"].as_str().unwrap()).unwrap();
-    let plain = Aes256Gcm::new(&keys.push.into())
+    let plain = Aes256Gcm::new(&keys(&paired).push.into())
         .decrypt(Nonce::from_slice(&raw[..12]), &raw[12..])
         .expect("push payload decrypts with the push key");
     let plain: Value = serde_json::from_slice(&plain).unwrap();
@@ -599,16 +618,33 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
 
     // Scanning the same QR again fails; the paired device reconnects.
     assert_eq!(
-        connect(&address, &device, &keys, true).await.err(),
+        connect(&address, &device, &secret, true).await.err(),
         Some(4401)
     );
-    let mut second = connect(&address, &device, &keys, false).await.unwrap();
+    // Holding only the QR link is useless once paired.
+    assert_eq!(
+        connect(&address, &device, &secret, false).await.err(),
+        Some(4401)
+    );
+    let mut second = connect(&address, &device, &paired, false).await.unwrap();
     let ok = second.request("scheduleList", json!({})).await;
     assert!(ok["result"]["schedules"].is_array());
     // A replayed frame closes the connection.
     let replay = second.last_frame.clone();
     second.ws.send(Message::Binary(replay)).await.unwrap();
     assert_eq!(second.next().await.err(), Some(4400));
+
+    // A gateway limited to another profile turns the device away with its
+    // own close code, and never backs it off.
+    {
+        let (_other, other) = start_gateway(&relay, &home, &["--profile", "other-profile"]);
+        for _ in 0..5 {
+            assert_eq!(
+                connect(&other, &device, &paired, false).await.err(),
+                Some(4409)
+            );
+        }
+    }
 
     // Revoking drops the live connection within a second or so.
     let started = Instant::now();
@@ -623,7 +659,7 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     assert_eq!(code, 4403);
     assert!(started.elapsed() < Duration::from_secs(3));
     assert_eq!(
-        connect(&address, &device, &keys, false).await.err(),
+        connect(&address, &device, &paired, false).await.err(),
         Some(4401)
     );
     let listed = cli(&relay, &home, &["devices", "--json"]);

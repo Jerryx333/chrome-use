@@ -338,7 +338,9 @@ pub(crate) async fn watch(shared: Arc<Shared>, url: String) {
         };
         let mut by_profile: HashMap<String, Vec<Device>> = HashMap::new();
         for device in registry.devices {
-            if device.state == State::Active && device.relay_token.is_some() {
+            // A `--profile` gateway serves, and notifies for, that profile only.
+            let in_scope = shared.profile.as_ref().is_none_or(|p| p == &device.profile);
+            if in_scope && device.state == State::Active && device.relay_token.is_some() {
                 by_profile
                     .entry(device.profile.clone())
                     .or_default()

@@ -34,7 +34,10 @@ pub fn hkdf(ikm: &[u8], salt: &[u8], info: &[u8]) -> [u8; KEY_LEN] {
     expand.finalize().into_bytes().into()
 }
 
-/// Long-term keys of one paired device, all derived from its pair secret.
+/// Keys of one device. A pending device's keys derive from the pair secret
+/// alone and serve only the pairing connection; once the phone has sent its
+/// own secret, every key derives from `pair_secret || phone_secret`, so the
+/// QR link by itself no longer authenticates anyone.
 #[derive(Clone)]
 pub struct DeviceKeys {
     pub auth: [u8; KEY_LEN],
@@ -43,10 +46,12 @@ pub struct DeviceKeys {
 }
 
 impl DeviceKeys {
-    pub fn derive(pair_secret: &[u8; KEY_LEN]) -> Self {
-        let frame = hkdf(pair_secret, KEY_SALT, b"frame");
+    /// `ikm` is the 32-byte pair secret while pairing, then the 64-byte
+    /// `pair_secret || phone_secret`.
+    pub fn derive(ikm: &[u8]) -> Self {
+        let frame = hkdf(ikm, KEY_SALT, b"frame");
         Self {
-            auth: hkdf(pair_secret, KEY_SALT, b"auth"),
+            auth: hkdf(ikm, KEY_SALT, b"auth"),
             push: hkdf(&frame, b"", b"push"),
             frame,
         }
@@ -273,6 +278,7 @@ pub(crate) mod tests {
 
     pub const DEVICE_ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
     pub const FRAME_TEXT: &str = r#"{"id":1,"op":"conversationList","params":{}}"#;
+    pub const ACK_TEXT: &str = r#"{"id":0,"result":{"paired":true}}"#;
     pub const PUSH_TEXT: &str = r#"{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","title":"Weekly report","body":"Waiting for your approval"}"#;
 
     #[test]
@@ -290,22 +296,20 @@ pub(crate) mod tests {
     #[test]
     fn spec_test_vectors() {
         let secret = sequence::<32>(0x00);
+        let phone_secret = sequence::<32>(0x80);
         let gateway = sequence::<32>(0x20);
         let phone = sequence::<32>(0x40);
-        let keys = DeviceKeys::derive(&secret);
+        // Pairing connection: keys from the pair secret alone.
+        let pairing = DeviceKeys::derive(&secret);
         assert_eq!(
-            hex::encode(keys.auth),
+            hex::encode(pairing.auth),
             "a8344e0caf1c7d238af084ccdbeb9d4c2d8ac1abeea4314ca22d1d3aaa47e00e"
         );
         assert_eq!(
-            hex::encode(keys.frame),
+            hex::encode(pairing.frame),
             "1ab8cb618f09a935128d1aca5e0aa708610fd20cb23a3b473e2446052036400d"
         );
-        assert_eq!(
-            hex::encode(keys.push),
-            "27654b22292a6eab25b4c62370b206e71aac17dfef02e6a2cbf568565f85cd2e"
-        );
-        let (c2p, p2c) = keys.session(&gateway, &phone);
+        let (c2p, p2c) = pairing.session(&gateway, &phone);
         assert_eq!(
             hex::encode(c2p),
             "5bc1cde1dbe85a0bafb5c37868e4b8798a5d290b548b2c8eea7831449f33116a"
@@ -315,17 +319,58 @@ pub(crate) mod tests {
             "5f2d6790a8083d40200190969fa564fae1390dacab76bd4318c41185f10a6845"
         );
         assert_eq!(
-            hex::encode(phone_proof(&keys, &gateway, &phone, DEVICE_ID)),
+            hex::encode(phone_proof(&pairing, &gateway, &phone, DEVICE_ID)),
             "8dc9b0be57af6d6329053ba1807835eb333d617132c1f1c00d494fa21b99ec20"
         );
         assert_eq!(
-            hex::encode(gateway_proof(&keys, &gateway, &phone, DEVICE_ID)),
+            hex::encode(gateway_proof(&pairing, &gateway, &phone, DEVICE_ID)),
             "7fcae67185c35186b70f2434a8ba5d593d40b2ea074558601cdd76b1e43f34e6"
         );
+        let complete = format!(
+            r#"{{"id":0,"op":"pairComplete","params":{{"phoneSecret":"{}"}}}}"#,
+            b64url(&phone_secret)
+        );
+        let frame = Channel::new(&p2c).seal(complete.as_bytes()).unwrap();
+        assert_eq!(hex::encode(&frame), "0000000000000000eecbbe0b87d98d8799928139b1306a0e8ad641630d702f3912455ee905df518bc47e2a62a8fbf37d44334e959fba8654b2a8ec58ee735b6d9d77cf5a8754981d6b520b9cec3c24c249fcdda6072bd7903904448ba4062b027abc2248c9370df66d6cc1bca2459aebcb0187444d0f2ed86431c5");
+        let ack = Channel::new(&c2p).seal(ACK_TEXT.as_bytes()).unwrap();
+        assert_eq!(hex::encode(&ack), "00000000000000002887dc6b0a83e1b96fccac5816546874f376ca967dc9dd031675a37003e6d635896c1495a11d67ef35831329b779c306a8");
+        // Paired: keys from pair_secret || phone_secret.
+        let mut ikm = secret.to_vec();
+        ikm.extend_from_slice(&phone_secret);
+        let keys = DeviceKeys::derive(&ikm);
+        assert_eq!(
+            hex::encode(keys.auth),
+            "1ff8540b97d115a12bf80351302fc1b97847bf21ad52bef5b46a2e305c1c5ddc"
+        );
+        assert_eq!(
+            hex::encode(keys.frame),
+            "624f1577d77bcf36468bd37c6acd886a73fce2796128b9130416ec88849f46b3"
+        );
+        assert_eq!(
+            hex::encode(keys.push),
+            "62ea56e406bb35ebf28f9c403bd6bfd0431aef952cd6d13d6ac50de785e0b621"
+        );
+        let (c2p, p2c) = keys.session(&gateway, &phone);
+        assert_eq!(
+            hex::encode(c2p),
+            "691a14378649adfe6b24fed30a8e12a6465b064ee71bc7f5eba952c04fd2b5b7"
+        );
+        assert_eq!(
+            hex::encode(p2c),
+            "9ae2fd1ae48966a3576dc7b61f2d8b6f59e9913596062e1940aa432dbc46d024"
+        );
+        assert_eq!(
+            hex::encode(phone_proof(&keys, &gateway, &phone, DEVICE_ID)),
+            "a2766a2b56dfecf634d78a5ff550d23f073cd6bc6a1b66538b0f27461f9c23c3"
+        );
+        assert_eq!(
+            hex::encode(gateway_proof(&keys, &gateway, &phone, DEVICE_ID)),
+            "3f56ef6947151350afa20a71ef7dfe4af26240a5e3d4814c6292005051e5b55b"
+        );
         let frame = Channel::new(&p2c).seal(FRAME_TEXT.as_bytes()).unwrap();
-        assert_eq!(hex::encode(&frame), "0000000000000000eecbbe0b87d98c8799928139b13079008dd2677e13613735094e30ac54db12d587633832f3eda22f16275d8d6cc4cb8d1b21400427884809662cfab2");
+        assert_eq!(hex::encode(&frame), "00000000000000003d3fea079d6d776461ebe1024f75712d9eb0b8324463906d3735ad868274cd09d2ed59f4fc423448e2dccb847c9f6b202838c5922a0c6c496cdb5726");
         let push = seal_push(&keys.push, &sequence::<12>(0x60), PUSH_TEXT.as_bytes()).unwrap();
-        assert_eq!(push, "YGFiY2RlZmdoaWprqoPM7QCXZkhyaRefvHAqHgEY+UOzCuAGhcMb8AMnhTeophCgMirT+P2+EAJ4WLnl48e4jehHaMj98HzDBDhx1zqQUyMs71Fy46iVJiGOKMmmDYeTkc51WH7yIMyUZfp4CADxrSXLZ8BPuy/0RvOBhHcvWPqF/CEQM3EYZ0eNtuz3yRqkiOABYIXUrTn31OrXOL/ukGxSZoSNvQCn4gM=");
+        assert_eq!(push, "YGFiY2RlZmdoaWprktav2wx9J+xArK4OvMDeVT9U88nqCouE9dpVi+i/sKRwrzQjUvK7YtXeHXjTSmiHAsnECRF00kOkE4HpgVcGP4qqcSRM3J51n02XKKZbglkIsNYdTiSgI72lAHJe/QpUul9s0W7solBQAJgEcxn+pmpcK8kHC7c5RjpK/lr+ZPVaAYhkZRR2bryeNaF6akuOC+m/FQmWvXOT/L1sD7M=");
         assert_eq!(open_push(&keys.push, &push).unwrap(), PUSH_TEXT.as_bytes());
     }
 

@@ -38,6 +38,8 @@ const CLOSE_PROTOCOL: u16 = 4400;
 const CLOSE_UNAUTHORIZED: u16 = 4401;
 const CLOSE_REVOKED: u16 = 4403;
 const CLOSE_TIMEOUT: u16 = 4408;
+/// A paired device of another profile reached a `--profile` gateway.
+const CLOSE_OTHER_PROFILE: u16 = 4409;
 const CLOSE_RATE_LIMITED: u16 = 4429;
 
 pub struct Options {
@@ -100,7 +102,7 @@ impl Limiter {
 pub(crate) struct Shared {
     pub(crate) store: Store,
     pub(crate) panel: Panel,
-    profile: Option<String>,
+    pub(crate) profile: Option<String>,
     limiter: Mutex<Limiter>,
     /// Live connections: id -> (device, close signal).
     live: Mutex<HashMap<u64, (String, watch::Sender<bool>)>>,
@@ -241,7 +243,12 @@ async fn connection(shared: Arc<Shared>, stream: TcpStream, peer: SocketAddr) {
         match tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&shared, &mut ws, source)).await {
             Ok(Ok(session)) => session,
             Ok(Err(code)) => {
-                close(&mut ws, code, "handshake failed").await;
+                let reason = if code == CLOSE_OTHER_PROFILE {
+                    "device is paired to another profile"
+                } else {
+                    "handshake failed"
+                };
+                close(&mut ws, code, reason).await;
                 return;
             }
             Err(_) => {
@@ -331,69 +338,108 @@ async fn handshake(
     {
         return Err(CLOSE_RATE_LIMITED);
     }
-    let in_scope = shared.profile.as_ref().is_none_or(|p| p == &device.profile);
     // A pending device is only reachable by pairing, and pairing only a
     // pending device: scanning the same QR again fails.
     let mode_ok = pairing == (device.state == State::Pending);
-    let keys = shared
+    // Pending keys come from the pair secret alone, paired keys also from the
+    // phone's secret; a key file of the other kind authenticates nobody.
+    let expected_len = if device.state == State::Pending {
+        crypto::KEY_LEN
+    } else {
+        2 * crypto::KEY_LEN
+    };
+    let secret = shared
         .store
         .secret(&device.id)
-        .map(|secret| DeviceKeys::derive(&secret));
-    let verified = keys.as_ref().is_ok_and(|keys| {
+        .ok()
+        .filter(|s| s.len() == expected_len);
+    let keys = secret.as_deref().map(DeviceKeys::derive);
+    let verified = keys.as_ref().is_some_and(|keys| {
         crypto::verify_phone_proof(keys, &gateway_nonce, &phone_nonce, &device.id, &proof)
     });
-    if !verified || !mode_ok || !in_scope {
+    if !verified {
         fail(true);
-        if !verified {
-            let store = shared.store.clone();
-            let id = device.id.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                store.update(|r| {
-                    if let Some(d) = r.device_mut(&id) {
-                        d.failures = d.failures.saturating_add(1);
-                        if d.failures >= store::MAX_FAILURES {
-                            d.state = State::Disabled;
-                        }
-                    }
-                    Ok(())
-                })
-            })
-            .await;
-        }
-        return Err(CLOSE_UNAUTHORIZED);
-    }
-    let keys = keys.map_err(|_| CLOSE_UNAUTHORIZED)?;
-    // Commit under the lock: of two phones racing with one QR, one wins.
-    let activated = {
         let store = shared.store.clone();
         let id = device.id.clone();
-        let ip = source.to_string();
-        tokio::task::spawn_blocking(move || {
+        let _ = tokio::task::spawn_blocking(move || {
             store.update(|r| {
-                let d = r.device_mut(&id).ok_or("revoked")?;
-                if (d.state == State::Pending) != pairing || !d.usable(store::now_ms()) {
-                    return Err("state changed".to_string());
+                if let Some(d) = r.device_mut(&id) {
+                    d.failures = d.failures.saturating_add(1);
+                    if d.failures >= store::MAX_FAILURES {
+                        d.state = State::Disabled;
+                    }
                 }
-                d.state = State::Active;
-                d.expires = None;
-                d.failures = 0;
-                d.last_seen = Some(store::now_ms());
-                d.last_ip = Some(ip);
                 Ok(())
             })
         })
-        .await
-    };
-    if !matches!(activated, Ok(Ok(()))) {
+        .await;
         return Err(CLOSE_UNAUTHORIZED);
     }
+    // A genuine device of another profile is not an attack: it is told so
+    // and does not count toward backoff.
+    if shared
+        .profile
+        .as_ref()
+        .is_some_and(|p| p != &device.profile)
+    {
+        return Err(CLOSE_OTHER_PROFILE);
+    }
+    if !mode_ok {
+        fail(true);
+        return Err(CLOSE_UNAUTHORIZED);
+    }
+    let (Some(keys), Some(secret)) = (keys, secret) else {
+        return Err(CLOSE_UNAUTHORIZED);
+    };
+    let ready = json!({"type":"ready","proof":crypto::b64url(&crypto::gateway_proof(&keys, &gateway_nonce, &phone_nonce, &device.id))});
+    let ip = source.to_string();
+    let keys = if pairing {
+        ws.send(Message::Text(ready.to_string()))
+            .await
+            .map_err(|_| CLOSE_PROTOCOL)?;
+        let phone_secret = complete_pairing(
+            shared,
+            ws,
+            &keys,
+            &gateway_nonce,
+            &phone_nonce,
+            &device.id,
+            ip,
+        )
+        .await?;
+        let mut ikm = secret;
+        ikm.extend_from_slice(&phone_secret);
+        DeviceKeys::derive(&ikm)
+    } else {
+        // Committed under the lock, so a revoke racing this handshake wins.
+        let seen = {
+            let store = shared.store.clone();
+            let id = device.id.clone();
+            tokio::task::spawn_blocking(move || {
+                store.update(|r| {
+                    let d = r.device_mut(&id).ok_or("revoked")?;
+                    if d.state != State::Active {
+                        return Err("state changed".to_string());
+                    }
+                    d.failures = 0;
+                    d.last_seen = Some(store::now_ms());
+                    d.last_ip = Some(ip);
+                    Ok(())
+                })
+            })
+            .await
+        };
+        if !matches!(seen, Ok(Ok(()))) {
+            return Err(CLOSE_UNAUTHORIZED);
+        }
+        ws.send(Message::Text(ready.to_string()))
+            .await
+            .map_err(|_| CLOSE_PROTOCOL)?;
+        keys
+    };
     if let Ok(mut limiter) = shared.limiter.lock() {
         limiter.succeed(source, &device.id);
     }
-    let ready = json!({"type":"ready","proof":crypto::b64url(&crypto::gateway_proof(&keys, &gateway_nonce, &phone_nonce, &device.id))});
-    ws.send(Message::Text(ready.to_string()))
-        .await
-        .map_err(|_| CLOSE_PROTOCOL)?;
     let (send_key, receive_key) = keys.session(&gateway_nonce, &phone_nonce);
     Ok(Session {
         device: device.id,
@@ -401,6 +447,57 @@ async fn handshake(
         send_key,
         receive_key,
     })
+}
+
+/// The pairing connection's only exchange under the pair-secret keys: the
+/// phone sends `pairComplete {phoneSecret}` as its first frame, the gateway
+/// stores it, activates the device and acknowledges. Both sides then switch
+/// to keys derived from `pair_secret || phone_secret`, with sequence numbers
+/// starting again at 0.
+async fn complete_pairing(
+    shared: &Arc<Shared>,
+    ws: &mut WebSocketStream<TcpStream>,
+    keys: &DeviceKeys,
+    gateway_nonce: &[u8; NONCE_LEN],
+    phone_nonce: &[u8; NONCE_LEN],
+    device: &str,
+    ip: String,
+) -> Result<[u8; crypto::KEY_LEN], u16> {
+    let (send_key, receive_key) = keys.session(gateway_nonce, phone_nonce);
+    let frame = loop {
+        match ws.next().await {
+            Some(Ok(Message::Binary(frame))) => break frame,
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+            _ => return Err(CLOSE_PROTOCOL),
+        }
+    };
+    let plaintext = Channel::new(&receive_key)
+        .open(&frame)
+        .map_err(|_| CLOSE_PROTOCOL)?;
+    let request: Value = serde_json::from_slice(&plaintext).map_err(|_| CLOSE_PROTOCOL)?;
+    let phone_secret = request["params"]["phoneSecret"]
+        .as_str()
+        .and_then(crypto::from_b64url::<{ crypto::KEY_LEN }>)
+        .filter(|_| request["op"] == "pairComplete")
+        .ok_or(CLOSE_PROTOCOL)?;
+    let committed = {
+        let store = shared.store.clone();
+        let device = device.to_string();
+        tokio::task::spawn_blocking(move || store.complete_pairing(&device, &phone_secret, ip))
+            .await
+    };
+    if !matches!(committed, Ok(Ok(()))) {
+        return Err(CLOSE_UNAUTHORIZED);
+    }
+    let ack =
+        json!({"id":request.get("id").cloned().unwrap_or(Value::Null),"result":{"paired":true}});
+    let sealed = Channel::new(&send_key)
+        .seal(ack.to_string().as_bytes())
+        .map_err(|_| CLOSE_PROTOCOL)?;
+    ws.send(Message::Binary(sealed))
+        .await
+        .map_err(|_| CLOSE_PROTOCOL)?;
+    Ok(phone_secret)
 }
 
 type Outbox = mpsc::Sender<Value>;
