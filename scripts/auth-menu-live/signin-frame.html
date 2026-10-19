@@ -1,0 +1,19 @@
+<!doctype html><html><body>
+<input type="text" id="account_name_text_field" placeholder="Email or Phone Number">
+<input type="password" id="password_text_field" placeholder="Password" style="display:none">
+<button type="button" id="sign-in" aria-label="Continue">→</button>
+<p id="err" role="alert"></p>
+<script>
+const user = document.getElementById('account_name_text_field');
+const pass = document.getElementById('password_text_field');
+const button = document.getElementById('sign-in');
+button.addEventListener('click', () => {
+  if (pass.style.display === 'none') {
+    if (!user.value) return;
+    setTimeout(() => { pass.style.display = ''; button.setAttribute('aria-label', 'Sign In'); pass.focus(); }, 300);
+    return;
+  }
+  if (user.value === 'user@example.com' && pass.value === 'super-secret') parent.postMessage({ signedIn: true }, '*');
+  else document.getElementById('err').textContent = 'Your Apple Account or password was incorrect.';
+});
+</script></body></html>

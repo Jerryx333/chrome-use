@@ -21473,6 +21473,22 @@ async fn auth_fill(
         .map(|_| ())
 }
 
+/// Take the focus out of the field just filled, when it still has it. A
+/// password manager's inline menu (Bitwarden's) opens on a focused login
+/// field, and while its frame is in the tab Chrome refuses every debugger
+/// command there. Leaving the field closes the menu (Bitwarden: on blur, or at
+/// once when the page does not have the focus, as in a background tab) before
+/// it blocks the next step. Best effort: a menu that opened anyway is closed
+/// by the recovery the next step runs.
+async fn auth_blur(client: &super::cdp::client::CdpClient, scope: &AuthScope, tag: &str) {
+    let tag = serde_json::to_string(tag).unwrap_or_default();
+    let blur = format!(
+        "(() => {{ const el = cuAuth({tag}); \
+         if (el && el.ownerDocument.activeElement === el) el.blur(); return true; }})()"
+    );
+    let _ = scope_eval(client, scope, &blur, true).await;
+}
+
 /// Bring the scope's list of same-site child frames up to date: frames that
 /// went away or changed origin are dropped, new ones get a world (same-process)
 /// or their own session (out-of-process).
@@ -22442,6 +22458,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             }};
         }
         fill_field!(&user_sel, &user_tag, &username)?;
+        auth_blur(&mgr.client, &scope, &user_sel).await;
 
         // Find and fill password. In a sign-in frame the password field may
         // only appear once the username was sent (Apple: Continue, then the
@@ -22478,6 +22495,7 @@ async fn handle_auth_login(cmd: &Value, state: &mut DaemonState) -> Result<Value
             }
         };
         fill_field!(&pass_sel, &pass_tag, &password)?;
+        auth_blur(&mgr.client, &scope, &pass_sel).await;
 
         // Find the submit control
         let sub_sel = if let Some(s) = submit_sel {
@@ -23096,6 +23114,14 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                     }
                 }
                 Err(e) => return Err(e),
+            }
+            // The default flow never relies on the cursor staying in the field
+            // (an `_autotype` `tab` step does). A field Enter goes to next in
+            // the top document keeps it: the Enter would focus it again, and a
+            // new focus is what opens the menu.
+            let enter_next = steps.get(i + 1).is_some_and(|s| s == "enter");
+            if auto && (scope.in_frame() || !enter_next) {
+                auth_blur(&mgr.client, &scope, &sel).await;
             }
             // Exact length for secrets; the username only has to be there
             // (fields normalize what is typed).
