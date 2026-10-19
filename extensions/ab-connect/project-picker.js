@@ -92,7 +92,7 @@ export function createProjectChoice({ document, api, select, host, supported, ca
   };
   // `suggestion`: the project a new conversation here starts in and why
   // (`repository` or `site`); `info`: what the host said about the page.
-  let folders = [], extra = [], current = PRIVATE, chosenByUser = false, suggestion = null, info = null, bindings = [], site = null, agent = '', epoch = 0, previous = PRIVATE, quiet = false;
+  let folders = [], extra = [], current = PRIVATE, chosenByUser = false, suggestion = null, info = null, bindings = [], site = null, agent = '', epoch = 0, previous = PRIVATE, quiet = false, askedOn = '';
   const manual = element('div', undefined, 'project-manual'); manual.hidden = true;
   const note = element('div', undefined, 'project-match hint'); note.hidden = true;
   const ask = element('div', undefined, 'project-remember'); ask.hidden = true;
@@ -146,6 +146,8 @@ export function createProjectChoice({ document, api, select, host, supported, ca
     const { list, page: about } = await lookup(where);
     if (mine !== epoch) return;
     site = where;
+    // A question or its answer is about the page it was asked on.
+    if (askedOn !== (where ? where.origin + where.pagePath : '')) ask.hidden = true;
     folders = list.projects || [];
     info = about?.legacy ? null : about;
     suggestion = about?.suggestion || null;
@@ -196,6 +198,7 @@ export function createProjectChoice({ document, api, select, host, supported, ca
     const scopes = rememberScopes(where, about.info, effective?.pathScope);
     if (!scopes.length) return;
     let chosen = scopes[0];
+    askedOn = where.origin + where.pagePath;
     const question = element('span', t('panel_project_remember', scopeName(where.origin, chosen.pathScope)));
     const parts = [question];
     if (scopes.length > 1) {

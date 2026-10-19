@@ -167,6 +167,12 @@ test('remembering on a repository page defaults to the repository and can widen 
   all(box, n => n.tag === 'button' && n.textContent === 'Remember')[0].fire('click'); await settle();
   assert.deepEqual(binds.at(-1), { origin: 'https://github.com', pathScope: '/leeguooooo/image-use', root: '/w/chatgpt-imagegen', replaces: null });
   assert.match(text(box), /github\.com\/leeguooooo\/image-use now uses this project/);
+  // It stays on this page and leaves with it.
+  await f.choice.refresh(repoPage);
+  assert.equal(box.hidden, false);
+  await f.choice.refresh({ url: 'https://github.com/other/repo' });
+  assert.equal(box.hidden, true);
+  await f.choice.refresh(repoPage);
   // Widening to the whole site replaces the binding shown for it.
   await f.choice.created('/w/other', repoPage);
   const again = all(f.host, n => n.className === 'project-remember')[0];
