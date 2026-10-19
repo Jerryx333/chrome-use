@@ -114,12 +114,20 @@ fn host_of(raw: &str) -> Option<String> {
 /// `http://`, `ssh://`, `git://`, and scp-like `user@host:owner/repo.git`.
 /// Local paths and `file://` URLs are not remotes of a web page.
 pub(super) fn parse_remote(url: &str) -> Option<Remote> {
+    parse_remote_via(url, |_| None)
+}
+
+/// `parse_remote`, with an ssh host alias (`git@github-work:o/r`) turned
+/// into its `HostName` by `alias`.
+fn parse_remote_via(url: &str, alias: impl Fn(&str) -> Option<String>) -> Option<Remote> {
     let url = url.trim();
+    let mut ssh = true;
     let (authority, path) = if let Some((scheme, rest)) = url.split_once("://") {
         let scheme = scheme.to_ascii_lowercase();
         if !["https", "http", "ssh", "git", "git+ssh", "ssh+git"].contains(&scheme.as_str()) {
             return None;
         }
+        ssh = scheme.contains("ssh");
         rest.split_once('/').unwrap_or((rest, ""))
     } else {
         // git reads `host:path` as scp-like only when no slash precedes the
@@ -131,6 +139,10 @@ pub(super) fn parse_remote(url: &str) -> Option<Remote> {
         (host, path)
     };
     let host = host_of(authority)?;
+    let host = match ssh.then(|| alias(&host)).flatten() {
+        Some(real) => host_of(&real)?,
+        None => host,
+    };
     let path = path.split(['?', '#']).next().unwrap_or("");
     let path = path.trim_matches('/');
     let path = path
@@ -317,7 +329,7 @@ pub(super) fn config_remotes(text: &str) -> Vec<NamedRemote> {
             Some(quoted) => quoted.split('"').next().unwrap_or(""),
             None => value.split([';', '#']).next().unwrap_or("").trim(),
         };
-        if let Some(remote) = parse_remote(value) {
+        if let Some(remote) = parse_remote_via(value, ssh_host_name) {
             remotes.push(NamedRemote {
                 name: name.clone(),
                 remote,
@@ -325,6 +337,66 @@ pub(super) fn config_remotes(text: &str) -> Vec<NamedRemote> {
         }
     }
     remotes
+}
+
+/// `Host alias` → `HostName` pairs of an ssh config: exact aliases only
+/// (no patterns), the first `HostName` of a block, in file order.
+pub(super) fn ssh_host_names(text: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    let mut aliases: Vec<String> = Vec::new();
+    let mut named = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = match line.split_once(|c: char| c.is_whitespace() || c == '=') {
+            Some((k, v)) => (
+                k,
+                v.trim_start_matches(|c: char| c.is_whitespace() || c == '=')
+                    .trim(),
+            ),
+            None => continue,
+        };
+        if key.eq_ignore_ascii_case("host") || key.eq_ignore_ascii_case("match") {
+            named = false;
+            aliases = if key.eq_ignore_ascii_case("host") {
+                value
+                    .split_whitespace()
+                    .filter(|a| !a.contains(['*', '?', '!']))
+                    .map(str::to_ascii_lowercase)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        } else if key.eq_ignore_ascii_case("hostname") && !named {
+            named = true;
+            let real = value.trim_matches('"').to_ascii_lowercase();
+            pairs.extend(aliases.iter().map(|a| (a.clone(), real.clone())));
+        }
+    }
+    pairs
+}
+
+/// The `HostName` `~/.ssh/config` gives an ssh host alias, read once per
+/// change of the file (`Include`d files are not followed).
+fn ssh_host_name(alias: &str) -> Option<String> {
+    static CACHE: OnceLock<Mutex<Option<(SystemTime, Vec<(String, String)>)>>> = OnceLock::new();
+    let config = dirs::home_dir()?.join(".ssh").join("config");
+    let modified = std::fs::metadata(&config).and_then(|m| m.modified()).ok()?;
+    let cache = CACHE.get_or_init(Default::default);
+    let mut cached = cache.lock().ok()?;
+    if cached.as_ref().is_none_or(|(at, _)| *at != modified) {
+        let text = std::fs::read_to_string(&config).unwrap_or_default();
+        *cached = Some((modified, ssh_host_names(&text)));
+    }
+    let alias = alias.to_ascii_lowercase();
+    cached
+        .as_ref()?
+        .1
+        .iter()
+        .find(|(a, _)| *a == alias)
+        .map(|(_, real)| real.clone())
 }
 
 type Cache = HashMap<PathBuf, (SystemTime, Vec<NamedRemote>)>;
@@ -407,6 +479,39 @@ mod tests {
         ] {
             assert_eq!(parse_remote(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn ssh_host_aliases_resolve_to_their_host_name() {
+        let config = "# work account\nHost github-work gw\n  HostName github.com\n  IdentityFile ~/.ssh/work\nHost *.internal\n  HostName ignored.example\nHost sg-git\n  HostName=sg-git-src.pwtk.cc\n  Port 2222\nMatch host foo\n  HostName bar.example\n";
+        let pairs = ssh_host_names(config);
+        assert_eq!(
+            pairs,
+            [
+                ("github-work".to_string(), "github.com".to_string()),
+                ("gw".into(), "github.com".into()),
+                ("sg-git".into(), "sg-git-src.pwtk.cc".into()),
+            ]
+        );
+        let alias = |host: &str| {
+            pairs
+                .iter()
+                .find(|(a, _)| a == host)
+                .map(|(_, r)| r.clone())
+        };
+        assert_eq!(
+            parse_remote_via("git@github-work:leeguooooo/image-use.git", alias),
+            remote("github.com", "leeguooooo/image-use")
+        );
+        assert_eq!(
+            parse_remote_via("ssh://git@sg-git/team/api.git", alias),
+            remote("sg-git-src.pwtk.cc", "team/api")
+        );
+        // Only ssh remotes go through ssh's config.
+        assert_eq!(
+            parse_remote_via("https://gw/o/r", alias),
+            remote("gw", "o/r")
+        );
     }
 
     #[test]
