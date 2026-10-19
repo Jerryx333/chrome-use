@@ -6215,6 +6215,45 @@ impl BrowserManager {
         self.forget_created_target(target_id)
     }
 
+    /// The target id and page session of one of this session's tabs, named
+    /// the way `tab` commands name it: `t<N>`, a label, a target id or a
+    /// relay `chrome-tab:<id>` handle.
+    pub fn resolve_tab_spec(&self, spec: &str) -> Result<(String, String), String> {
+        let tab_id = match self.tab_id_for_target(spec) {
+            Some(id) => id,
+            None => {
+                let spec = match parse_chrome_tab_handle(spec) {
+                    Some(_) => self.owned_tab_ref_for_handle(spec).ok_or_else(|| {
+                        format!("`{spec}` is not one of this session's tabs; run `tab list`")
+                    })?,
+                    None => spec.to_string(),
+                };
+                self.resolve_tab_ref(&TabRef::parse(&spec)?)?
+            }
+        };
+        self.pages
+            .iter()
+            .find(|p| p.tab_id == tab_id)
+            .map(|p| (p.target_id.clone(), p.session_id.clone()))
+            .ok_or_else(|| format!("tab `{spec}` is no longer open; run `tab list`"))
+    }
+
+    /// The url this session last saw on `target_id`, if it is one of its pages.
+    pub fn target_url(&self, target_id: &str) -> Option<&str> {
+        self.pages
+            .iter()
+            .find(|p| p.target_id == target_id)
+            .map(|p| p.url.as_str())
+    }
+
+    /// The page session of the active tab.
+    pub fn active_tab_spec(&self) -> Result<(String, String), String> {
+        Ok((
+            self.active_target_id()?.to_string(),
+            self.active_session_id()?.to_string(),
+        ))
+    }
+
     /// Re-take a tab this session created and later released with `keep`.
     ///
     /// The caller MUST establish that we created it — `handle_keep` does that by

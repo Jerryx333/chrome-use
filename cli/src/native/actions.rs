@@ -1802,7 +1802,17 @@ pub fn cb_skip_of(cmd: &Value) -> bool {
 /// Actions a `--tab <handle> --force` does not apply to: tab management verbs
 /// (which take their own refs, and `tab close --force` its own flag) and
 /// session lifecycle.
+/// Whether a `done` command names any tab to keep.
+fn done_keeps(cmd: &Value) -> bool {
+    cmd.get("keepActive").and_then(Value::as_bool) == Some(true)
+        || cmd
+            .get("keep")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty())
+}
+
 const FORCE_TAB_SKIPS: &[&str] = &[
+    "done",
     "tab_switch",
     "tab_close",
     "tab_new",
@@ -2085,6 +2095,11 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             | "stream_status"
     ) || (action == "tab_list"
         && cmd.get("all").and_then(Value::as_bool) == Some(true))
+        // `done` connects only to find a tab to keep among the session's own:
+        // without --keep, or with no tabs recorded, connecting would open a
+        // first tab just to close it again.
+        || (action == "done"
+            && (!done_keeps(cmd) || !crate::connection::has_created_targets(&state.session_id)))
         || (action == "read"
         // `read <url>` (and --llms / --require-md) is a pure HTTP fetch — it
         // never touches the browser, so don't auto-launch. Only `read` with no
@@ -2576,6 +2591,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "script" => super::script::handle_script(cmd, state).await,
             "close" => handle_close(cmd, state).await,
             "keep" => handle_keep(cmd, state).await,
+            "done" => handle_done(cmd, state).await,
             "upgrade_handoff" => handle_upgrade_handoff(cmd, state).await,
             "stealth_status" => handle_stealth_status(state).await,
             "snapshot" => handle_snapshot(cmd, state).await,
@@ -5349,6 +5365,7 @@ async fn annotate_site_change(
 /// Commands that never land on a login wall by themselves, or are the login.
 const LOGIN_WALL_SKIP_ACTIONS: &[&str] = &[
     "close",
+    "done",
     "auth_login",
     "auth_login_bwu",
     "auth_save",
@@ -6320,14 +6337,20 @@ async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let was_owned = mgr.unown_target(&target_id)?;
     // Best-effort: ask the extension to ungroup the tab (relay only; no-ops on a
     // launched browser or an older extension that doesn't know ABExt.ungroupTab).
-    let _ = mgr
-        .client
-        .send_command_typed::<_, Value>(
-            "ABExt.ungroupTab",
-            &json!({ "sessionId": session_id, "targetId": target_id }),
-            None,
-        )
-        .await;
+    // The extension finds the tab from the command's CDP session, so the
+    // command must be sent ON the tab's session: sent browser-level it named
+    // no tab and nothing was ever ungrouped. Only a tab this session created:
+    // an adopted or lent tab may sit in a group of the user's own.
+    if was_owned {
+        let _ = mgr
+            .client
+            .send_command_typed::<_, Value>(
+                "ABExt.ungroupTab",
+                &json!({ "sessionId": session_id, "targetId": target_id }),
+                Some(&session_id),
+            )
+            .await;
+    }
     // Record the reason ONLY when we actually owned the tab. `keep` on a tab we
     // merely adopted is a no-op for ownership, and writing a record for it would
     // let `--release` later claim deletion rights over the user's own tab.
@@ -6350,6 +6373,107 @@ async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             "this session did not create this tab, so there was nothing to release: it was already              exempt from auto-close. No keep reason was recorded."
         },
     }))
+}
+
+/// `done [--keep <tab>]...` — the agent's task is over. Each kept tab is left
+/// for the user the way `keep` leaves one: no longer owned, out of the
+/// session's tab group, recorded as kept, and (0.5.77+) released by the
+/// extension so it is a plain tab with no debugger attached. Then the session
+/// ends exactly as `close` ends it: every other tab it opened is closed and
+/// read back, adopted and lent tabs stay, and the daemon exits.
+///
+/// Which tabs to keep is the agent's call, never a question for the user:
+/// keep what the user needs to see or continue, close everything else.
+async fn handle_done(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let specs: Vec<String> = cmd
+        .get("keep")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let keep_active = cmd.get("keepActive").and_then(Value::as_bool) == Some(true);
+    let session = super::browser::DAEMON_SESSION.get().cloned();
+    let mut kept = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    // `done` is safe to repeat: a session with nothing open has nothing to
+    // keep, and the close below then reports nothing to close.
+    if (keep_active || !specs.is_empty()) && state.browser.is_none() {
+        notes.push(
+            "nothing kept: this session has no open tabs (already done, or never opened any)"
+                .to_string(),
+        );
+    } else if keep_active || !specs.is_empty() {
+        let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+        // Resolve every name before changing anything, so one typo keeps
+        // nothing rather than half of what was asked.
+        let mut tabs = Vec::new();
+        if keep_active {
+            tabs.push(mgr.active_tab_spec()?);
+        }
+        for spec in &specs {
+            tabs.push(mgr.resolve_tab_spec(spec)?);
+        }
+        tabs.dedup_by(|a, b| a.0 == b.0);
+        let owned = mgr.created_target_ids();
+        for (target_id, session_id) in tabs {
+            // Only this session's own tabs are handed over. A tab the user
+            // lent or the agent adopted is the user's already and stays as it
+            // is; a blank tab is nothing the user needs.
+            if !owned.contains(&target_id) {
+                notes.push(format!(
+                    "{target_id} was not kept: it is not a tab this session opened, so it was \
+                     left exactly as it was"
+                ));
+                continue;
+            }
+            if mgr
+                .target_url(&target_id)
+                .is_some_and(|u| u.is_empty() || u == "about:blank")
+            {
+                notes.push(format!("{target_id} was not kept: it is a blank tab"));
+                continue;
+            }
+            // Only a tab this session created is handed over: an adopted or
+            // lent tab is the user's already, and may sit in a group of theirs.
+            let was_owned = mgr.unown_target(&target_id)?;
+            if was_owned {
+                // Out of the group while the extension still holds it; sent on
+                // the tab's session, which is how the extension finds the tab.
+                let _ = mgr
+                    .client
+                    .send_command_typed::<_, Value>(
+                        "ABExt.ungroupTab",
+                        &json!({ "sessionId": session_id, "targetId": target_id }),
+                        Some(&session_id),
+                    )
+                    .await;
+                if let Some(session) = session.as_deref() {
+                    crate::connection::set_kept_tab(session, &target_id, "deliverable")?;
+                }
+                // An older extension does not know it; the tab then stays
+                // attached until Chrome restarts, which is how `keep` always was.
+                let _ = mgr
+                    .client
+                    .send_command_typed::<_, Value>(
+                        "ABExt.releaseOwnedTab",
+                        &json!({ "sessionId": session_id, "targetId": target_id }),
+                        Some(&session_id),
+                    )
+                    .await;
+            }
+            kept.push(json!({ "targetId": target_id, "wasOwned": was_owned }));
+        }
+    }
+    let mut out = handle_close(&json!({ "action": "close" }), state).await?;
+    out["done"] = json!(true);
+    out["kept"] = json!(kept);
+    if !notes.is_empty() {
+        out["notes"] = json!(notes);
+    }
+    Ok(out)
 }
 
 /// `upgrade_handoff` — sent by a CLI of another version just before it
@@ -24463,6 +24587,16 @@ fn error_response(id: &str, error: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn done_connects_only_to_keep_a_tab() {
+        assert!(!done_keeps(&json!({ "action": "done", "keep": [] })));
+        assert!(!done_keeps(&json!({ "action": "done" })));
+        assert!(done_keeps(&json!({ "action": "done", "keep": ["t2"] })));
+        assert!(done_keeps(
+            &json!({ "action": "done", "keep": [], "keepActive": true })
+        ));
+    }
+
     /// #507: with no current tab only listing, opening, naming or closing a
     /// named tab runs; everything that acts on "the current tab" is refused.
     #[test]

@@ -1886,6 +1886,27 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                         tab
                     }
                 }
+                Some("done") => {
+                    let closed = data
+                        .get("tabsClosed")
+                        .and_then(|v| v.as_array())
+                        .map(Vec::len)
+                        .unwrap_or(0);
+                    let kept = data
+                        .get("kept")
+                        .and_then(|v| v.as_array())
+                        .map(Vec::len)
+                        .unwrap_or(0);
+                    format!(
+                        "Done: closed {closed} tab(s) this session opened{}, left {kept} for the \
+                         user outside the tab group",
+                        if closed > 0 && data.get("verifiedAbsent").and_then(|v| v.as_bool()) == Some(true) {
+                            " (verified absent)"
+                        } else {
+                            ""
+                        }
+                    )
+                }
                 // #517: no connection, no tabs of its own: nothing was touched.
                 _ if data.get("nothingToClose").and_then(|v| v.as_bool()) == Some(true) => {
                     "Nothing to close: this session has no browser connection and no tabs of its own"
@@ -1898,6 +1919,16 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 _ => format!("Browser closed{verified}"),
             };
             println!("{} {}", color::success_indicator(), label);
+            for note in data
+                .get("notes")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if let Some(note) = note.as_str() {
+                    println!("  {}", color::dim(note));
+                }
+            }
             return;
         }
         // Started actions (profiling, HAR, recording)
@@ -5909,6 +5940,38 @@ Environment:
 "##
         }
 
+        "done" => {
+            r##"
+chrome-use done - End the task: keep what the user needs, close the rest
+
+Usage: chrome-use done [--keep [<tab>]]...
+
+Run it at the end of every task that opened tabs. Each `--keep <tab>` (a tab
+id such as t2, a label, a target id or a chrome-tab:<id> handle; bare
+`--keep` is the active tab) is left open for the user, outside the session's
+tab group, the way `keep` leaves it. Every other tab this session opened is
+closed and read back, like `close`, and the session ends. Tabs the user lent
+or you adopted are theirs and stay open either way; naming one with --keep
+keeps nothing and the reply's notes say so. Running `done` again, or with
+nothing open, does nothing and succeeds.
+
+Decide yourself; do not ask the user which tabs to keep. Keep a page the user
+asked to see, a result they will act on, or a logged-in page left for them to
+finish. Close searches, sources, intermediate steps and anything else.
+
+Sessions that end without `done` are swept up: once a session's daemon has
+exited and it has been idle for 30 minutes (AGENT_BROWSER_GROUP_CLEANUP_MS,
+0 turns it off), its tabs are closed, except a tab the user is looking at or
+has switched to, which is left for them. `chrome-use tabs cleanup` does that
+for every ended session now.
+
+Examples:
+  chrome-use done
+  chrome-use done --keep t3
+  chrome-use done --keep            # keep the active tab
+"##
+        }
+
         // === Site adapters ===
         "keep" => {
             r##"
@@ -6206,6 +6269,10 @@ Core Commands:
   keep                       Leave the active tab for the user — exempt it from
                              auto-close/idle cleanup + remove it from the session
                              tab group (so scratch tabs get cleaned, this one stays)
+  done [--keep [<tab>]]...   End the task: leave the named tabs for the user
+                             (ungrouped), close every other tab the session opened
+  tabs cleanup               Close the tab groups of ended sessions now (a tab the
+                             user is looking at or switched to is left, ungrouped)
   close [--all]              Close browser (--all closes every session; refuses
                              while other sessions are live unless --force)
   close --forget-untracked   Explicitly abandon verified stale target records;
@@ -6433,9 +6500,14 @@ Sessions:
 
   Lifecycle: each --session <name> spawns a background daemon that drives that
   session's tabs. A daemon auto-shuts-down after 10 min idle (no commands) —
-  AGENT_BROWSER_IDLE_TIMEOUT_MS overrides, 0 disables — and on shutdown closes
-  the scratch tabs IT created (its tab group). Use `keep` to leave a tab for the
-  user (exempt from auto-close), `session stop/prune` to reclaim now.
+  AGENT_BROWSER_IDLE_TIMEOUT_MS overrides, 0 disables. A launched browser closes
+  then; tabs in your own Chrome stay open so the session can pick them up again.
+  End a task with `done [--keep <tab>]`: the kept tabs stay for the user, the
+  rest close. Tabs of a session that ended without it are closed once it has
+  been idle 30 min (AGENT_BROWSER_GROUP_CLEANUP_MS, 0 disables), except tabs
+  the user is looking at or switched to; `tabs cleanup` does it now. A new
+  session from the same terminal and directory continues the previous one's
+  tab group.
   If a registered daemon loses its socket, the next command stops the unreachable
   process and starts a clean replacement for the same session automatically.
   A session under `session handoff` is never reaped — the human's window stays
@@ -6724,6 +6796,7 @@ Environment:
   AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM session encryption
   AGENT_BROWSER_STREAM_PORT      Override WebSocket streaming port (default: OS-assigned)
   AGENT_BROWSER_IDLE_TIMEOUT_MS  Auto-shutdown daemon after N ms of inactivity (disabled by default)
+  AGENT_BROWSER_GROUP_CLEANUP_MS Close an ended session's tabs after N ms idle (default 1800000; 0 disables)
   AGENT_BROWSER_IOS_DEVICE       Default iOS device name
   AGENT_BROWSER_IOS_UDID         Default iOS device UDID
   AGENT_BROWSER_CONTENT_BOUNDARIES Wrap page output in boundary markers

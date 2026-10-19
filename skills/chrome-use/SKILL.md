@@ -30,6 +30,11 @@ Load it once per conversation. It holds the rules and routes each need to one
 Reuse the same task session across calls. Follow the user's selected browser
 and tool preferences.
 
+When the task is finished, end it with `chrome-use done`, adding
+`--keep <tab>` only for tabs the user still needs (a page they asked to see,
+a result to act on, a login left for them). Decide this yourself; never ask
+the user which tabs to close. Everything else you opened is closed.
+
 If `chrome-use` is missing, install the GitHub Release binary, then load core:
 
 ```bash
