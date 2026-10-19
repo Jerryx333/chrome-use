@@ -30,6 +30,7 @@ const REQUESTS_IN_FLIGHT: usize = 8;
 const MAX_SUBSCRIPTIONS: usize = 16;
 const SCREENSHOT_INTERVAL: Duration = Duration::from_secs(2);
 const SCREENSHOT_WIDTH: u32 = 1080;
+const INSPECT_INTERVAL: Duration = Duration::from_secs(30);
 /// Failures from one source before backoff starts, and the longest backoff.
 const FREE_FAILURES: u32 = 3;
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
@@ -118,7 +119,11 @@ pub(crate) struct Shared {
     computer_name: String,
     next_connection: AtomicU64,
     screenshots: Mutex<HashMap<String, Instant>>,
+    /// (profile, agent) -> (started, result once finished).
+    inspections: Mutex<InspectCache>,
 }
+
+type InspectCache = HashMap<(String, String), (Instant, Option<Result<Value, String>>)>;
 
 impl Shared {
     /// Queue an event for every live connection of `device`; dropped when a
@@ -163,6 +168,7 @@ pub async fn serve(options: Options) -> Result<(), String> {
         computer_name,
         next_connection: AtomicU64::new(1),
         screenshots: Mutex::new(HashMap::new()),
+        inspections: Mutex::new(HashMap::new()),
     });
     eprintln!("mobile gateway listening on ws://{local}");
     // Machine-readable readiness line for scripts and tests.
@@ -780,10 +786,45 @@ async fn perform(
             set_relay_token(shared, &session.device, None).await?;
             Ok(json!({"registered":false}))
         }
-        Action::Hello => Ok(json!({
-            "computerName": shared.computer_name,
-            "gatewayVersion": env!("CARGO_PKG_VERSION"),
-        })),
+        Action::Hello => {
+            let store = shared.store.clone();
+            let registry = tokio::task::spawn_blocking(move || store.read())
+                .await
+                .map_err(|_| "Device store unavailable".to_string())
+                .and_then(|r| r)
+                .map_err(|message| Refusal {
+                    code: "store",
+                    message,
+                })?;
+            let muted = registry
+                .device(&session.device)
+                .map(|d| d.muted.clone())
+                .unwrap_or_default();
+            Ok(json!({
+                "computerName": shared.computer_name,
+                "gatewayVersion": env!("CARGO_PKG_VERSION"),
+                "pushMutes": muted,
+            }))
+        }
+        Action::PushMute {
+            conversation_id,
+            muted,
+        } => {
+            let store = shared.store.clone();
+            let device = session.device.clone();
+            let conversation = conversation_id.clone();
+            let all =
+                tokio::task::spawn_blocking(move || store.set_mute(&device, &conversation, muted))
+                    .await
+                    .map_err(|_| "Device store unavailable".to_string())
+                    .and_then(|r| r)
+                    .map_err(|message| Refusal {
+                        code: "store",
+                        message,
+                    })?;
+            Ok(json!({"conversationId":conversation_id,"muted":muted,"pushMutes":all}))
+        }
+        Action::Inspect { agent_id } => inspect(shared, profile, agent_id).await,
         Action::Screenshot { conversation_id } => {
             {
                 let mut last = shared.screenshots.lock().map_err(|_| Refusal {
@@ -814,6 +855,44 @@ async fn perform(
         }
         Action::Subscribe { .. } | Action::Unsubscribe { .. } => unreachable!("handled inline"),
     }
+}
+
+/// `agentInspect` starts the agent's CLI to list its models, so a phone gets
+/// at most one real inspection per agent and profile every 30 s; within that
+/// window the last result (or refusal) is returned again.
+async fn inspect(shared: &Arc<Shared>, profile: &str, agent: String) -> Result<Value, Refusal> {
+    let key = (profile.to_string(), agent.clone());
+    {
+        let mut cache = shared.inspections.lock().map_err(|_| Refusal {
+            code: "panel",
+            message: "Inspection state unavailable".into(),
+        })?;
+        let now = Instant::now();
+        cache.retain(|_, (at, _)| now.duration_since(*at) < INSPECT_INTERVAL);
+        match cache.get(&key) {
+            Some((_, Some(Ok(result)))) => return Ok(result.clone()),
+            Some((_, Some(Err(message)))) => return Err(panel_error(message.clone())),
+            Some((_, None)) => {
+                return Err(Refusal {
+                    code: "rateLimited",
+                    message: "This agent is already being inspected".into(),
+                })
+            }
+            None => {
+                cache.insert(key.clone(), (now, None));
+            }
+        }
+    }
+    let result = shared
+        .panel
+        .call("agentInspect", json!({"agentId":agent}), profile)
+        .await;
+    if let Ok(mut cache) = shared.inspections.lock() {
+        if let Some(entry) = cache.get_mut(&key) {
+            entry.1 = Some(result.clone());
+        }
+    }
+    result.map_err(panel_error)
 }
 
 async fn conversation_row(

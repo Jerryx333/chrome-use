@@ -12,6 +12,8 @@ use std::path::PathBuf;
 pub const PAIR_TTL_MS: u64 = 10 * 60 * 1000;
 /// Consecutive failed handshakes that disable a device until it is paired again.
 pub const MAX_FAILURES: u32 = 10;
+/// Muted conversations kept per device.
+pub const MAX_MUTED: usize = 512;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +49,9 @@ pub struct Device {
     pub rejected_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rejected_reason: Option<String>,
+    /// Conversations this device gets no pushes for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub muted: Vec<String>,
 }
 
 impl Device {
@@ -259,6 +264,7 @@ impl Store {
             relay_token: None,
             rejected_token: None,
             rejected_reason: None,
+            muted: Vec::new(),
         };
         // The key exists before the record that refers to it.
         private_fs::write(&self.key_path(&device.id)?, &secret)?;
@@ -319,6 +325,26 @@ impl Store {
                 device.rejected_reason = Some(reason.into());
             }
             Ok(())
+        })
+    }
+
+    /// Mute or unmute pushes for one conversation; returns the muted list.
+    pub fn set_mute(
+        &self,
+        id: &str,
+        conversation: &str,
+        muted: bool,
+    ) -> Result<Vec<String>, String> {
+        self.update(|registry| {
+            let device = registry.device_mut(id).ok_or("Device was revoked")?;
+            device.muted.retain(|c| c != conversation);
+            if muted {
+                if device.muted.len() >= MAX_MUTED {
+                    return Err(format!("At most {MAX_MUTED} conversations can be muted"));
+                }
+                device.muted.push(conversation.into());
+            }
+            Ok(device.muted.clone())
         })
     }
 
@@ -421,6 +447,20 @@ mod tests {
         // Rejecting an old token leaves the current one alone.
         store.reject_token(&device.id, "b", "invalid").unwrap();
         assert_eq!(token(&store).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn mutes_are_per_device_and_toggle() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let (device, _, _) = store.create_pending("Phone", "p").unwrap();
+        assert_eq!(store.set_mute(&device.id, "a", true).unwrap(), ["a"]);
+        assert_eq!(store.set_mute(&device.id, "a", true).unwrap(), ["a"]);
+        assert_eq!(store.set_mute(&device.id, "b", true).unwrap(), ["a", "b"]);
+        assert_eq!(store.set_mute(&device.id, "a", false).unwrap(), ["b"]);
+        assert!(store
+            .set_mute("0f8fad5b-d9cb-469f-a165-70867728950e", "a", true)
+            .is_err());
     }
 
     #[test]

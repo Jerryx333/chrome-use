@@ -33,8 +33,17 @@ pub enum Action {
         relay_token: String,
     },
     PushUnregister,
-    /// The computer's display name and the gateway version.
+    /// The computer's display name, the gateway version and this device's
+    /// muted conversations.
     Hello,
+    PushMute {
+        conversation_id: String,
+        muted: bool,
+    },
+    /// The agent CLI's model list (`agentInspect`), rate limited.
+    Inspect {
+        agent_id: String,
+    },
     Screenshot {
         conversation_id: String,
     },
@@ -368,6 +377,31 @@ pub fn check(op: &str, params: &Value) -> Result<Action, Refusal> {
             fields(params, &[], &[], op)?;
             Ok(Action::Hello)
         }
+        "pushMute" => {
+            let map = fields(
+                params,
+                &["conversationId", "muted"],
+                &["conversationId", "muted"],
+                op,
+            )?;
+            Ok(Action::PushMute {
+                conversation_id: conversation_id(map)?,
+                muted: map["muted"]
+                    .as_bool()
+                    .ok_or_else(|| invalid("muted must be true or false"))?,
+            })
+        }
+        "agentInspect" => {
+            // `executable` would run any program; only the installed CLI.
+            let map = fields(params, &["agentId"], &["agentId"], op)?;
+            let agent = map["agentId"]
+                .as_str()
+                .filter(|a| ["codex", "claude", "opencode", "pi"].contains(a))
+                .ok_or_else(|| invalid("agentId must be codex, claude, opencode or pi"))?;
+            Ok(Action::Inspect {
+                agent_id: agent.into(),
+            })
+        }
         "screenshot" => {
             let map = fields(params, &["conversationId"], &["conversationId"], op)?;
             Ok(Action::Screenshot {
@@ -412,6 +446,7 @@ mod tests {
             "conversationArtifactRead",
             "conversationAttachmentRead",
             "conversationQueueEdit",
+            "agentScheduleRun",
             "serviceStop",
             "serviceHealth",
             "health",
@@ -612,6 +647,34 @@ mod tests {
         assert_eq!(code("discover", json!({"x":1})), "denied");
         assert_eq!(check("hello", &json!({})).unwrap(), Action::Hello);
         assert_eq!(code("hello", json!({"name":"x"})), "denied");
+        assert_eq!(
+            check("agentInspect", &json!({"agentId":"codex"})).unwrap(),
+            Action::Inspect {
+                agent_id: "codex".into()
+            }
+        );
+        assert_eq!(
+            code(
+                "agentInspect",
+                json!({"agentId":"codex","executable":"/bin/sh"})
+            ),
+            "denied"
+        );
+        assert_eq!(
+            code("agentInspect", json!({"agentId":"sh"})),
+            "invalidParams"
+        );
+        assert_eq!(
+            check("pushMute", &json!({"conversationId":ID,"muted":true})).unwrap(),
+            Action::PushMute {
+                conversation_id: ID.into(),
+                muted: true
+            }
+        );
+        assert_eq!(
+            code("pushMute", json!({"conversationId":ID})),
+            "invalidParams"
+        );
         assert_eq!(code("conversationList", json!([])), "invalidParams");
     }
 

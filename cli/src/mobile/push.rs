@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_URL: &str = "https://push.chrome-use.leeguoo.com";
+pub const DEFAULT_URL: &str = "https://chrome-use-push.leeguoo.com";
 const POLL: Duration = Duration::from_secs(2);
 const DEBOUNCE: Duration = Duration::from_secs(10);
 const TITLE_CHARS: usize = 80;
@@ -31,6 +31,9 @@ pub fn url(flag: Option<String>) -> String {
 pub struct Notice {
     pub conversation_id: String,
     pub kind: &'static str,
+    /// Stable reason the phone localizes by: needsInput, finished, stopped,
+    /// failed, scheduleDone, scheduleFailed or test.
+    pub code: &'static str,
     pub title: String,
     pub body: String,
     pub high: bool,
@@ -38,7 +41,7 @@ pub struct Notice {
 
 impl Notice {
     pub fn plaintext(&self) -> Vec<u8> {
-        json!({"v":1,"conversationId":self.conversation_id,"kind":self.kind,"title":self.title,"body":self.body})
+        json!({"v":1,"conversationId":self.conversation_id,"kind":self.kind,"code":self.code,"title":self.title,"body":self.body})
             .to_string()
             .into_bytes()
     }
@@ -88,6 +91,7 @@ impl Observed {
                 notices.push(Notice {
                     conversation_id: id.into(),
                     kind: "needsInput",
+                    code: "needsInput",
                     title,
                     body: "Waiting for your approval".into(),
                     high: true,
@@ -108,6 +112,11 @@ impl Observed {
                 notices.push(Notice {
                     conversation_id: id.into(),
                     kind: "turnEnded",
+                    code: match phase {
+                        "idle" => "finished",
+                        "interrupted" => "stopped",
+                        _ => "failed",
+                    },
                     title,
                     body,
                     high: false,
@@ -140,6 +149,11 @@ impl Observed {
             notices.push(Notice {
                 conversation_id: row["lastChat"].as_str().unwrap_or("").into(),
                 kind: if done {
+                    "scheduleDone"
+                } else {
+                    "scheduleFailed"
+                },
+                code: if done {
                     "scheduleDone"
                 } else {
                     "scheduleFailed"
@@ -277,6 +291,11 @@ async fn reject_token(store: &Store, device: &str, token: &str, reason: &str) {
     let _ = tokio::task::spawn_blocking(move || store.reject_token(&device, &token, &reason)).await;
 }
 
+/// Whether a device takes this notice: not for a conversation it muted.
+fn wants(device: &Device, notice: &Notice) -> bool {
+    notice.conversation_id.is_empty() || !device.muted.contains(&notice.conversation_id)
+}
+
 /// Send one notice to every given device, handling dead tokens and rate
 /// limits. Returns the devices whose token was refused, with the reason.
 pub async fn fan_out(
@@ -292,6 +311,9 @@ pub async fn fan_out(
         let Some(token) = &device.relay_token else {
             continue;
         };
+        if !wants(device, notice) {
+            continue;
+        }
         if paused
             .get(&device.id)
             .is_some_and(|until| *until > Instant::now())
@@ -389,6 +411,7 @@ pub async fn test(store: &Store, device_id: &str, url: &str) -> Result<(), Strin
     let notice = Notice {
         conversation_id: String::new(),
         kind: "test",
+        code: "test",
         title: "chrome-use".into(),
         body: format!("Test notification ({})", store::now_ms() / 1000),
         high: false,
@@ -430,6 +453,8 @@ mod tests {
         let ended = seen.conversations(&list("idle", Some("Sent the summary to Ann")));
         assert_eq!(ended[0].kind, "turnEnded");
         assert_eq!(ended[0].body, "Sent the summary to Ann");
+        assert_eq!(ended[0].code, "finished");
+        assert_eq!(needs[0].code, "needsInput");
         assert!(seen.conversations(&list("idle", None)).is_empty());
         // A scheduled conversation ends with a schedule notice instead.
         let mut scheduled = list("running", None);
@@ -459,6 +484,7 @@ mod tests {
         let notice = |kind: &'static str, high: bool| Notice {
             conversation_id: A.into(),
             kind,
+            code: kind,
             title: "t".into(),
             body: "b".into(),
             high,
@@ -481,6 +507,7 @@ mod tests {
         let notice = Notice {
             conversation_id: A.into(),
             kind: "needsInput",
+            code: "needsInput",
             title: clip(&"t".repeat(500), TITLE_CHARS),
             body: clip(&"b".repeat(500), BODY_CHARS),
             high: true,
@@ -492,6 +519,28 @@ mod tests {
         assert_eq!(plain["v"], 1);
         assert_eq!(plain["kind"], "needsInput");
         assert_eq!(plain["conversationId"], A);
+    }
+
+    #[test]
+    fn muted_conversations_get_no_push() {
+        let device: Device = serde_json::from_value(
+            json!({"id":A,"name":"p","profile":"p","state":"active","created":1,"muted":[A]}),
+        )
+        .unwrap();
+        let notice = |conversation: &str| Notice {
+            conversation_id: conversation.into(),
+            kind: "turnEnded",
+            code: "finished",
+            title: "t".into(),
+            body: "b".into(),
+            high: false,
+        };
+        assert!(!wants(&device, &notice(A)));
+        assert!(wants(
+            &device,
+            &notice("1b4e28ba-2fa1-41d2-883f-0016d3cca427")
+        ));
+        assert!(wants(&device, &notice("")));
     }
 
     #[test]

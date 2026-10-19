@@ -127,6 +127,9 @@ fn serve_panel(listener: TcpListener, hash: String, state: Arc<Mutex<Panel>>) {
                         .unwrap_or(after);
                     json!({"result":{"schemaVersion":1,"conversation":summary,"journal":{"events":events,"cursor":cursor,"more":false},"queuedMessages":[]}})
                 }
+                "agentInspect" => {
+                    json!({"result":{"schemaVersion":1,"inspection":{"agentId":params["agentId"],"models":[{"id":"gpt-5"}],"complete":true}}})
+                }
                 "conversationRespond" => {
                     panel.phase = "running".into();
                     json!({"result":{"schemaVersion":1,"conversation":summary,"response":{"dispatched":true}}})
@@ -523,6 +526,49 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     let hello = phone.request("hello", json!({})).await;
     assert_eq!(hello["result"]["computerName"], "Studio Mac");
     assert!(hello["result"]["gatewayVersion"].is_string());
+    assert_eq!(hello["result"]["pushMutes"], json!([]));
+    let muted = phone
+        .request(
+            "pushMute",
+            json!({"conversationId":CONVERSATION,"muted":true}),
+        )
+        .await;
+    assert_eq!(muted["result"]["pushMutes"], json!([CONVERSATION]));
+    let hello = phone.request("hello", json!({})).await;
+    assert_eq!(hello["result"]["pushMutes"], json!([CONVERSATION]));
+    let unmuted = phone
+        .request(
+            "pushMute",
+            json!({"conversationId":CONVERSATION,"muted":false}),
+        )
+        .await;
+    assert_eq!(unmuted["result"]["pushMutes"], json!([]));
+    // Model listing: one real inspection per agent per 30 s, then cached.
+    let first = phone
+        .request("agentInspect", json!({"agentId":"codex"}))
+        .await;
+    assert_eq!(first["result"]["inspection"]["models"][0]["id"], "gpt-5");
+    let second = phone
+        .request("agentInspect", json!({"agentId":"codex"}))
+        .await;
+    assert_eq!(second["result"], first["result"]);
+    let denied = phone
+        .request(
+            "agentInspect",
+            json!({"agentId":"codex","executable":"/bin/sh"}),
+        )
+        .await;
+    assert_eq!(denied["error"]["code"], "denied");
+    {
+        let panel = state.lock().unwrap();
+        let inspections: Vec<_> = panel
+            .received
+            .iter()
+            .filter(|(o, _)| o == "agentInspect")
+            .collect();
+        assert_eq!(inspections.len(), 1);
+        assert_eq!(inspections[0].1, json!({"agentId":"codex"}));
+    }
     let list = phone.request("conversationList", json!({})).await;
     assert_eq!(list["result"]["conversations"][0]["id"], CONVERSATION);
 
@@ -595,12 +641,17 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     assert_eq!(push["priority"], "high");
     assert_eq!(push["collapseId"], CONVERSATION);
     let raw = STANDARD.decode(push["payload"].as_str().unwrap()).unwrap();
-    let plain = Aes256Gcm::new(&keys(&paired).push.into())
-        .decrypt(Nonce::from_slice(&raw[..12]), &raw[12..])
+    let push_key = keys(&paired).push;
+    let mut kid = <Hmac<Sha256> as Mac>::new_from_slice(&push_key).unwrap();
+    kid.update(b"chrome-use mobile v1 kid");
+    assert_eq!(raw[..4], kid.finalize().into_bytes()[..4], "key id");
+    let plain = Aes256Gcm::new(&push_key.into())
+        .decrypt(Nonce::from_slice(&raw[4..16]), &raw[16..])
         .expect("push payload decrypts with the push key");
     let plain: Value = serde_json::from_slice(&plain).unwrap();
     assert_eq!(plain["v"], 1);
     assert_eq!(plain["kind"], "needsInput");
+    assert_eq!(plain["code"], "needsInput");
     assert_eq!(plain["conversationId"], CONVERSATION);
     assert_eq!(plain["title"], "Weekly report");
     // Answered only after the push: the watcher must see waitingInput first.

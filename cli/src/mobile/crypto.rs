@@ -236,8 +236,18 @@ impl Channel {
     }
 }
 
-/// Encrypt a push body: standard base64 of nonce(12) || ciphertext || tag,
-/// no associated data.
+/// Non-secret id of a push key: the first 4 bytes of
+/// HMAC-SHA256(push_key, "chrome-use mobile v1 kid"). It lets a phone paired
+/// with several computers pick the right key before decrypting.
+pub fn push_kid(push_key: &[u8; KEY_LEN]) -> [u8; 4] {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(push_key).expect("HMAC takes any key length");
+    mac.update(b"chrome-use mobile v1 kid");
+    let tag = mac.finalize().into_bytes();
+    [tag[0], tag[1], tag[2], tag[3]]
+}
+
+/// Encrypt a push body: standard base64 of kid(4) || nonce(12) ||
+/// ciphertext || tag, no associated data.
 pub fn seal_push(
     push_key: &[u8; KEY_LEN],
     nonce: &[u8; 12],
@@ -247,7 +257,8 @@ pub fn seal_push(
     let sealed = cipher
         .encrypt(Nonce::from_slice(nonce), plaintext)
         .map_err(|_| "Push encryption failed")?;
-    let mut out = Vec::with_capacity(12 + sealed.len());
+    let mut out = Vec::with_capacity(4 + 12 + sealed.len());
+    out.extend_from_slice(&push_kid(push_key));
     out.extend_from_slice(nonce);
     out.extend_from_slice(&sealed);
     Ok(STANDARD.encode(out))
@@ -256,11 +267,11 @@ pub fn seal_push(
 #[cfg(test)]
 pub fn open_push(push_key: &[u8; KEY_LEN], payload: &str) -> Result<Vec<u8>, String> {
     let raw = STANDARD.decode(payload).map_err(|_| "bad base64")?;
-    if raw.len() < 12 + TAG_LEN {
-        return Err("short".into());
+    if raw.len() < 4 + 12 + TAG_LEN || raw[..4] != push_kid(push_key) {
+        return Err("short or another key".into());
     }
     Aes256Gcm::new(push_key.into())
-        .decrypt(Nonce::from_slice(&raw[..12]), &raw[12..])
+        .decrypt(Nonce::from_slice(&raw[4..16]), &raw[16..])
         .map_err(|_| "auth".into())
 }
 
@@ -279,7 +290,7 @@ pub(crate) mod tests {
     pub const DEVICE_ID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
     pub const FRAME_TEXT: &str = r#"{"id":1,"op":"conversationList","params":{}}"#;
     pub const ACK_TEXT: &str = r#"{"id":0,"result":{"paired":true}}"#;
-    pub const PUSH_TEXT: &str = r#"{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","title":"Weekly report","body":"Waiting for your approval"}"#;
+    pub const PUSH_TEXT: &str = r#"{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","code":"needsInput","title":"Weekly report","body":"Waiting for your approval"}"#;
 
     #[test]
     fn hkdf_matches_rfc5869_case_1() {
@@ -369,8 +380,9 @@ pub(crate) mod tests {
         );
         let frame = Channel::new(&p2c).seal(FRAME_TEXT.as_bytes()).unwrap();
         assert_eq!(hex::encode(&frame), "00000000000000003d3fea079d6d776461ebe1024f75712d9eb0b8324463906d3735ad868274cd09d2ed59f4fc423448e2dccb847c9f6b202838c5922a0c6c496cdb5726");
+        assert_eq!(hex::encode(push_kid(&keys.push)), "0fd39a46");
         let push = seal_push(&keys.push, &sequence::<12>(0x60), PUSH_TEXT.as_bytes()).unwrap();
-        assert_eq!(push, "YGFiY2RlZmdoaWprktav2wx9J+xArK4OvMDeVT9U88nqCouE9dpVi+i/sKRwrzQjUvK7YtXeHXjTSmiHAsnECRF00kOkE4HpgVcGP4qqcSRM3J51n02XKKZbglkIsNYdTiSgI72lAHJe/QpUul9s0W7solBQAJgEcxn+pmpcK8kHC7c5RjpK/lr+ZPVaAYhkZRR2bryeNaF6akuOC+m/FQmWvXOT/L1sD7M=");
+        assert_eq!(push, "D9OaRmBhYmNkZWZnaGlqa5LWr9sMfSfsQKyuDrzA3lU/VPPJ6gqLhPXaVYvov7CkcK80I1Lyu2LV3h1400pohwLJxAkRdNJDpBOB6YFXBj+KqnEkTNyedZ9NlyimW4JZCLDWHVkisCr6vRg+bP0LTJ9IPNZ/vuEAUEvASnRUoP0fA2z1ChvjIk0tBepBrmiuVxuePSZeJEuygSCkNnBbEVQAqk2LryQAdNZH2Fn72U5ucwevM2p9auOluknJ1H1AWrc=");
         assert_eq!(open_push(&keys.push, &push).unwrap(), PUSH_TEXT.as_bytes());
     }
 
