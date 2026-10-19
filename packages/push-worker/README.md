@@ -11,7 +11,7 @@ content. Design: `docs/superpowers/specs/2026-10-19-mobile-remote-design.md`, se
 | Request | Response |
 | --- | --- |
 | `POST /v1/register {platform: "ios"\|"android", deviceToken, env?: "sandbox"\|"production"}` | `200 {relayToken, expiresAt}` (ISO 8601, 90 days) |
-| `POST /v1/push {relayToken, payload, priority: "high"\|"normal", collapseId?}` | `200 {status:"sent"}`, `401 {status:"invalid_token"\|"expired_token"}`, `410 {status:"unregistered"}`, `429 {status:"rate_limited", retryAfter}`, `502 {status:"upstream_error"}` |
+| `POST /v1/push {relayToken, payload, priority: "high"\|"normal", collapseId?}` | `200 {status:"sent"}`, `401 {status:"invalid_token"\|"expired_token"}`, `410 {status:"unregistered", reason}`, `429 {status:"rate_limited", retryAfter}`, `502 {status:"upstream_error", reason?: "misconfigured"}` |
 
 Also: `400 {status:"bad_request", reason}` for malformed input, `413 {status:"too_large"}`
 when `payload` exceeds 2048 base64 characters or the body exceeds 16 KiB, `404`/`405` for
@@ -20,7 +20,14 @@ other paths and methods, `500 {status:"misconfigured"}` when `RELAY_SECRET` is m
 - `relayToken = base64url(JSON{p,d,e,iat,exp}) "." base64url(HMAC-SHA256(RELAY_SECRET, first part))`.
   The Worker verifies it on every push; nothing is stored. Rotating `RELAY_SECRET`
   invalidates every token (apps re-register silently on `401`).
-- `payload` is opaque base64 ciphertext. The Worker checks only its charset and length;
+- `410` carries the upstream `reason`: `Unregistered` / `BadDeviceToken` (APNs) or
+  `UNREGISTERED` / `NOT_FOUND` (FCM). APNs reports a sandbox token sent to production
+  (or the reverse) as `BadDeviceToken` too, so the app should check its `env` when it
+  sees that reason. `502` adds `reason:"misconfigured"` for operator-side faults: missing
+  or unusable APNs/FCM secrets, or an FCM project-level 403/404 (wrong `project_id`,
+  API disabled).
+- `payload` is opaque padded base64 ciphertext of at least 32 bytes (4-byte kid +
+  12-byte nonce + 16-byte tag). The Worker checks only its charset and length;
   it never decodes it. iOS receives it as custom key `e` next to a generic alert
   ("chrome-use needs you", `mutable-content: 1`); Android receives a data-only message `{e}`.
 - `env` only matters for iOS: development builds get `sandbox` tokens and must register
@@ -32,7 +39,7 @@ Workers Rate Limiting bindings (`wrangler.toml`), no storage:
 
 | Binding | Key | Limit |
 | --- | --- | --- |
-| `RL_TOKEN` | relayToken MAC segment | 10 / 60 s |
+| `RL_TOKEN` | SHA-256 of `platform:deviceToken` from the verified token | 10 / 60 s |
 | `RL_IP` | `CF-Connecting-IP` on `/v1/push` | 120 / 60 s |
 | `RL_REGISTER` | `CF-Connecting-IP` on `/v1/register` | 10 / 60 s |
 

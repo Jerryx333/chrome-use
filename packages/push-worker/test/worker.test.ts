@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetApnsCache } from "../src/apns";
 import { resetFcmCache } from "../src/fcm";
-import worker, { MAX_PAYLOAD_CHARS } from "../src/index";
+import worker, { MAX_PAYLOAD_CHARS, MIN_PAYLOAD_BYTES } from "../src/index";
 import { signRelayToken } from "../src/token";
 import type { Env } from "../src/types";
 import {
@@ -155,6 +155,10 @@ describe("POST /v1/push validation", () => {
     for (const body of [
       { relayToken, payload: "not base64 at all!!".repeat(4), priority: "high" },
       { relayToken, payload: "QUJD", priority: "high" },
+      // 31 bytes: one short of kid(4) + nonce(12) + tag(16), still 44 chars.
+      { relayToken, payload: btoa("x".repeat(31)), priority: "high" },
+      // Unpadded base64.
+      { relayToken, payload: btoa("x".repeat(40)).replace(/=+$/, ""), priority: "high" },
       { relayToken, payload: PAYLOAD, priority: "urgent" },
       { relayToken, payload: PAYLOAD, priority: "high", collapseId: "x".repeat(65) },
       { relayToken, payload: PAYLOAD, priority: "high", collapseId: "has space" },
@@ -162,6 +166,14 @@ describe("POST /v1/push validation", () => {
       expect((await call(post("/v1/push", body))).status).toBe(400);
     }
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts the smallest valid payload (32 bytes)", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+    const relayToken = await iosToken();
+    const payload = btoa("x".repeat(MIN_PAYLOAD_BYTES));
+    expect(payload).toHaveLength(44);
+    expect((await call(post("/v1/push", { relayToken, payload, priority: "high" }))).status).toBe(200);
   });
 });
 
@@ -225,18 +237,20 @@ describe("APNs", () => {
   });
 
   it.each([
-    [410, { reason: "Unregistered" }, 410],
-    [400, { reason: "BadDeviceToken" }, 410],
-    [400, { reason: "BadCollapseId" }, 502],
-    [403, { reason: "ExpiredProviderToken" }, 502],
-    [429, { reason: "TooManyRequests" }, 502],
-    [500, { reason: "InternalServerError" }, 502],
-  ])("maps APNs %i %o to %i", async (upstream, body, expected) => {
+    [410, { reason: "Unregistered" }, 410, { status: "unregistered", reason: "Unregistered" }],
+    [410, {}, 410, { status: "unregistered", reason: "Unregistered" }],
+    // Also what a sandbox token sent to production looks like; the reason lets the app tell.
+    [400, { reason: "BadDeviceToken" }, 410, { status: "unregistered", reason: "BadDeviceToken" }],
+    [400, { reason: "BadCollapseId" }, 502, { status: "upstream_error" }],
+    [403, { reason: "ExpiredProviderToken" }, 502, { status: "upstream_error" }],
+    [429, { reason: "TooManyRequests" }, 502, { status: "upstream_error" }],
+    [500, { reason: "InternalServerError" }, 502, { status: "upstream_error" }],
+  ])("maps APNs %i %o to %i", async (upstream, body, expected, responseBody) => {
     fetchMock.mockResolvedValue(jsonResponse(upstream, body));
     const relayToken = await iosToken();
     const res = await call(post("/v1/push", { relayToken, payload: PAYLOAD, priority: "high" }));
     expect(res.status).toBe(expected);
-    expect(await res.json()).toEqual({ status: expected === 410 ? "unregistered" : "upstream_error" });
+    expect(await res.json()).toEqual(responseBody);
   });
 
   it("maps a network failure to 502", async () => {
@@ -263,6 +277,7 @@ describe("APNs", () => {
       APNS_KEY_P8: undefined,
     });
     expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ status: "upstream_error", reason: "misconfigured" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -328,19 +343,28 @@ describe("FCM", () => {
   });
 
   it.each([
-    [404, fcmError(404, "NOT_FOUND", "UNREGISTERED"), 410],
-    [404, fcmError(404, "NOT_FOUND"), 410],
-    [400, fcmError(400, "INVALID_ARGUMENT", "UNREGISTERED"), 410],
-    [400, fcmError(400, "INVALID_ARGUMENT", "INVALID_ARGUMENT"), 502],
-    [429, fcmError(429, "RESOURCE_EXHAUSTED", "QUOTA_EXCEEDED"), 502],
-    [503, fcmError(503, "UNAVAILABLE", "UNAVAILABLE"), 502],
-  ])("maps FCM %i to %i", async (upstream, body, expected) => {
+    [404, fcmError(404, "NOT_FOUND", "UNREGISTERED"), 410, { status: "unregistered", reason: "UNREGISTERED" }],
+    [400, fcmError(400, "INVALID_ARGUMENT", "UNREGISTERED"), 410, { status: "unregistered", reason: "UNREGISTERED" }],
+    [404, fcmError(404, "NOT_FOUND", "NOT_FOUND"), 410, { status: "unregistered", reason: "NOT_FOUND" }],
+    // Project-level 404 (wrong project_id): no FcmError about the token.
+    [404, fcmError(404, "NOT_FOUND"), 502, { status: "upstream_error", reason: "misconfigured" }],
+    [404, "<html>Not Found</html>", 502, { status: "upstream_error", reason: "misconfigured" }],
+    [403, fcmError(403, "PERMISSION_DENIED"), 502, { status: "upstream_error", reason: "misconfigured" }],
+    [400, fcmError(400, "INVALID_ARGUMENT", "INVALID_ARGUMENT"), 502, { status: "upstream_error" }],
+    [429, fcmError(429, "RESOURCE_EXHAUSTED", "QUOTA_EXCEEDED"), 502, { status: "upstream_error" }],
+    [503, fcmError(503, "UNAVAILABLE", "UNAVAILABLE"), 502, { status: "upstream_error" }],
+  ])("maps FCM %i %j to %i", async (upstream, body, expected, responseBody) => {
     fetchMock.mockImplementation(async (url: string) =>
-      url.includes("oauth2") ? jsonResponse(200, { access_token: "ya29.test", expires_in: 3599 }) : jsonResponse(upstream, body),
+      url.includes("oauth2")
+        ? jsonResponse(200, { access_token: "ya29.test", expires_in: 3599 })
+        : typeof body === "string"
+          ? new Response(body, { status: upstream })
+          : jsonResponse(upstream, body),
     );
     const relayToken = await androidToken();
     const res = await call(post("/v1/push", { relayToken, payload: PAYLOAD, priority: "high" }));
     expect(res.status).toBe(expected);
+    expect(await res.json()).toEqual(responseBody);
   });
 
   it("returns 502 when the OAuth exchange fails", async () => {
@@ -351,21 +375,31 @@ describe("FCM", () => {
 });
 
 describe("rate limits", () => {
-  it("limits per relayToken keyed by its MAC, not the device token", async () => {
+  it("limits per device, so freshly minted relayTokens share one budget", async () => {
     fetchMock.mockImplementation(async () => new Response(null, { status: 200 }));
     const limiter = fakeLimiter(2);
     const e = { ...env, RL_TOKEN: limiter };
     const relayToken = await iosToken();
-    const send = () => call(post("/v1/push", { relayToken, payload: PAYLOAD, priority: "high" }), e);
+    const send = (token = relayToken) => call(post("/v1/push", { relayToken: token, payload: PAYLOAD, priority: "high" }), e);
     expect((await send()).status).toBe(200);
-    expect((await send()).status).toBe(200);
-    const res = await send();
+    // A second relayToken for the same device token (different iat, so a different MAC).
+    const now = Math.floor(Date.now() / 1000);
+    const minted = (await signRelayToken(RELAY_SECRET, "ios", IOS_TOKEN, "sandbox", now - 5)).relayToken;
+    expect(minted).not.toBe(relayToken);
+    expect((await send(minted)).status).toBe(200);
+    const res = await send((await signRelayToken(RELAY_SECRET, "ios", IOS_TOKEN, "production", now - 9)).relayToken);
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBe("60");
     expect(await res.json()).toEqual({ status: "rate_limited", retryAfter: 60 });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(limiter.keys[0]).toBe(relayToken.split(".")[1]);
+    expect(new Set(limiter.keys).size).toBe(1);
+    expect(limiter.keys[0]).toMatch(/^[0-9a-f]{64}$/);
     expect(limiter.keys.join()).not.toContain(IOS_TOKEN);
+
+    // A different device keeps its own budget.
+    fcmOk();
+    expect((await send(await androidToken())).status).toBe(200);
+    expect(new Set(limiter.keys).size).toBe(2);
   });
 
   it("limits per source IP before verifying the token", async () => {

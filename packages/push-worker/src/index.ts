@@ -11,8 +11,8 @@ export type { Env } from "./types";
 export const MAX_BODY_BYTES = 16 * 1024;
 /** Cap on the base64 `payload` string (the spec's 2 KiB), measured encoded. */
 export const MAX_PAYLOAD_CHARS = 2048;
-/** 12-byte nonce + 16-byte GCM tag + at least 1 byte of ciphertext, base64-encoded. */
-const MIN_PAYLOAD_CHARS = 40;
+/** Smallest valid payload: 4-byte kid + 12-byte nonce + 16-byte GCM tag. */
+export const MIN_PAYLOAD_BYTES = 32;
 
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const APNS_TOKEN_RE = /^[0-9a-fA-F]{64,200}$/;
@@ -56,6 +56,18 @@ function clientIp(request: Request): string {
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
+/** Decoded length of a base64 string, computed without decoding it. */
+function base64DecodedLength(b64: string): number {
+  const padding = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  return (b64.length / 4) * 3 - padding;
+}
+
+/** Rate-limit key for one physical device: tokens are free to mint, devices are not. */
+async function deviceKey(platform: Platform, deviceToken: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${platform}:${deviceToken}`));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function handleRegister(request: Request, env: Env): Promise<Response> {
   if (!(await allow(env.RL_REGISTER, clientIp(request)))) return rateLimited();
   const body = await readJson(request);
@@ -83,11 +95,17 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
 
   const verified = await verifyRelayToken(env.RELAY_SECRET!, body.relayToken, nowSeconds());
   if (!verified.ok) return json(401, { status: verified.status });
-  // Keyed by the MAC segment: unique per token, and keeps device tokens out of limiter keys.
-  if (!(await allow(env.RL_TOKEN, verified.signature))) return rateLimited();
+  // Keyed by a hash of the device, so minting many relayTokens for one device does not
+  // multiply its budget, and device tokens stay out of limiter keys.
+  if (!(await allow(env.RL_TOKEN, await deviceKey(verified.claims.p, verified.claims.d)))) return rateLimited();
 
   const payload = body.payload;
-  if (typeof payload !== "string" || payload.length < MIN_PAYLOAD_CHARS || !BASE64_RE.test(payload)) {
+  if (
+    typeof payload !== "string" ||
+    payload.length % 4 !== 0 ||
+    !BASE64_RE.test(payload) ||
+    base64DecodedLength(payload) < MIN_PAYLOAD_BYTES
+  ) {
     return badRequest("payload");
   }
   if (payload.length > MAX_PAYLOAD_CHARS) return json(413, { status: "too_large" });
@@ -108,10 +126,10 @@ async function handlePush(request: Request, env: Env): Promise<Response> {
       return json(200, { status: "sent" });
     case "unregistered":
       console.log(`push unregistered ${claims.p} ${redact(claims.d)}: ${result.detail}`);
-      return json(410, { status: "unregistered" });
+      return json(410, { status: "unregistered", reason: result.reason });
     case "upstream_error":
       console.log(`push upstream error ${claims.p} ${redact(claims.d)}: ${result.detail}`);
-      return json(502, { status: "upstream_error" });
+      return json(502, result.reason ? { status: "upstream_error", reason: result.reason } : { status: "upstream_error" });
   }
 }
 

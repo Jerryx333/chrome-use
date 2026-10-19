@@ -3,7 +3,7 @@ import type { Env, RateLimiter } from "../src/types";
 export const RELAY_SECRET = "test-relay-secret-0123456789abcdef0123456789";
 export const IOS_TOKEN = "a1".repeat(32);
 export const FCM_TOKEN = "fcm-token_abc:DEF-1234567890.xyz";
-// 12-byte nonce + 32 bytes of "ciphertext+tag", base64 (not base64url, per spec).
+// 4-byte kid + 12-byte nonce + 28 bytes of "ciphertext+tag", base64 (not base64url, per spec).
 export const PAYLOAD = btoa(String.fromCharCode(...Array.from({ length: 44 }, (_, i) => i)));
 
 function toPem(der: ArrayBuffer, label: string): string {

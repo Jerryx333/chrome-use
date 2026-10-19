@@ -70,12 +70,12 @@ export async function sendApns(
   message: PushMessage,
   nowSeconds: number,
 ): Promise<SendResult> {
-  if (!apnsConfigured(env)) return { kind: "upstream_error", detail: "apns not configured" };
+  if (!apnsConfigured(env)) return { kind: "upstream_error", reason: "misconfigured", detail: "apns not configured" };
   let jwt: string;
   try {
     jwt = await providerJwt(env, nowSeconds);
   } catch {
-    return { kind: "upstream_error", detail: "apns key import failed" };
+    return { kind: "upstream_error", reason: "misconfigured", detail: "apns key import failed" };
   }
   const headers: Record<string, string> = {
     authorization: `bearer ${jwt}`,
@@ -106,8 +106,10 @@ export async function sendApns(
     // APNs error bodies are JSON; anything else is just an upstream error.
   }
   const detail = `apns ${res.status} ${reason}`.trim();
+  // BadDeviceToken also covers a sandbox token sent to production (or the reverse);
+  // APNs cannot tell the two apart, so the reason goes back to the caller.
   if (res.status === 410 || reason === "BadDeviceToken" || reason === "Unregistered") {
-    return { kind: "unregistered", detail };
+    return { kind: "unregistered", reason: reason || "Unregistered", detail };
   }
   if (reason === "ExpiredProviderToken" || reason === "InvalidProviderToken") resetApnsCache();
   return { kind: "upstream_error", detail };

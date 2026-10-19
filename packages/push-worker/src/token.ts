@@ -17,7 +17,7 @@ export const MAX_TOKEN_LENGTH = 8192;
 const MAX_FUTURE_SKEW_SECONDS = 300;
 
 export type VerifyResult =
-  | { ok: true; claims: RelayClaims; signature: string }
+  | { ok: true; claims: RelayClaims }
   | { ok: false; status: "invalid_token" | "expired_token" };
 
 const keyCache = new Map<string, Promise<CryptoKey>>();
@@ -90,5 +90,5 @@ export async function verifyRelayToken(
   }
   if (claims.iat > nowSeconds + MAX_FUTURE_SKEW_SECONDS) return invalid;
   if (claims.exp <= nowSeconds) return { ok: false, status: "expired_token" };
-  return { ok: true, claims, signature: sig };
+  return { ok: true, claims };
 }

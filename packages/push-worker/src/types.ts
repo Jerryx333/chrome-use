@@ -24,8 +24,12 @@ export interface PushMessage {
   collapseId?: string;
 }
 
-/** `detail` is a short upstream status/reason for logs; it never holds payload or token. */
+/**
+ * `detail` is a short upstream status/reason for logs; it never holds payload or token.
+ * `reason` is returned to the caller: the upstream reason for `unregistered`, and
+ * "misconfigured" for errors only the Worker operator can fix.
+ */
 export type SendResult =
   | { kind: "sent" }
-  | { kind: "unregistered"; detail: string }
-  | { kind: "upstream_error"; detail: string };
+  | { kind: "unregistered"; reason: string; detail: string }
+  | { kind: "upstream_error"; reason?: "misconfigured"; detail: string };

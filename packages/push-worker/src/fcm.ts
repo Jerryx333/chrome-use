@@ -113,7 +113,7 @@ interface FcmError {
 
 export async function sendFcm(env: Env, message: PushMessage, nowSeconds: number): Promise<SendResult> {
   const account = serviceAccount(env);
-  if (!account) return { kind: "upstream_error", detail: "fcm not configured" };
+  if (!account) return { kind: "upstream_error", reason: "misconfigured", detail: "fcm not configured" };
   let token: string | null;
   try {
     token = await accessToken(account, nowSeconds);
@@ -147,9 +147,12 @@ export async function sendFcm(env: Env, message: PushMessage, nowSeconds: number
     // Non-JSON error body: plain upstream error.
   }
   const detail = `fcm ${res.status} ${errorCode || status}`.trim();
-  if (errorCode === "UNREGISTERED" || status === "NOT_FOUND" || res.status === 404) {
-    return { kind: "unregistered", detail };
+  // Only an FcmError about the token means the token is gone. A bare 404 / NOT_FOUND
+  // without one is project-level (wrong project_id, API disabled).
+  if (errorCode === "UNREGISTERED" || errorCode === "NOT_FOUND") {
+    return { kind: "unregistered", reason: errorCode, detail };
   }
   if (res.status === 401) cachedAccessToken = null;
+  if (res.status === 404 || res.status === 403) return { kind: "upstream_error", reason: "misconfigured", detail };
   return { kind: "upstream_error", detail };
 }
