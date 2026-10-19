@@ -86,6 +86,7 @@ import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js
 import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION, USER_TAB_GROUPS_JOIN } from './user-tab-organizer.js';
 import { createTabGrants, LENT_TAB_CLOSE } from './tab-grant.js';
 import { bindingsFrom, openTabPanel, panelTabKey, PANEL_TAB_PREFIX, tabForConversation } from './panel-tabs.js';
+import { FrontTabGuard } from './front-tab-guard.js';
 import {
   followReplacement,
   forgetReplacement,
@@ -2896,3 +2897,21 @@ async function whenReady(fn) {
 
 // Kick a connection attempt as soon as the worker starts.
 connectHost();
+
+// An agent click that opens a tab must not take the user's page away (see
+// front-tab-guard.js): Chrome fronts the pop-up, the tab that was in front
+// comes back, and the pop-up stays open behind it for the agent.
+const frontTabGuard = new FrontTabGuard();
+const bringBack = tabId => { if (Number.isInteger(tabId)) void chrome.tabs.update(tabId, { active: true }).catch(() => {}); };
+void chrome.tabs.query({ active: true }).then(list => { for (const tab of list) frontTabGuard.activated(tab.windowId, tab.id); }).catch(() => {});
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => bringBack(frontTabGuard.activated(windowId, tabId)));
+chrome.tabs.onRemoved.addListener(tabId => frontTabGuard.removed(tabId));
+chrome.webNavigation?.onCreatedNavigationTarget?.addListener(({ sourceTabId, tabId }) =>
+  void whenReady(async () => {
+    if (!ownedTabs.has(sourceTabId)) {
+      await loadAgentPopups();
+      if (!agentPopups.has(sourceTabId)) return;
+    }
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab) bringBack(frontTabGuard.agentOpened(tabId, tab.windowId, tab.active));
+  }));
