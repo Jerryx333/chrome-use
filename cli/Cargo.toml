@@ -49,6 +49,8 @@ similar = "2"
 zip = { version = "8.2.0", default-features = false, features = ["deflate"] }
 time = { version = "0.3", features = ["formatting"] }
 hmac = "0.12"
+# Terminal QR code for `chrome-use mobile pair`; rendering only, no image backend.
+qrcode = { version = "0.14", default-features = false }
 hex = "0.4"
 aes = "0.8"
 cbc = "0.1"

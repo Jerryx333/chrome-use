@@ -87,6 +87,50 @@ pub fn run_service(args: &[String]) -> Result<(), String> {
     service::run(args)
 }
 
+/// Reach the running panel service of `profile` without starting one: the
+/// mobile gateway's background polling must never launch a service.
+pub(crate) fn call_running_service(
+    operation: &str,
+    params: &Value,
+    profile: &str,
+    budget: std::time::Duration,
+) -> Result<Value, String> {
+    service::call_existing(operation, params, profile, budget)
+}
+
+/// Panel profiles that have a service directory, for choosing one from the CLI.
+pub(crate) fn panel_profiles() -> Result<Vec<String>, String> {
+    let root = service::data_root(&DiscoveryContext::current()?)?;
+    let mut profiles: Vec<String> = match fs::read_dir(root.join("profiles")) {
+        Ok(entries) => entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    profiles.sort();
+    Ok(profiles)
+}
+
+/// Private storage shared with other local stores: directories 0700 (a
+/// user-only ACL on Windows) and files written atomically at 0600.
+pub(crate) mod private_fs {
+    pub(crate) fn directory(path: &std::path::Path) -> Result<(), String> {
+        super::config_transaction::private_tree(path)
+    }
+    pub(crate) fn write(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+        super::config_transaction::atomic_write(path, bytes, None)
+    }
+    pub(crate) fn open(path: &std::path::Path, create: bool) -> Result<std::fs::File, String> {
+        super::config_transaction::private_open(path, create)
+    }
+}
+
+/// Image attachment limits a message is held to: (count, bytes per image).
+pub(crate) const ATTACHMENT_LIMITS: (usize, usize) =
+    (attachments::MAX_IMAGES, attachments::MAX_BYTES);
+
 /// Stop every running panel service and its conversations (`upgrade --force`).
 pub(crate) fn force_stop_services() -> Result<Vec<String>, String> {
     service::force_stop_all()
