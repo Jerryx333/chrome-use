@@ -63,6 +63,10 @@ final class StoreEntitlementTests: XCTestCase {
 @MainActor
 final class StorePurchaseTests: XCTestCase {
     func testTrialThenUnlock() async throws {
+        #if !targetEnvironment(simulator)
+        // On a device SKTestSession waits for the App Store sign-in sheet.
+        throw XCTSkip("StoreKit test sessions run in the simulator only")
+        #endif
         let session = try SKTestSession(configurationFileNamed: "Products")
         session.resetToDefaultState()
         session.disableDialogs = true
@@ -301,7 +305,7 @@ final class AppLockTests: XCTestCase {
     func testRequiredLockAtLaunchAndAfterFiveMinutes() async {
         let clock = MutableClock(Date(timeIntervalSince1970: 1_800_000_000))
         var prompts = 0
-        let lock = AppLock(defaults: defaults(), clock: clock) { _ in prompts += 1; return true }
+        let lock = AppLock(defaults: defaults(), clock: clock, passcodeSet: { true }) { _ in prompts += 1; return true }
         XCTAssertFalse(lock.locked)
         lock.setRequired(true, atLaunch: true)
         XCTAssertTrue(lock.locked, "required: locked on launch")
@@ -326,7 +330,7 @@ final class AppLockTests: XCTestCase {
 
     func testOptionalLockLocksOnEveryReturn() async {
         let clock = MutableClock(Date(timeIntervalSince1970: 1_800_000_000))
-        let lock = AppLock(defaults: defaults(), clock: clock) { _ in true }
+        let lock = AppLock(defaults: defaults(), clock: clock, passcodeSet: { true }) { _ in true }
         await lock.setEnabled(true)
         lock.background()
         lock.foreground()
@@ -337,13 +341,13 @@ final class AppLockTests: XCTestCase {
     func testHelloMakesTheLockRequired() {
         let credential = GatewayCredential(url: URL(string: "ws://127.0.0.1:9/")!, deviceId: UUID().uuidString.lowercased(), secret: Data(repeating: 1, count: 64), gatewayId: "g", name: "Mac", pairedAt: Date())
         let keychain = InMemoryCredentialStore([credential])
-        let lock = AppLock(defaults: defaults(), clock: SystemClock()) { _ in true }
+        let lock = AppLock(defaults: defaults(), clock: SystemClock(), passcodeSet: { true }) { _ in true }
         let model = AppModel(credentials: keychain, cache: InMemoryJournalCache(), lock: lock)
         XCTAssertFalse(lock.required)
         model.client(credential.deviceId)?.applyHello(["computerName": "Mac", "gatewayVersion": "1", "pushMutes": [], "fullAccessAllowed": true])
         XCTAssertTrue(lock.required)
         XCTAssertEqual(try keychain.all().first?.fullAccessAllowed, true, "remembered for the next launch")
-        let relaunched = AppModel(credentials: keychain, cache: InMemoryJournalCache(), lock: AppLock(defaults: defaults(), clock: SystemClock()) { _ in true })
+        let relaunched = AppModel(credentials: keychain, cache: InMemoryJournalCache(), lock: AppLock(defaults: defaults(), clock: SystemClock(), passcodeSet: { true }) { _ in true })
         XCTAssertTrue(relaunched.lock.locked)
         model.remove(credential.deviceId, tellGateway: false)
         relaunched.remove(credential.deviceId, tellGateway: false)
@@ -352,5 +356,98 @@ final class AppLockTests: XCTestCase {
     func testAccessTooHighNamesTheCommand() {
         let message = GatewayError.remote(code: "accessTooHigh", message: "x").message(deviceId: "0f8fad5b-d9cb-469f-a165-70867728950e")
         XCTAssertTrue(message.contains("chrome-use mobile access 0f8fad5b-d9cb-469f-a165-70867728950e full"), message)
+    }
+}
+
+@MainActor
+final class NoPasscodeTests: XCTestCase {
+    func credential(fullAccess: Bool) -> GatewayCredential {
+        GatewayCredential(url: URL(string: "ws://127.0.0.1:9/")!, deviceId: UUID().uuidString.lowercased(), secret: Data(repeating: 1, count: 64), gatewayId: "g", name: "Mac", pairedAt: Date(), fullAccessAllowed: fullAccess)
+    }
+
+    /// Without a passcode the lock cannot be enforced: never lock the person
+    /// out, refuse elevated operations instead, keep the rest usable.
+    func testNoPasscodeNeverLocksAndRefusesElevatedOperations() {
+        var passcode = false
+        let lock = AppLock(defaults: UserDefaults(suiteName: "np-\(UUID().uuidString)")!, clock: SystemClock(), passcodeSet: { passcode }) { _ in true }
+        let full = credential(fullAccess: true)
+        let model = AppModel(credentials: InMemoryCredentialStore([full]), cache: InMemoryJournalCache(), lock: lock)
+        let client = model.client(full.deviceId)!
+        XCTAssertTrue(lock.required)
+        XCTAssertFalse(lock.locked, "no passcode: never locked out")
+        XCTAssertTrue(lock.requirementUnenforceable)
+        XCTAssertEqual(model.elevatedRefusal(client, elevated: true), AppModel.noPasscodeMessage)
+        XCTAssertNil(model.elevatedRefusal(client, elevated: false), "ordinary conversations stay usable")
+
+        // A passcode set later (checked on foreground): the lock applies again.
+        passcode = true
+        lock.background()
+        lock.foreground()
+        XCTAssertTrue(lock.passcodeSet)
+        XCTAssertNil(model.elevatedRefusal(client, elevated: true))
+        model.remove(full.deviceId, tellGateway: false)
+    }
+
+    func testLimitedComputerIsNeverRefusedLocally() {
+        let lock = AppLock(defaults: UserDefaults(suiteName: "np-\(UUID().uuidString)")!, clock: SystemClock(), passcodeSet: { false }) { _ in true }
+        let limited = credential(fullAccess: false)
+        let model = AppModel(credentials: InMemoryCredentialStore([limited]), cache: InMemoryJournalCache(), lock: lock)
+        // The gateway answers accessTooHigh itself for a limited computer.
+        XCTAssertNil(model.elevatedRefusal(model.client(limited.deviceId)!, elevated: true))
+        model.remove(limited.deviceId, tellGateway: false)
+    }
+
+    /// Access set back to limited: the overlay goes without asking.
+    func testLockClearsWhenTheRequirementLifts() async {
+        let lock = AppLock(defaults: UserDefaults(suiteName: "np-\(UUID().uuidString)")!, clock: SystemClock(), passcodeSet: { true }) { _ in true }
+        lock.setRequired(true, atLaunch: true)
+        XCTAssertTrue(lock.locked)
+        lock.setRequired(false, atLaunch: false)
+        XCTAssertFalse(lock.locked)
+    }
+}
+
+@MainActor
+final class PairingRetryTests: XCTestCase {
+    let link = PairLink(url: URL(string: "ws://192.168.0.190:17345/")!, deviceId: UUID().uuidString.lowercased(), pairSecret: Data(repeating: 2, count: 32), gatewayId: "g")
+
+    /// The first LAN attempts fail while iOS shows the Local Network prompt;
+    /// pairing retries the same link and succeeds.
+    func testRetriesANetworkFailureBeforePairComplete() async throws {
+        var attempts = 0
+        var sawWaiting = false
+        var model: AppModel!
+        model = AppModel(credentials: InMemoryCredentialStore(), cache: InMemoryJournalCache()) { link, store in
+            attempts += 1
+            if attempts < 3 {
+                if attempts == 2 { sawWaiting = model.waitingForLocalNetwork }
+                throw GatewayError.closed(.closed(code: nil))
+            }
+            let secret = link.pairSecret + Data(repeating: 3, count: 32)
+            try store(secret)
+            return (nil, secret)
+        }
+        model.asksForNotifications = false
+        model.pairingRetryDelay = { error, attempt, host in LocalNetwork.pairingRetryDelay(after: error, attempt: attempt, host: host).map { _ in 0.01 } }
+        let client = try await model.pair(link, name: "Mac")
+        XCTAssertEqual(attempts, 3)
+        XCTAssertTrue(sawWaiting, "the sheet says it is waiting for Local Network permission")
+        XCTAssertFalse(model.waitingForLocalNetwork)
+        model.remove(client.id, tellGateway: false)
+    }
+
+    func testRefusalsAndFailuresAfterPairCompleteAreNotRetried() async {
+        for (error, storesFirst) in [(GatewayError.closed(.unauthorized), false), (GatewayError.closed(.closed(code: nil)), true)] {
+            var attempts = 0
+            let model = AppModel(credentials: InMemoryCredentialStore(), cache: InMemoryJournalCache()) { link, store in
+                attempts += 1
+                if storesFirst { try store(link.pairSecret + Data(repeating: 3, count: 32)) }
+                throw error
+            }
+            model.asksForNotifications = false
+            model.pairingRetryDelay = { error, attempt, host in LocalNetwork.pairingRetryDelay(after: error, attempt: attempt, host: host).map { _ in 0.01 } }
+            _ = try? await model.pair(link, name: "Mac")
+            XCTAssertEqual(attempts, 1, "\(error) is not retried")
+        }
     }
 }

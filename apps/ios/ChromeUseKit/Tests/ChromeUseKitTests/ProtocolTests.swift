@@ -230,3 +230,39 @@ final class CreateRulesTests: XCTestCase {
         XCTAssertFalse(AgentModel.isValidName("  --dangerously-skip-permissions"))
     }
 }
+
+final class LocalNetworkTests: XCTestCase {
+    func testWhichHostsNeedThePermission() {
+        for host in ["192.168.0.190", "10.1.2.3", "172.20.0.4", "169.254.1.1", "studio.local", "macbook", "fe80::1", "fd00::5"] {
+            XCTAssertTrue(LocalNetwork.needsPermission(host: host), host)
+        }
+        for host in ["100.88.1.2", "mac.tail1234.ts.net", "fd7a:115c:a1e0::1", "127.0.0.1", "localhost", "example.com", "8.8.8.8"] {
+            XCTAssertFalse(LocalNetwork.needsPermission(host: host), host)
+        }
+    }
+
+    func testRetriesOnlyPlainNetworkFailuresOnTheLAN() {
+        let network = GatewayError.closed(.closed(code: nil))
+        XCTAssertEqual(LocalNetwork.pairingRetryDelay(after: network, attempt: 1, host: "192.168.0.190"), 5)
+        XCTAssertEqual(LocalNetwork.pairingRetryDelay(after: network, attempt: 3, host: "192.168.0.190"), 15)
+        XCTAssertNil(LocalNetwork.pairingRetryDelay(after: network, attempt: 4, host: "192.168.0.190"), "about 30 s in all")
+        XCTAssertNil(LocalNetwork.pairingRetryDelay(after: network, attempt: 1, host: "100.88.1.2"), "Tailscale needs no prompt")
+        XCTAssertNil(LocalNetwork.pairingRetryDelay(after: GatewayError.closed(.unauthorized), attempt: 1, host: "192.168.0.190"))
+        XCTAssertNil(LocalNetwork.pairingRetryDelay(after: GatewayError.closed(.handshakeTimeout), attempt: 1, host: "192.168.0.190"))
+    }
+}
+
+final class ElevatedTests: XCTestCase {
+    func testMirrorsTheGatewayRule() {
+        XCTAssertTrue(ToolAccess.elevated(agentId: "claude", toolAccess: nil, fullAccess: true))
+        XCTAssertTrue(ToolAccess.elevated(agentId: "claude", toolAccess: .runCommands, fullAccess: false))
+        XCTAssertTrue(ToolAccess.elevated(agentId: "opencode", toolAccess: nil, fullAccess: false))
+        XCTAssertTrue(ToolAccess.elevated(agentId: "pi", toolAccess: .readFiles, fullAccess: false))
+        XCTAssertFalse(ToolAccess.elevated(agentId: "pi", toolAccess: nil, fullAccess: false))
+        XCTAssertFalse(ToolAccess.elevated(agentId: "claude", toolAccess: .writeFiles, fullAccess: false))
+        XCTAssertFalse(ToolAccess.elevated(agentId: "codex", toolAccess: nil, fullAccess: false))
+        XCTAssertTrue(ConversationSummary(["id": "x", "agentId": "claude", "fullAccess": true]).elevated)
+        XCTAssertTrue(Schedule(["id": "s", "agentId": "opencode"]).elevated)
+        XCTAssertFalse(Schedule(["id": "s", "agentId": "claude", "options": ["toolAccess": "browserOnly"]]).elevated)
+    }
+}

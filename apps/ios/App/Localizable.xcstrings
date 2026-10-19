@@ -4593,6 +4593,34 @@
         }
       }
     },
+    "This phone has no passcode, so it cannot drive high-access conversations. Set a passcode in Settings first.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This phone has no passcode, so it cannot drive high-access conversations. Set a passcode in Settings first."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这台手机没有设置锁屏密码，不能操作高权限对话。请先在系统设置里设置密码。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "這支手機沒有設定鎖定密碼，不能操作高權限對話。請先在系統設定裡設定密碼。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このiPhoneにはパスコードが設定されていないため、高権限の会話は操作できません。先に設定でパスコードを設定してください。"
+          }
+        }
+      }
+    },
     "This phone is paired to another browser profile than the running gateway serves. Start mobile serve with the matching --profile on the computer.": {
       "localizations": {
         "en": {
@@ -5317,6 +5345,34 @@
           "stringUnit": {
             "state": "translated",
             "value": "バージョン"
+          }
+        }
+      }
+    },
+    "Waiting for Local Network permission…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for Local Network permission…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待本地网络权限…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "等待區域網路權限…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローカルネットワークの許可を待っています…"
           }
         }
       }

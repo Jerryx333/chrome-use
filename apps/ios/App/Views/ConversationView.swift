@@ -49,7 +49,7 @@ struct ConversationView: View {
                             .font(.footnote)
                     }
                     ForEach(timeline.openRequests) { request in
-                        ApprovalCard(client: client, conversationId: conversationId, request: request, stopRequested: summary?.stopRequested ?? false)
+                        ApprovalCard(client: client, conversationId: conversationId, request: request, stopRequested: summary?.stopRequested ?? false, elevated: summary?.elevated ?? false)
                             .id("request-\(request.key)")
                     }
                     if !queued.isEmpty {
@@ -207,6 +207,7 @@ struct ConversationView: View {
     }
 
     private func send() async {
+        if let refusal = model.elevatedRefusal(client, elevated: summary?.elevated ?? false) { error = refusal; return }
         guard model.allow(.send) else { return }
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
         sending = true

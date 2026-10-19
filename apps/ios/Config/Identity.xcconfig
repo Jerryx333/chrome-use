@@ -7,8 +7,9 @@ DEVELOPMENT_TEAM = 6ZPXG4KVVS
 // Shared by the app and the extension (entitlement + runtime lookup).
 APP_GROUP = group.com.leeguoo.chromeuse
 // Keychain group shared with the notification extension: push keys only.
-// An app group identifier is a valid keychain access group on iOS.
-KEYCHAIN_GROUP = $(APP_GROUP)
+// Team-prefixed, so the provisioning profile (keychain-access-groups
+// TEAM.*) allows it on a real device; app group ids are not listed there.
+KEYCHAIN_GROUP = $(AppIdentifierPrefix)$(BUNDLE_ID_BASE).shared
 // The app's own keychain group: full credentials (the extension never gets them).
 KEYCHAIN_APP_GROUP = $(AppIdentifierPrefix)$(BUNDLE_ID_BASE)
 // Default push Worker; changeable in Settings > Advanced.

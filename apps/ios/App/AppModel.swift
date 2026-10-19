@@ -47,6 +47,10 @@ final class AppModel {
     var showSettings = false
     var showPaywall = false
     var storeError: String?
+    /// Pairing is waiting for the person to answer iOS's Local Network prompt.
+    private(set) var waitingForLocalNetwork = false
+    /// Delay before retrying a failed pairing attempt (1-based), or nil.
+    @ObservationIgnored var pairingRetryDelay: (Error, Int, String) -> TimeInterval? = LocalNetwork.pairingRetryDelay
 
     let store: Store
     let push: PushManager
@@ -158,11 +162,31 @@ final class AppModel {
         }
         let stored = StoredFlag()
         do {
-            let (connection, secret) = try await pairer(link) { secret in
+            let save = { (secret: Data) throws in
                 let credential = credentialFor(secret)
                 try keychain.save(credential)
                 try pushKeys.save(PushKeyEntry(credential: credential))
                 stored.value = true
+            }
+            var attempt = 0
+            let (connection, secret): (GatewayConnection?, Data)
+            while true {
+                do {
+                    (connection, secret) = try await pairer(link, save)
+                    waitingForLocalNetwork = false
+                    break
+                } catch {
+                    // The first LAN connection fails while iOS asks for Local
+                    // Network permission; nothing secret has left the phone
+                    // yet, so the same link can be tried again.
+                    attempt += 1
+                    guard !stored.value, let delay = pairingRetryDelay(error, attempt, link.url.host ?? "") else {
+                        waitingForLocalNetwork = false
+                        throw error
+                    }
+                    waitingForLocalNetwork = true
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
             }
             let credential = credentialFor(secret)
             if let conflicting {
@@ -267,6 +291,18 @@ final class AppModel {
 
     /// Actions that let the agent act need the unlock or a running trial;
     /// reading, Stop and refusing a request never do.
+    /// A computer that allows high-access conversations relies on the app
+    /// lock; a phone without a passcode cannot provide it, so it treats that
+    /// computer as limited and refuses elevated operations itself.
+    func elevatedRefusal(_ client: GatewayClient, elevated: Bool) -> String? {
+        guard elevated, client.credential.fullAccessAllowed, !lock.passcodeSet else { return nil }
+        return Self.noPasscodeMessage
+    }
+
+    static var noPasscodeMessage: String {
+        String(localized: "This phone has no passcode, so it cannot drive high-access conversations. Set a passcode in Settings first.")
+    }
+
     func allow(_ action: GatedAction) -> Bool {
         if !action.needsUnlock || store.entitlement.canWrite { return true }
         showPaywall = true

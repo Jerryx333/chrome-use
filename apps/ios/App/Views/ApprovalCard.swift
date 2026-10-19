@@ -9,6 +9,8 @@ struct ApprovalCard: View {
     let conversationId: String
     let request: PendingRequest
     let stopRequested: Bool
+    /// The conversation runs beyond what a phone may start.
+    var elevated = false
 
     @State private var answering = false
     @State private var sent = false
@@ -93,6 +95,8 @@ struct ApprovalCard: View {
 
     /// Refusing (deny, decline, cancel) is always free; allowing is gated.
     private func respond(_ decision: JSONValue, as action: GatedAction) async {
+        // Refusing is always possible; approving an elevated request may not be.
+        if action.needsUnlock, let refusal = model.elevatedRefusal(client, elevated: elevated) { error = refusal; return }
         guard model.allow(action) else { return }
         answering = true
         defer { answering = false }
