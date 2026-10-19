@@ -52,7 +52,7 @@ final class PushManager {
     func tokenRejected(reason: String) {
         if let lastRejection, Date().timeIntervalSince(lastRejection) < 60 { return }
         lastRejection = Date()
-        lastError = String(localized: "推送令牌被拒绝（\(reason)），正在重新注册。")
+        lastError = String(localized: "The push token was refused (\(reason)); registering again.")
         forgetRegistration()
     }
 

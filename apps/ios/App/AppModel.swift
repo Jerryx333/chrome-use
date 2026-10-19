@@ -64,9 +64,7 @@ final class AppModel {
 
     /// Live stores unless given: full credentials in the app-only keychain
     /// group, push keys in the group shared with the notification extension.
-    /// `legacy` holds computers saved by earlier builds (full credentials in
-    /// the shared group); they are moved on launch.
-    init(credentials: CredentialStore? = nil, pushKeys: PushKeyStore? = nil, legacy: CredentialStore? = nil,
+    init(credentials: CredentialStore? = nil, pushKeys: PushKeyStore? = nil,
          cache: JournalCache = FileJournalCache.applicationSupport(), pairer: Pairer? = nil, lock: AppLock? = nil) {
         let live = credentials == nil
         self.credentials = credentials ?? KeychainCredentialStore(accessGroup: AppConfig.keychainAppGroup)
@@ -81,14 +79,6 @@ final class AppModel {
         self.lock = lock ?? AppLock()
         push.onRelayToken = { [weak self] token in
             self?.clients.forEach { $0.relayToken = token }
-        }
-        let legacy = legacy ?? (live ? KeychainCredentialStore(service: "chrome-use.gateway", accessGroup: AppConfig.keychainGroup) : nil)
-        if let legacy {
-            do {
-                try CredentialMigration.run(legacy: legacy, into: self.credentials, pushKeys: self.pushKeys)
-            } catch {
-                storeError = String(localized: "无法迁移已配对的电脑：\(String(describing: error))")
-            }
         }
         load()
         // On launch, a computer that allows high-access conversations from
@@ -109,7 +99,7 @@ final class AppModel {
                 client.start()
             }
         } catch {
-            storeError = String(localized: "无法读取钥匙串：\(String(describing: error))")
+            storeError = String(localized: "Cannot read the keychain: \(String(describing: error))")
         }
     }
 

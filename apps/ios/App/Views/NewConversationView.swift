@@ -34,7 +34,7 @@ struct NewConversationView: View {
                     } else {
                         Picker("Agent", selection: $agentId) {
                             ForEach(agents.filter(\.creatableFromPhone)) { agent in
-                                Text(agent.installed ? agent.name : String(localized: "\(agent.name)（未安装）")).tag(agent.id)
+                                Text(agent.installed ? agent.name : String(localized: "\(agent.name) (not installed)")).tag(agent.id)
                             }
                         }
                         .onChange(of: agentId) { _, id in
@@ -43,53 +43,54 @@ struct NewConversationView: View {
                         }
                     }
                     if agents.contains(where: { !$0.creatableFromPhone }) {
-                        Text("OpenCode 总是可以运行命令，只能在电脑上新建。").font(.caption).foregroundStyle(.secondary)
+                        Text("OpenCode always runs commands, so it can only be started on the computer.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Section {
                     if loadingModels {
-                        HStack { Text("模型"); Spacer(); ProgressView() }
+                        HStack { Text("Model"); Spacer(); ProgressView() }
                     } else if !models.isEmpty {
-                        Picker("模型", selection: $modelChoice) {
-                            Text("默认").tag("")
+                        Picker("Model", selection: $modelChoice) {
+                            Text("Default").tag("")
                             ForEach(models) { option in
-                                Text(option.isDefault ? String(localized: "\(option.label)（默认）") : option.label).tag(option.id)
+                                Text(option.isDefault ? String(localized: "\(option.label) (default)") : option.label).tag(option.id)
                             }
-                            Text("其他…").tag(Self.customChoice)
+                            Text("Other…").tag(Self.customChoice)
                         }
                     }
                     if models.isEmpty || modelChoice == Self.customChoice {
-                        TextField("模型（留空用默认）", text: $model)
+                        TextField("Model (blank for default)", text: $model)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
                 } footer: {
                     VStack(alignment: .leading) {
                         if let modelsNote { Text(modelsNote) }
-                        Text("模型只能在新建时选择，之后不能更改。")
+                        Text("The model is chosen when the conversation is created and cannot be changed later.")
                     }
                 }
                 Section {
-                    Picker("权限", selection: $access) {
+                    Picker("Access", selection: $access) {
                         ForEach(choices, id: \.self) { Text($0.label).tag($0) }
                     }
                 } footer: {
-                    Text("手机上新建的对话最多“可写文件”；需要运行命令时 agent 会请你审批。")
+                    Text("Conversations started from the phone can at most write files; when the agent needs to run a command it asks you to approve.")
                 }
-                Section("第一条消息") {
-                    TextField("要 agent 做什么？", text: $message, axis: .vertical)
+                Section("First message") {
+                    TextField("What should the agent do?", text: $message, axis: .vertical)
                         .lineLimit(3...8)
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
-            .navigationTitle("新建对话")
+            .navigationTitle("New conversation")
+            .accessibilityIdentifier("newConversationForm")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.accessibilityIdentifier("cancel") }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("开始") { Task { await create() } }
+                    Button("Start") { Task { await create() } }
                         .disabled(working || agentId.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -124,9 +125,9 @@ struct NewConversationView: View {
             guard id == agentId else { return }
             models = found
         } catch GatewayError.remote("rateLimited", _) {
-            modelsNote = String(localized: "正在读取模型列表，稍后再试；也可以直接输入模型名。")
+            modelsNote = String(localized: "The model list is being read; try again shortly, or type a model name.")
         } catch {
-            modelsNote = String(localized: "无法读取模型列表：\(describe(error, deviceId: client.id))")
+            modelsNote = String(localized: "Cannot read the model list: \(describe(error, deviceId: client.id))")
         }
     }
 

@@ -19,7 +19,7 @@ struct ApprovalCard: View {
     var body: some View {
         let form = ApprovalForm.build(request)
         VStack(alignment: .leading, spacing: 10) {
-            Label(isQuestion(form) ? LocalizedStringKey("需要你回答") : LocalizedStringKey("需要你确认"), systemImage: "hand.raised.fill")
+            Label(isQuestion(form) ? LocalizedStringKey("Needs your answer") : LocalizedStringKey("Needs your approval"), systemImage: "hand.raised.fill")
                 .font(.headline)
                 .foregroundStyle(.orange)
             switch form {
@@ -42,7 +42,7 @@ struct ApprovalCard: View {
                     QuestionField(question: question, picked: Binding(get: { picked[index] ?? [] }, set: { picked[index] = $0 }), custom: Binding(get: { custom[index] ?? "" }, set: { custom[index] = $0 }))
                 }
                 HStack {
-                    Button("发送回答") { Task { await answer(questions) } }
+                    Button("Send answers") { Task { await answer(questions) } }
                         .buttonStyle(.borderedProminent)
                         .disabled(answering || sent || stopRequested)
                     if let deny {
@@ -52,14 +52,14 @@ struct ApprovalCard: View {
                     }
                 }
             case .truncated:
-                Text("请求内容太长，手机上只显示了一部分。请在电脑上处理。").font(.callout)
+                Text("This request is too long to show in full on the phone. Answer it on the computer.").font(.callout)
             case .unsupported(let method):
-                Text("这个请求（\(method)）只能在电脑上处理。").font(.callout)
+                Text("This request (\(method)) can only be answered on the computer.").font(.callout)
             }
             if stopRequested {
-                Text("已请求停止：只能拒绝，不能再允许。").font(.caption).foregroundStyle(.secondary)
+                Text("Stop was requested: you can only decline now.").font(.caption).foregroundStyle(.secondary)
             }
-            if sent { Label("已发送", systemImage: "checkmark").font(.caption).foregroundStyle(.green) }
+            if sent { Label("Sent", systemImage: "checkmark").font(.caption).foregroundStyle(.green) }
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
         .padding(12)
@@ -84,7 +84,7 @@ struct ApprovalCard: View {
             } else if let first = choices.first {
                 answers.append(.option(first))
             } else {
-                error = String(localized: "每个问题都要回答。")
+                error = String(localized: "Answer every question.")
                 return
             }
         }
@@ -123,6 +123,7 @@ private struct FlowButtons: View {
         ForEach(options) { option in
             if option.allows {
                 Button(option.label) { action(option) }
+                    .accessibilityIdentifier("decision-\(option.id)")
                     .buttonStyle(.borderedProminent)
                     .disabled(disabled || stopRequested)
             } else {
@@ -161,7 +162,7 @@ private struct QuestionField: View {
                 .buttonStyle(.plain)
             }
             if question.allowsCustom {
-                TextField("你的回答", text: $custom, axis: .vertical)
+                TextField("Your answer", text: $custom, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
             }
         }

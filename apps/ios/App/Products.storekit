@@ -1,65 +1,129 @@
 {
-  "identifier" : "5C2E7A10",
-  "nonRenewingSubscriptions" : [
-
-  ],
-  "products" : [
+  "identifier": "5C2E7A10",
+  "nonRenewingSubscriptions": [],
+  "products": [
     {
-      "displayPrice" : "1.99",
-      "familyShareable" : false,
-      "internalID" : "6740000001",
-      "localizations" : [
+      "displayPrice": "1.99",
+      "familyShareable": false,
+      "internalID": "6740000001",
+      "localizations": [
         {
-          "description" : "Unlock sending, creating and approving from your phone, forever.",
-          "displayName" : "Unlock chrome-use remote",
-          "locale" : "en_US"
+          "locale": "en_US",
+          "displayName": "Unlock chrome-use Remote",
+          "description": "Send, start and approve from your phone."
         },
         {
-          "description" : "永久解锁在手机上发送、创建对话和处理审批。",
-          "displayName" : "解锁 chrome-use 遥控",
-          "locale" : "zh_Hans"
+          "locale": "zh_Hans",
+          "displayName": "解锁 chrome-use 遥控",
+          "description": "在手机上发送、新建对话和审批。"
+        },
+        {
+          "locale": "zh_Hant",
+          "displayName": "解鎖 chrome-use Remote",
+          "description": "永久解鎖從手機傳送訊息、新增對話及核准請求的功能。"
+        },
+        {
+          "locale": "ja",
+          "displayName": "chrome-use Remote のロックを解除",
+          "description": "iPhone からの送信、会話の開始、承認をずっと使えます。"
+        },
+        {
+          "locale": "ko",
+          "displayName": "chrome-use Remote 잠금 해제",
+          "description": "휴대폰에서 보내기, 새 대화, 승인 기능을 영구 잠금 해제합니다."
+        },
+        {
+          "locale": "es_ES",
+          "displayName": "Desbloquear chrome-use Remote",
+          "description": "Envía, crea y aprueba desde tu móvil."
+        },
+        {
+          "locale": "fr_FR",
+          "displayName": "Débloquer chrome-use Remote",
+          "description": "Envoyez, créez et validez depuis l’iPhone."
+        },
+        {
+          "locale": "de_DE",
+          "displayName": "chrome-use Remote freischalten",
+          "description": "Senden, starten, freigeben – vom iPhone."
+        },
+        {
+          "locale": "pt_BR",
+          "displayName": "Desbloquear chrome-use Remote",
+          "description": "Envie, crie conversas e aprove pelo celular."
         }
       ],
-      "productID" : "com.leeguoo.chromeuse.unlock",
-      "referenceName" : "Unlock",
-      "type" : "NonConsumable"
+      "productID": "com.leeguoo.chromeuse.unlock",
+      "referenceName": "Unlock",
+      "type": "NonConsumable"
     },
     {
-      "displayPrice" : "0.0",
-      "familyShareable" : false,
-      "internalID" : "6740000002",
-      "localizations" : [
+      "displayPrice": "0.0",
+      "familyShareable": false,
+      "internalID": "6740000002",
+      "localizations": [
         {
-          "description" : "Try everything free for 14 days.",
-          "displayName" : "14-day free trial",
-          "locale" : "en_US"
+          "locale": "en_US",
+          "displayName": "14-day free trial",
+          "description": "Try everything free for 14 days."
         },
         {
-          "description" : "免费试用全部功能 14 天。",
-          "displayName" : "14 天免费试用",
-          "locale" : "zh_Hans"
+          "locale": "zh_Hans",
+          "displayName": "14 天免费试用",
+          "description": "免费试用全部功能 14 天。"
+        },
+        {
+          "locale": "zh_Hant",
+          "displayName": "14 天免費試用",
+          "description": "免費試用全部功能 14 天。"
+        },
+        {
+          "locale": "ja",
+          "displayName": "14日間無料トライアル",
+          "description": "すべての機能を14日間無料でお試しいただけます。"
+        },
+        {
+          "locale": "ko",
+          "displayName": "14일 무료 체험",
+          "description": "14일 동안 모든 기능을 무료로 사용해 보세요."
+        },
+        {
+          "locale": "es_ES",
+          "displayName": "Prueba gratuita de 14 días",
+          "description": "Prueba todo gratis durante 14 días."
+        },
+        {
+          "locale": "fr_FR",
+          "displayName": "Essai gratuit de 14 jours",
+          "description": "Essayez tout gratuitement pendant 14 jours."
+        },
+        {
+          "locale": "de_DE",
+          "displayName": "14 Tage kostenlos testen",
+          "description": "Alle Funktionen 14 Tage kostenlos testen."
+        },
+        {
+          "locale": "pt_BR",
+          "displayName": "Teste grátis de 14 dias",
+          "description": "Experimente tudo grátis por 14 dias."
         }
       ],
-      "productID" : "com.leeguoo.chromeuse.trial",
-      "referenceName" : "Trial",
-      "type" : "NonConsumable"
+      "productID": "com.leeguoo.chromeuse.trial",
+      "referenceName": "Trial",
+      "type": "NonConsumable"
     }
   ],
-  "settings" : {
-    "_applicationInternalID" : "6740000000",
-    "_developerTeamID" : "6ZPXG4KVVS",
-    "_failTransactionsEnabled" : false,
-    "_locale" : "zh_Hans",
-    "_storefront" : "USA",
-    "_storeKitErrors" : [
-
-    ]
+  "settings": {
+    "_applicationInternalID": "6740000000",
+    "_developerTeamID": "6ZPXG4KVVS",
+    "_failTransactionsEnabled": false,
+    "_locale": "en_US",
+    "_storefront": "USA",
+    "_storeKitErrors": []
   },
-  "subscriptionGroups" : [
-
-  ],
-  "version" : {
-    "major" : 4,
-    "minor" : 0
+  "subscriptionGroups": [],
+  "version": {
+    "major": 4,
+    "minor": 0
   }
 }

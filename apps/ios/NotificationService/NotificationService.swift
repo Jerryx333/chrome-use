@@ -42,20 +42,20 @@ final class NotificationService: UNNotificationServiceExtension {
 
     private func reason(for code: PushNotice.Code?) -> String {
         switch code {
-        case .needsInput: return String(localized: "等你审批")
-        case .finished: return String(localized: "已完成")
-        case .stopped: return String(localized: "已停止")
-        case .failed: return String(localized: "失败")
-        case .scheduleDone: return String(localized: "定时任务已完成")
-        case .scheduleFailed: return String(localized: "定时任务失败")
-        case .test: return String(localized: "测试通知")
-        case nil: return String(localized: "chrome-use 需要你")
+        case .needsInput: return String(localized: "Waiting for your approval")
+        case .finished: return String(localized: "Finished")
+        case .stopped: return String(localized: "Stopped")
+        case .failed: return String(localized: "Failed")
+        case .scheduleDone: return String(localized: "Schedule finished")
+        case .scheduleFailed: return String(localized: "Schedule failed")
+        case .test: return String(localized: "Test notification")
+        case nil: return String(localized: "chrome-use needs you")
         }
     }
 
     private func generic(_ content: UNMutableNotificationContent) {
         content.title = "chrome-use"
-        content.body = String(localized: "chrome-use 需要你")
+        content.body = String(localized: "chrome-use needs you")
     }
 
     override func serviceExtensionTimeWillExpire() {

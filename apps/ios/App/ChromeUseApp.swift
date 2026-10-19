@@ -92,9 +92,9 @@ struct LockView: View {
             Rectangle().fill(.regularMaterial).ignoresSafeArea()
             VStack(spacing: 16) {
                 Image(systemName: "lock.fill").font(.system(size: 44))
-                Text("chrome-use 已锁定").font(.title3.bold())
+                Text("chrome-use is locked").font(.title3.bold())
                 if let error = model.lock.error { Text(error).font(.footnote).foregroundStyle(.secondary) }
-                Button("解锁") { Task { await model.lock.unlock() } }
+                Button("Unlock") { Task { await model.lock.unlock() } }
                     .buttonStyle(.borderedProminent)
             }
         }

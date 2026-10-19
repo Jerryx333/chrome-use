@@ -13,14 +13,14 @@ struct ScreenshotView: View {
                     ZoomableImage(image: image)
                         .ignoresSafeArea(edges: .bottom)
                 } else {
-                    ContentUnavailableView("无法显示截图", systemImage: "photo")
+                    ContentUnavailableView("Cannot show the screenshot", systemImage: "photo")
                 }
             }
             .background(Color.black)
-            .navigationTitle("截图")
+            .navigationTitle("Screenshot")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
     }

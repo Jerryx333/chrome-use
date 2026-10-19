@@ -6,23 +6,23 @@ extension CloseReason {
     var message: String {
         switch self {
         case .malformed:
-            return String(localized: "电脑拒绝了一条数据，连接已重置，正在重连。")
+            return String(localized: "The computer rejected a message; the connection was reset and is reconnecting.")
         case .unauthorized:
-            return String(localized: "电脑不认识这部手机：配对可能已被撤销、禁用或已过期。请重新配对。")
+            return String(localized: "The computer does not recognize this phone: the pairing may have been revoked, disabled or expired. Pair again.")
         case .revoked:
-            return String(localized: "这部手机已在电脑上被撤销，请重新配对。")
+            return String(localized: "This phone was revoked on the computer. Pair again.")
         case .handshakeTimeout:
-            return String(localized: "握手超时，正在重试。")
+            return String(localized: "Handshake timed out; retrying.")
         case .wrongProfile:
-            return String(localized: "这部手机配对的是另一个浏览器配置，当前运行的网关不服务它。请在电脑上用对应的 --profile 启动 mobile serve。")
+            return String(localized: "This phone is paired to another browser profile than the running gateway serves. Start mobile serve with the matching --profile on the computer.")
         case .backoff:
-            return String(localized: "失败次数过多，电脑要求稍后再试。")
+            return String(localized: "Too many failed attempts; the computer asks to try again later.")
         case .gatewayNotAuthentic:
-            return String(localized: "对方无法证明自己是已配对的电脑，已断开。请检查地址是否正确。")
+            return String(localized: "The other side could not prove it is the paired computer, so the connection was closed. Check the address.")
         case .closed(let code):
             return code == nil
-                ? String(localized: "无法连接到电脑。请确认 chrome-use mobile serve 正在运行，且手机能访问该地址。")
-                : String(localized: "连接已断开，正在重连。")
+                ? String(localized: "Cannot reach the computer. Make sure chrome-use mobile serve is running and the phone can reach its address.")
+                : String(localized: "Disconnected; reconnecting.")
         }
     }
 }
@@ -30,9 +30,9 @@ extension CloseReason {
 extension GatewayClient.Status {
     var label: String {
         switch self {
-        case .idle: return String(localized: "未连接")
-        case .connecting: return String(localized: "正在连接…")
-        case .connected: return String(localized: "已连接")
+        case .idle: return String(localized: "Not connected")
+        case .connecting: return String(localized: "Connecting…")
+        case .connected: return String(localized: "Connected")
         case .retrying(_, let reason): return reason.message
         case .failed(let reason): return reason.message
         }
@@ -51,15 +51,15 @@ extension GatewayClient.Status {
 extension Phase {
     var label: String {
         switch self {
-        case .idle: return String(localized: "空闲")
-        case .starting: return String(localized: "启动中")
-        case .running: return String(localized: "运行中")
-        case .waitingInput: return String(localized: "等你处理")
-        case .stopping: return String(localized: "停止中")
-        case .failed: return String(localized: "失败")
-        case .interrupted: return String(localized: "已中断")
-        case .recoveryRequired: return String(localized: "需在电脑上确认")
-        case .unknown: return String(localized: "未知")
+        case .idle: return String(localized: "Idle")
+        case .starting: return String(localized: "Starting")
+        case .running: return String(localized: "Running")
+        case .waitingInput: return String(localized: "Needs you")
+        case .stopping: return String(localized: "Stopping")
+        case .failed: return String(localized: "Failed")
+        case .interrupted: return String(localized: "Interrupted")
+        case .recoveryRequired: return String(localized: "Confirm on computer")
+        case .unknown: return String(localized: "Unknown")
         }
     }
 
@@ -77,10 +77,10 @@ extension Phase {
 extension ToolAccess {
     var label: String {
         switch self {
-        case .browserOnly: return String(localized: "仅浏览器")
-        case .readFiles: return String(localized: "可读文件")
-        case .writeFiles: return String(localized: "可写文件")
-        case .runCommands: return String(localized: "可运行命令")
+        case .browserOnly: return String(localized: "Browser only")
+        case .readFiles: return String(localized: "Read files")
+        case .writeFiles: return String(localized: "Write files")
+        case .runCommands: return String(localized: "Run commands")
         }
     }
 }
@@ -88,12 +88,12 @@ extension ToolAccess {
 extension DecisionOption {
     var label: String {
         switch kind {
-        case .allowOnce: return String(localized: "允许一次")
-        case .allowForSession: return String(localized: "本会话都允许")
-        case .allowTurn: return String(localized: "本轮允许")
-        case .deny: return String(localized: "拒绝")
-        case .decline: return String(localized: "拒绝")
-        case .cancel: return String(localized: "取消请求")
+        case .allowOnce: return String(localized: "Allow once")
+        case .allowForSession: return String(localized: "Allow for this session")
+        case .allowTurn: return String(localized: "Allow for this turn")
+        case .deny: return String(localized: "Deny")
+        case .decline: return String(localized: "Deny")
+        case .cancel: return String(localized: "Cancel request")
         case .agentOption(let name, _): return name
         }
     }
@@ -101,12 +101,15 @@ extension DecisionOption {
 
 enum ToolLabel {
     static func text(_ name: String) -> String {
-        if name.hasPrefix("browser:") { return String(localized: "浏览器：\(String(name.dropFirst("browser:".count)))") }
+        if name.hasPrefix("browser:") {
+            let tool = String(name.dropFirst("browser:".count))
+            return String(localized: "Browser: \(tool)")
+        }
         switch name {
-        case "command": return String(localized: "运行命令")
-        case "fileChange": return String(localized: "修改文件")
-        case "webSearch": return String(localized: "搜索网页")
-        case "toolResult": return String(localized: "工具结果")
+        case "command": return String(localized: "Ran a command")
+        case "fileChange": return String(localized: "Changed files")
+        case "webSearch": return String(localized: "Searched the web")
+        case "toolResult": return String(localized: "Tool result")
         default: return name
         }
     }
@@ -121,17 +124,17 @@ extension GatewayError {
         case .closed(let reason): return reason.message
         case .remote(let code, let message):
             switch code {
-            case "denied": return String(localized: "手机端不允许这个操作：\(message)")
-            case "rateLimited": return String(localized: "操作太频繁，请稍后再试。")
-            case "screenshot": return String(localized: "无法截图：这个对话的浏览器会话没有在运行。")
+            case "denied": return String(localized: "Not allowed from the phone: \(message)")
+            case "rateLimited": return String(localized: "Too many requests; try again shortly.")
+            case "screenshot": return String(localized: "Cannot take a screenshot: this conversation’s browser session is not running.")
             case "accessTooHigh":
                 let id = deviceId ?? "<id>"
-                return String(localized: "这个对话权限太高，需要在电脑上运行 `chrome-use mobile access \(id) full` 才能从手机操作")
+                return String(localized: "This conversation’s access is too high. Run `chrome-use mobile access \(id) full` on the computer to drive it from the phone")
             default: return message.isEmpty ? code : message
             }
-        case .timeout: return String(localized: "电脑没有及时回应。")
-        case .notConnected: return String(localized: "还没连上电脑。")
-        case .protocolViolation(let what): return String(localized: "通信出错：\(what)")
+        case .timeout: return String(localized: "The computer did not answer in time.")
+        case .notConnected: return String(localized: "Not connected to the computer yet.")
+        case .protocolViolation(let what): return String(localized: "Communication error: \(what)")
         }
     }
 }
@@ -140,14 +143,14 @@ func describe(_ error: Error, deviceId: String? = nil) -> String {
     if let error = error as? GatewayError { return error.message(deviceId: deviceId) }
     if let error = error as? PairLink.ParseError {
         switch error {
-        case .notAPairLink: return String(localized: "这不是 chrome-use 配对链接。")
-        case .unsupportedVersion: return String(localized: "配对链接版本不受支持，请更新 App。")
-        case .plaintextToPublicHost: return String(localized: "公网地址必须用 wss://。ws:// 只能用于 Tailscale 或局域网地址。")
-        default: return String(localized: "配对链接不完整或已损坏。")
+        case .notAPairLink: return String(localized: "This is not a chrome-use pairing link.")
+        case .unsupportedVersion: return String(localized: "This pairing link version is not supported; update the app.")
+        case .plaintextToPublicHost: return String(localized: "Public addresses need wss://. ws:// is only for Tailscale or local network addresses.")
+        default: return String(localized: "The pairing link is incomplete or damaged.")
         }
     }
     if let error = error as? ImagePreparer.Failure {
-        return error == .tooLarge ? String(localized: "图片太大，压缩后仍超过 512 KiB。") : String(localized: "无法读取这张图片。")
+        return error == .tooLarge ? String(localized: "The image is still larger than 512 KiB after compression.") : String(localized: "Cannot read this image.")
     }
     return error.localizedDescription
 }

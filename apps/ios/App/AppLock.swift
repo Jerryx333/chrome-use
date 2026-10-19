@@ -65,7 +65,7 @@ final class AppLock {
     func unlock() async {
         guard active else { locked = false; return }
         do {
-            if try await authenticate(String(localized: "解锁 chrome-use")) {
+            if try await authenticate(String(localized: "Unlock chrome-use")) {
                 locked = false
                 error = nil
             }
@@ -78,7 +78,7 @@ final class AppLock {
     /// cannot be turned off while a computer requires it.
     func setEnabled(_ on: Bool) async {
         guard on else { enabled = false; if !required { locked = false }; return }
-        if (try? await authenticate(String(localized: "开启面容 ID 锁"))) == true {
+        if (try? await authenticate(String(localized: "Turn on Face ID lock"))) == true {
             enabled = true
         }
     }

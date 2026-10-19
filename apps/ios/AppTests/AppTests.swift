@@ -3,32 +3,39 @@ import StoreKitTest
 import XCTest
 @testable import ChromeUse
 
-/// Runs in the simulator with the app as host, so the String Catalog is the
-/// real compiled one.
+/// Runs in the simulator with the app as host, so these are the compiled
+/// catalogs. The test action runs in English (the source language).
 final class CloseMessageTests: XCTestCase {
+    static let locales = ["en", "zh-Hans", "zh-Hant", "ja", "ko", "es", "fr", "de", "pt-BR"]
     let reasons: [CloseReason] = [
         CloseReason(closeCode: 4400), CloseReason(closeCode: 4401), CloseReason(closeCode: 4403),
         CloseReason(closeCode: 4408), CloseReason(closeCode: 4409), CloseReason(closeCode: 4429),
     ]
 
-    func testEveryCloseCodeHasItsOwnChineseMessage() {
+    func testEveryCloseCodeHasItsOwnMessage() {
         let messages = reasons.map(\.message)
         XCTAssertEqual(Set(messages).count, messages.count, "each close code says something different")
-        for message in messages {
-            XCTAssertTrue(message.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }, "\(message) is Chinese")
-        }
-        XCTAssertTrue(CloseReason(closeCode: 4403).message.contains("撤销"))
-        XCTAssertTrue(CloseReason(closeCode: 4403).message.contains("重新配对"))
+        XCTAssertTrue(CloseReason(closeCode: 4403).message.contains("revoked"))
         XCTAssertTrue(CloseReason(closeCode: 4409).message.contains("--profile"))
     }
 
-    func testEnglishLocalizationExists() throws {
-        let path = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj"), "en.lproj is in the app")
-        let english = try XCTUnwrap(Bundle(path: path))
-        for key in ["这部手机已在电脑上被撤销，请重新配对。", "等你处理", "允许一次", "配对电脑"] {
-            let translated = english.localizedString(forKey: key, value: "__missing__", table: nil)
-            XCTAssertNotEqual(translated, "__missing__", key)
-            XCTAssertFalse(translated.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }, "\(key) → \(translated)")
+    /// Every shipped language is in the bundle and translates the messages
+    /// (the source catalogs are checked key by key in ChromeUseKit's
+    /// AppCatalogTests).
+    func testEveryLanguageIsCompiledIn() throws {
+        XCTAssertEqual(Set(Bundle.main.localizations).intersection(Self.locales), Set(Self.locales))
+        let keys = ["This phone was revoked on the computer. Pair again.", "Needs you", "Allow once", "Pair a computer",
+                    "Start 14-day free trial", "Untitled conversation"]
+        for locale in Self.locales where locale != "en" {
+            let path = try XCTUnwrap(Bundle.main.path(forResource: locale, ofType: "lproj"), "\(locale).lproj")
+            let bundle = try XCTUnwrap(Bundle(path: path))
+            for key in keys {
+                let value = bundle.localizedString(forKey: key, value: "__missing__", table: nil)
+                XCTAssertNotEqual(value, "__missing__", "\(locale): \(key)")
+                XCTAssertNotEqual(value, key, "\(locale) translates \(key)")
+            }
+            let usage = bundle.localizedString(forKey: "NSCameraUsageDescription", value: "__missing__", table: "InfoPlist")
+            XCTAssertNotEqual(usage, "__missing__", "\(locale): camera usage description")
         }
     }
 
@@ -116,21 +123,6 @@ final class KeychainSplitTests: XCTestCase {
         renamed.name = "Mac mini"
         try store.save(renamed)
         XCTAssertEqual(try store.all().filter { $0.deviceId == saved.deviceId }, [renamed])
-    }
-
-    /// Computers saved by earlier builds (full credential in the shared
-    /// group) move on launch, and the shared copy is deleted.
-    @MainActor
-    func testLaunchMigratesLegacyCredentials() throws {
-        let legacy = KeychainCredentialStore(service: "chrome-use.gateway", accessGroup: sharedGroup)
-        let old = credential()
-        try legacy.items.put(account: old.deviceId, data: try JSONEncoder().encode(old))
-        let model = AppModel(cache: InMemoryJournalCache())
-        defer { model.remove(old.deviceId, tellGateway: false) }
-        XCTAssertTrue(try legacy.all().filter { $0.deviceId == old.deviceId }.isEmpty, "shared copy deleted")
-        XCTAssertEqual(try KeychainCredentialStore(accessGroup: appGroup).all().first { $0.deviceId == old.deviceId }, old)
-        XCTAssertNotNil(try KeychainPushKeyStore(accessGroup: sharedGroup).all().first { $0.deviceId == old.deviceId })
-        XCTAssertNotNil(model.client(old.deviceId))
     }
 }
 

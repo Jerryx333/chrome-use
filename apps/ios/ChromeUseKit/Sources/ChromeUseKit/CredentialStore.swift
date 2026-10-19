@@ -166,22 +166,6 @@ public final class KeychainPushKeyStore: PushKeyStore, @unchecked Sendable {
     }
 }
 
-/// Moves computers saved by earlier builds (full credential in the shared
-/// group, which the extension could read) into the app-only store plus a
-/// push-key entry, then deletes the shared copy.
-public enum CredentialMigration {
-    @discardableResult
-    public static func run(legacy: CredentialStore, into credentials: CredentialStore, pushKeys: PushKeyStore) throws -> Int {
-        let old = try legacy.all()
-        for credential in old {
-            try credentials.save(credential)
-            try pushKeys.save(PushKeyEntry(credential: credential))
-            try legacy.delete(deviceId: credential.deviceId)
-        }
-        return old.count
-    }
-}
-
 public final class InMemoryCredentialStore: CredentialStore, @unchecked Sendable {
     private var items: [String: GatewayCredential] = [:]
     private let lock = NSLock()

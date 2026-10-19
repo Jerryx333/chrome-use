@@ -36,7 +36,7 @@ struct ConversationView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
                     if client.ended.contains(conversationId) {
-                        Label("这个对话已在电脑上删除。", systemImage: "trash").foregroundStyle(.secondary)
+                        Label("This conversation was deleted on the computer.", systemImage: "trash").foregroundStyle(.secondary)
                     }
                     if let failure = client.subscriptionErrors[conversationId] {
                         Label(failure, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
@@ -54,7 +54,7 @@ struct ConversationView: View {
                     }
                     if !queued.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("排队中的消息").font(.caption.bold()).foregroundStyle(.secondary)
+                            Text("Queued messages").font(.caption.bold()).foregroundStyle(.secondary)
                             ForEach(Array(queued.enumerated()), id: \.offset) { _, message in
                                 Text(message["text"].string ?? "")
                                     .font(.callout)
@@ -76,17 +76,17 @@ struct ConversationView: View {
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
         .safeAreaInset(edge: .bottom) { composer }
-        .navigationTitle(summary?.title.isEmpty == false ? summary!.title : String(localized: "对话"))
+        .navigationTitle(summary?.title.isEmpty == false ? summary!.title : String(localized: "Conversation"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
-                    Text(summary?.title.isEmpty == false ? summary!.title : String(localized: "对话")).font(.headline).lineLimit(1)
+                    Text(summary?.title.isEmpty == false ? summary!.title : String(localized: "Conversation")).font(.headline).lineLimit(1)
                     HStack(spacing: 4) {
                         if let summary { PhaseBadge(phase: summary.phase) }
                         if client.pushMutes.contains(conversationId) {
                             Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary)
-                                .accessibilityLabel("已静音")
+                                .accessibilityLabel("Muted")
                         }
                     }
                 }
@@ -95,18 +95,18 @@ struct ConversationView: View {
                 Button { Task { await screenshot() } } label: {
                     if shooting { ProgressView() } else { Image(systemName: "camera.viewfinder") }
                 }
-                .accessibilityLabel("截图")
+                .accessibilityLabel("Screenshot")
                 .disabled(shooting || client.status != .connected)
                 Menu {
                     // Muting is free: it only stops this phone's pushes.
                     let muted = client.pushMutes.contains(conversationId)
-                    Button(muted ? LocalizedStringKey("恢复通知") : LocalizedStringKey("静音通知"), systemImage: muted ? "bell" : "bell.slash") {
+                    Button(muted ? LocalizedStringKey("Unmute notifications") : LocalizedStringKey("Mute notifications"), systemImage: muted ? "bell" : "bell.slash") {
                         Task {
                             do { try await client.setMuted(conversationId, !muted) } catch { self.error = describe(error, deviceId: client.id) }
                         }
                     }
                     .disabled(client.status != .connected)
-                    Button("删除对话", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                    Button("Delete conversation", systemImage: "trash", role: .destructive) { confirmDelete = true }
                         .disabled(phase.isBusy)
                 } label: { Image(systemName: "ellipsis.circle") }
             }
@@ -116,14 +116,14 @@ struct ConversationView: View {
         .sheet(item: Binding(get: { shot.map(ShotItem.init) }, set: { if $0 == nil { shot = nil } })) { item in
             ScreenshotView(shot: item.shot)
         }
-        .confirmationDialog("删除这个对话？", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("删除", role: .destructive) {
+        .confirmationDialog("Delete this conversation?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
                 Task {
                     do { try await client.delete(conversationId: conversationId); dismiss() } catch { self.error = describe(error, deviceId: client.id) }
                 }
             }
         } message: {
-            Text("对话会从电脑上删除，无法恢复。")
+            Text("The conversation will be deleted from the computer. This cannot be undone.")
         }
         .onChange(of: picks) { _, items in Task { await load(items) } }
     }
@@ -151,7 +151,7 @@ struct ConversationView: View {
                                     Button { images.removeAll { $0.id == image.id } } label: {
                                         Image(systemName: "xmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.6))
                                     }
-                                    .accessibilityLabel("移除图片")
+                                    .accessibilityLabel("Remove image")
                                 }
                         }
                     }
@@ -162,8 +162,8 @@ struct ConversationView: View {
                     Image(systemName: "photo.on.rectangle").font(.title3)
                 }
                 .disabled(images.count >= ImagePreparer.maximumImages || sending)
-                .accessibilityLabel("添加图片")
-                TextField(phase.isBusy ? LocalizedStringKey("补充一句（会排队）") : LocalizedStringKey("给 agent 发消息"), text: $text, axis: .vertical)
+                .accessibilityLabel("Add images")
+                TextField(phase.isBusy ? LocalizedStringKey("Add a message (queued)") : LocalizedStringKey("Message the agent"), text: $text, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($composing)
                     .padding(.horizontal, 10)
@@ -175,13 +175,13 @@ struct ConversationView: View {
                     }
                     .tint(.red)
                     .disabled(summary?.stopRequested == true)
-                    .accessibilityLabel("停止")
+                    .accessibilityLabel("Stop")
                 } else {
                     Button { Task { await send() } } label: {
                         if sending { ProgressView() } else { Image(systemName: "arrow.up.circle.fill").font(.title) }
                     }
                     .disabled(sending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || client.status != .connected || phase == .recoveryRequired)
-                    .accessibilityLabel("发送")
+                    .accessibilityLabel("Send")
                 }
             }
         }
@@ -245,7 +245,7 @@ struct TimelineRowView: View {
                     .padding(10)
                     .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
                 if images > 0 {
-                    Label("\(images) 张图片", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
+                    Label("\(images) images", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)

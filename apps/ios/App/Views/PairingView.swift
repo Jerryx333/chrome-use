@@ -16,6 +16,7 @@ struct PairingView: View {
     /// address or gateway).
     @State private var conflict: GatewayCredential?
     @State private var confirmReplace = false
+    private var conflictName: String { conflict?.name ?? "" }
 
     var body: some View {
         NavigationStack {
@@ -23,38 +24,39 @@ struct PairingView: View {
                 if let link {
                     if let conflict {
                         Section {
-                            Label("这会替换「\(conflict.name)」，地址/电脑不同", systemImage: "exclamationmark.octagon.fill")
+                            Label("This replaces “\(conflict.name)”: a different address or computer", systemImage: "exclamationmark.octagon.fill")
                                 .font(.headline)
                                 .foregroundStyle(.red)
-                            LabeledContent("原来", value: conflict.url.absoluteString)
-                            LabeledContent("现在", value: link.url.absoluteString)
+                            LabeledContent("Before", value: conflict.url.absoluteString)
+                            LabeledContent("Now", value: link.url.absoluteString)
                         } footer: {
-                            Text("只有你确定这是同一部手机在新电脑或新地址上的配对时才继续。否则取消，并在电脑上重新运行 mobile pair。")
+                            Text("Continue only if you are sure this phone is being paired with a new computer or address. Otherwise cancel and run mobile pair again on the computer.")
                         }
                     }
-                    Section("电脑") {
-                        LabeledContent("地址", value: link.url.absoluteString)
-                        TextField("名称", text: $name)
+                    Section("Computers") {
+                        LabeledContent("Address", value: link.url.absoluteString)
+                        TextField("Name", text: $name)
                     }
                     Section {
                         Button(role: conflict == nil ? nil : .destructive) {
                             if conflict == nil { Task { await pair(link, replacing: false) } } else { confirmReplace = true }
                         } label: {
                             HStack {
-                                Text(pairing ? "正在配对…" : conflict == nil ? "配对" : "替换并配对")
+                                Text(pairing ? LocalizedStringKey("Pairing…") : conflict == nil ? LocalizedStringKey("Pair") : LocalizedStringKey("Replace and pair"))
                                 if pairing { Spacer(); ProgressView() }
                             }
                         }
                         .disabled(pairing || name.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .confirmationDialog("替换「\(conflict?.name ?? "")」？", isPresented: $confirmReplace, titleVisibility: .visible) {
-                            Button("替换", role: .destructive) { Task { await pair(link, replacing: true) } }
+                        .accessibilityIdentifier("pairButton")
+                        .confirmationDialog("Replace “\(conflictName)”?", isPresented: $confirmReplace, titleVisibility: .visible) {
+                            Button("Replace", role: .destructive) { Task { await pair(link, replacing: true) } }
                         } message: {
-                            Text("原来的电脑会从这部手机上删除。")
+                            Text("The previous computer will be removed from this phone.")
                         }
-                        Button("换一个二维码", role: .cancel) { self.link = nil; conflict = nil; error = nil }
+                        Button("Use another QR code", role: .cancel) { self.link = nil; conflict = nil; error = nil }
                             .disabled(pairing)
                     } footer: {
-                        Text("配对会生成一份只存在这部手机里的密钥；二维码随即失效，再扫一次也无法使用。")
+                        Text("Pairing creates a key that exists only on this phone; the QR code stops working right away and cannot be scanned again.")
                     }
                 } else {
                     Section {
@@ -62,19 +64,19 @@ struct PairingView: View {
                             .frame(height: 300)
                             .listRowInsets(EdgeInsets())
                     } footer: {
-                        Text("在电脑上运行 chrome-use mobile pair --url <手机能访问的地址>，扫描终端里的二维码。")
+                        Text("On the computer, run chrome-use mobile pair --url <address your phone can reach> and scan the QR code in the terminal.")
                     }
-                    Section("或粘贴配对链接") {
+                    Section("Or paste a pairing link") {
                         TextField("chromeuse://pair?…", text: $pasted, axis: .vertical)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .font(.footnote.monospaced())
                         HStack {
-                            Button("从剪贴板粘贴") {
+                            Button("Paste from clipboard") {
                                 if let text = UIPasteboard.general.string { pasted = text; accept(text) }
                             }
                             Spacer()
-                            Button("使用") { accept(pasted) }.disabled(pasted.isEmpty)
+                            Button("Use") { accept(pasted) }.disabled(pasted.isEmpty)
                         }
                     }
                 }
@@ -82,11 +84,11 @@ struct PairingView: View {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
-            .navigationTitle(model.repairing == nil ? "配对电脑" : "重新配对")
+            .navigationTitle(model.repairing == nil ? LocalizedStringKey("Pair a computer") : LocalizedStringKey("Pair again"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { model.repairing = nil; dismiss() }.disabled(pairing)
+                    Button("Cancel") { model.repairing = nil; dismiss() }.disabled(pairing)
                 }
             }
             .onAppear {
@@ -130,7 +132,7 @@ struct PairingView: View {
             model.path = [.computer(client.id)]
         } catch {
             if let gateway = error as? GatewayError, gateway == .closed(.unauthorized) {
-                self.error = String(localized: "电脑拒绝了这个二维码：它可能已被使用、已过期（10 分钟）或已被撤销。请在电脑上重新运行 mobile pair。")
+                self.error = String(localized: "The computer refused this QR code: it may have been used, expired (10 minutes) or revoked. Run mobile pair again on the computer.")
             } else {
                 self.error = describe(error)
             }
@@ -149,7 +151,7 @@ struct QRScannerView: View {
         } else if AVCaptureDevice.default(for: .video) != nil {
             CaptureScanner(found: found)
         } else {
-            ContentUnavailableView("没有可用的相机", systemImage: "camera.metering.unknown", description: Text("粘贴配对链接，或在电脑上用 --json 打印链接。"))
+            ContentUnavailableView("No camera available", systemImage: "camera.metering.unknown", description: Text("Paste the pairing link, or print it on the computer with --json."))
         }
     }
 }

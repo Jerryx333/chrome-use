@@ -8,13 +8,14 @@ struct ComputersView: View {
         List {
             if model.clients.isEmpty {
                 ContentUnavailableView {
-                    Label("还没有配对的电脑", systemImage: "desktopcomputer")
+                    Label("No paired computers yet", systemImage: "desktopcomputer")
                 } description: {
-                    Text("在电脑上运行 chrome-use mobile serve，再用 chrome-use mobile pair --url <地址> 显示二维码，然后在这里扫码。")
+                    Text("On the computer, run chrome-use mobile serve, then chrome-use mobile pair --url <address> to show a QR code, and scan it here.")
                 } actions: {
-                    Button("配对电脑") { model.pendingLink = nil; model.showPairing = true }
+                    Button("Pair a computer") { model.pendingLink = nil; model.showPairing = true }
                         .buttonStyle(.borderedProminent)
                 }
+                .accessibilityIdentifier("noComputers")
                 .listRowBackground(Color.clear)
             }
             ForEach(model.clients) { client in
@@ -26,15 +27,16 @@ struct ComputersView: View {
                 Text(error).font(.footnote).foregroundStyle(.red)
             }
         }
-        .navigationTitle("电脑")
+        .navigationTitle("Computers")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { model.showSettings = true } label: { Image(systemName: "gearshape") }
-                    .accessibilityLabel("设置")
+                    .accessibilityLabel("Settings")
+                    .accessibilityIdentifier("settings")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { model.pendingLink = nil; model.showPairing = true } label: { Image(systemName: "qrcode.viewfinder") }
-                    .accessibilityLabel("配对电脑")
+                    .accessibilityLabel("Pair a computer")
             }
         }
         .refreshable { model.clients.forEach { $0.reconnectNow() } }
@@ -57,7 +59,7 @@ struct ComputerRow: View {
                 }
                 let waiting = client.conversations.filter { $0.phase == .waitingInput }.count
                 if waiting > 0 {
-                    Text("\(waiting) 个对话等你处理").font(.caption.bold()).foregroundStyle(.orange)
+                    Text("\(waiting) waiting for you").font(.caption.bold()).foregroundStyle(.orange)
                 }
             }
         }

@@ -5,7 +5,7 @@ options:
   bundleIdPrefix: com.leeguoo
   deploymentTarget:
     iOS: "17.0"
-  developmentLanguage: zh-Hans
+  developmentLanguage: en
   createIntermediateGroups: true
 configFiles:
   Debug: Config/Identity.xcconfig
@@ -98,9 +98,10 @@ schemes:
       storeKitConfiguration: App/Products.storekit
     test:
       config: Debug
-      # Unit tests check the Chinese source strings; run them in Chinese.
+      # Unit tests check the English source strings; the catalogs are
+      # checked per locale.
       commandLineArguments:
-        "-AppleLanguages (zh-Hans)": true
+        "-AppleLanguages (en)": true
       targets:
         - ChromeUseTests
         - ChromeUseUITests

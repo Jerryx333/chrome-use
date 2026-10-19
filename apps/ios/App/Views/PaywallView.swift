@@ -15,15 +15,15 @@ struct PaywallView: View {
                         .font(.system(size: 54))
                         .foregroundStyle(.tint)
                         .padding(.top, 24)
-                    Text("解锁 chrome-use 遥控").font(.title2.bold())
+                    Text("Unlock chrome-use Remote").font(.title2.bold()).accessibilityIdentifier("paywallTitle")
                     statusText(store.entitlement, clock: store.clock)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 10) {
-                        Label("在手机上发消息、新建对话", systemImage: "paperplane")
-                        Label("随时处理 agent 的审批请求", systemImage: "hand.raised")
-                        Label("停止任务、截图、运行定时任务", systemImage: "camera.viewfinder")
-                        Label("一次付费，永久使用；看对话始终免费", systemImage: "checkmark.seal")
+                        Label("Send messages and start conversations from your phone", systemImage: "paperplane")
+                        Label("Answer the agent’s approval requests anywhere", systemImage: "hand.raised")
+                        Label("Stop turns, take screenshots, run schedules", systemImage: "camera.viewfinder")
+                        Label("Pay once, keep it forever; reading is always free", systemImage: "checkmark.seal")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
@@ -33,7 +33,7 @@ struct PaywallView: View {
                         Button {
                             Task { await store.buy(trial) }
                         } label: {
-                            Text("开始 14 天免费试用").frame(maxWidth: .infinity)
+                            Text("Start 14-day free trial").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
@@ -43,7 +43,7 @@ struct PaywallView: View {
                         let button = Button {
                             Task { await store.buy(unlock) }
                         } label: {
-                            Text("一次性解锁 \(unlock.displayPrice)").frame(maxWidth: .infinity)
+                            Text("Unlock for \(unlock.displayPrice)").frame(maxWidth: .infinity)
                         }
                         .controlSize(.large)
                         .disabled(store.purchasing)
@@ -53,7 +53,7 @@ struct PaywallView: View {
                     if store.unlockProduct == nil && store.trialProduct == nil {
                         ProgressView()
                     }
-                    Button("恢复购买") { Task { await store.restore() } }
+                    Button("Restore purchases") { Task { await store.restore() } }
                         .font(.callout)
                     if let message = store.message {
                         Text(message).font(.footnote).foregroundStyle(.red)
@@ -62,7 +62,7 @@ struct PaywallView: View {
                 .padding()
             }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
             }
             .onChange(of: store.entitlement) { _, state in
                 if state.canWrite { dismiss() }
@@ -73,12 +73,12 @@ struct PaywallView: View {
     @ViewBuilder
     private func statusText(_ state: Entitlement, clock: Clock) -> some View {
         switch state {
-        case .unlocked: Text("已解锁，感谢支持。")
+        case .unlocked: Text("Unlocked. Thanks for your support.")
         case .trial:
             let days = state.daysLeft(clock: clock)
-            Text("试用中，还剩 \(days) 天。")
-        case .trialNotStarted: Text("先免费试用 14 天，或直接一次性解锁。")
-        case .expired: Text("试用已结束。查看对话、停止任务和拒绝请求仍然免费；发送、新建和允许请求需要解锁。")
+            Text("Trial: \(days) days left.")
+        case .trialNotStarted: Text("Try it free for 14 days, or unlock once.")
+        case .expired: Text("Your trial has ended. Reading, stopping and declining stay free; sending, starting conversations and allowing requests need the unlock.")
         }
     }
 }

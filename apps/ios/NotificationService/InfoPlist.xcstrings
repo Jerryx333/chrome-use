@@ -1,7 +1,8 @@
 {
-  "sourceLanguage": "zh-Hans",
+  "sourceLanguage": "en",
   "strings": {
     "CFBundleDisplayName": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
@@ -14,10 +15,53 @@
             "state": "translated",
             "value": "chrome-use notifications"
           }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "chrome-use 通知"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "chrome-use 通知"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "chrome-use 알림"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notificaciones de chrome-use"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifications chrome-use"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "chrome-use Mitteilungen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notificações do chrome-use"
+          }
         }
       }
     },
     "CFBundleName": {
+      "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
@@ -26,6 +70,48 @@
           }
         },
         "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ChromeUseNotification"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ChromeUseNotification"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ChromeUseNotification"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ChromeUseNotification"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ChromeUseNotification"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ChromeUseNotification"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ChromeUseNotification"
+          }
+        },
+        "pt-BR": {
           "stringUnit": {
             "state": "translated",
             "value": "ChromeUseNotification"

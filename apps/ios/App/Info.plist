@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>zh-Hans</string>
+	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>chrome-use</string>
 	<key>CFBundleExecutable</key>
@@ -22,8 +22,15 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleLocalizations</key>
 	<array>
-		<string>zh-Hans</string>
 		<string>en</string>
+		<string>zh-Hans</string>
+		<string>zh-Hant</string>
+		<string>ja</string>
+		<string>ko</string>
+		<string>es</string>
+		<string>fr</string>
+		<string>de</string>
+		<string>pt-BR</string>
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
@@ -71,13 +78,13 @@
 		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>扫描电脑终端上显示的配对二维码。</string>
+	<string>Scan the pairing QR code shown in the computer’s terminal.</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>用面容 ID 解锁 chrome-use。</string>
+	<string>Unlock chrome-use with Face ID.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>连接你在同一局域网或 Tailscale 里运行 chrome-use 的电脑。</string>
+	<string>Connect to your computer running chrome-use on your local network or Tailscale.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>选择要发给 agent 的图片。</string>
+	<string>Choose images to send to the agent.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

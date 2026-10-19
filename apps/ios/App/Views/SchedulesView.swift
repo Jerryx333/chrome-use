@@ -12,7 +12,7 @@ struct SchedulesView: View {
     var body: some View {
         List {
             if loaded && schedules.isEmpty {
-                ContentUnavailableView("没有定时任务", systemImage: "calendar", description: Text("定时任务在电脑的侧边栏里创建。"))
+                ContentUnavailableView("No schedules", systemImage: "calendar", description: Text("Schedules are created in the side panel on the computer."))
                     .listRowBackground(Color.clear)
             }
             ForEach(schedules) { schedule in
@@ -24,21 +24,21 @@ struct SchedulesView: View {
                     Text([ruleText(schedule.rule), schedule.agentId].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        let last = schedule.lastResult ?? String(localized: "还没运行")
-                        Text("上次：\(last)")
+                        let last = schedule.lastResult ?? String(localized: "not run yet")
+                        Text("Last: \(last)")
                             .foregroundStyle(schedule.lastResult?.hasPrefix("failed") == true ? .red : .secondary)
                         if schedule.enabled, let next = schedule.nextRun {
                             let when = next.formatted(date: .abbreviated, time: .shortened)
-                            Text("· 下次：\(when)").foregroundStyle(.secondary)
+                            Text("· Next: \(when)").foregroundStyle(.secondary)
                         }
                     }
                     .font(.caption)
                     HStack {
-                        Button("立即运行") { Task { await run(schedule) } }
+                        Button("Run now") { Task { await run(schedule) } }
                             .buttonStyle(.bordered)
                             .disabled(busy == schedule.id || schedule.running)
                         if let chat = schedule.lastChat {
-                            Button("查看上次运行") { model.path.append(.conversation(client.id, chat)) }
+                            Button("Open last run") { model.path.append(.conversation(client.id, chat)) }
                                 .buttonStyle(.borderless)
                         }
                     }
@@ -48,16 +48,18 @@ struct SchedulesView: View {
             }
             if let error { Text(error).font(.footnote).foregroundStyle(.red) }
         }
-        .navigationTitle("定时任务")
+        .navigationTitle("Schedules")
         .refreshable { await load() }
         .task { await load() }
     }
 
     private func ruleText(_ rule: JSONValue) -> String {
+        let minutes = rule["minutes"].int ?? 0
+        let time = rule["time"].string ?? ""
         switch rule["kind"].string {
-        case "interval": return String(localized: "每 \(rule["minutes"].int ?? 0) 分钟")
-        case "daily": return String(localized: "每天 \(rule["time"].string ?? "")")
-        case "weekdays": return String(localized: "工作日 \(rule["time"].string ?? "")")
+        case "interval": return String(localized: "Every \(minutes) minutes")
+        case "daily": return String(localized: "Daily at \(time)")
+        case "weekdays": return String(localized: "Weekdays at \(time)")
         case "cron": return rule["expression"].string ?? ""
         default: return ""
         }

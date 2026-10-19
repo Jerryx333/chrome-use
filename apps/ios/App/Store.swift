@@ -49,7 +49,7 @@ final class Store {
             unlockProduct = products.first { $0.id == AppConfig.unlockProduct }
             trialProduct = products.first { $0.id == AppConfig.trialProduct }
         } catch {
-            message = String(localized: "无法载入商品：\(error.localizedDescription)")
+            message = String(localized: "Cannot load products: \(error.localizedDescription)")
         }
         await refresh()
     }
@@ -75,9 +75,9 @@ final class Store {
             case .success(.verified(let transaction)):
                 await transaction.finish()
             case .success(.unverified(_, let error)):
-                message = String(localized: "购买未通过验证：\(error.localizedDescription)")
+                message = String(localized: "The purchase could not be verified: \(error.localizedDescription)")
             case .pending:
-                message = String(localized: "购买等待批准。")
+                message = String(localized: "The purchase is waiting for approval.")
             case .userCancelled:
                 break
             @unknown default:
