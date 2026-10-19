@@ -1,0 +1,65 @@
+{
+  "identifier" : "5C2E7A10",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "1.99",
+      "familyShareable" : false,
+      "internalID" : "6740000001",
+      "localizations" : [
+        {
+          "description" : "Unlock sending, creating and approving from your phone, forever.",
+          "displayName" : "Unlock chrome-use remote",
+          "locale" : "en_US"
+        },
+        {
+          "description" : "永久解锁在手机上发送、创建对话和处理审批。",
+          "displayName" : "解锁 chrome-use 遥控",
+          "locale" : "zh_Hans"
+        }
+      ],
+      "productID" : "com.leeguoo.chromeuse.unlock",
+      "referenceName" : "Unlock",
+      "type" : "NonConsumable"
+    },
+    {
+      "displayPrice" : "0.0",
+      "familyShareable" : false,
+      "internalID" : "6740000002",
+      "localizations" : [
+        {
+          "description" : "Try everything free for 14 days.",
+          "displayName" : "14-day free trial",
+          "locale" : "en_US"
+        },
+        {
+          "description" : "免费试用全部功能 14 天。",
+          "displayName" : "14 天免费试用",
+          "locale" : "zh_Hans"
+        }
+      ],
+      "productID" : "com.leeguoo.chromeuse.trial",
+      "referenceName" : "Trial",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6740000000",
+    "_developerTeamID" : "6ZPXG4KVVS",
+    "_failTransactionsEnabled" : false,
+    "_locale" : "zh_Hans",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

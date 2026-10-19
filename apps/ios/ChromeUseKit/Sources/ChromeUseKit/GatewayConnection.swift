@@ -192,7 +192,7 @@ public actor GatewayConnection {
             }
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                await self.failRequest(id, GatewayError.timeout)
+                self.failRequest(id, GatewayError.timeout)
             }
         }
         if let error = reply["error"].object {

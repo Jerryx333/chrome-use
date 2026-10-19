@@ -162,7 +162,7 @@ public final class GatewayClient: Identifiable {
         for conversationId in subscribed {
             await sendSubscribe(conversationId, on: live)
         }
-        try? await refreshConversations()
+        _ = try? await refreshConversations()
     }
 
     private func registerPush(on live: GatewayConnection) async {

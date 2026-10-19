@@ -14,6 +14,11 @@ public struct DecisionOption: Identifiable, Hashable, Sendable {
     public let decision: JSONValue
     public var id: String { decision.encodedString() }
 
+    public init(kind: Kind, decision: JSONValue) {
+        self.kind = kind
+        self.decision = decision
+    }
+
     /// Lets the requested action run; disabled once Stop was requested.
     public var allows: Bool {
         switch kind {

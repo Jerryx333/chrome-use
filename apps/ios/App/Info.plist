@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh-Hans</string>
+	<key>CFBundleDisplayName</key>
+	<string>chrome-use</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hans</string>
+		<string>en</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>$(BUNDLE_ID_BASE).pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>chromeuse</string>
+			</array>
+		</dict>
+	</array>
+	<key>ChromeUseAppGroup</key>
+	<string>$(APP_GROUP)</string>
+	<key>ChromeUseKeychainGroup</key>
+	<string>$(KEYCHAIN_GROUP)</string>
+	<key>ChromeUsePushWorkerURL</key>
+	<string>$(PUSH_WORKER_URL)</string>
+	<key>ChromeUseUnlockProduct</key>
+	<string>$(UNLOCK_PRODUCT_ID)</string>
+	<key>ChromeUseTrialProduct</key>
+	<string>$(TRIAL_PRODUCT_ID)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Gateways are reached over the user's own tailnet or LAN as plain
+		     ws://; frames are end-to-end encrypted regardless. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>扫描电脑终端上显示的配对二维码。</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>用面容 ID 解锁 chrome-use。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>连接同一局域网里运行 chrome-use 的电脑。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>选择要发给 agent 的图片。</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>

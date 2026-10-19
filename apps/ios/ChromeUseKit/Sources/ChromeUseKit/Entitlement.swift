@@ -24,8 +24,6 @@ public enum Entitlement: Equatable, Sendable {
     case expired(endedAt: Date)
 
     public static let trialLength: TimeInterval = 14 * 24 * 60 * 60
-    public static let unlockProductId = "com.leeguoo.chromeuse.unlock"
-    public static let trialProductId = "com.leeguoo.chromeuse.trial"
 
     /// `trialStart` is the verified purchase date of the trial product.
     public static func evaluate(unlocked: Bool, trialStart: Date?, clock: Clock) -> Entitlement {

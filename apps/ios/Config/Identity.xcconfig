@@ -1,0 +1,20 @@
+// The one place for identifiers that change between teams or accounts.
+// The app and its notification extension read everything else from here.
+
+// App bundle id; the notification extension is $(BUNDLE_ID_BASE).notification.
+BUNDLE_ID_BASE = com.leeguoo.chromeuse
+DEVELOPMENT_TEAM = 6ZPXG4KVVS
+// Shared by the app and the extension (entitlement + runtime lookup).
+APP_GROUP = group.com.leeguoo.chromeuse
+// Keychain group holding paired computers; the extension derives push keys
+// from it. An app group identifier is a valid keychain access group on iOS,
+// which keeps the team prefix out of this file.
+KEYCHAIN_GROUP = $(APP_GROUP)
+// Default push Worker; changeable in Settings > Advanced.
+PUSH_WORKER_URL = https:/$()/push.chrome-use.leeguoo.com
+// StoreKit products.
+UNLOCK_PRODUCT_ID = $(BUNDLE_ID_BASE).unlock
+TRIAL_PRODUCT_ID = $(BUNDLE_ID_BASE).trial
+
+MARKETING_VERSION = 1.0.0
+CURRENT_PROJECT_VERSION = 1

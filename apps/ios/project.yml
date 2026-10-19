@@ -1,0 +1,105 @@
+# XcodeGen spec; run `xcodegen` here to produce ChromeUse.xcodeproj (not committed).
+# Identifiers live in Config/Identity.xcconfig.
+name: ChromeUse
+options:
+  bundleIdPrefix: com.leeguoo
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: zh-Hans
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Identity.xcconfig
+  Release: Config/Identity.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+packages:
+  ChromeUseKit:
+    path: ChromeUseKit
+targets:
+  ChromeUse:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    dependencies:
+      - package: ChromeUseKit
+      - target: ChromeUseNotification
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_BASE)
+        PRODUCT_NAME: ChromeUse
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/ChromeUse.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG APNS_SANDBOX
+        Release:
+          APS_ENVIRONMENT: production
+  ChromeUseNotification:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: NotificationService
+    dependencies:
+      - package: ChromeUseKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_BASE).notification
+        INFOPLIST_FILE: NotificationService/Info.plist
+        CODE_SIGN_ENTITLEMENTS: NotificationService/ChromeUseNotification.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+  ChromeUseTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AppTests
+      - path: App/Products.storekit
+        buildPhase: resources
+    dependencies:
+      - target: ChromeUse
+      - package: ChromeUseKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_BASE).tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/ChromeUse.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ChromeUse
+        BUNDLE_LOADER: $(TEST_HOST)
+  ChromeUseUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: ChromeUse
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_BASE).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ChromeUse
+schemes:
+  ChromeUse:
+    build:
+      targets:
+        ChromeUse: all
+        ChromeUseTests: [test]
+        ChromeUseUITests: [test]
+    run:
+      config: Debug
+      storeKitConfiguration: App/Products.storekit
+    test:
+      config: Debug
+      targets:
+        - ChromeUseTests
+        - ChromeUseUITests
+    archive:
+      config: Release
