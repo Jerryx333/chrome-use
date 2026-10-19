@@ -168,6 +168,16 @@ fn operation_seconds(operation: &str) -> u64 {
         "conversationProjectChoose" => 300,
         "conversationProjectList" => 20,
         "conversationResume" => 45,
+        // `ocs dm` (30 s) after a roster read; the roster alone is two ocs
+        // runs of up to 8 s each.
+        "inspectDeliver" => 50,
+        "inspectStatus"
+        | "inspectResolve"
+        | "inspectReplies"
+        | "inspectDeliveryStatus"
+        | "inspectLaunchCommand"
+        | "inspectProject"
+        | "inspectProjectBind" => 25,
         _ => 10,
     }
 }
@@ -416,7 +426,15 @@ fn ensure(directory: &Path, root: &Path, profile: &str) -> Result<Endpoint, Stri
     // native libraries, which Gatekeeper then blocks. launchd starts the
     // service outside Chrome's process tree.
     #[cfg(target_os = "macos")]
-    let launched = launchd_start(directory, &executable, &arguments).is_ok();
+    let launched = match launchd_start(directory, &executable, &arguments) {
+        Ok(()) => true,
+        Err(error) => {
+            // The fallback below starts the service under Chrome, where the
+            // agents it runs inherit the quarantine; say so in the host log.
+            eprintln!("agent service: launchd start failed ({error}); starting it directly");
+            false
+        }
+    };
     #[cfg(not(target_os = "macos"))]
     let launched = false;
     let mut child = if launched {
@@ -1955,6 +1973,22 @@ async fn dispatch(
             evidence_ops::recovery_dispatch(engine, operation, params).await
         }
 
+        operation if super::inspect::OPERATIONS.contains(&operation) => {
+            // Handed over by the native host (see `inspect::runs_in_service`).
+            let profile = engine.lock().await.profile.clone();
+            let operation = operation.to_string();
+            let params = params.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                super::inspect::handle(&operation, &params, Some(&profile))
+            })
+            .await
+            .map_err(|_| "Inspect & Ask operation did not finish".to_string())?;
+            // An ocs run from an older build may have left a quarantined
+            // library behind that this one reused.
+            #[cfg(target_os = "macos")]
+            release_bun_libraries();
+            result
+        }
         "agentInspect" => {
             let root = engine.lock().await.store.directory.clone();
             super::inspection::inspect(params, &root).await

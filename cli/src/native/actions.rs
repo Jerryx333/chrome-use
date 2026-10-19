@@ -2576,6 +2576,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "script" => super::script::handle_script(cmd, state).await,
             "close" => handle_close(cmd, state).await,
             "keep" => handle_keep(cmd, state).await,
+            "done" => handle_done(cmd, state).await,
             "upgrade_handoff" => handle_upgrade_handoff(cmd, state).await,
             "stealth_status" => handle_stealth_status(state).await,
             "snapshot" => handle_snapshot(cmd, state).await,
@@ -6320,12 +6321,15 @@ async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     let was_owned = mgr.unown_target(&target_id)?;
     // Best-effort: ask the extension to ungroup the tab (relay only; no-ops on a
     // launched browser or an older extension that doesn't know ABExt.ungroupTab).
+    // The extension finds the tab from the command's CDP session, so the
+    // command must be sent ON the tab's session: sent browser-level it named
+    // no tab and nothing was ever ungrouped.
     let _ = mgr
         .client
         .send_command_typed::<_, Value>(
             "ABExt.ungroupTab",
             &json!({ "sessionId": session_id, "targetId": target_id }),
-            None,
+            Some(&session_id),
         )
         .await;
     // Record the reason ONLY when we actually owned the tab. `keep` on a tab we
@@ -6350,6 +6354,79 @@ async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             "this session did not create this tab, so there was nothing to release: it was already              exempt from auto-close. No keep reason was recorded."
         },
     }))
+}
+
+/// `done [--keep <tab>]...` — the agent's task is over. Each kept tab is left
+/// for the user the way `keep` leaves one: no longer owned, out of the
+/// session's tab group, recorded as kept, and (0.5.77+) released by the
+/// extension so it is a plain tab with no debugger attached. Then the session
+/// ends exactly as `close` ends it: every other tab it opened is closed and
+/// read back, adopted and lent tabs stay, and the daemon exits.
+///
+/// Which tabs to keep is the agent's call, never a question for the user:
+/// keep what the user needs to see or continue, close everything else.
+async fn handle_done(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let specs: Vec<String> = cmd
+        .get("keep")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let keep_active = cmd.get("keepActive").and_then(Value::as_bool) == Some(true);
+    let session = super::browser::DAEMON_SESSION.get().cloned();
+    let mut kept = Vec::new();
+    if keep_active || !specs.is_empty() {
+        let mgr = state.browser.as_mut().ok_or(
+            "done --keep: this session has no open tab to keep (its browser connection ended); \
+             run `done` without --keep, or `tab list` first",
+        )?;
+        // Resolve every name before changing anything, so one typo keeps
+        // nothing rather than half of what was asked.
+        let mut tabs = Vec::new();
+        if keep_active {
+            tabs.push(mgr.active_tab_spec()?);
+        }
+        for spec in &specs {
+            tabs.push(mgr.resolve_tab_spec(spec)?);
+        }
+        tabs.dedup_by(|a, b| a.0 == b.0);
+        for (target_id, session_id) in tabs {
+            // Out of the group first, while the extension still holds it; sent
+            // on the tab's session, which is how the extension finds the tab.
+            let _ = mgr
+                .client
+                .send_command_typed::<_, Value>(
+                    "ABExt.ungroupTab",
+                    &json!({ "sessionId": session_id, "targetId": target_id }),
+                    Some(&session_id),
+                )
+                .await;
+            let was_owned = mgr.unown_target(&target_id)?;
+            if was_owned {
+                if let Some(session) = session.as_deref() {
+                    crate::connection::set_kept_tab(session, &target_id, "deliverable")?;
+                }
+                // An older extension does not know it; the tab then stays
+                // attached until Chrome restarts, which is how `keep` always was.
+                let _ = mgr
+                    .client
+                    .send_command_typed::<_, Value>(
+                        "ABExt.releaseOwnedTab",
+                        &json!({ "sessionId": session_id, "targetId": target_id }),
+                        Some(&session_id),
+                    )
+                    .await;
+            }
+            kept.push(json!({ "targetId": target_id, "wasOwned": was_owned }));
+        }
+    }
+    let mut out = handle_close(&json!({ "action": "close" }), state).await?;
+    out["done"] = json!(true);
+    out["kept"] = json!(kept);
+    Ok(out)
 }
 
 /// `upgrade_handoff` — sent by a CLI of another version just before it

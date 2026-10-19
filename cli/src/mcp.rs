@@ -545,7 +545,9 @@ fn extended_tools() -> Vec<Value> {
             "name": TOOL_TABS,
             "description": "List browser tabs (all: every tab in the profile, the user's own too, read-only), open or duplicate tabs, explicitly adopt existing tabs, inspect tabs, close tabs, or switch tabs. External Chrome listings include ownership; there, close accepts only session-created tabs (force: the user's own, on their request) and switch accepts only created/adopted tabs.",
             "inputSchema": build_schema(obj(&[
-                ("action", json!({ "type": "string", "enum": ["list", "new", "duplicate", "adopt", "inspect", "close", "switch"], "description": "Tab operation to perform." })),
+                ("action", json!({ "type": "string", "enum": ["list", "new", "duplicate", "adopt", "inspect", "close", "switch", "done", "cleanup"], "description": "Tab operation to perform. done: end the task — keep only the tabs named in keep (left for the user, ungrouped) and close every other tab this session opened; call it at the end of every task and decide what to keep yourself, without asking the user. cleanup: close the tab groups of ended sessions now." })),
+                ("keep", json!({ "type": "array", "items": { "type": "string" }, "description": "With action=done: tab ids (t2, a label, a target id or chrome-tab:<id>) to leave open for the user: a page they asked to see, a result to act on, a logged-in page for them to finish. Leave it out to close everything." })),
+                ("keepActive", json!({ "type": "boolean", "description": "With action=done: also keep the active tab." })),
                 ("url", json!({ "type": "string", "description": "With action=new: URL to open in the new tab." })),
                 ("spec", json!({ "type": "string", "description": "With action=adopt: URL substring or stable target ID of an existing tab." })),
                 ("label", json!({ "type": "string", "description": "With action=new or duplicate: assign this label to the new tab (--label)." })),
@@ -1448,6 +1450,28 @@ fn tabs_args(arguments: &Value) -> Result<Vec<String>, ProtocolError> {
                 args.push("--force".to_string());
             }
         }
+        "done" => {
+            // A session command, not a `tab` subcommand.
+            args = vec!["done".to_string()];
+            if let Some(keep) = arguments.get("keep") {
+                let tabs = keep.as_array().ok_or_else(|| {
+                    ProtocolError::invalid_params("chrome_use_tabs: keep must be an array of tab ids")
+                })?;
+                for tab in tabs {
+                    let tab = tab.as_str().ok_or_else(|| {
+                        ProtocolError::invalid_params("chrome_use_tabs: keep holds tab id strings")
+                    })?;
+                    args.push("--keep".to_string());
+                    args.push(tab.to_string());
+                }
+            }
+            if optional_bool(arguments, "keepActive")?.unwrap_or(false) {
+                args.push("--keep".to_string());
+            }
+        }
+        "cleanup" => {
+            args.push("cleanup".to_string());
+        }
         "switch" => {
             let tab_id = required_string(arguments, "tabId")?;
             args.push(tab_id);
@@ -1457,7 +1481,7 @@ fn tabs_args(arguments: &Value) -> Result<Vec<String>, ProtocolError> {
         }
         other => {
             return Err(ProtocolError::invalid_params(format!(
-                "chrome_use_tabs: unknown action '{}' (use list, new, duplicate, adopt, inspect, close, or switch)",
+                "chrome_use_tabs: unknown action '{}' (use list, new, duplicate, adopt, inspect, close, switch, done, or cleanup)",
                 other
             )))
         }
@@ -2263,6 +2287,25 @@ mod tests {
                 .ok()
                 .unwrap(),
             vec!["diag", "pages", "--watch", "30"]
+        );
+    }
+
+    #[test]
+    fn tabs_done_and_cleanup_map_to_the_cli() {
+        assert_eq!(
+            tabs_args(&json!({ "action": "done" })).ok().unwrap(),
+            vec!["done"]
+        );
+        assert_eq!(
+            tabs_args(&json!({ "action": "done", "keep": ["t2", "docs"], "keepActive": true }))
+                .ok()
+                .unwrap(),
+            vec!["done", "--keep", "t2", "--keep", "docs", "--keep"]
+        );
+        assert!(tabs_args(&json!({ "action": "done", "keep": "t2" })).is_err());
+        assert_eq!(
+            tabs_args(&json!({ "action": "cleanup" })).ok().unwrap(),
+            vec!["tab", "cleanup"]
         );
     }
 

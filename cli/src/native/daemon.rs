@@ -662,10 +662,16 @@ async fn handle_connection<S>(
                 if let Some(ref tx) = idle_reset_tx {
                     let _ = tx.try_send(());
                 }
+                if let Some(session) = super::browser::DAEMON_SESSION.get() {
+                    crate::group_lifecycle::touch_activity(session);
+                }
 
                 let is_handoff = cmd.get("action").and_then(|v| v.as_str())
                     == Some(crate::upgrade_handoff::HANDOFF_ACTION);
-                let mut is_close = cmd.get("action").and_then(|v| v.as_str()) == Some("close");
+                let mut is_close = matches!(
+                    cmd.get("action").and_then(|v| v.as_str()),
+                    Some("close") | Some("done")
+                );
 
                 let keepalive = cmd.get("_keepalive").and_then(Value::as_bool) == Some(true);
                 let response = {

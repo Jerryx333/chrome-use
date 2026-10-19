@@ -1,16 +1,43 @@
 # Session Management
 
-On the extension relay, sessions share one background agent window per Chrome
-profile. Each session has its own tab group and references; cookies and login
-state belong to the profile and are shared. Your own window stays separate.
-Full screen does not change agent ownership. A lost window record is recovered
-from verified agent tabs before creating a replacement; user tabs and unknown
-blank pages are never moved or deleted to reclaim a window. A window the user
-mixed their own tabs into becomes theirs: its agent tabs keep working and new
-agent tabs go to one fresh agent window that later sessions share. Failed placeholder
-cleanup retains its identity and refuses success so the next call can retry.
+On the extension relay, agent tabs open in the background of the user's own
+window. Each session has its own tab group (titled `✦ <session or name>`) and
+references; cookies and login state belong to the profile and are shared.
+`AGENT_BROWSER_DEDICATED_WINDOW=1` puts them in a separate agent window instead.
 `tab list --all` uses a passive connection even in a fresh session: no daemon,
 window, tab or page attachment is created.
+
+## Ending a task: `done`
+
+```bash
+chrome-use done                      # close every tab this session opened
+chrome-use done --keep t3            # leave t3 for the user, close the rest
+chrome-use done --keep --keep docs   # the active tab and the tab labelled docs
+```
+
+Run it at the end of every task that opened tabs, and decide yourself what to
+keep; the user should never be asked. Keep only what they need to see or
+continue: a page they asked to open, a result to act on, a logged-in page left
+for them. A kept tab leaves the group and becomes a plain tab (extension
+0.5.77+ also detaches from it); the rest close and are read back like `close`.
+Tabs you adopted or the user lent stay open either way. The MCP form is
+`chrome_use_tabs` with `action: "done"` and `keep: ["t3"]`.
+
+What happens without it:
+
+- The daemon exits after 10 idle minutes but leaves its tabs open, so the next
+  command of the same session picks them up again.
+- Once a session's daemon is gone and it has been idle for 30 minutes
+  (`AGENT_BROWSER_GROUP_CLEANUP_MS`, `0` turns this off), the next new session
+  on the machine closes its tabs in the background. A tab the user is looking
+  at, or has switched to (extension 0.5.77+), is left for them, ungrouped and
+  recorded as kept.
+- A new session started from the same terminal and working directory takes
+  over the previous session's group and tabs once that session's daemon is
+  gone, instead of opening another group. `--session <name>` never does.
+- `chrome-use tabs cleanup` does all of that now for every ended session and
+  also clears groups left by older builds (`⬉`, `🤖` or a bare session id in
+  the title). Only tabs an agent created are ever closed.
 
 With ab-connect 0.5.50+, native-host disconnect schedules a first connection retry after 1 second.
 Repeated failures back off through 2, 4, 8, 16 and at most 30 seconds; a

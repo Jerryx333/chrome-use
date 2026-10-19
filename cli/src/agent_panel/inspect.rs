@@ -73,6 +73,14 @@ pub(super) const OPERATIONS: &[&str] = &[
     "inspectProjectBind",
 ];
 
+/// Whether the native host hands Inspect & Ask to the panel service instead
+/// of running it itself: on macOS, unless the acceptance hook names a fake
+/// ocs (that one is not Bun-built, and the service does not see the host's
+/// environment).
+pub(super) fn runs_in_service() -> bool {
+    cfg!(target_os = "macos") && std::env::var_os(OCS_OVERRIDE).is_none()
+}
+
 /// `profile` is the Chrome profile the native host was bound to; it picks
 /// the sender identity deliveries go out as and whose replies are read.
 pub(super) fn handle(

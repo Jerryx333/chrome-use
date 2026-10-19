@@ -657,7 +657,17 @@ pub fn handle_for_profile(
         | "serviceHealth"
         | "serviceStop" => service::call(operation, params, profile),
         operation if inspect::OPERATIONS.contains(&operation) => {
-            inspect::handle(operation, params, profile)
+            // On macOS this process runs under Chrome and carries its file
+            // quarantine. Inspect & Ask runs `ocs`, a Bun-built program whose
+            // extracted `.bun-*.dylib` would inherit it and be stopped by
+            // Gatekeeper ("Apple cannot verify .bun-501-….dylib"). The panel
+            // service runs outside Chrome's process tree (launchd), so the
+            // work goes there. The acceptance hook's fake ocs runs here.
+            if inspect::runs_in_service() {
+                service::call(operation, params, profile)
+            } else {
+                inspect::handle(operation, params, profile)
+            }
         }
         _ => Err(format!("Unsupported agent panel operation: {operation}")),
     }

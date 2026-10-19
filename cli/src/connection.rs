@@ -177,6 +177,23 @@ pub fn lock_session_lifecycle(session: &str) -> Result<SessionLifecycleLock, Str
     Ok(SessionLifecycleLock { _file: file })
 }
 
+/// [`lock_session_lifecycle`] without waiting: `None` when another process
+/// holds it (that session is starting or stopping right now).
+pub fn try_lock_session_lifecycle(session: &str) -> Option<SessionLifecycleLock> {
+    let path = get_socket_dir().join(format!("{session}.lifecycle.lock"));
+    fs::create_dir_all(get_socket_dir()).ok()?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    file.try_lock().ok()?;
+    Some(SessionLifecycleLock {
+        _file: FileLockGuard { file },
+    })
+}
+
 pub fn lock_relay_recovery() -> Result<RelayRecoveryLock, String> {
     let path = config_home().join("relay-recovery.lock");
     let file = acquire_file_lock(&path, "relay recovery")?;
@@ -611,6 +628,24 @@ fn get_created_targets_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.created-targets.json", session))
 }
 
+/// Where a session's tab ownership record lives, for its modification time.
+pub(crate) fn created_targets_path(session: &str) -> PathBuf {
+    get_created_targets_path(session)
+}
+
+/// Hand `from`'s whole tab ownership record to `to`, which must have none:
+/// the record moves as it is, endpoint and browser identity included, so it
+/// grants `to` exactly what it granted `from` and nothing on another browser.
+/// The caller holds `from`'s lifecycle lock and has checked its daemon is gone.
+pub(crate) fn move_created_targets(from: &str, to: &str) -> Result<(), String> {
+    let source = get_created_targets_path(from);
+    let destination = get_created_targets_path(to);
+    if destination.exists() {
+        return Err(format!("session {to} already has a tab record"));
+    }
+    fs::rename(&source, &destination).map_err(|e| e.to_string())
+}
+
 /// Ask a running daemon to relabel this session's existing tab group.
 ///
 /// Returns whether the group was actually relabelled. Best effort by design:
@@ -835,7 +870,7 @@ fn owned_registry_targets(
     }
 }
 
-const CREATED_TARGETS_SUFFIX: &str = ".created-targets.json";
+pub(crate) const CREATED_TARGETS_SUFFIX: &str = ".created-targets.json";
 
 /// Target ids that any session other than `session` records as created.
 fn targets_claimed_by_other_sessions(session: &str) -> Result<HashSet<String>, String> {
