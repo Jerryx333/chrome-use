@@ -91,6 +91,21 @@ pub fn effective_rank(agent: &str, tool_access: Option<&str>, full_access: bool)
     }
 }
 
+/// Whether a conversation acts without the user's approval beyond the
+/// browser, or can run commands: full access, OpenCode, `runCommands`, or Pi
+/// with more than browser tools (Pi never asks before a tool runs). The phone
+/// drives such a conversation only when the device was allowed full access on
+/// the computer.
+pub fn elevated(agent: &str, tool_access: Option<&str>, full_access: bool) -> bool {
+    let rank = effective_rank(agent, tool_access, full_access);
+    full_access || rank > PHONE_CREATE_MAX_RANK || (agent == "pi" && rank > 0)
+}
+
+/// Decisions that only refuse or cancel: always allowed, whatever the access.
+pub fn declines(decision: &Value) -> bool {
+    matches!(decision.as_str(), Some("deny" | "decline" | "cancel"))
+}
+
 /// The highest tool access a conversation created from the phone may have.
 pub const PHONE_CREATE_MAX_RANK: u8 = 2;
 
@@ -172,6 +187,11 @@ pub fn check(op: &str, params: &Value) -> Result<Action, Refusal> {
                 let model = model
                     .as_str()
                     .ok_or_else(|| invalid("model must be a string"))?;
+                // A model is passed to the agent CLI as an argument value; one
+                // that looks like an option is refused.
+                if model.starts_with('-') {
+                    return Err(invalid("model must not start with '-'"));
+                }
                 out.insert("model".into(), model.into());
             }
             let options = match map.get("options") {
@@ -186,6 +206,11 @@ pub fn check(op: &str, params: &Value) -> Result<Action, Refusal> {
             if rank > PHONE_CREATE_MAX_RANK {
                 return Err(denied(
                     "A conversation created from the phone cannot run commands; choose writeFiles or less",
+                ));
+            }
+            if agent == "pi" && rank > 0 {
+                return Err(denied(
+                    "Pi runs tools without asking, so from the phone it gets browser tools only (browserOnly)",
                 ));
             }
             out.insert("options".into(), Value::Object(options));
@@ -360,7 +385,7 @@ pub fn check(op: &str, params: &Value) -> Result<Action, Refusal> {
                 .as_str()
                 .filter(|t| {
                     !t.is_empty()
-                        && t.len() <= 2048
+                        && t.len() <= 8192
                         && t.bytes()
                             .all(|b| b.is_ascii_alphanumeric() || b"-_.=".contains(&b))
                 })
@@ -676,6 +701,60 @@ mod tests {
             "invalidParams"
         );
         assert_eq!(code("conversationList", json!([])), "invalidParams");
+    }
+
+    #[test]
+    fn pi_is_browser_only_from_the_phone_and_models_are_not_options() {
+        assert!(check("conversationCreate", &json!({"agentId":"pi"})).is_ok());
+        assert!(check(
+            "conversationCreate",
+            &json!({"agentId":"pi","options":{"toolAccess":"browserOnly"}})
+        )
+        .is_ok());
+        for access in ["readFiles", "writeFiles"] {
+            assert_eq!(
+                code(
+                    "conversationCreate",
+                    json!({"agentId":"pi","options":{"toolAccess":access}})
+                ),
+                "denied"
+            );
+        }
+        assert_eq!(
+            code(
+                "conversationCreate",
+                json!({"agentId":"claude","model":"--dangerously-skip-permissions"})
+            ),
+            "invalidParams"
+        );
+        let long = "a".repeat(8192);
+        assert!(check("pushRegister", &json!({"relayToken":long})).is_ok());
+        assert_eq!(
+            code("pushRegister", json!({"relayToken":"a".repeat(8193)})),
+            "invalidParams"
+        );
+    }
+
+    #[test]
+    fn elevated_conversations_and_declining_answers() {
+        assert!(!elevated("claude", None, false));
+        assert!(!elevated("codex", Some("writeFiles"), false));
+        assert!(elevated("codex", Some("runCommands"), false));
+        assert!(elevated("claude", Some("browserOnly"), true));
+        assert!(elevated("opencode", None, false));
+        assert!(!elevated("pi", None, false));
+        assert!(elevated("pi", Some("readFiles"), false));
+        for d in ["deny", "decline", "cancel"] {
+            assert!(declines(&json!(d)));
+        }
+        for d in [
+            json!("allow"),
+            json!("accept"),
+            json!("acceptForSession"),
+            json!({"optionId":"x"}),
+        ] {
+            assert!(!declines(&d));
+        }
     }
 
     #[test]

@@ -23,6 +23,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 const PROFILE: &str = "mobile-fixture";
 const CONVERSATION: &str = "7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e";
+/// A desktop conversation with full access.
+const ELEVATED: &str = "5a1f2b3c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
 
 fn test_binary() -> PathBuf {
     std::env::var_os("CHROME_USE_TEST_BIN")
@@ -102,7 +104,8 @@ fn serve_panel(listener: TcpListener, hash: String, state: Arc<Mutex<Panel>>) {
             let reply = match operation.as_str() {
                 "health" => json!({"result":{"schemaVersion":1,"binaryHash":hash,"active":0}}),
                 "conversationList" => {
-                    json!({"result":{"schemaVersion":1,"conversations":[summary]}})
+                    let elevated = json!({"id":ELEVATED,"agentId":"codex","title":"Deploy","phase":"idle","fullAccess":true,"options":{"toolAccess":"writeFiles"},"scheduleId":null,"lastTurn":null,"updated":1});
+                    json!({"result":{"schemaVersion":1,"conversations":[summary, elevated]}})
                 }
                 "scheduleList" => json!({"result":{"schemaVersion":1,"schedules":[]}}),
                 "conversationSend" => {
@@ -127,6 +130,10 @@ fn serve_panel(listener: TcpListener, hash: String, state: Arc<Mutex<Panel>>) {
                         .unwrap_or(after);
                     json!({"result":{"schemaVersion":1,"conversation":summary,"journal":{"events":events,"cursor":cursor,"more":false},"queuedMessages":[]}})
                 }
+                "conversationSetOptions" => {
+                    json!({"result":{"schemaVersion":1,"conversation":summary}})
+                }
+                "conversationStop" => json!({"result":{"schemaVersion":1,"conversation":summary}}),
                 "agentInspect" => {
                     json!({"result":{"schemaVersion":1,"inspection":{"agentId":params["agentId"],"models":[{"id":"gpt-5"}],"complete":true}}})
                 }
@@ -747,6 +754,83 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     }
 
     // Revoking drops the live connection within a second or so.
+    let mut second = connect(&address, &device, &paired, false).await.unwrap();
+    // A desktop conversation with full access: reading is fine, acting needs
+    // the computer's permission; stopping and declining never do.
+    let send_elevated = json!({"conversationId":ELEVATED,"messageId":"9b2f8a7e-1c3d-4e5f-8a9b-0c1d2e3f4a5b","text":"Ship it"});
+    let refused = second
+        .request("conversationSend", send_elevated.clone())
+        .await;
+    assert_eq!(refused["error"]["code"], "accessTooHigh");
+    let allow = second
+        .request(
+            "conversationRespond",
+            json!({"conversationId":ELEVATED,"requestId":1,"generation":1,"requestRevision":1,"decision":"accept"}),
+        )
+        .await;
+    assert_eq!(allow["error"]["code"], "accessTooHigh");
+    let decline = second
+        .request(
+            "conversationRespond",
+            json!({"conversationId":ELEVATED,"requestId":1,"generation":1,"requestRevision":1,"decision":"decline"}),
+        )
+        .await;
+    assert!(decline.get("result").is_some(), "{decline}");
+    let stop = second
+        .request("conversationStop", json!({"conversationId":ELEVATED}))
+        .await;
+    assert!(stop.get("result").is_some(), "{stop}");
+    let read = second
+        .request("conversationRead", json!({"conversationId":ELEVATED}))
+        .await;
+    assert!(read.get("result").is_some(), "{read}");
+    let hello = second.request("hello", json!({})).await;
+    assert_eq!(hello["result"]["fullAccessAllowed"], false);
+    let granted = cli(&relay, &home, &["access", &device, "full", "--json"]);
+    assert_eq!(granted["fullAccessAllowed"], true);
+    let hello = second.request("hello", json!({})).await;
+    assert_eq!(hello["result"]["fullAccessAllowed"], true);
+    let sent = second.request("conversationSend", send_elevated).await;
+    assert_eq!(sent["result"]["message"]["accepted"], true);
+    let listed = cli(&relay, &home, &["devices", "--json"]);
+    assert_eq!(listed["devices"][0]["fullAccessAllowed"], true);
+    // Changing effort alone keeps the conversation's current tool access.
+    let options = second
+        .request(
+            "conversationSetOptions",
+            json!({"conversationId":ELEVATED,"options":{"effort":"high"}}),
+        )
+        .await;
+    assert!(options.get("result").is_some(), "{options}");
+    {
+        let panel = state.lock().unwrap();
+        let (_, params) = panel
+            .received
+            .iter()
+            .rfind(|(o, _)| o == "conversationSetOptions")
+            .unwrap();
+        assert_eq!(
+            params,
+            &json!({"conversationId":ELEVATED,"options":{"effort":"high","toolAccess":"writeFiles"}})
+        );
+    }
+
+    // Browsers (any Origin header) are refused before the WebSocket opens.
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
+            "ws://{address}/"
+        ))
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("Origin", "https://evil.example".parse().unwrap());
+    match tokio_tungstenite::connect_async(request).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), 403)
+        }
+        other => panic!("browser origin accepted: {:?}", other.map(|_| ())),
+    }
+
     let started = Instant::now();
     let revoked = cli(&relay, &home, &["revoke", &device, "--json"]);
     assert_eq!(revoked["revoked"], device.as_str());
@@ -764,4 +848,26 @@ async fn phone_pairs_drives_the_panel_and_gets_an_encrypted_push() {
     );
     let listed = cli(&relay, &home, &["devices", "--json"]);
     assert_eq!(listed["devices"], json!([]));
+
+    // Unauthenticated connections: at most 4 per source, each closed after 5 s.
+    let idle: Vec<_> = (0..4)
+        .map(|_| std::net::TcpStream::connect(&address).unwrap())
+        .collect();
+    std::thread::sleep(Duration::from_millis(200));
+    let mut fifth = std::net::TcpStream::connect(&address).unwrap();
+    fifth
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut byte = [0u8; 1];
+    assert_eq!(fifth.read(&mut byte).unwrap_or(0), 0, "fifth was kept open");
+    let mut first = idle.into_iter().next().unwrap();
+    first
+        .set_read_timeout(Some(Duration::from_secs(8)))
+        .unwrap();
+    let opened = Instant::now();
+    assert_eq!(first.read(&mut byte).unwrap_or(0), 0);
+    assert!(
+        opened.elapsed() < Duration::from_secs(7),
+        "pre-auth timeout"
+    );
 }

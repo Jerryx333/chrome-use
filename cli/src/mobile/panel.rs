@@ -60,13 +60,19 @@ impl Panel {
         &self,
         work: impl FnOnce() -> Result<Value, String> + Send + 'static,
     ) -> Result<Value, String> {
-        let _slot = self
+        let slot = self
             .slots
-            .acquire()
+            .clone()
+            .acquire_owned()
             .await
             .map_err(|_| "The gateway is shutting down")?;
-        tokio::task::spawn_blocking(work)
-            .await
-            .map_err(|_| "The panel call did not finish".to_string())?
+        // The slot lives with the blocking call: if the caller is dropped
+        // (connection closed), the call still runs to its end holding it.
+        tokio::task::spawn_blocking(move || {
+            let _slot = slot;
+            work()
+        })
+        .await
+        .map_err(|_| "The panel call did not finish".to_string())?
     }
 }

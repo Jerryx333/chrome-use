@@ -11,21 +11,24 @@ use super::store::{self, State, Store};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, watch, Semaphore};
-use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 const MAX_CONNECTIONS: usize = 32;
+/// Connections from one source that have not authenticated yet.
+const MAX_PRE_AUTH_PER_SOURCE: usize = 4;
 const MAX_MESSAGE: usize = 2 * 1024 * 1024;
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Upgrade plus handshake (and pairing) must finish within this.
+const PRE_AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUESTS_IN_FLIGHT: usize = 8;
 const MAX_SUBSCRIPTIONS: usize = 16;
 const SCREENSHOT_INTERVAL: Duration = Duration::from_secs(2);
@@ -34,6 +37,8 @@ const INSPECT_INTERVAL: Duration = Duration::from_secs(30);
 /// Failures from one source before backoff starts, and the longest backoff.
 const FREE_FAILURES: u32 = 3;
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
+/// Entries kept per limiter table; the least recently touched goes first.
+const LIMITER_ENTRIES: usize = 4096;
 
 const CLOSE_PROTOCOL: u16 = 4400;
 const CLOSE_UNAUTHORIZED: u16 = 4401;
@@ -50,20 +55,39 @@ pub struct Options {
     pub push_url: String,
     /// Overrides (and saves) the computer name shown to phones.
     pub name: Option<String>,
+    /// Take the client address from `CF-Connecting-IP` on loopback
+    /// connections (cloudflared on this computer).
+    pub trust_cf_header: bool,
 }
 
-#[derive(Default)]
+/// The address rate limits are kept for: IPv4 as is (also when mapped into
+/// IPv6), IPv6 by its /64, since one host usually holds a whole /64.
+pub(crate) fn source_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
+    }
+}
+
 struct Strike {
     count: u32,
     until: Option<Instant>,
+    touched: Instant,
 }
 
-/// Failed handshakes per source address and per claimed device, with
-/// exponential backoff. Persistent per-device counts live in the store.
+/// Failed handshakes per source and per (source, claimed device), with
+/// exponential backoff. Kept in memory only; a device is never disabled by
+/// failures, since anyone who knows its id could cause them.
 #[derive(Default)]
 pub(crate) struct Limiter {
     sources: HashMap<IpAddr, Strike>,
-    devices: HashMap<String, Strike>,
+    devices: HashMap<(IpAddr, String), Strike>,
 }
 
 impl Limiter {
@@ -72,12 +96,23 @@ impl Limiter {
             .and_then(|s| s.until)
             .is_some_and(|until| until > now)
     }
-    fn strike<K: std::hash::Hash + Eq>(map: &mut HashMap<K, Strike>, key: K, now: Instant) {
-        if map.len() > 4096 {
-            map.retain(|_, s| s.until.is_some_and(|u| u > now));
+    fn strike<K: std::hash::Hash + Eq + Clone>(map: &mut HashMap<K, Strike>, key: K, now: Instant) {
+        if !map.contains_key(&key) && map.len() >= LIMITER_ENTRIES {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, s)| s.touched)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            }
         }
-        let strike = map.entry(key).or_default();
+        let strike = map.entry(key).or_insert(Strike {
+            count: 0,
+            until: None,
+            touched: now,
+        });
         strike.count = strike.count.saturating_add(1);
+        strike.touched = now;
         if strike.count >= FREE_FAILURES {
             let exponent = (strike.count - FREE_FAILURES).min(16);
             let delay = Duration::from_secs(1u64 << exponent).min(MAX_BACKOFF);
@@ -85,20 +120,26 @@ impl Limiter {
         }
     }
     pub(crate) fn source_blocked(&self, ip: IpAddr, now: Instant) -> bool {
-        Self::wait(&self.sources, &ip, now)
+        Self::wait(&self.sources, &source_key(ip), now)
     }
-    pub(crate) fn device_blocked(&self, id: &str, now: Instant) -> bool {
-        Self::wait(&self.devices, &id.to_string(), now)
+    pub(crate) fn device_blocked(&self, ip: IpAddr, id: &str, now: Instant) -> bool {
+        Self::wait(&self.devices, &(source_key(ip), id.to_string()), now)
     }
     pub(crate) fn fail(&mut self, ip: IpAddr, device: Option<&str>, now: Instant) {
+        let ip = source_key(ip);
         Self::strike(&mut self.sources, ip, now);
         if let Some(id) = device {
-            Self::strike(&mut self.devices, id.to_string(), now);
+            Self::strike(&mut self.devices, (ip, id.to_string()), now);
         }
     }
     pub(crate) fn succeed(&mut self, ip: IpAddr, device: &str) {
+        let ip = source_key(ip);
         self.sources.remove(&ip);
-        self.devices.remove(device);
+        self.devices.remove(&(ip, device.to_string()));
+    }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.sources.len() + self.devices.len()
     }
 }
 
@@ -113,7 +154,10 @@ pub(crate) struct Shared {
     pub(crate) store: Store,
     pub(crate) panel: Panel,
     pub(crate) profile: Option<String>,
+    trust_cf_header: bool,
     limiter: Mutex<Limiter>,
+    /// Unauthenticated connections per source key.
+    pre_auth: Mutex<HashMap<IpAddr, usize>>,
     live: Mutex<HashMap<u64, Live>>,
     /// Shown to the phone by `hello`.
     computer_name: String,
@@ -132,6 +176,52 @@ impl Shared {
         if let Ok(live) = self.live.lock() {
             for connection in live.values().filter(|c| c.device == device) {
                 let _ = connection.outbox.try_send(event.clone());
+            }
+        }
+    }
+
+    /// Hold one of a source's few unauthenticated connection slots.
+    fn pre_auth(self: &Arc<Self>, ip: IpAddr) -> Option<PreAuth> {
+        let key = source_key(ip);
+        let mut slots = self.pre_auth.lock().ok()?;
+        let count = slots.entry(key).or_insert(0);
+        if *count >= MAX_PRE_AUTH_PER_SOURCE {
+            return None;
+        }
+        *count += 1;
+        Some(PreAuth {
+            shared: self.clone(),
+            key,
+        })
+    }
+
+    fn strike(&self, ip: IpAddr) {
+        if let Ok(mut limiter) = self.limiter.lock() {
+            limiter.fail(ip, None, Instant::now());
+        }
+    }
+
+    fn blocked(&self, ip: IpAddr) -> bool {
+        self.limiter
+            .lock()
+            .map(|l| l.source_blocked(ip, Instant::now()))
+            .unwrap_or(true)
+    }
+}
+
+struct PreAuth {
+    shared: Arc<Shared>,
+    key: IpAddr,
+}
+
+impl Drop for PreAuth {
+    fn drop(&mut self) {
+        if let Ok(mut slots) = self.shared.pre_auth.lock() {
+            if let Some(count) = slots.get_mut(&self.key) {
+                *count -= 1;
+                if *count == 0 {
+                    slots.remove(&self.key);
+                }
             }
         }
     }
@@ -163,7 +253,9 @@ pub async fn serve(options: Options) -> Result<(), String> {
         store,
         panel: Panel::default(),
         profile: options.profile,
+        trust_cf_header: options.trust_cf_header,
         limiter: Mutex::new(Limiter::default()),
+        pre_auth: Mutex::new(HashMap::new()),
         live: Mutex::new(HashMap::new()),
         computer_name,
         next_connection: AtomicU64::new(1),
@@ -187,23 +279,29 @@ pub async fn serve(options: Options) -> Result<(), String> {
         let Ok(slot) = slots.clone().try_acquire_owned() else {
             continue;
         };
-        if shared
-            .limiter
-            .lock()
-            .map(|l| l.source_blocked(peer.ip(), Instant::now()))
-            .unwrap_or(true)
-        {
-            continue;
-        }
+        // A trusted tunnel connects from loopback for every client; its
+        // source is known only from the header, after the upgrade.
+        let forwarded = shared.trust_cf_header && is_loopback(peer.ip());
+        let early = if forwarded {
+            None
+        } else {
+            if shared.blocked(peer.ip()) {
+                continue;
+            }
+            match shared.pre_auth(peer.ip()) {
+                Some(guard) => Some(guard),
+                None => continue,
+            }
+        };
         let shared = shared.clone();
         tokio::spawn(async move {
             let _slot = slot;
-            connection(shared, stream, peer).await;
+            connection(shared, stream, peer, forwarded, early).await;
         });
     }
 }
 
-/// Drop connections of revoked or disabled devices within half a second.
+/// Drop connections of revoked devices within half a second.
 async fn watch_revocations(shared: Arc<Shared>) {
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -243,23 +341,40 @@ fn is_loopback(ip: IpAddr) -> bool {
     }
 }
 
+/// Browsers always send `Origin`; the phone apps never do. Refusing it keeps
+/// web pages (including ones on this computer) from opening a socket here.
+#[allow(clippy::result_large_err)]
+fn check_upgrade(request: &Request) -> Result<(), ErrorResponse> {
+    if request.headers().contains_key("origin") {
+        let mut refusal = ErrorResponse::new(Some("Browser connections are not accepted".into()));
+        *refusal.status_mut() = tokio_tungstenite::tungstenite::http::StatusCode::FORBIDDEN;
+        return Err(refusal);
+    }
+    Ok(())
+}
+
 // The upgrade callback's error type is tungstenite's HTTP response.
 #[allow(clippy::result_large_err)]
-async fn connection(shared: Arc<Shared>, stream: TcpStream, peer: SocketAddr) {
-    let mut forwarded: Option<IpAddr> = None;
+async fn connection(
+    shared: Arc<Shared>,
+    stream: TcpStream,
+    peer: SocketAddr,
+    forwarded: bool,
+    early: Option<PreAuth>,
+) {
+    let deadline = tokio::time::Instant::now() + PRE_AUTH_TIMEOUT;
+    let mut header_source: Option<IpAddr> = None;
     let config = WebSocketConfig {
         max_message_size: Some(MAX_MESSAGE),
         max_frame_size: Some(MAX_MESSAGE),
         ..Default::default()
     };
-    // A tunnel on this machine connects from loopback; its client address
-    // header is then the only per-source identity there is.
-    let trust_forwarded = is_loopback(peer.ip());
     let upgrade = tokio_tungstenite::accept_hdr_async_with_config(
         stream,
         |request: &Request, response: Response| {
-            if trust_forwarded {
-                forwarded = request
+            check_upgrade(request)?;
+            if forwarded {
+                header_source = request
                     .headers()
                     .get("cf-connecting-ip")
                     .and_then(|v| v.to_str().ok())
@@ -269,36 +384,61 @@ async fn connection(shared: Arc<Shared>, stream: TcpStream, peer: SocketAddr) {
         },
         Some(config),
     );
-    let Ok(Ok(mut ws)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, upgrade).await else {
-        return;
+    let upgraded = tokio::time::timeout_at(deadline, upgrade).await;
+    // Without the header a trusted tunnel's client is unknown; the loopback
+    // address itself is never struck or checked.
+    let source = if forwarded {
+        header_source
+    } else {
+        Some(peer.ip())
     };
-    let source = forwarded.unwrap_or(peer.ip());
-    if shared
-        .limiter
-        .lock()
-        .map(|l| l.source_blocked(source, Instant::now()))
-        .unwrap_or(true)
+    let mut ws = match upgraded {
+        Ok(Ok(ws)) => ws,
+        _ => {
+            if let Some(source) = source {
+                shared.strike(source);
+            }
+            return;
+        }
+    };
+    let _late = match (forwarded, source) {
+        (true, Some(source)) => {
+            if shared.blocked(source) {
+                close(&mut ws, CLOSE_RATE_LIMITED, "try again later").await;
+                return;
+            }
+            match shared.pre_auth(source) {
+                Some(guard) => Some(guard),
+                None => {
+                    close(&mut ws, CLOSE_RATE_LIMITED, "try again later").await;
+                    return;
+                }
+            }
+        }
+        _ => None,
+    };
+    let session = match tokio::time::timeout_at(deadline, handshake(&shared, &mut ws, source)).await
     {
-        close(&mut ws, CLOSE_RATE_LIMITED, "try again later").await;
-        return;
-    }
-    let session =
-        match tokio::time::timeout(HANDSHAKE_TIMEOUT, handshake(&shared, &mut ws, source)).await {
-            Ok(Ok(session)) => session,
-            Ok(Err(code)) => {
-                let reason = if code == CLOSE_OTHER_PROFILE {
-                    "device is paired to another profile"
-                } else {
-                    "handshake failed"
-                };
-                close(&mut ws, code, reason).await;
-                return;
+        Ok(Ok(session)) => session,
+        Ok(Err(code)) => {
+            let reason = if code == CLOSE_OTHER_PROFILE {
+                "device is paired to another profile"
+            } else {
+                "handshake failed"
+            };
+            close(&mut ws, code, reason).await;
+            return;
+        }
+        Err(_) => {
+            if let Some(source) = source {
+                shared.strike(source);
             }
-            Err(_) => {
-                close(&mut ws, CLOSE_TIMEOUT, "handshake timed out").await;
-                return;
-            }
-        };
+            close(&mut ws, CLOSE_TIMEOUT, "handshake timed out").await;
+            return;
+        }
+    };
+    drop(early);
+    drop(_late);
     let (closer, closed) = watch::channel(false);
     let connection_id = shared.next_connection.fetch_add(1, Ordering::Relaxed);
     let (outbox, queue) = mpsc::channel::<Value>(64);
@@ -312,7 +452,8 @@ async fn connection(shared: Arc<Shared>, stream: TcpStream, peer: SocketAddr) {
             },
         );
     }
-    eprintln!("mobile: device {} connected from {source}", session.device);
+    let shown = source.map_or_else(|| "a tunnel".to_string(), |s| s.to_string());
+    eprintln!("mobile: device {} connected from {shown}", session.device);
     let code = run_session(&shared, ws, session.clone(), closed, outbox, queue).await;
     if let Ok(mut live) = shared.live.lock() {
         live.remove(&connection_id);
@@ -333,7 +474,7 @@ struct Session {
 async fn handshake(
     shared: &Arc<Shared>,
     ws: &mut WebSocketStream<TcpStream>,
-    source: IpAddr,
+    source: Option<IpAddr>,
 ) -> Result<Session, u16> {
     let registry = {
         let store = shared.store.clone();
@@ -363,7 +504,7 @@ async fn handshake(
     let proof = reply["proof"].as_str().and_then(crypto::from_b64url::<32>);
     let now = Instant::now();
     let fail = |known: bool| {
-        if let Ok(mut limiter) = shared.limiter.lock() {
+        if let (Some(source), Ok(mut limiter)) = (source, shared.limiter.lock()) {
             limiter.fail(source, known.then_some(device_id.as_str()), now);
         }
     };
@@ -381,13 +522,15 @@ async fn handshake(
         fail(false);
         return Err(CLOSE_UNAUTHORIZED);
     };
-    if shared
-        .limiter
-        .lock()
-        .map(|l| l.device_blocked(&device.id, now))
-        .unwrap_or(true)
-    {
-        return Err(CLOSE_RATE_LIMITED);
+    if let Some(source) = source {
+        if shared
+            .limiter
+            .lock()
+            .map(|l| l.device_blocked(source, &device.id, now))
+            .unwrap_or(true)
+        {
+            return Err(CLOSE_RATE_LIMITED);
+        }
     }
     // A pending device is only reachable by pairing, and pairing only a
     // pending device: scanning the same QR again fails.
@@ -410,20 +553,6 @@ async fn handshake(
     });
     if !verified {
         fail(true);
-        let store = shared.store.clone();
-        let id = device.id.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            store.update(|r| {
-                if let Some(d) = r.device_mut(&id) {
-                    d.failures = d.failures.saturating_add(1);
-                    if d.failures >= store::MAX_FAILURES {
-                        d.state = State::Disabled;
-                    }
-                }
-                Ok(())
-            })
-        })
-        .await;
         return Err(CLOSE_UNAUTHORIZED);
     }
     // A genuine device of another profile is not an attack: it is told so
@@ -443,7 +572,7 @@ async fn handshake(
         return Err(CLOSE_UNAUTHORIZED);
     };
     let ready = json!({"type":"ready","proof":crypto::b64url(&crypto::gateway_proof(&keys, &gateway_nonce, &phone_nonce, &device.id))});
-    let ip = source.to_string();
+    let ip = source.map_or_else(|| "tunnel".to_string(), |s| s.to_string());
     let keys = if pairing {
         ws.send(Message::Text(ready.to_string()))
             .await
@@ -472,7 +601,6 @@ async fn handshake(
                     if d.state != State::Active {
                         return Err("state changed".to_string());
                     }
-                    d.failures = 0;
                     d.last_seen = Some(store::now_ms());
                     d.last_ip = Some(ip);
                     Ok(())
@@ -488,7 +616,7 @@ async fn handshake(
             .map_err(|_| CLOSE_PROTOCOL)?;
         keys
     };
-    if let Ok(mut limiter) = shared.limiter.lock() {
+    if let (Some(source), Ok(mut limiter)) = (source, shared.limiter.lock()) {
         limiter.succeed(source, &device.id);
     }
     let (send_key, receive_key) = keys.session(&gateway_nonce, &phone_nonce);
@@ -585,6 +713,7 @@ async fn run_session(
         sink
     });
     let requests = Arc::new(Semaphore::new(REQUESTS_IN_FLIGHT));
+    let mut running = tokio::task::JoinSet::new();
     let mut subscriptions: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
     let outcome: (&'static str, u16) = loop {
         let frame = tokio::select! {
@@ -657,13 +786,19 @@ async fn run_session(
                     .await;
             }
             action => {
-                let Ok(permit) = requests.clone().acquire_owned().await else {
+                // A full request queue must not keep a revoked device open.
+                let permit = tokio::select! {
+                    _ = closed.changed() => break ("revoked", CLOSE_REVOKED),
+                    permit = requests.clone().acquire_owned() => permit,
+                };
+                let Ok(permit) = permit else {
                     break ("shutdown", 1001);
                 };
+                while running.try_join_next().is_some() {}
                 let shared = shared.clone();
                 let session = session.clone();
                 let outbox = outbox.clone();
-                tokio::spawn(async move {
+                running.spawn(async move {
                     let _permit = permit;
                     let reply = match perform(&shared, &session, action).await {
                         Ok(result) => json!({"id":id,"result":result}),
@@ -677,6 +812,8 @@ async fn run_session(
     for task in subscriptions.values() {
         task.abort();
     }
+    // Requests still running are not answered on a closed connection.
+    running.abort_all();
     let _ = outbox.send(Value::Null).await;
     drop(outbox);
     if let Ok(mut sink) = writer.await {
@@ -709,20 +846,50 @@ async fn perform(
 ) -> Result<Value, Refusal> {
     let profile = session.profile.as_str();
     match action {
-        Action::Panel { operation, params } => shared
-            .panel
-            .call(operation, params, profile)
-            .await
-            .map_err(panel_error),
+        Action::Panel { operation, params } => {
+            match operation {
+                "conversationSend" | "conversationSendDirect" => {
+                    let id = params["conversationId"].as_str().unwrap_or("");
+                    let row = conversation_row(shared, profile, id).await?;
+                    require_access(shared, session, &row).await?;
+                }
+                "conversationRespond" if !policy::declines(&params["decision"]) => {
+                    let id = params["conversationId"].as_str().unwrap_or("");
+                    let row = conversation_row(shared, profile, id).await?;
+                    require_access(shared, session, &row).await?;
+                }
+                "scheduleRun" => {
+                    let id = params["id"].as_str().unwrap_or("");
+                    let schedule = schedule_row(shared, profile, id).await?;
+                    require_access(shared, session, &schedule).await?;
+                }
+                _ => {}
+            }
+            shared
+                .panel
+                .call(operation, params, profile)
+                .await
+                .map_err(panel_error)
+        }
         Action::SetOptions {
             conversation_id,
             options,
         } => {
+            let mut options = options;
             let row = conversation_row(shared, profile, &conversation_id).await?;
+            require_access(shared, session, &row).await?;
             let agent = row["agentId"].as_str().unwrap_or("");
             let full = row["fullAccess"] == true;
-            let current =
-                policy::effective_rank(agent, row["options"]["toolAccess"].as_str(), full);
+            let current_access = row["options"]["toolAccess"].as_str();
+            // Options replace each other whole: an omitted toolAccess would
+            // fall back to the agent default, so keep the current one.
+            if options.get("toolAccess").is_none_or(Value::is_null) {
+                match current_access {
+                    Some(access) => options.insert("toolAccess".into(), access.into()),
+                    None => options.remove("toolAccess"),
+                };
+            }
+            let current = policy::effective_rank(agent, current_access, full);
             let requested = policy::effective_rank(
                 agent,
                 options.get("toolAccess").and_then(Value::as_str),
@@ -732,6 +899,12 @@ async fn perform(
                 return Err(Refusal {
                     code: "denied",
                     message: "The phone cannot raise a conversation's tool access".into(),
+                });
+            }
+            if agent == "pi" && requested > 0 {
+                return Err(Refusal {
+                    code: "denied",
+                    message: "Pi runs tools without asking, so from the phone it gets browser tools only (browserOnly)".into(),
                 });
             }
             shared
@@ -796,14 +969,12 @@ async fn perform(
                     code: "store",
                     message,
                 })?;
-            let muted = registry
-                .device(&session.device)
-                .map(|d| d.muted.clone())
-                .unwrap_or_default();
+            let device = registry.device(&session.device);
             Ok(json!({
                 "computerName": shared.computer_name,
                 "gatewayVersion": env!("CARGO_PKG_VERSION"),
-                "pushMutes": muted,
+                "pushMutes": device.map(|d| d.muted.clone()).unwrap_or_default(),
+                "fullAccessAllowed": device.is_some_and(|d| d.allow_full_access),
             }))
         }
         Action::PushMute {
@@ -846,12 +1017,10 @@ async fn perform(
             }
             // Only a conversation of this device's profile can be captured.
             conversation_row(shared, profile, &conversation_id).await?;
-            capture(profile, &conversation_id)
-                .await
-                .map_err(|message| Refusal {
-                    code: "screenshot",
-                    message,
-                })
+            capture(&conversation_id).await.map_err(|message| Refusal {
+                code: "screenshot",
+                message,
+            })
         }
         Action::Subscribe { .. } | Action::Unsubscribe { .. } => unreachable!("handled inline"),
     }
@@ -893,6 +1062,54 @@ async fn inspect(shared: &Arc<Shared>, profile: &str, agent: String) -> Result<V
         }
     }
     result.map_err(panel_error)
+}
+
+/// Refuse a conversation or schedule that acts beyond what a phone may start
+/// unless this device was allowed full access on the computer.
+async fn require_access(
+    shared: &Arc<Shared>,
+    session: &Session,
+    row: &Value,
+) -> Result<(), Refusal> {
+    let elevated = policy::elevated(
+        row["agentId"].as_str().unwrap_or(""),
+        row["options"]["toolAccess"].as_str(),
+        row["fullAccess"] == true,
+    );
+    if !elevated || device_allows_full_access(shared, &session.device).await {
+        return Ok(());
+    }
+    Err(Refusal {
+        code: "accessTooHigh",
+        message: "This conversation runs with full access, commands or Pi tools. Allow it for this phone on the computer: chrome-use mobile access <device> full".into(),
+    })
+}
+
+async fn device_allows_full_access(shared: &Arc<Shared>, device: &str) -> bool {
+    let store = shared.store.clone();
+    let device = device.to_string();
+    tokio::task::spawn_blocking(move || store.read())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .and_then(|r| r.device(&device).map(|d| d.allow_full_access))
+        .unwrap_or(false)
+}
+
+async fn schedule_row(shared: &Arc<Shared>, profile: &str, id: &str) -> Result<Value, Refusal> {
+    let list = shared
+        .panel
+        .call("scheduleList", json!({}), profile)
+        .await
+        .map_err(panel_error)?;
+    list["schedules"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|r| r["id"] == id))
+        .cloned()
+        .ok_or_else(|| Refusal {
+            code: "notFound",
+            message: "Schedule not found".into(),
+        })
 }
 
 async fn conversation_row(
@@ -1009,37 +1226,40 @@ async fn follow(
 }
 
 /// Capture the conversation's own browser session (`panel-<id>`, the session
-/// the panel service gives its agent) as a downscaled JPEG. A session without
-/// a running daemon is reported, never started: a phone never opens a browser.
-async fn capture(profile: &str, conversation: &str) -> Result<Value, String> {
+/// the panel service gives its agent) as a downscaled JPEG. The command goes
+/// straight to that session's running daemon: none is started, none is
+/// restarted, so a phone never opens a browser.
+async fn capture(conversation: &str) -> Result<Value, String> {
     let session = format!("panel-{conversation}");
-    if cfg!(test) || !crate::connection::daemon_ready(&session) {
+    if cfg!(test) {
         return Err("This conversation has no open browser session".into());
     }
-    let executable = std::env::current_exe().map_err(|_| "Cannot locate chrome-use")?;
     let directory = tempfile::tempdir().map_err(|_| "Cannot create a screenshot folder")?;
     let path = directory.path().join("screenshot.png");
-    let mut command = tokio::process::Command::new(executable);
-    command
-        .arg("screenshot")
-        .arg(&path)
-        .env("AGENT_BROWSER_BROWSER", profile)
-        .env("AGENT_BROWSER_SESSION", &session)
-        .env("CHROME_USE_NO_UPDATE_CHECK", "1")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let status = tokio::time::timeout(Duration::from_secs(20), command.status())
-        .await
-        .map_err(|_| "The screenshot did not finish within 20 seconds")?
-        .map_err(|_| "chrome-use could not run")?;
-    if !status.success() {
-        return Err("The browser session could not take a screenshot".into());
+    let command = json!({"id":"mobile-screenshot","action":"screenshot","path":path,"base64":true});
+    let reply = tokio::time::timeout(
+        Duration::from_secs(20),
+        tokio::task::spawn_blocking(move || {
+            crate::connection::send_to_running_daemon(&command, &session)
+        }),
+    )
+    .await
+    .map_err(|_| "The screenshot did not finish within 20 seconds")?
+    .map_err(|_| "The screenshot did not finish")?
+    .map_err(|_| "This conversation has no open browser session")?;
+    if !reply.success {
+        return Err(reply
+            .error
+            .unwrap_or_else(|| "The browser session could not take a screenshot".into()));
     }
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|_| "The screenshot file is missing")?;
+    use base64::Engine;
+    let bytes = reply
+        .data
+        .as_ref()
+        .and_then(|d| d["base64"].as_str())
+        .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok())
+        .ok_or("The browser session returned no image")?;
+    drop(directory);
     tokio::task::spawn_blocking(move || jpeg(&bytes))
         .await
         .map_err(|_| "Screenshot encoding failed".to_string())?
@@ -1082,7 +1302,10 @@ mod tests {
         assert!(!limiter.source_blocked(ip, now));
         limiter.fail(ip, Some("d"), now);
         assert!(limiter.source_blocked(ip, now));
-        assert!(limiter.device_blocked("d", now));
+        assert!(limiter.device_blocked(ip, "d", now));
+        // Backoff for a device is per source: another address is not held.
+        let other: IpAddr = "198.51.100.7".parse().unwrap();
+        assert!(!limiter.device_blocked(other, "d", now));
         assert!(!limiter.source_blocked(ip, now + Duration::from_secs(2)));
         for _ in 0..40 {
             limiter.fail(ip, None, now);
@@ -1091,7 +1314,44 @@ mod tests {
         assert!(!limiter.source_blocked(ip, now + MAX_BACKOFF + Duration::from_secs(1)));
         limiter.succeed(ip, "d");
         assert!(!limiter.source_blocked(ip, now));
-        assert!(!limiter.device_blocked("d", now));
+        assert!(!limiter.device_blocked(ip, "d", now));
+    }
+
+    #[test]
+    fn ipv6_sources_share_their_64_and_tables_stay_bounded() {
+        let a: IpAddr = "2001:db8:1:2:aaaa::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:bbbb::9".parse().unwrap();
+        let c: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert_eq!(source_key(a), source_key(b));
+        assert_ne!(source_key(a), source_key(c));
+        let mapped: IpAddr = "::ffff:203.0.113.9".parse().unwrap();
+        assert_eq!(source_key(mapped), "203.0.113.9".parse::<IpAddr>().unwrap());
+        let mut limiter = Limiter::default();
+        let now = Instant::now();
+        for _ in 0..FREE_FAILURES {
+            limiter.fail(a, None, now);
+        }
+        assert!(limiter.source_blocked(b, now));
+        let start = Instant::now();
+        for i in 0..(LIMITER_ENTRIES as u32 + 10) {
+            let ip = IpAddr::V4(std::net::Ipv4Addr::from(0x0a00_0000 + i));
+            limiter.fail(ip, None, start + Duration::from_millis(i as u64));
+        }
+        assert!(limiter.len() <= LIMITER_ENTRIES);
+    }
+
+    #[test]
+    fn browser_origins_are_refused_at_upgrade() {
+        let request = |origin: Option<&str>| {
+            let mut builder = Request::builder().uri("/");
+            if let Some(origin) = origin {
+                builder = builder.header("Origin", origin);
+            }
+            builder.body(()).unwrap()
+        };
+        assert!(check_upgrade(&request(None)).is_ok());
+        let refused = check_upgrade(&request(Some("https://evil.example"))).unwrap_err();
+        assert_eq!(refused.status(), 403);
     }
 
     #[test]

@@ -10,8 +10,6 @@ use std::path::PathBuf;
 
 /// A pending pairing is usable for this long, once.
 pub const PAIR_TTL_MS: u64 = 10 * 60 * 1000;
-/// Consecutive failed handshakes that disable a device until it is paired again.
-pub const MAX_FAILURES: u32 = 10;
 /// Muted conversations kept per device.
 pub const MAX_MUTED: usize = 512;
 
@@ -39,7 +37,14 @@ pub struct Device {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_ip: Option<String>,
     #[serde(default)]
+    /// Not counted any more (a device is never disabled by failures, which
+    /// anyone knowing its id could cause); kept so older files still load.
     pub failures: u32,
+    /// Set on the computer only (`mobile pair --allow-full-access`,
+    /// `mobile access`): lets the phone drive conversations with full access,
+    /// command execution or Pi beyond browser tools.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_full_access: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay_token: Option<String>,
     /// The last relay token the push Worker refused, and why
@@ -85,6 +90,20 @@ impl Registry {
     pub fn device_mut(&mut self, id: &str) -> Option<&mut Device> {
         self.devices.iter_mut().find(|d| d.id == id)
     }
+}
+
+/// Atomic write that leaves the file at 0600 even when an existing file had
+/// wider permissions (the shared writer keeps an existing file's mode).
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.is_file() && meta.permissions().mode() & 0o777 != 0o600 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|_| "Cannot protect the paired-device files")?;
+        }
+    }
+    private_fs::write(path, bytes)
 }
 
 pub fn now_ms() -> u64 {
@@ -177,7 +196,7 @@ impl Store {
 
     fn save(&self, registry: &Registry) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(registry).map_err(|_| "Cannot encode device list")?;
-        private_fs::write(&self.registry_path(), &bytes)
+        write_private(&self.registry_path(), &bytes)
     }
 
     /// Apply one change and write it back atomically.
@@ -232,7 +251,7 @@ impl Store {
                 return Err("The device key file is invalid".into());
             }
             bytes.extend_from_slice(phone_secret);
-            private_fs::write(&key, &bytes)?;
+            write_private(&key, &bytes)?;
             device.state = State::Active;
             device.expires = None;
             device.failures = 0;
@@ -261,13 +280,14 @@ impl Store {
             last_seen: None,
             last_ip: None,
             failures: 0,
+            allow_full_access: false,
             relay_token: None,
             rejected_token: None,
             rejected_reason: None,
             muted: Vec::new(),
         };
         // The key exists before the record that refers to it.
-        private_fs::write(&self.key_path(&device.id)?, &secret)?;
+        write_private(&self.key_path(&device.id)?, &secret)?;
         let stored = device.clone();
         let expired = self.update(move |registry| {
             let expired: Vec<String> = registry
@@ -325,6 +345,17 @@ impl Store {
                 device.rejected_reason = Some(reason.into());
             }
             Ok(())
+        })
+    }
+
+    /// Allow or stop the phone driving high-access conversations.
+    pub fn set_full_access(&self, id: &str, allowed: bool) -> Result<Device, String> {
+        self.update(|registry| {
+            let device = registry
+                .device_mut(id)
+                .ok_or("No paired device has that id")?;
+            device.allow_full_access = allowed;
+            Ok(device.clone())
         })
     }
 
@@ -471,6 +502,30 @@ mod tests {
         assert_eq!(store.read().unwrap().gateway_id, first);
         let (_, _, gateway) = store.create_pending("Phone", "p").unwrap();
         assert_eq!(gateway, first);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewrites_narrow_widened_files_back_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let (device, _, _) = store.create_pending("Phone", "p").unwrap();
+        let path = store.registry_path();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        store.set_full_access(&device.id, true).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(
+            store
+                .read()
+                .unwrap()
+                .device(&device.id)
+                .unwrap()
+                .allow_full_access
+        );
     }
 
     #[test]

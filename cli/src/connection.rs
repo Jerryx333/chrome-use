@@ -2594,6 +2594,13 @@ fn client_read_budget(cmd: &Value) -> Duration {
     daemon_cdp_budget(cmd) + Duration::from_secs(15)
 }
 
+/// One command to a session's running daemon, as is: no daemon is started,
+/// no stale daemon is stopped, nothing is retried. For callers that must
+/// never cause a browser launch (the mobile gateway's screenshots).
+pub(crate) fn send_to_running_daemon(cmd: &Value, session: &str) -> Result<Response, String> {
+    send_command_once(cmd, session)
+}
+
 fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
     let read_to = client_read_budget(cmd);
     exchange_command(

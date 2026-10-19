@@ -17,9 +17,10 @@ pub const DEFAULT_PORT: u16 = 17345;
 
 const USAGE: &str = "\
 Usage:
-  chrome-use mobile serve [--bind ADDR] [--allow-all-interfaces] [--profile P] [--push-url URL] [--name NAME]
-  chrome-use mobile pair --url ws(s)://HOST[:PORT] [--name NAME] [--profile P] [--json]
+  chrome-use mobile serve [--bind ADDR] [--allow-all-interfaces] [--profile P] [--push-url URL] [--name NAME] [--trust-cf-header]
+  chrome-use mobile pair --url ws(s)://HOST[:PORT] [--name NAME] [--profile P] [--allow-full-access] [--json]
   chrome-use mobile devices [--json]
+  chrome-use mobile access <deviceId> full|limited [--json]
   chrome-use mobile revoke <deviceId> [--json]
   chrome-use mobile push-test <deviceId> [--push-url URL]";
 
@@ -123,6 +124,7 @@ fn run(raw: &[String]) -> Result<(), String> {
                 "push-url",
                 "allow-all-interfaces",
                 "name",
+                "trust-cf-header",
             ])?;
             let name = args.value("name").map(|n| display_name(&n)).transpose()?;
             let bind = bind_address(args.value("bind"), args.flag("allow-all-interfaces"))?;
@@ -136,11 +138,12 @@ fn run(raw: &[String]) -> Result<(), String> {
                 profile,
                 push_url,
                 name,
+                trust_cf_header: args.flag("trust-cf-header"),
             }))
         }
         "pair" => {
             let args = Args::parse(rest, &["url", "name", "profile"])?;
-            args.only(&["url", "name", "profile", "json"])?;
+            args.only(&["url", "name", "profile", "json", "allow-full-access"])?;
             pair(&args)
         }
         "devices" => {
@@ -161,6 +164,35 @@ fn run(raw: &[String]) -> Result<(), String> {
                 println!(
                     "Revoked {} ({}). A running gateway drops its connection within a second.",
                     device.name, device.id
+                );
+            }
+            Ok(())
+        }
+        "access" => {
+            let args = Args::parse(rest, &[])?;
+            args.only(&["json"])?;
+            let [id, level] = args.positional.as_slice() else {
+                return Err(format!(
+                    "access needs a device id and full or limited\n{USAGE}"
+                ));
+            };
+            let allowed = match level.as_str() {
+                "full" => true,
+                "limited" => false,
+                _ => return Err(format!("access takes full or limited\n{USAGE}")),
+            };
+            let device = Store::open()?.set_full_access(id, allowed)?;
+            if args.flag("json") {
+                println!(
+                    "{}",
+                    json!({"success":true,"deviceId":device.id,"fullAccessAllowed":allowed})
+                );
+            } else if allowed {
+                println!("{} may now drive conversations with full access, commands or Pi tools. The app asks for its lock first.", device.name);
+            } else {
+                println!(
+                    "{} may drive only conversations that ask before acting beyond the browser.",
+                    device.name
                 );
             }
             Ok(())
@@ -271,6 +303,9 @@ fn pair(args: &Args) -> Result<(), String> {
     let profile = choose_profile(args.value("profile"))?;
     let store = Store::open()?;
     let (device, secret, gateway) = store.create_pending(&name, &profile)?;
+    if args.flag("allow-full-access") {
+        store.set_full_access(&device.id, true)?;
+    }
     let computer = store.read()?.computer_name.unwrap_or_else(computer_name);
     let link = format!(
         "chromeuse://pair?v=1&url={}&id={}&k={}&fp={}&n={}",
@@ -364,7 +399,7 @@ fn devices(json_output: bool) -> Result<(), String> {
                 State::Active => "active",
                 State::Disabled => "disabled",
             };
-            json!({"id":d.id,"name":d.name,"state":state,"profile":d.profile,"created":d.created,"lastSeen":d.last_seen,"lastIp":d.last_ip,"push":d.relay_token.is_some()})
+            json!({"id":d.id,"name":d.name,"state":state,"profile":d.profile,"created":d.created,"lastSeen":d.last_seen,"lastIp":d.last_ip,"push":d.relay_token.is_some(),"fullAccessAllowed":d.allow_full_access})
         })
         .collect();
     if json_output {
@@ -389,7 +424,7 @@ fn devices(json_output: bool) -> Result<(), String> {
     };
     for (row, device) in rows.iter().zip(&registry.devices) {
         println!(
-            "{}  {}  [{}]  created {}  last seen {}{}{}",
+            "{}  {}  [{}]  created {}  last seen {}{}{}{}",
             device.id,
             device.name,
             row["state"].as_str().unwrap_or(""),
@@ -402,6 +437,11 @@ fn devices(json_output: bool) -> Result<(), String> {
                 .unwrap_or_default(),
             if device.relay_token.is_some() {
                 "  push on"
+            } else {
+                ""
+            },
+            if device.allow_full_access {
+                "  full access allowed"
             } else {
                 ""
             }
