@@ -477,7 +477,8 @@ pub enum SelfUpgrade {
     Ready,
     /// `CHROME_USE_AUTO_UPGRADE=0`: no automatic upgrade, a click still works.
     Disabled,
-    /// Installed somewhere we cannot write (a package manager's path).
+    /// Installed somewhere we cannot write (a package manager's path), or a
+    /// cargo build rather than an install.
     Unwritable,
     /// install.sh does not run on Windows; install.ps1 is a manual step.
     Windows,
@@ -497,7 +498,7 @@ impl SelfUpgrade {
 pub fn self_upgrade() -> SelfUpgrade {
     if cfg!(windows) {
         SelfUpgrade::Windows
-    } else if !binary_dir_writable() {
+    } else if !binary_dir_writable() || current_bin_dir().is_some_and(|d| in_cargo_target(&d)) {
         SelfUpgrade::Unwritable
     } else if !auto_upgrade_enabled() {
         SelfUpgrade::Disabled
@@ -648,6 +649,15 @@ fn binary_dir_writable() -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Whether `dir` is inside a cargo build directory: cargo keeps
+/// `.rustc_info.json` in its target directory, and `CACHEDIR.TAG` when it
+/// created the directory itself. A development or test build is not an
+/// install: replacing it with the release would overwrite the build.
+fn in_cargo_target(dir: &Path) -> bool {
+    dir.ancestors()
+        .any(|d| d.join(".rustc_info.json").is_file() || d.join("CACHEDIR.TAG").is_file())
 }
 
 fn current_bin_dir() -> Option<PathBuf> {
@@ -1526,6 +1536,18 @@ mod tests {
         for off in ["0", "false", "no", "off", " off "] {
             assert!(!auto_upgrade_enabled_by(Some(off)), "{off:?}");
         }
+    }
+
+    /// A cargo build is never replaced by the release.
+    #[test]
+    fn a_cargo_build_is_not_an_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        std::fs::create_dir_all(target.join("debug")).unwrap();
+        assert!(!in_cargo_target(&target.join("debug")));
+        std::fs::write(target.join(".rustc_info.json"), "{}").unwrap();
+        assert!(in_cargo_target(&target.join("debug")));
+        assert!(!in_cargo_target(tmp.path()));
     }
 
     /// The outcome follows the version on disk: install.sh's closing
