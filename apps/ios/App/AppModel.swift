@@ -161,6 +161,11 @@ final class AppModel {
             GatewayCredential(url: link.url, deviceId: link.deviceId, secret: secret, gatewayId: link.gatewayId, name: name, pairedAt: pairedAt, nameIsCustom: custom)
         }
         let stored = StoredFlag()
+        // A link for a computer already saved under the same key (its QR
+        // scanned again) can only be refused, but the attempt may overwrite
+        // the saved credential before that: keep a copy to put back.
+        let storageKey = credentialFor(Data()).storageKey
+        let previous = (try? keychain.all())?.first { $0.storageKey == storageKey }
         do {
             let save = { (secret: Data) throws in
                 let credential = credentialFor(secret)
@@ -202,16 +207,19 @@ final class AppModel {
             if asksForNotifications { push.requestAuthorization() }
             return client
         } catch {
-            if stored.value, (error as? GatewayError) != .closed(.unauthorized) {
+            if let previous {
+                // The computer was already paired: leave it exactly as it was.
+                try? credentials.save(previous)
+                try? self.pushKeys.save(PushKeyEntry(credential: previous))
+            } else if stored.value, (error as? GatewayError) != .closed(.unauthorized) {
                 // pairComplete left the phone; the gateway may have committed
                 // it before the connection dropped. Keep the credential: the
                 // next connection either works or is refused with 4401.
                 load()
             } else {
                 // Only what this attempt stored; never a computer it was about to replace.
-                let key = credentialFor(Data()).storageKey
-                try? credentials.delete(storageKey: key)
-                try? self.pushKeys.delete(storageKey: key)
+                try? credentials.delete(storageKey: storageKey)
+                try? self.pushKeys.delete(storageKey: storageKey)
             }
             throw error
         }

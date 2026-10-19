@@ -128,7 +128,7 @@ struct SettingsView: View {
     }
 
     private func applyWorker() {
-        guard let url = URL(string: workerURL.trimmingCharacters(in: .whitespaces)), url.scheme == "https" || url.scheme == "http", url.host != nil else {
+        guard let url = PushRegistrar.workerURL(workerURL) else {
             workerError = String(localized: "Enter a full https:// URL.")
             return
         }

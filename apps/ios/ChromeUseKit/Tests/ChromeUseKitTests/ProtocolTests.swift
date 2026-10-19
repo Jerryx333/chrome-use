@@ -266,3 +266,27 @@ final class ElevatedTests: XCTestCase {
         XCTAssertFalse(Schedule(["id": "s", "agentId": "claude", "options": ["toolAccess": "browserOnly"]]).elevated)
     }
 }
+
+final class OutgoingAndWorkerTests: XCTestCase {
+    func testMessageIdIsKeptUntilConfirmed() {
+        var outgoing = OutgoingMessage()
+        let image = Data(repeating: 1, count: 100)
+        let first = outgoing.id(text: "hello", images: [image])
+        XCTAssertEqual(outgoing.id(text: "hello", images: [image]), first, "a retry reuses the id")
+        let edited = outgoing.id(text: "hello!", images: [image])
+        XCTAssertNotEqual(edited, first, "changed text: the service would refuse the old id")
+        XCTAssertNotEqual(outgoing.id(text: "hello!", images: []), edited, "changed images too")
+        let current = outgoing.id(text: "next")
+        outgoing.sent()
+        XCTAssertNotEqual(outgoing.id(text: "next"), current, "after confirmation a new message gets a new id")
+        XCTAssertNotNil(UUID(uuidString: current))
+    }
+
+    func testPushWorkerMustBeHTTPS() {
+        XCTAssertEqual(PushRegistrar.workerURL(" https://push.example.com ")?.host, "push.example.com")
+        XCTAssertNil(PushRegistrar.workerURL("http://push.example.com"))
+        XCTAssertNil(PushRegistrar.workerURL("https://"))
+        XCTAssertNil(PushRegistrar.workerURL("ftp://x"))
+        XCTAssertNil(PushRegistrar.workerURL("push.example.com"))
+    }
+}

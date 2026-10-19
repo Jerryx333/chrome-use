@@ -451,3 +451,37 @@ final class PairingRetryTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class RescanTests: XCTestCase {
+    /// Scanning a paired computer's QR again is refused (4401); the saved
+    /// computer and its push key stay exactly as they were.
+    func testRefusedRescanKeepsTheSavedComputer() async throws {
+        for storesFirst in [false, true] {
+            let link = PairLink(url: URL(string: "ws://192.168.0.190:17345/")!, deviceId: UUID().uuidString.lowercased(), pairSecret: Data(repeating: 2, count: 32), gatewayId: "home")
+            let saved = GatewayCredential(url: link.url, deviceId: link.deviceId, secret: Data(repeating: 9, count: 64), gatewayId: "home", name: "Home Mac", pairedAt: Date(), nameIsCustom: true)
+            let keychain = InMemoryCredentialStore([saved])
+            let pushKeys = InMemoryPushKeyStore()
+            try pushKeys.save(PushKeyEntry(credential: saved))
+            let model = AppModel(credentials: keychain, pushKeys: pushKeys, cache: InMemoryJournalCache()) { link, store in
+                if storesFirst { try store(link.pairSecret + Data(repeating: 7, count: 32)) }
+                throw GatewayError.closed(.unauthorized)
+            }
+            model.asksForNotifications = false
+            do {
+                _ = try await model.pair(link, name: "Home Mac")
+                XCTFail("re-scan must be refused")
+            } catch {}
+            XCTAssertEqual(try keychain.all(), [saved], "storesFirst=\(storesFirst)")
+            XCTAssertEqual(try pushKeys.all(), [PushKeyEntry(credential: saved)])
+            XCTAssertNotNil(model.client(saved.deviceId))
+            model.remove(saved.deviceId, tellGateway: false)
+        }
+    }
+
+    func testAppIconIsInTheBundle() {
+        let icons = Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any]
+        let primary = icons?["CFBundlePrimaryIcon"] as? [String: Any]
+        XCTAssertNotNil(primary?["CFBundleIconName"] ?? primary?["CFBundleIconFiles"], "an app icon is compiled in")
+    }
+}

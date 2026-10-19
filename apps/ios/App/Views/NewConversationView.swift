@@ -22,6 +22,10 @@ struct NewConversationView: View {
     @State private var loading = true
     @State private var working = false
     @State private var error: String?
+    /// Created on an earlier Start whose first message failed: retrying
+    /// sends to it instead of creating another conversation.
+    @State private var createdId: String?
+    @State private var outgoing = OutgoingMessage()
 
     private var choices: [ToolAccess] { ToolAccess.phoneCreateChoices(agentId: agentId) }
     private var modelValid: Bool { AgentModel.isValidName(chosenModel) }
@@ -42,6 +46,8 @@ struct NewConversationView: View {
                             access = agents.first { $0.id == id }?.defaultAccess ?? .browserOnly
                             Task { await loadModels(id) }
                         }
+                        // Once created, a retry only resends the first message.
+                        .disabled(createdId != nil)
                     }
                     if agents.contains(where: { !$0.creatableFromPhone }) {
                         Text("OpenCode always runs commands, so it can only be started on the computer.").font(.caption).foregroundStyle(.secondary)
@@ -58,11 +64,13 @@ struct NewConversationView: View {
                             }
                             Text("Other…").tag(Self.customChoice)
                         }
+                        .disabled(createdId != nil)
                     }
                     if models.isEmpty || modelChoice == Self.customChoice {
                         TextField("Model (blank for default)", text: $model)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .disabled(createdId != nil)
                     }
                 } footer: {
                     VStack(alignment: .leading) {
@@ -75,6 +83,7 @@ struct NewConversationView: View {
                     Picker("Access", selection: $access) {
                         ForEach(choices, id: \.self) { Text($0.label).tag($0) }
                     }
+                    .disabled(createdId != nil)
                 } footer: {
                     if agentId == "pi" {
                         Text("Pi conversations started from the phone can only use the browser.")
@@ -90,6 +99,7 @@ struct NewConversationView: View {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
+            .disabled(working)
             .navigationTitle("New conversation")
             .accessibilityIdentifier("newConversationForm")
             .navigationBarTitleDisplayMode(.inline)
@@ -145,10 +155,15 @@ struct NewConversationView: View {
         working = true
         defer { working = false }
         do {
-            let summary = try await client.create(agentId: agentId, model: chosenModel, toolAccess: access)
-            try await client.send(conversationId: summary.id, text: message.trimmingCharacters(in: .whitespacesAndNewlines))
+            var made = createdId
+            var pending = outgoing
+            defer { createdId = made; outgoing = pending }
+            let id = try await client.startConversation(
+                createdId: &made, outgoing: &pending, agentId: agentId, model: chosenModel, toolAccess: access,
+                text: message.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
             dismiss()
-            created(summary.id)
+            created(id)
         } catch {
             self.error = describe(error, deviceId: client.id)
         }

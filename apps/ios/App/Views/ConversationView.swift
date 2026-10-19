@@ -16,6 +16,8 @@ struct ConversationView: View {
     @State private var shot: GatewayClient.Screenshot?
     @State private var shooting = false
     @State private var confirmDelete = false
+    /// Kept across retries so a timed-out send is not delivered twice.
+    @State private var outgoing = OutgoingMessage()
     @FocusState private var composing: Bool
 
     struct PreparedImage: Identifiable {
@@ -213,7 +215,10 @@ struct ConversationView: View {
         sending = true
         defer { sending = false }
         do {
-            try await client.send(conversationId: conversationId, text: message, images: images.map(\.jpeg))
+            let jpegs = images.map(\.jpeg)
+            let messageId = outgoing.id(text: message, images: jpegs)
+            try await client.send(conversationId: conversationId, text: message, images: jpegs, messageId: messageId)
+            outgoing.sent()
             text = ""
             images = []
             error = nil
