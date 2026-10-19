@@ -1,10 +1,10 @@
 name = "chrome-use-push"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
-workers_dev = true
+workers_dev = false
 
-# Hostname is still OPEN in the spec; enable once decided.
-# routes = [{ pattern = "push.chrome-use.leeguoo.com", custom_domain = true }]
+# One level under leeguoo.com so Universal SSL covers it.
+routes = [{ pattern = "chrome-use-push.leeguoo.com", custom_domain = true }]
 
 # No KV / D1 / Durable Objects: tokens are self-verifying and nothing is stored.
 

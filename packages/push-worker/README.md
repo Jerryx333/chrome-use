@@ -87,9 +87,8 @@ npx wrangler@4 deploy --dry-run --outdir /tmp/push-worker-build   # bundle check
 npm run deploy      # after the secrets are set
 ```
 
-The custom domain is still open in the spec; until it is decided the Worker is served on
-`chrome-use-push.<account>.workers.dev`. Uncomment `routes` in `wrangler.toml` when the
-hostname is fixed.
+The Worker is served on the custom domain `chrome-use-push.leeguoo.com` (Cloudflare
+account `leeguooooo`, zone `leeguoo.com`).
 
 ## Cost
 
