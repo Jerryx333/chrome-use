@@ -1,10 +1,24 @@
 # Changelog
 
+## 1.5.240
+
+<!-- release:start -->
+Works with extension ab-connect 0.5.75.
+
+### Changes
+
+- **A repository page starts in your checkout of that repository, not in whatever project the whole site was bound to.** On github.com/owner/repo (and GitLab with subgroups, Gitee, Bitbucket, Codeberg, self-hosted Gitea, Gogs and GitLab) the side panel now finds the recent folder whose git remote (origin, upstream or any other; https, ssh or `git@host:owner/repo`) is the page's repository and preselects it, shown as "Matched by repository". Before, remembering a project once on github.com made every repository there open in it. Remotes are read from `.git/config`, worktrees included, cached by modification time; git is not run. A project bound to the repository itself still wins; a broader binding (the whole site) no longer overrides the match. Nothing already stored is removed.
+- **Remembering a project asks for the narrowest sensible scope, editable in place.** On a repository page the bar asks "Use this project for github.com/owner/repo from now on?" with "this path" and "whole site" as alternatives; other sites default to the site with a path option. A code host is never bound whole by default. The options page shows each binding's scope and can change it in one write.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
 ## 1.5.239
 
 Works with extension ab-connect 0.5.74.
 
-<!-- release:start -->
 ### New Features
 
 - **The CLI keeps itself current.** Most installs stayed on the version they started with: background upgrades were opt-in and the only signal was a stderr line. When a newer release exists, any command, and the native host whenever Chrome starts it, now installs it in place in the background (it takes effect on the next run) and refreshes the skill copies afterwards. `CHROME_USE_AUTO_UPGRADE=0` turns it off and leaves the notice. A CLI installed where it cannot write, or a cargo build, is never replaced. On macOS the upgrade runs as a launchd job, because started from inside Chrome it would install a binary carrying Chrome's quarantine. How the last background upgrade ended is kept, and `doctor` says why a CLI is still behind and what to run.
@@ -13,7 +27,6 @@ Works with extension ab-connect 0.5.74.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.238
 
