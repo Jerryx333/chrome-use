@@ -83,6 +83,23 @@ public struct Agent: Identifiable, Hashable, Sendable {
     }
 }
 
+/// One entry of `agentInspect`'s model list.
+public struct AgentModel: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let label: String
+    public let isDefault: Bool
+
+    /// Agents the gateway can inspect for models.
+    public static let inspectable: Set<String> = ["codex", "claude", "opencode", "pi"]
+
+    public static func list(_ result: JSONValue) -> [AgentModel] {
+        (result["inspection"]["models"].array ?? []).compactMap { value in
+            guard let id = value["id"].string, !id.isEmpty else { return nil }
+            return AgentModel(id: id, label: value["label"].string ?? id, isDefault: value["isDefault"] == .bool(true))
+        }
+    }
+}
+
 public struct Schedule: Identifiable, Hashable, Sendable {
     public let raw: JSONValue
     public var id: String { raw["id"].string ?? "" }

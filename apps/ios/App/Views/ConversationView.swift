@@ -82,7 +82,13 @@ struct ConversationView: View {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
                     Text(summary?.title.isEmpty == false ? summary!.title : String(localized: "对话")).font(.headline).lineLimit(1)
-                    if let summary { PhaseBadge(phase: summary.phase) }
+                    HStack(spacing: 4) {
+                        if let summary { PhaseBadge(phase: summary.phase) }
+                        if client.pushMutes.contains(conversationId) {
+                            Image(systemName: "bell.slash.fill").font(.caption2).foregroundStyle(.secondary)
+                                .accessibilityLabel("已静音")
+                        }
+                    }
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -92,6 +98,14 @@ struct ConversationView: View {
                 .accessibilityLabel("截图")
                 .disabled(shooting || client.status != .connected)
                 Menu {
+                    // Muting is free: it only stops this phone's pushes.
+                    let muted = client.pushMutes.contains(conversationId)
+                    Button(muted ? LocalizedStringKey("恢复通知") : LocalizedStringKey("静音通知"), systemImage: muted ? "bell" : "bell.slash") {
+                        Task {
+                            do { try await client.setMuted(conversationId, !muted) } catch { self.error = describe(error) }
+                        }
+                    }
+                    .disabled(client.status != .connected)
                     Button("删除对话", systemImage: "trash", role: .destructive) { confirmDelete = true }
                         .disabled(phase.isBusy)
                 } label: { Image(systemName: "ellipsis.circle") }

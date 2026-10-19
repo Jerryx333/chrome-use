@@ -21,6 +21,26 @@
         }
       }
     },
+    "定时任务失败": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schedule failed"
+          }
+        }
+      }
+    },
+    "定时任务已完成": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schedule finished"
+          }
+        }
+      }
+    },
     "已停止": {
       "localizations": {
         "en": {

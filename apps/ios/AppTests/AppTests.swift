@@ -166,7 +166,7 @@ final class RepairFlowTests: XCTestCase {
 
 @MainActor
 final class NotificationRouteTests: XCTestCase {
-    static let payload = "YGFiY2RlZmdoaWprktav2wx9J+xArK4OvMDeVT9U88nqCouE9dpVi+i/sKRwrzQjUvK7YtXeHXjTSmiHAsnECRF00kOkE4HpgVcGP4qqcSRM3J51n02XKKZbglkIsNYdTiSgI72lAHJe/QpUul9s0W7solBQAJgEcxn+pmpcK8kHC7c5RjpK/lr+ZPVaAYhkZRR2bryeNaF6akuOC+m/FQmWvXOT/L1sD7M="
+    static let payload = "D9OaRmBhYmNkZWZnaGlqa5LWr9sMfSfsQKyuDrzA3lU/VPPJ6gqLhPXaVYvov7CkcK80I1Lyu2LV3h1400pohwLJxAkRdNJDpBOB6YFXBj+KqnEkTNyedZ9NlyimW4JZCLDWHVkisCr6vRg+bP0LTJ9IPNZ/vuEAUEvASnRUoP0fA2z1ChvjIk0tBepBrmiuVxuePSZeJEuygSCkNnBbEVQAqk2LryQAdNZH2Fn72U5ucwevM2p9auOluknJ1H1AWrc="
 
     /// The extension decrypts the spec's push vector and merges its route;
     /// tapping the notification opens that conversation (its approval card
@@ -176,7 +176,7 @@ final class NotificationRouteTests: XCTestCase {
         let credential = GatewayCredential(url: URL(string: "ws://127.0.0.1:9/")!, deviceId: device, secret: Data(0x00...0x1f) + Data(0x80...0x9f), gatewayId: "g", name: "Mac", pairedAt: Date())
         let model = AppModel(credentials: InMemoryCredentialStore([credential]), cache: InMemoryJournalCache())
         let notice = try XCTUnwrap(PushNotice.open(payload: Self.payload, credentials: [credential]))
-        XCTAssertEqual(notice.kind, .needsInput)
+        XCTAssertEqual(notice.code, .needsInput)
         let conversation = "7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e"
 
         model.path = [.schedules(device)]

@@ -11,6 +11,16 @@
         }
       }
     },
+    "%@（默认）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ (default)"
+          }
+        }
+      }
+    },
     "%lld 个对话等你处理": {
       "localizations": {
         "en": {
@@ -287,6 +297,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Close"
+          }
+        }
+      }
+    },
+    "其他…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other…"
           }
         }
       }
@@ -651,6 +671,16 @@
         }
       }
     },
+    "已静音": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muted"
+          }
+        }
+      }
+    },
     "开启后，每次回到 App 都需要验证。": {
       "localizations": {
         "en": {
@@ -697,6 +727,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Restore purchases"
+          }
+        }
+      }
+    },
+    "恢复通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unmute notifications"
           }
         }
       }
@@ -901,6 +941,16 @@
         }
       }
     },
+    "无法读取模型列表：%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot read the model list: %@"
+          }
+        }
+      }
+    },
     "无法读取这张图片。": {
       "localizations": {
         "en": {
@@ -1041,6 +1091,16 @@
         }
       }
     },
+    "模型": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Model"
+          }
+        }
+      }
+    },
     "模型只能在新建时选择，之后不能更改。": {
       "localizations": {
         "en": {
@@ -1057,6 +1117,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Model (blank for default)"
+          }
+        }
+      }
+    },
+    "正在读取模型列表，稍后再试；也可以直接输入模型名。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model list is being read; try again shortly, or type a model name."
           }
         }
       }
@@ -1781,6 +1851,16 @@
         }
       }
     },
+    "静音通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mute notifications"
+          }
+        }
+      }
+    },
     "面容 ID 锁": {
       "localizations": {
         "en": {
@@ -1797,6 +1877,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Advanced"
+          }
+        }
+      }
+    },
+    "默认": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default"
           }
         }
       }

@@ -12,6 +12,11 @@ struct NewConversationView: View {
     @State private var agents: [Agent] = []
     @State private var agentId = ""
     @State private var model = ""
+    @State private var models: [AgentModel] = []
+    @State private var modelChoice = ""
+    @State private var loadingModels = false
+    @State private var modelsNote: String?
+    private static let customChoice = "\u{0}custom"
     @State private var access: ToolAccess = .browserOnly
     @State private var message = ""
     @State private var loading = true
@@ -34,6 +39,7 @@ struct NewConversationView: View {
                         }
                         .onChange(of: agentId) { _, id in
                             access = agents.first { $0.id == id }?.defaultAccess ?? .browserOnly
+                            Task { await loadModels(id) }
                         }
                     }
                     if agents.contains(where: { !$0.creatableFromPhone }) {
@@ -41,11 +47,27 @@ struct NewConversationView: View {
                     }
                 }
                 Section {
-                    TextField("模型（留空用默认）", text: $model)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
+                    if loadingModels {
+                        HStack { Text("模型"); Spacer(); ProgressView() }
+                    } else if !models.isEmpty {
+                        Picker("模型", selection: $modelChoice) {
+                            Text("默认").tag("")
+                            ForEach(models) { option in
+                                Text(option.isDefault ? String(localized: "\(option.label)（默认）") : option.label).tag(option.id)
+                            }
+                            Text("其他…").tag(Self.customChoice)
+                        }
+                    }
+                    if models.isEmpty || modelChoice == Self.customChoice {
+                        TextField("模型（留空用默认）", text: $model)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
                 } footer: {
-                    Text("模型只能在新建时选择，之后不能更改。")
+                    VStack(alignment: .leading) {
+                        if let modelsNote { Text(modelsNote) }
+                        Text("模型只能在新建时选择，之后不能更改。")
+                    }
                 }
                 Section {
                     Picker("权限", selection: $access) {
@@ -81,17 +103,42 @@ struct NewConversationView: View {
             let first = agents.first { $0.creatableFromPhone && $0.installed } ?? agents.first { $0.creatableFromPhone }
             agentId = first?.id ?? ""
             access = first?.defaultAccess ?? .browserOnly
+            if let first { await loadModels(first.id) }
         } catch {
             self.error = describe(error)
         }
         loading = false
     }
 
+    /// The agent CLI's model list (`agentInspect`); the gateway lets it run
+    /// once per agent every 30 s, so a refusal falls back to typing a name.
+    private func loadModels(_ id: String) async {
+        models = []
+        modelChoice = ""
+        modelsNote = nil
+        guard AgentModel.inspectable.contains(id) else { return }
+        loadingModels = true
+        defer { loadingModels = false }
+        do {
+            let found = try await client.models(agentId: id)
+            guard id == agentId else { return }
+            models = found
+        } catch GatewayError.remote("rateLimited", _) {
+            modelsNote = String(localized: "正在读取模型列表，稍后再试；也可以直接输入模型名。")
+        } catch {
+            modelsNote = String(localized: "无法读取模型列表：\(describe(error))")
+        }
+    }
+
+    private var chosenModel: String {
+        modelChoice.isEmpty || modelChoice == Self.customChoice ? model.trimmingCharacters(in: .whitespaces) : modelChoice
+    }
+
     private func create() async {
         working = true
         defer { working = false }
         do {
-            let summary = try await client.create(agentId: agentId, model: model.trimmingCharacters(in: .whitespaces), toolAccess: access)
+            let summary = try await client.create(agentId: agentId, model: chosenModel, toolAccess: access)
             try await client.send(conversationId: summary.id, text: message.trimmingCharacters(in: .whitespacesAndNewlines))
             dismiss()
             created(summary.id)

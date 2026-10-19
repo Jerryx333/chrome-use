@@ -145,6 +145,7 @@ final class GatewayE2ETests: XCTestCase {
         let hello = try await connection.request("hello")
         XCTAssertEqual(hello["computerName"].string, computerName)
         XCTAssertFalse((hello["gatewayVersion"].string ?? "").isEmpty)
+        XCTAssertEqual(hello["pushMutes"], [])
         do {
             _ = try await connection.request("hello", ["name": "x"])
             XCTFail("hello takes no parameters")
@@ -208,7 +209,7 @@ final class GatewayE2ETests: XCTestCase {
         XCTAssertEqual(push["collapseId"].string, conversation)
         let credential = GatewayCredential(url: link.url, deviceId: link.deviceId, secret: secret, gatewayId: link.gatewayId, name: "Mac", pairedAt: Date())
         let notice = try XCTUnwrap(PushNotice.open(payload: push["payload"].string!, credentials: [credential]))
-        XCTAssertEqual(notice.kind, .needsInput)
+        XCTAssertEqual(notice.code, .needsInput)
         XCTAssertEqual(notice.conversationId, conversation)
         XCTAssertEqual(notice.title, "Weekly report")
 
@@ -266,6 +267,27 @@ final class GatewayE2ETests: XCTestCase {
         let named = await client.credential
         XCTAssertEqual(named.name, computerName)
         XCTAssertNotNil(named.gatewayVersion)
+        // Mutes are per device and come back with hello on the next connection.
+        try await client.setMuted(conversation, true)
+        let mutedNow = await client.pushMutes
+        XCTAssertEqual(mutedNow, [conversation])
+        let probe = try await GatewayConnection.connect(url: link.url, deviceId: link.deviceId, secret: secret)
+        let rehello = try await probe.request("hello")
+        XCTAssertEqual(rehello["pushMutes"], [.string(conversation)])
+        await probe.close()
+        try await client.setMuted(conversation, false)
+        let unmuted = await client.pushMutes
+        XCTAssertTrue(unmuted.isEmpty)
+
+        // Model listing for the create screen; cached on the gateway.
+        let models = try await client.models(agentId: "claude")
+        XCTAssertEqual(models.map(\.id), ["claude-opus-5-5", "claude-sonnet-5-5"])
+        XCTAssertEqual(models.first?.isDefault, true)
+        let again = try await client.models(agentId: "claude")
+        XCTAssertEqual(again, models)
+        let none = try await client.models(agentId: "gemini")
+        XCTAssertTrue(none.isEmpty, "not inspectable: no request")
+
         // The app's answer to the refusal: a new token, which is stored.
         await MainActor.run { client.relayToken = "eyJwIjoiaW9zIn0.c2ln" }
         _ = try await wait("new token stored") { () async -> Bool? in

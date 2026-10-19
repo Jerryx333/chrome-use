@@ -134,7 +134,7 @@ public struct FrameChannel: Sendable {
 
 /// End-to-end encrypted push payloads: standard base64 of
 /// `kid (4) ‖ nonce (12) ‖ ciphertext ‖ tag`, no associated data, under
-/// `push_key`. Payloads from gateways before the key id carry no `kid`.
+/// `push_key`.
 public enum PushCrypto {
     /// Non-secret id of a push key: the first 4 bytes of
     /// HMAC-SHA256(push_key, "chrome-use mobile v1 kid").
@@ -142,27 +142,18 @@ public enum PushCrypto {
         MobileCrypto.hmac(key: pushKey, Data("chrome-use mobile v1 kid".utf8)).prefix(4)
     }
 
-    /// Open with this key; the `kid` prefix is used when it matches the key,
-    /// otherwise the payload is tried as the older unprefixed form.
-    public static func open(payload: String, pushKey: Data) -> Data? {
-        guard let raw = Data(base64Encoded: payload) else { return nil }
-        if raw.count > 4 + 12 + 16, raw.prefix(4) == kid(pushKey: pushKey),
-           let plain = openSealed(raw.dropFirst(4), pushKey: pushKey) {
-            return plain
-        }
-        return openSealed(raw, pushKey: pushKey)
-    }
-
-    /// Whether the payload names this key (cheap check before decrypting).
+    /// Whether the payload names this key.
     public static func names(payload: String, pushKey: Data) -> Bool {
         guard let raw = Data(base64Encoded: payload), raw.count > 4 else { return false }
         return raw.prefix(4) == kid(pushKey: pushKey)
     }
 
-    static func openSealed(_ raw: Data, pushKey: Data) -> Data? {
-        let raw = Data(raw)
-        guard raw.count > 12 + 16,
-              let box = try? AES.GCM.SealedBox(combined: raw),
+    /// Open a payload addressed to this key; nil for another key's payload
+    /// or one that fails authentication.
+    public static func open(payload: String, pushKey: Data) -> Data? {
+        guard let raw = Data(base64Encoded: payload), raw.count > 4 + 12 + 16,
+              raw.prefix(4) == kid(pushKey: pushKey),
+              let box = try? AES.GCM.SealedBox(combined: Data(raw.dropFirst(4))),
               let plain = try? AES.GCM.open(box, using: SymmetricKey(data: pushKey))
         else { return nil }
         return plain
@@ -170,7 +161,7 @@ public enum PushCrypto {
 
     public static func seal(_ plaintext: Data, pushKey: Data, nonce: Data) throws -> String {
         let box = try AES.GCM.seal(plaintext, using: SymmetricKey(data: pushKey), nonce: AES.GCM.Nonce(data: nonce))
-        return box.combined!.base64EncodedString()
+        return (kid(pushKey: pushKey) + box.combined!).base64EncodedString()
     }
 }
 

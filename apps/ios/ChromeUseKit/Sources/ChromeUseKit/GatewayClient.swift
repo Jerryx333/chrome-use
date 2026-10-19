@@ -26,6 +26,8 @@ public final class GatewayClient: Identifiable {
     public private(set) var subscriptionErrors: [String: String] = [:]
     /// Conversations that no longer exist (`subscriptionEnded`).
     public private(set) var ended: Set<String> = []
+    /// Conversations this phone gets no pushes for (`hello`, `pushMute`).
+    public private(set) var pushMutes: Set<String> = []
 
     /// The push relay token; sent with `pushRegister` on every connection.
     public var relayToken: String? {
@@ -191,6 +193,7 @@ public final class GatewayClient: Identifiable {
 
     /// Exposed for tests.
     public func applyHello(_ reply: JSONValue) {
+        if let mutes = reply["pushMutes"].array { pushMutes = Set(mutes.compactMap(\.string)) }
         var updated = credential
         if let version = reply["gatewayVersion"].string { updated.gatewayVersion = version }
         if !updated.nameIsCustom, let name = reply["computerName"].string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
@@ -261,6 +264,18 @@ public final class GatewayClient: Identifiable {
         if !attachments.isEmpty { params["attachments"] = .array(attachments) }
         let result = try await call("conversationSend", .object(params))
         if !result["conversation"].isNull { summaries[conversationId] = ConversationSummary(result["conversation"]) }
+    }
+
+    /// The agent's models for the create screen (`agentInspect`), for the
+    /// agents the gateway can inspect; empty for the others.
+    public func models(agentId: String) async throws -> [AgentModel] {
+        guard AgentModel.inspectable.contains(agentId) else { return [] }
+        return AgentModel.list(try await call("agentInspect", ["agentId": .string(agentId)], timeout: 90))
+    }
+
+    public func setMuted(_ conversationId: String, _ muted: Bool) async throws {
+        let reply = try await call("pushMute", ["conversationId": .string(conversationId), "muted": .bool(muted)])
+        if let mutes = reply["pushMutes"].array { pushMutes = Set(mutes.compactMap(\.string)) }
     }
 
     public func stopTurn(conversationId: String) async throws {

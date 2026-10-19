@@ -90,70 +90,51 @@ final class VectorTests: XCTestCase {
         XCTAssertEqual(try gatewaySide.open(hex(expected)), request.encoded())
     }
 
-    static let pushPayload = "YGFiY2RlZmdoaWprktav2wx9J+xArK4OvMDeVT9U88nqCouE9dpVi+i/sKRwrzQjUvK7YtXeHXjTSmiHAsnECRF00kOkE4HpgVcGP4qqcSRM3J51n02XKKZbglkIsNYdTiSgI72lAHJe/QpUul9s0W7solBQAJgEcxn+pmpcK8kHC7c5RjpK/lr+ZPVaAYhkZRR2bryeNaF6akuOC+m/FQmWvXOT/L1sD7M="
-    static let pushPlaintext = #"{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","title":"Weekly report","body":"Waiting for your approval"}"#
+    /// Spec appendix: push under the paired push key, nonce 60…6b.
+    static let pushPayload = "D9OaRmBhYmNkZWZnaGlqa5LWr9sMfSfsQKyuDrzA3lU/VPPJ6gqLhPXaVYvov7CkcK80I1Lyu2LV3h1400pohwLJxAkRdNJDpBOB6YFXBj+KqnEkTNyedZ9NlyimW4JZCLDWHVkisCr6vRg+bP0LTJ9IPNZ/vuEAUEvASnRUoP0fA2z1ChvjIk0tBepBrmiuVxuePSZeJEuygSCkNnBbEVQAqk2LryQAdNZH2Fn72U5ucwevM2p9auOluknJ1H1AWrc="
+    static let pushPlaintext = #"{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","code":"needsInput","title":"Weekly report","body":"Waiting for your approval"}"#
 
-    func testPushPayloadDecrypts() throws {
-        let pushKey = DeviceKeys(ikm: pairSecret + phoneSecret).push
-        let plain = try XCTUnwrap(PushCrypto.open(payload: Self.pushPayload, pushKey: pushKey))
-        XCTAssertEqual(String(decoding: plain, as: UTF8.self), Self.pushPlaintext)
-        XCTAssertEqual(
-            try PushCrypto.seal(Data(Self.pushPlaintext.utf8), pushKey: pushKey, nonce: Data(0x60...0x6b)),
-            Self.pushPayload
-        )
-    }
-
-    /// The key id the gateway puts in front of push payloads
-    /// (`crypto::push_kid`, vector 0fd39a46 for the paired push key).
-    func testPushKeyIdAndPrefixedPayload() throws {
+    func testPushKeyIdAndPayload() throws {
         let pushKey = DeviceKeys(ikm: pairSecret + phoneSecret).push
         XCTAssertEqual(PushCrypto.kid(pushKey: pushKey).hex, "0fd39a46")
-        let unprefixed = try XCTUnwrap(Data(base64Encoded: Self.pushPayload))
-        let prefixed = (PushCrypto.kid(pushKey: pushKey) + unprefixed).base64EncodedString()
-        XCTAssertTrue(PushCrypto.names(payload: prefixed, pushKey: pushKey))
-        XCTAssertFalse(PushCrypto.names(payload: Self.pushPayload, pushKey: pushKey))
-        XCTAssertEqual(PushCrypto.open(payload: prefixed, pushKey: pushKey), Data(Self.pushPlaintext.utf8))
-        // Older gateways send no kid; still opens.
-        XCTAssertEqual(PushCrypto.open(payload: Self.pushPayload, pushKey: pushKey), Data(Self.pushPlaintext.utf8))
+        XCTAssertTrue(PushCrypto.names(payload: Self.pushPayload, pushKey: pushKey))
+        let plain = try XCTUnwrap(PushCrypto.open(payload: Self.pushPayload, pushKey: pushKey))
+        XCTAssertEqual(String(decoding: plain, as: UTF8.self), Self.pushPlaintext)
+        XCTAssertEqual(try PushCrypto.seal(Data(Self.pushPlaintext.utf8), pushKey: pushKey, nonce: Data(0x60...0x6b)), Self.pushPayload)
+        // Without the kid (or with another key's), the payload is not ours.
+        let raw = try XCTUnwrap(Data(base64Encoded: Self.pushPayload))
+        XCTAssertNil(PushCrypto.open(payload: raw.dropFirst(4).base64EncodedString(), pushKey: pushKey))
+        XCTAssertNil(PushCrypto.open(payload: Self.pushPayload, pushKey: Data(repeating: 3, count: 32)))
     }
 
-    /// The gateway's current push vector: kid prefix and a `code` field.
-    func testGatewayPushVectorWithKidAndCode() throws {
-        let pushKey = DeviceKeys(ikm: pairSecret + phoneSecret).push
-        let payload = "D9OaRmBhYmNkZWZnaGlqa5LWr9sMfSfsQKyuDrzA3lU/VPPJ6gqLhPXaVYvov7CkcK80I1Lyu2LV3h1400pohwLJxAkRdNJDpBOB6YFXBj+KqnEkTNyedZ9NlyimW4JZCLDWHVkisCr6vRg+bP0LTJ9IPNZ/vuEAUEvASnRUoP0fA2z1ChvjIk0tBepBrmiuVxuePSZeJEuygSCkNnBbEVQAqk2LryQAdNZH2Fn72U5ucwevM2p9auOluknJ1H1AWrc="
-        let plain = try XCTUnwrap(PushCrypto.open(payload: payload, pushKey: pushKey))
-        XCTAssertEqual(String(decoding: plain, as: UTF8.self), #"{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","code":"needsInput","title":"Weekly report","body":"Waiting for your approval"}"#)
-        let mine = GatewayCredential(url: URL(string: "ws://b")!, deviceId: deviceId, secret: pairSecret + phoneSecret, gatewayId: "y", name: "mine", pairedAt: Date())
-        let notice = try XCTUnwrap(PushNotice.open(payload: payload, credentials: [mine]))
-        XCTAssertEqual(notice.code, "needsInput")
-        XCTAssertEqual(notice.standardBody, .waitingForApproval)
-    }
-
-    func testStandardBodies() {
-        func notice(_ kind: PushNotice.Kind, _ code: String?, _ body: String) -> PushNotice {
-            PushNotice(conversationId: "c", kind: kind, rawKind: kind.rawValue, code: code, title: "t", body: body, deviceId: "d")
-        }
-        XCTAssertEqual(notice(.turnEnded, "finished", "Finished").standardBody, .finished)
-        XCTAssertNil(notice(.turnEnded, "finished", "Your inbox has 3 unread").standardBody, "agent summaries are kept")
-        XCTAssertEqual(notice(.turnEnded, "stopped", "Stopped").standardBody, .stopped)
-        XCTAssertEqual(notice(.test, "test", "Test notification (1)").standardBody, .test)
-        XCTAssertNil(notice(.scheduleFailed, "scheduleFailed", "failed: timeout").standardBody)
-        // Older gateways: no code.
-        XCTAssertEqual(notice(.needsInput, nil, "Waiting for your approval").standardBody, .waitingForApproval)
-        XCTAssertEqual(notice(.turnEnded, nil, "Failed").standardBody, .failed)
-        XCTAssertNil(notice(.turnEnded, nil, "Done: 3 files").standardBody)
-    }
-
-    func testPushNoticeFindsItsComputer() throws {
+    func testPushNoticePicksItsComputerByKid() throws {
         let other = GatewayCredential(url: URL(string: "ws://a")!, deviceId: UUID().uuidString, secret: Data(repeating: 7, count: 64), gatewayId: "x", name: "other", pairedAt: Date())
         let mine = GatewayCredential(url: URL(string: "ws://b")!, deviceId: deviceId, secret: pairSecret + phoneSecret, gatewayId: "y", name: "mine", pairedAt: Date())
         let notice = try XCTUnwrap(PushNotice.open(payload: Self.pushPayload, credentials: [other, mine]))
         XCTAssertEqual(notice.deviceId, deviceId)
-        XCTAssertEqual(notice.kind, .needsInput)
+        XCTAssertEqual(notice.code, .needsInput)
+        XCTAssertEqual(notice.rawKind, "needsInput")
         XCTAssertEqual(notice.conversationId, "7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e")
         XCTAssertEqual(notice.title, "Weekly report")
-        XCTAssertEqual(notice.body, "Waiting for your approval")
-        XCTAssertNil(PushNotice.open(payload: Self.pushPayload, credentials: [other]))
+        XCTAssertFalse(notice.showsBody, "needsInput is worded by its code, not the English body")
+        XCTAssertEqual(notice.userInfo["code"], "needsInput")
+        XCTAssertNil(PushNotice.open(payload: Self.pushPayload, credentials: [other]), "no matching kid: dropped")
         XCTAssertNil(PushNotice.open(payload: "not base64", credentials: [mine]))
+    }
+
+    func testCodesDecideWhatIsShown() throws {
+        let key = DeviceKeys(ikm: pairSecret + phoneSecret).push
+        let mine = GatewayCredential(url: URL(string: "ws://b")!, deviceId: deviceId, secret: pairSecret + phoneSecret, gatewayId: "y", name: "mine", pairedAt: Date())
+        func open(_ code: String, _ body: String) throws -> PushNotice {
+            let plain = #"{"v":1,"conversationId":"","kind":"turnEnded","code":"\#(code)","title":"t","body":"\#(body)"}"#
+            let payload = try PushCrypto.seal(Data(plain.utf8), pushKey: key, nonce: Data(repeating: 1, count: 12))
+            return try XCTUnwrap(PushNotice.open(payload: payload, credentials: [mine]))
+        }
+        XCTAssertEqual(try open("finished", "Your inbox has 3 unread").code, .finished)
+        XCTAssertTrue(try open("finished", "Your inbox has 3 unread").showsBody)
+        XCTAssertEqual(try open("test", "Test notification (1)").code, .test)
+        XCTAssertFalse(try open("test", "Test notification (1)").showsBody)
+        XCTAssertNil(try open("somethingNew", "x").code, "unknown code: generic text")
+        XCTAssertFalse(try open("somethingNew", "x").showsBody)
     }
 }

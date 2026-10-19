@@ -95,6 +95,10 @@ def main():
                 if s["id"] == p["id"]:
                     s["enabled"] = p["enabled"]
             return {"schemaVersion": 1, "schedules": state["schedules"]}
+        if op == "agentInspect":
+            models = {"claude": [{"id": "claude-opus-5-5", "label": "Opus 5.5", "isDefault": True}, {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5"}],
+                      "codex": [{"id": "gpt-5.5", "label": "GPT-5.5", "isDefault": True}, {"id": "gpt-5.5-mini", "label": "GPT-5.5 mini"}]}.get(p["agentId"], [])
+            return {"schemaVersion": 1, "inspection": {"agentId": p["agentId"], "models": models, "complete": True, "account": {"status": "unverified"}}}
         if op == "conversationCreate":
             cid = str(uuid.uuid4())
             convs[cid] = {"id": cid, "agentId": p["agentId"], "title": "New conversation", "phase": "idle", "updated": now(), "events": [],

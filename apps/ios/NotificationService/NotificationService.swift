@@ -20,7 +20,15 @@ final class NotificationService: UNNotificationServiceExtension {
         if let payload = request.content.userInfo["e"] as? String,
            let notice = PushNotice.open(payload: payload, credentials: credentials) {
             content.title = notice.title.isEmpty ? "chrome-use" : notice.title
-            content.body = body(for: notice)
+            // Worded by the code, never by the English body; an agent's own
+            // text (turn preview, schedule result) goes under the reason.
+            let reason = reason(for: notice.code)
+            if notice.showsBody {
+                content.subtitle = reason
+                content.body = notice.body
+            } else {
+                content.body = reason
+            }
             content.threadIdentifier = notice.conversationId.isEmpty ? notice.deviceId : notice.conversationId
             var info = content.userInfo
             for (key, value) in notice.userInfo { info[key] = value }
@@ -31,16 +39,16 @@ final class NotificationService: UNNotificationServiceExtension {
         contentHandler(content)
     }
 
-    /// Fixed bodies are said in the user's language (by the payload's
-    /// `code`); summaries and agent text are shown as sent.
-    private func body(for notice: PushNotice) -> String {
-        switch notice.standardBody {
-        case .waitingForApproval: return String(localized: "等你审批")
+    private func reason(for code: PushNotice.Code?) -> String {
+        switch code {
+        case .needsInput: return String(localized: "等你审批")
         case .finished: return String(localized: "已完成")
         case .stopped: return String(localized: "已停止")
         case .failed: return String(localized: "失败")
+        case .scheduleDone: return String(localized: "定时任务已完成")
+        case .scheduleFailed: return String(localized: "定时任务失败")
         case .test: return String(localized: "测试通知")
-        case nil: return notice.body
+        case nil: return String(localized: "chrome-use 需要你")
         }
     }
 
