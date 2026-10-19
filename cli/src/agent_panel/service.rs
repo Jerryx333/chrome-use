@@ -2221,9 +2221,17 @@ async fn dispatch(
             Ok(json!({"schemaVersion":1,"agentId":p.agent_id,"supported":true,"sessions":rows}))
         }
         "conversationProjectList" => {
-            if params != &json!({}) {
-                return Err("conversationProjectList takes no parameters".into());
+            // With the page's origin and path it also says which project a
+            // new conversation there starts in (a checkout of the repository
+            // the page names, or the site's remembered project).
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct ProjectList {
+                origin: Option<String>,
+                page_path: Option<String>,
             }
+            let page: ProjectList = serde_json::from_value(params.clone())
+                .map_err(|_| "conversationProjectList takes an optional origin and pagePath")?;
             let (panel, roots) = {
                 let e = engine.lock().await;
                 let panel: Vec<_> = e
@@ -2258,13 +2266,28 @@ async fn dispatch(
                         .into_iter()
                         .map(|(path, site, at)| (path, "site", at, Some(site))),
                 );
-                super::projects::merge(seen, &root)
+                let mut rows = super::projects::merge(seen, &root);
+                // Every recent checkout may be the page's repository; the
+                // panel offers only the newest.
+                let page = match (page.origin, page.page_path) {
+                    (Some(origin), Some(path)) => {
+                        let recent: Vec<PathBuf> = rows.iter().map(|r| r.path.clone()).collect();
+                        Some(super::inspect::suggest(&origin, &path, &recent))
+                    }
+                    _ => None,
+                };
+                rows.truncate(super::projects::MAX_RECENT);
+                (rows, page)
             })
             .await
             .map_err(|_| "Project folders could not be listed")?;
-            Ok(
-                json!({"schemaVersion":1,"projects":rows.iter().map(super::projects::row).collect::<Vec<_>>()}),
-            )
+            let (rows, page) = rows;
+            let mut result = json!({"schemaVersion":1,"projects":rows.iter().map(super::projects::row).collect::<Vec<_>>()});
+            // A store that cannot be read costs the suggestion, not the list.
+            if let Some(page) = page {
+                result["page"] = page.unwrap_or(Value::Null);
+            }
+            Ok(result)
         }
         "conversationProjectChoose" => {
             #[derive(Deserialize)]
@@ -4310,6 +4333,32 @@ mod schedule_tests {
             .cloned()
             .unwrap();
         assert!(row["sources"].as_array().unwrap().contains(&json!("panel")));
+        assert!(listed.get("page").is_none());
+        // A page of the repository the folder is a checkout of names it.
+        std::fs::create_dir(project.join(".git")).unwrap();
+        std::fs::write(
+            project.join(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:example-owner/panel-test-repo.git\n",
+        )
+        .unwrap();
+        let page = dispatch(
+            &engine,
+            "conversationProjectList",
+            &json!({"origin":"https://github.com","pagePath":"/example-owner/panel-test-repo/pull/1"}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page["page"]["suggestion"]["root"], json!(canonical));
+        assert_eq!(page["page"]["suggestion"]["reason"], "repository");
+        assert_eq!(
+            page["page"]["repositoryScope"],
+            "/example-owner/panel-test-repo"
+        );
+        assert!(
+            dispatch(&engine, "conversationProjectList", &json!({"path":"/"}))
+                .await
+                .is_err()
+        );
         // The default stays the private folder.
         let plain = dispatch(&engine, "conversationCreate", &json!({"agentId":"codex"}))
             .await

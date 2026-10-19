@@ -36,7 +36,7 @@ mod testkit;
 
 pub(super) use cli::run as run_cli;
 use facts::{Facts, Probe, Relation};
-pub(super) use project::bound_projects;
+pub(super) use project::{bound_projects, suggest};
 use scope::Target;
 
 const MAX_BINDINGS: usize = 256;

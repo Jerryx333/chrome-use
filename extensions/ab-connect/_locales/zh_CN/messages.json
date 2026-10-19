@@ -971,7 +971,7 @@
     "message": "已绑定到项目的网站"
   },
   "options_inspect_bindings_hint": {
-    "message": "一个网站（可限定到某个路径）只发给一个 agent 会话。解除绑定后可以重新选择；会话也可以用 `chrome-use inspect link <url>` 认领网站。在该网站上新开的侧栏会话也会默认使用它的项目。"
+    "message": "一个网站（可限定到某个路径）只发给一个 agent 会话。解除绑定后可以重新选择；会话也可以用 `chrome-use inspect link <url>` 认领网站。在该网站上新开的侧栏会话也会默认使用它的项目。仓库页面默认使用最近用过的该仓库本地副本，除非你把这个仓库绑定到了别的项目。"
   },
   "options_inspect_bindings_loading": {
     "message": "正在加载…"
@@ -1070,6 +1070,24 @@
   },
   "options_inspect_unbind": {
     "message": "解除绑定"
+  },
+  "options_inspect_rescope": {
+    "message": "修改范围"
+  },
+  "options_inspect_rescope_hint": {
+    "message": "绑定覆盖的 $ORIGIN$ 路径，例如 /owner/repo；/ 表示整个网站。",
+    "placeholders": {
+      "origin": {
+        "content": "$1",
+        "example": "https://github.com"
+      }
+    }
+  },
+  "options_inspect_rescope_save": {
+    "message": "保存"
+  },
+  "options_inspect_rescope_cancel": {
+    "message": "取消"
   },
   "options_notifications_heading": {
     "message": "通知"
@@ -2109,6 +2127,45 @@
     "placeholders": {
       "site": {
         "content": "$1"
+      }
+    }
+  },
+  "panel_project_repo_hint": {
+    "message": "按仓库匹配：$REPO$",
+    "placeholders": {
+      "repo": {
+        "content": "$1",
+        "example": "github.com/owner/repo"
+      }
+    }
+  },
+  "panel_project_scope_label": {
+    "message": "记住的范围"
+  },
+  "panel_project_scope_repository": {
+    "message": "这个仓库 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "github.com/owner/repo"
+      }
+    }
+  },
+  "panel_project_scope_site": {
+    "message": "整个网站 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "github.com"
+      }
+    }
+  },
+  "panel_project_scope_path": {
+    "message": "这个路径 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "example.com/docs"
       }
     }
   },

@@ -971,7 +971,7 @@
     "message": "Sites bound to projects"
   },
   "options_inspect_bindings_hint": {
-    "message": "A site (optionally limited to a path) sends to one agent session. Unbind to choose again; a session can also claim a site with `chrome-use inspect link <url>`. New side-panel conversations on the site start in its project."
+    "message": "A site (optionally limited to a path) sends to one agent session. Unbind to choose again; a session can also claim a site with `chrome-use inspect link <url>`. New side-panel conversations on the site start in its project. A page of a repository starts in a recent checkout of it unless you bound that repository to another project."
   },
   "options_inspect_bindings_loading": {
     "message": "Loading…"
@@ -1070,6 +1070,24 @@
   },
   "options_inspect_unbind": {
     "message": "Unbind"
+  },
+  "options_inspect_rescope": {
+    "message": "Change scope"
+  },
+  "options_inspect_rescope_hint": {
+    "message": "Path on $ORIGIN$ the binding covers, such as /owner/repo; / is the whole site.",
+    "placeholders": {
+      "origin": {
+        "content": "$1",
+        "example": "https://github.com"
+      }
+    }
+  },
+  "options_inspect_rescope_save": {
+    "message": "Save"
+  },
+  "options_inspect_rescope_cancel": {
+    "message": "Cancel"
   },
   "options_notifications_heading": {
     "message": "Notifications"
@@ -2109,6 +2127,45 @@
     "placeholders": {
       "site": {
         "content": "$1"
+      }
+    }
+  },
+  "panel_project_repo_hint": {
+    "message": "Matched by repository $REPO$",
+    "placeholders": {
+      "repo": {
+        "content": "$1",
+        "example": "github.com/owner/repo"
+      }
+    }
+  },
+  "panel_project_scope_label": {
+    "message": "Where to remember it"
+  },
+  "panel_project_scope_repository": {
+    "message": "This repository · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "github.com/owner/repo"
+      }
+    }
+  },
+  "panel_project_scope_site": {
+    "message": "Whole site · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "github.com"
+      }
+    }
+  },
+  "panel_project_scope_path": {
+    "message": "This path · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1",
+        "example": "example.com/docs"
       }
     }
   },

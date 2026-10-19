@@ -146,8 +146,8 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     document, api, onError: error, relativeTime, schedule, cancel,
     agents: () => (panelSupport?.chatAgents || ['codex', 'claude']).filter(id => chatAgents.has(id)).map(id => ({ id, name: agentNames[id] })),
     preferredAgent: () => conversation?.agentId || nodes.agent.value || preferredAgent,
-    // The project this site remembered goes first.
-    preferredProject: () => projectChoice?.binding?.root || '',
+    // The page's project (its repository's checkout or the site's) goes first.
+    preferredProject: () => projectChoice?.preferred || '',
     executable: agentId => agentId === nodes.agent.value ? nodes.executable.value.trim() : '',
     onResumed: async (resumed, existing, refused) => {
       await list(); rememberAgent(conversations.find(c => c.id === resumed.id)?.agentId || preferredAgent); select(resumed.id);
@@ -161,6 +161,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   const projectChoice = createProjectChoice({
     document, api, onError: error, select: document.getElementById('project'), host: document.getElementById('projectHost'),
     supported: () => Boolean(panelSupport?.projectDirectory), canRemember: () => Boolean(panelSupport?.inspect),
+    matchesRepositories: () => (panelSupport?.projectDirectory || 0) >= 2,
   });
   function refreshProjects() { if (!selected && connected) void projectChoice.refresh(page).catch(() => {}); }
   let importedNode = null, importedCount = -1;
@@ -1261,7 +1262,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
         // runs in this tab when it works here.
         if (tabBound) { await setWorkIn(result.conversation.id, workInFor('')); newWorkIn = null; await maybeAutoLend(); }
         // After selecting it: selecting another conversation hides the question.
-        if (project) { projectChoice.created(result.conversation.project || project, page); projectChoice.reset(); }
+        if (project) { void projectChoice.created(result.conversation.project || project, page).catch(error); projectChoice.reset(); }
       }
       const id = selected, pending = { id: crypto.randomUUID(), text, typed, direct };
       imageDrafts.set(id, images); if (images.length) imageDrafts.delete(''); renderImageDrafts();

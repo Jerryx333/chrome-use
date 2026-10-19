@@ -172,6 +172,25 @@ function inspectButton(label, onClick) {
   button.addEventListener('click', async () => { button.disabled = true; try { await onClick() } catch (error) { el('inspectBindingsHint').textContent = error.message } renderBindings() })
   return button
 }
+// Move a binding to another path of its site (a repository, a section, the
+// whole site) in one write; a binding already there is replaced only as shown.
+function editScope(text, binding, bindings) {
+  const from = binding.pathScope || '/'
+  const input = document.createElement('input'); input.value = from; input.setAttribute('aria-label', t('options_inspect_rescope'))
+  const hint = document.createElement('div'); hint.className = 'hint'; hint.textContent = t('options_inspect_rescope_hint', binding.origin)
+  const save = inspectButton(t('options_inspect_rescope_save'), () => {
+    const pathScope = input.value.trim().replace(/(.)\/+$/, '$1') || '/'
+    if (pathScope === from) return
+    const replaces = bindings.find(b => b.origin === binding.origin && (b.pathScope || '/') === pathScope)?.fingerprint ?? null
+    return inspectRequest('inspectProjectBind', { origin: binding.origin, pathScope, root: binding.root, replaces, movesFrom: from })
+  })
+  const cancel = document.createElement('button'); cancel.className = 'btn'; cancel.textContent = t('options_inspect_rescope_cancel')
+  cancel.addEventListener('click', () => renderBindings())
+  const editor = document.createElement('div'); editor.className = 'scope-editor'
+  editor.append(input, save, cancel, hint)
+  text.replaceChildren(text.firstChild, editor)
+  input.focus()
+}
 async function renderBindings() {
   const hint = el('inspectBindingsHint'), list = el('inspectBindings')
   if (!hasChrome) { hint.textContent = t('options_inspect_bindings_preview'); return }
@@ -202,6 +221,9 @@ async function renderBindings() {
         if (!binding.consents?.[kind]) continue
         row.append(inspectButton(kind === 'plugin' ? t('options_inspect_revoke_dev') : t('options_inspect_revoke_test'), () => inspectRequest('inspectConsent', { origin: binding.origin, ...(binding.pathScope ? { pathScope: binding.pathScope } : {}), kind, granted: false })))
       }
+      const rescope = document.createElement('button'); rescope.className = 'btn'; rescope.textContent = t('options_inspect_rescope')
+      rescope.addEventListener('click', () => editScope(text, binding, bindings))
+      row.append(rescope)
       row.append(inspectButton(t('options_inspect_unbind'), () => inspectRequest('inspectUnbind', { origin: binding.origin, ...(binding.pathScope ? { pathScope: binding.pathScope } : {}) })))
       list.append(row)
     }

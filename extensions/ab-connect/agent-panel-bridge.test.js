@@ -379,6 +379,9 @@ test('project folder replies must match what was asked', async () => {
   for (const [operation, params, result, valid] of [
     ['conversationProjectList', {}, { projects: [{ path: '/w', sources: ['panel'] }] }, true],
     ['conversationProjectList', {}, { projects: [{ path: 3, sources: [] }] }, false],
+    ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r' }, { projects: [], page: { codeHost: true, repositoryScope: '/o/r', suggestion: { root: '/w/r', reason: 'repository', pathScope: '/o/r' }, bindings: [{ pathScope: '/', root: '/w/x', fingerprint: 'f' }] } }, true],
+    ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r' }, { projects: [], page: null }, true],
+    ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r' }, { projects: [], page: { codeHost: true, repositoryScope: null, suggestion: { root: '/w/r', reason: 'guess' }, bindings: [] } }, false],
     ['conversationProjectChoose', {}, { path: '/w' }, true],
     ['conversationProjectChoose', {}, { cancelled: true }, true],
     ['conversationProjectChoose', {}, { unavailable: true }, true],
