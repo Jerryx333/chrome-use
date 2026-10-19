@@ -2139,6 +2139,14 @@
       }
     }
   },
+  "panel_project_key_hint": {
+    "message": "按项目匹配：$PROJECT$",
+    "placeholders": {
+      "project": {
+        "content": "$1"
+      }
+    }
+  },
   "panel_project_scope_label": {
     "message": "记住的范围"
   },
@@ -2148,6 +2156,22 @@
       "scope": {
         "content": "$1",
         "example": "github.com/owner/repo"
+      }
+    }
+  },
+  "panel_project_scope_app": {
+    "message": "这个应用 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
+      }
+    }
+  },
+  "panel_project_scope_project": {
+    "message": "这个项目 · $SCOPE$",
+    "placeholders": {
+      "scope": {
+        "content": "$1"
       }
     }
   },
@@ -2166,6 +2190,17 @@
       "scope": {
         "content": "$1",
         "example": "example.com/docs"
+      }
+    }
+  },
+  "panel_project_named": {
+    "message": "$NAME$（$SCOPE$）",
+    "placeholders": {
+      "name": {
+        "content": "$1"
+      },
+      "scope": {
+        "content": "$2"
       }
     }
   },

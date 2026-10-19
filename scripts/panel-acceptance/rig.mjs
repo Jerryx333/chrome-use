@@ -11,7 +11,7 @@ import { Service, Proxy, waitFor, sleep } from './lib.mjs';
 
 export const EXT_ID = 'ciiljdlhdpfckdcfkphgmfalanpdejep';
 
-export async function startRig({ dir, work, hostBin, chrome, extDir, sitePort = 8910, cdpPort = 9371, serviceEnv = {} }) {
+export async function startRig({ dir, work, hostBin, chrome, extDir, sitePort = 8910, cdpPort = 9371, serviceEnv = {}, chromeArgs = [] }) {
   const home = path.join(work, 'home');
   const accept = path.join(work, 'accept');
   for (const d of [home, accept, path.join(accept, 'scenarios'), path.join(accept, 'signals'), path.join(work, 'backends'), path.join(work, 'xdg')]) fs.mkdirSync(d, { recursive: true });
@@ -47,7 +47,7 @@ export async function startRig({ dir, work, hostBin, chrome, extDir, sitePort = 
   const userDataDir = path.join(work, 'chrome-profile');
   fs.mkdirSync(path.join(userDataDir, 'NativeMessagingHosts'), { recursive: true });
   fs.writeFileSync(path.join(userDataDir, 'NativeMessagingHosts', 'com.agent_browser.connect.json'), JSON.stringify({ name: 'com.agent_browser.connect', description: 'panel acceptance host', path: nm, type: 'stdio', allowed_origins: [`chrome-extension://${EXT_ID}/`] }));
-  rig.browser = await launch({ chrome, port: cdpPort, userDataDir, args: ['--headless=new', `--load-extension=${extDir}`, `--disable-extensions-except=${extDir}`, '--window-size=1280,900'] });
+  rig.browser = await launch({ chrome, port: cdpPort, userDataDir, args: ['--headless=new', `--load-extension=${extDir}`, `--disable-extensions-except=${extDir}`, '--window-size=1280,900', ...chromeArgs] });
   rig.cdp = api(rig.browser);
   rig.chromeVersion = rig.browser.version;
   const sw = await rig.cdp.worker();

@@ -379,9 +379,10 @@ test('project folder replies must match what was asked', async () => {
   for (const [operation, params, result, valid] of [
     ['conversationProjectList', {}, { projects: [{ path: '/w', sources: ['panel'] }] }, true],
     ['conversationProjectList', {}, { projects: [{ path: 3, sources: [] }] }, false],
-    ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r' }, { projects: [], page: { codeHost: true, repositoryScope: '/o/r', suggestion: { root: '/w/r', reason: 'repository', pathScope: '/o/r' }, bindings: [{ pathScope: '/', root: '/w/x', fingerprint: 'f' }] } }, true],
+    ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r' }, { projects: [], page: { multiProject: true, project: { kind: 'repository', key: 'o/r', pathScope: '/o/r' }, suggestion: { root: '/w/r', reason: 'repository', pathScope: '/o/r' }, bindings: [{ pathScope: '/', root: '/w/x', fingerprint: 'f' }] } }, true],
+    ['conversationProjectList', { origin: 'https://console.cloud.google.com', pagePath: '/run', query: '?project=p' }, { projects: [], page: { multiProject: true, project: { kind: 'googleCloud', key: 'p', pathScope: null }, suggestion: { root: '/w/p', reason: 'project', pathScope: null }, bindings: [] } }, true],
     ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r' }, { projects: [], page: null }, true],
-    ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r' }, { projects: [], page: { codeHost: true, repositoryScope: null, suggestion: { root: '/w/r', reason: 'guess' }, bindings: [] } }, false],
+    ['conversationProjectList', { origin: 'https://github.com', pagePath: '/o/r' }, { projects: [], page: { multiProject: true, project: null, suggestion: { root: '/w/r', reason: 'guess' }, bindings: [] } }, false],
     ['conversationProjectChoose', {}, { path: '/w' }, true],
     ['conversationProjectChoose', {}, { cancelled: true }, true],
     ['conversationProjectChoose', {}, { unavailable: true }, true],

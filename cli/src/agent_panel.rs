@@ -27,6 +27,7 @@ mod inspect;
 mod inspection;
 mod options;
 mod progress;
+mod project_hosts;
 mod projects;
 mod recovery;
 mod redact;

@@ -2229,9 +2229,12 @@ async fn dispatch(
             struct ProjectList {
                 origin: Option<String>,
                 page_path: Option<String>,
+                /// The page's `location.search`: some sites name the project there.
+                query: Option<String>,
             }
-            let page: ProjectList = serde_json::from_value(params.clone())
-                .map_err(|_| "conversationProjectList takes an optional origin and pagePath")?;
+            let page: ProjectList = serde_json::from_value(params.clone()).map_err(|_| {
+                "conversationProjectList takes an optional origin, pagePath and query"
+            })?;
             let (panel, roots) = {
                 let e = engine.lock().await;
                 let panel: Vec<_> = e
@@ -2272,7 +2275,8 @@ async fn dispatch(
                 let page = match (page.origin, page.page_path) {
                     (Some(origin), Some(path)) => {
                         let recent: Vec<PathBuf> = rows.iter().map(|r| r.path.clone()).collect();
-                        Some(super::inspect::suggest(&origin, &path, &recent))
+                        let query = page.query.unwrap_or_default();
+                        Some(super::inspect::suggest(&origin, &path, &query, &recent))
                     }
                     _ => None,
                 };
@@ -4350,10 +4354,6 @@ mod schedule_tests {
         .unwrap();
         assert_eq!(page["page"]["suggestion"]["root"], json!(canonical));
         assert_eq!(page["page"]["suggestion"]["reason"], "repository");
-        assert_eq!(
-            page["page"]["repositoryScope"],
-            "/example-owner/panel-test-repo"
-        );
         assert!(
             dispatch(&engine, "conversationProjectList", &json!({"path":"/"}))
                 .await

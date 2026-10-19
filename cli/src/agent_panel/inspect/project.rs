@@ -4,7 +4,7 @@
 //! another one for the site. A page naming a repository goes to the recent
 //! checkout of that repository unless the user bound the repository itself.
 use super::{origin, scope, Binding, BindingSource, Inspect};
-use crate::agent_panel::repos;
+use crate::agent_panel::{project_hosts, repos};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -110,59 +110,72 @@ impl Inspect<'_> {
     }
 }
 
-/// Why a page's project was chosen.
+/// What a page's project was chosen from.
 #[derive(Debug, PartialEq)]
-enum Reason {
-    /// A recent checkout's remote is the page's repository.
-    Repository,
-    /// A remembered site binding.
-    Site,
+enum Pick {
+    /// The page's effective site binding.
+    Binding,
+    /// One of the checkouts or folders naming the page's project.
+    Found(usize),
 }
 
 /// The project for a page from its effective site binding (scope and root)
-/// and the checkouts of the repository it names, best first. A binding at
-/// or under the repository wins: the user chose a project for that very
-/// repository. A broader one (the whole code host, an owner) does not
-/// override the repository's own checkout, though it picks among several.
-fn decide<'a>(
-    binding: Option<(&str, &'a Path)>,
-    found: &'a [repos::Match],
-) -> Option<(&'a Path, Reason, Option<&'a repos::Match>)> {
-    if let Some((bound, root)) = binding {
-        let under_repo = found.first().is_none_or(|m| {
-            scope::applies(&m.scope.to_ascii_lowercase(), &bound.to_ascii_lowercase())
-        });
-        if under_repo {
-            return Some((root, Reason::Site, None));
+/// and the recent folders naming the project the page is about, best first,
+/// each with that project's path scope (None when the URL's query names
+/// it). A binding at or under the project's scope wins: the user chose a
+/// folder for that very project. A broader one (the whole site, an owner)
+/// does not override the project's own folder, though it picks among
+/// several; with no path scope to compare, only a site-wide binding yields.
+fn decide(binding: Option<(&str, &Path)>, found: &[(PathBuf, Option<String>)]) -> Option<Pick> {
+    if let Some((bound, _)) = binding {
+        let keeps = match found.first() {
+            None => true,
+            Some((_, Some(project))) => {
+                scope::applies(&project.to_ascii_lowercase(), &bound.to_ascii_lowercase())
+            }
+            Some((_, None)) => bound != "/",
+        };
+        if keeps {
+            return Some(Pick::Binding);
         }
     }
-    let chosen = found
+    let at = found
         .iter()
-        .find(|m| binding.is_some_and(|(_, root)| m.root == root))
-        .or(found.first())?;
-    Some((&chosen.root, Reason::Repository, Some(chosen)))
+        .position(|(root, _)| binding.is_some_and(|(_, bound)| root == bound))
+        .unwrap_or(0);
+    (!found.is_empty()).then_some(Pick::Found(at))
 }
 
-/// Recent checkouts read for one page.
+/// Recent folders read for one page.
 const MAX_CANDIDATES: usize = 120;
 
 /// What a new conversation on a page starts in, for the panel: the
-/// suggested project and why, the repository the page names (for the
-/// remember bar's scope), and every binding covering the page with its
-/// fingerprint (what `inspectProjectBind` must be told it replaces).
-/// `recent` is the panel's recent project folders, most recent first.
+/// suggested project and why, the project the page is about (a repository,
+/// an App Store Connect app, a Vercel project, … with its path scope, for
+/// the remember bar), whether the site holds many projects, and every
+/// binding covering the page with its fingerprint (what
+/// `inspectProjectBind` must be told it replaces). `query` is the page's
+/// `location.search`; `recent` the panel's recent folders, newest first.
 pub(in crate::agent_panel) fn suggest(
     origin_text: &str,
     page_path: &str,
+    query: &str,
     recent: &[PathBuf],
 ) -> Result<Value, String> {
-    suggest_with(home_inspect().as_ref(), origin_text, page_path, recent)
+    suggest_with(
+        home_inspect().as_ref(),
+        origin_text,
+        page_path,
+        query,
+        recent,
+    )
 }
 
 fn suggest_with(
     inspect: Option<&Inspect>,
     origin_text: &str,
     page_path: &str,
+    query: &str,
     recent: &[PathBuf],
 ) -> Result<Value, String> {
     let origin = origin(origin_text)?;
@@ -170,31 +183,55 @@ fn suggest_with(
     let host = origin.split_once("://").map_or("", |(_, host)| host);
     let store = inspect.map(Inspect::load).transpose()?.unwrap_or_default();
     let effective = store.effective(&origin, &page).filter(|b| b.root.is_dir());
-    let candidates: Vec<_> = recent
-        .iter()
-        .take(MAX_CANDIDATES)
-        .map(|root| (root.clone(), repos::remotes_of(root)))
-        .collect();
-    let found = repos::matches(host, &page, &candidates);
-    let repository_scope = found
-        .first()
-        .map(|m| m.scope.clone())
-        .or_else(|| repos::shape_scope(host, &page));
-    let suggestion = decide(
+    let recent = &recent[..recent.len().min(MAX_CANDIDATES)];
+    // A site of many projects names one in its URL; code hosts by repository.
+    let (project, found, remotes, reason) = match project_hosts::page_project(host, &page, query) {
+        Some(p) => {
+            let candidates: Vec<_> = recent
+                .iter()
+                .map(|root| (root.clone(), project_hosts::local_keys(root)))
+                .collect();
+            let found: Vec<_> = project_hosts::matches(&p, &candidates)
+                .into_iter()
+                .map(|root| (root, p.scope.clone()))
+                .collect();
+            let project = json!({"kind": p.kind.name(), "key": p.key, "pathScope": p.scope});
+            (Some(project), found, Vec::new(), "project")
+        }
+        None => {
+            let candidates: Vec<_> = recent
+                .iter()
+                .map(|root| (root.clone(), repos::remotes_of(root)))
+                .collect();
+            let matched = repos::matches(host, &page, &candidates);
+            let scope = matched
+                .first()
+                .map(|m| m.scope.clone())
+                .or_else(|| repos::shape_scope(host, &page));
+            let project = scope.map(
+                |s| json!({"kind": "repository", "key": s.trim_start_matches('/'), "pathScope": s}),
+            );
+            let remotes = matched.iter().map(|m| m.remote.clone()).collect();
+            let found = matched
+                .into_iter()
+                .map(|m| (m.root, Some(m.scope)))
+                .collect();
+            (project, found, remotes, "repository")
+        }
+    };
+    let suggestion = match decide(
         effective.map(|b| (b.path_scope.as_str(), b.root.as_path())),
         &found,
-    )
-    .map(|(root, reason, matched)| match reason {
-        Reason::Repository => json!({
-            "root": root, "reason": "repository",
-            "pathScope": matched.map(|m| m.scope.clone()),
-            "remote": matched.map(|m| m.remote.clone()),
-        }),
-        Reason::Site => json!({
-            "root": root, "reason": "site",
-            "pathScope": effective.map(|b| b.path_scope.clone()),
-        }),
-    });
+    ) {
+        Some(Pick::Binding) => {
+            effective.map(|b| json!({"root": b.root, "reason": "site", "pathScope": b.path_scope}))
+        }
+        Some(Pick::Found(at)) => Some(json!({
+            "root": found[at].0, "reason": reason, "pathScope": found[at].1,
+            "remote": remotes.get(at),
+        })),
+        None => None,
+    };
     let bindings: Vec<Value> = store
         .bindings
         .iter()
@@ -203,8 +240,8 @@ fn suggest_with(
         .collect();
     Ok(json!({
         "origin": origin,
-        "repositoryScope": repository_scope,
-        "codeHost": repos::known_host(host) || repository_scope.is_some(),
+        "multiProject": project.is_some() || repos::known_host(host) || project_hosts::known_host(host),
+        "project": project,
         "suggestion": suggestion,
         "bindings": bindings,
     }))
@@ -259,29 +296,24 @@ mod tests {
         at.to_path_buf()
     }
 
-    fn found(root: &str, scope: &str) -> repos::Match {
-        repos::Match {
-            root: root.into(),
-            remote: "origin".into(),
-            scope: scope.into(),
-        }
+    fn found(root: &str, scope: Option<&str>) -> (PathBuf, Option<String>) {
+        (root.into(), scope.map(str::to_string))
     }
 
     #[test]
-    fn a_repository_match_beats_broader_site_bindings_only() {
-        let repo = [found("/w/image-use", "/leeguooooo/image-use")];
-        let pick = |bound: Option<(&str, &str)>, found: &[repos::Match]| {
+    fn a_project_match_beats_broader_site_bindings_only() {
+        let repo = [found("/w/image-use", Some("/leeguooooo/image-use"))];
+        let pick = |bound: Option<(&str, &str)>, found: &[(PathBuf, Option<String>)]| {
             decide(bound.map(|(s, r)| (s, Path::new(r))), found)
-                .map(|(root, reason, _)| (root.to_string_lossy().to_string(), reason))
         };
         // github.com bound to another project: the repository's checkout wins.
         assert_eq!(
             pick(Some(("/", "/w/chatgpt-imagegen")), &repo),
-            Some(("/w/image-use".into(), Reason::Repository))
+            Some(Pick::Found(0))
         );
         assert_eq!(
             pick(Some(("/leeguooooo", "/w/chatgpt-imagegen")), &repo),
-            Some(("/w/image-use".into(), Reason::Repository))
+            Some(Pick::Found(0))
         );
         // The user bound this repository (or a path inside it) on purpose.
         for scope in [
@@ -291,28 +323,41 @@ mod tests {
         ] {
             assert_eq!(
                 pick(Some((scope, "/w/image-use-old")), &repo),
-                Some(("/w/image-use-old".into(), Reason::Site)),
+                Some(Pick::Binding),
                 "{scope}"
             );
         }
-        // No repository: the site binding as before; nothing at all: none.
-        assert_eq!(
-            pick(Some(("/", "/w/site")), &[]),
-            Some(("/w/site".into(), Reason::Site))
-        );
+        // No project folder: the site binding as before; nothing at all: none.
+        assert_eq!(pick(Some(("/", "/w/site")), &[]), Some(Pick::Binding));
         assert_eq!(pick(None, &[]), None);
-        assert_eq!(
-            pick(None, &repo),
-            Some(("/w/image-use".into(), Reason::Repository))
-        );
-        // Several checkouts: a broader binding naming one of them picks it.
+        assert_eq!(pick(None, &repo), Some(Pick::Found(0)));
+        // Several folders: a broader binding naming one of them picks it.
         let two = [
-            found("/w/image-use", "/leeguooooo/image-use"),
-            found("/w/image-use-2", "/leeguooooo/image-use"),
+            found("/w/image-use", Some("/leeguooooo/image-use")),
+            found("/w/image-use-2", Some("/leeguooooo/image-use")),
         ];
         assert_eq!(
             pick(Some(("/", "/w/image-use-2")), &two),
-            Some(("/w/image-use-2".into(), Reason::Repository))
+            Some(Pick::Found(1))
+        );
+        // An App Store Connect app: the same rule by its path scope.
+        let app = [found("/w/ios", Some("/apps/1234567890"))];
+        assert_eq!(pick(Some(("/", "/w/other")), &app), Some(Pick::Found(0)));
+        assert_eq!(
+            pick(Some(("/apps/1234567890", "/w/other")), &app),
+            Some(Pick::Binding)
+        );
+        assert_eq!(
+            pick(Some(("/apps/999", "/w/other")), &app),
+            Some(Pick::Found(0))
+        );
+        // A project named in the query has no scope: only a site-wide
+        // binding yields to it.
+        let query = [found("/w/gcp", None)];
+        assert_eq!(pick(Some(("/", "/w/other")), &query), Some(Pick::Found(0)));
+        assert_eq!(
+            pick(Some(("/run", "/w/other")), &query),
+            Some(Pick::Binding)
         );
     }
 
@@ -347,24 +392,26 @@ mod tests {
             Some(&inspect),
             github,
             "/leeguooooo/image-use/pull/55",
+            "",
             &recent,
         )
         .unwrap();
         assert_eq!(s["suggestion"]["root"], json!(image_use));
         assert_eq!(s["suggestion"]["reason"], "repository");
         assert_eq!(s["suggestion"]["pathScope"], "/leeguooooo/image-use");
-        assert_eq!(s["repositoryScope"], "/leeguooooo/image-use");
-        assert_eq!(s["codeHost"], true);
+        assert_eq!(s["project"]["pathScope"], "/leeguooooo/image-use");
+        assert_eq!(s["project"]["kind"], "repository");
+        assert_eq!(s["multiProject"], true);
         assert_eq!(s["bindings"][0]["pathScope"], "/");
         assert_eq!(
             s["bindings"][0]["fingerprint"],
             bound["binding"]["fingerprint"]
         );
         // The origin-wide binding still holds where no repository matches.
-        let other = suggest_with(Some(&inspect), github, "/someone/else", &recent).unwrap();
+        let other = suggest_with(Some(&inspect), github, "/someone/else", "", &recent).unwrap();
         assert_eq!(other["suggestion"]["root"], json!(imagegen));
         assert_eq!(other["suggestion"]["reason"], "site");
-        assert_eq!(other["repositoryScope"], "/someone/else");
+        assert_eq!(other["project"]["pathScope"], "/someone/else");
         // Binding the repository itself wins over the match.
         call(
             &w,
@@ -373,21 +420,64 @@ mod tests {
             json!({"origin": github, "pathScope": "/leeguooooo/image-use", "root": imagegen, "replaces": null}),
         )
         .unwrap();
-        let s = suggest_with(Some(&inspect), github, "/leeguooooo/image-use", &recent).unwrap();
+        let s = suggest_with(Some(&inspect), github, "/leeguooooo/image-use", "", &recent).unwrap();
         assert_eq!(s["suggestion"]["reason"], "site");
         assert_eq!(s["suggestion"]["pathScope"], "/leeguooooo/image-use");
         assert_eq!(s["bindings"].as_array().unwrap().len(), 2);
         // A plain site: no repository, not a code host.
-        let plain = suggest_with(Some(&inspect), ORIGIN, "/app/settings", &recent).unwrap();
+        let plain = suggest_with(Some(&inspect), ORIGIN, "/app/settings", "", &recent).unwrap();
         assert_eq!(plain["suggestion"], Value::Null);
-        assert_eq!(plain["repositoryScope"], Value::Null);
-        assert_eq!(plain["codeHost"], false);
+        assert_eq!(plain["project"], Value::Null);
+        assert_eq!(plain["multiProject"], false);
         // A self-hosted server is recognized by the checkout alone.
         let api = checkout(&base.join("api"), "ssh://git@localhost:2222/team/api.git");
-        let s = suggest_with(Some(&inspect), ORIGIN, "/team/api/whatever", &[api.clone()]).unwrap();
+        let s = suggest_with(
+            Some(&inspect),
+            ORIGIN,
+            "/team/api/whatever",
+            "",
+            &[api.clone()],
+        )
+        .unwrap();
         assert_eq!(s["suggestion"]["root"], json!(api));
-        assert_eq!(s["codeHost"], true);
-        assert!(suggest_with(None, "nope", "/", &[]).is_err());
+        assert_eq!(s["multiProject"], true);
+        assert!(suggest_with(None, "nope", "/", "", &[]).is_err());
+        // App Store Connect: the folder whose fastlane names the app.
+        let ios = base.join("ios-app");
+        fs::create_dir_all(ios.join("fastlane")).unwrap();
+        fs::write(
+            ios.join("fastlane/Fastfile"),
+            "upload_to_testflight(apple_id: \"1234567890\")\n",
+        )
+        .unwrap();
+        let asc = "https://appstoreconnect.apple.com";
+        let s = suggest_with(
+            Some(&inspect),
+            asc,
+            "/apps/1234567890/testflight/ios",
+            "",
+            &[imagegen.clone(), ios.clone()],
+        )
+        .unwrap();
+        assert_eq!(s["suggestion"]["root"], json!(ios));
+        assert_eq!(s["suggestion"]["reason"], "project");
+        assert_eq!(s["suggestion"]["pathScope"], "/apps/1234567890");
+        assert_eq!(
+            s["project"],
+            json!({"kind":"appStoreApp","key":"1234567890","pathScope":"/apps/1234567890"})
+        );
+        assert_eq!(s["multiProject"], true);
+        // Another app: nothing matches, the site is still never "plain".
+        let s = suggest_with(
+            Some(&inspect),
+            asc,
+            "/apps/42424242/appstore",
+            "",
+            &[ios.clone()],
+        )
+        .unwrap();
+        assert_eq!(s["suggestion"], Value::Null);
+        assert_eq!(s["project"]["pathScope"], "/apps/42424242");
     }
 
     #[test]
