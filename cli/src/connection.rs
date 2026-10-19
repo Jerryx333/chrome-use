@@ -1050,6 +1050,10 @@ fn write_created_targets_in(
 ) -> Result<(), String> {
     let path = get_created_targets_path(session);
     if targets.is_empty() {
+        // A session with no tabs left has nothing to be continued or swept
+        // for; its next start writes these again.
+        let _ = fs::remove_file(get_socket_dir().join(format!("{session}.activity")));
+        let _ = fs::remove_file(get_socket_dir().join(format!("{session}.lineage")));
         return match fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

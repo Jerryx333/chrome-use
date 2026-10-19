@@ -6323,15 +6323,18 @@ async fn handle_keep(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     // launched browser or an older extension that doesn't know ABExt.ungroupTab).
     // The extension finds the tab from the command's CDP session, so the
     // command must be sent ON the tab's session: sent browser-level it named
-    // no tab and nothing was ever ungrouped.
-    let _ = mgr
-        .client
-        .send_command_typed::<_, Value>(
-            "ABExt.ungroupTab",
-            &json!({ "sessionId": session_id, "targetId": target_id }),
-            Some(&session_id),
-        )
-        .await;
+    // no tab and nothing was ever ungrouped. Only a tab this session created:
+    // an adopted or lent tab may sit in a group of the user's own.
+    if was_owned {
+        let _ = mgr
+            .client
+            .send_command_typed::<_, Value>(
+                "ABExt.ungroupTab",
+                &json!({ "sessionId": session_id, "targetId": target_id }),
+                Some(&session_id),
+            )
+            .await;
+    }
     // Record the reason ONLY when we actually owned the tab. `keep` on a tab we
     // merely adopted is a no-op for ownership, and writing a record for it would
     // let `--release` later claim deletion rights over the user's own tab.
@@ -6394,18 +6397,20 @@ async fn handle_done(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         }
         tabs.dedup_by(|a, b| a.0 == b.0);
         for (target_id, session_id) in tabs {
-            // Out of the group first, while the extension still holds it; sent
-            // on the tab's session, which is how the extension finds the tab.
-            let _ = mgr
-                .client
-                .send_command_typed::<_, Value>(
-                    "ABExt.ungroupTab",
-                    &json!({ "sessionId": session_id, "targetId": target_id }),
-                    Some(&session_id),
-                )
-                .await;
+            // Only a tab this session created is handed over: an adopted or
+            // lent tab is the user's already, and may sit in a group of theirs.
             let was_owned = mgr.unown_target(&target_id)?;
             if was_owned {
+                // Out of the group while the extension still holds it; sent on
+                // the tab's session, which is how the extension finds the tab.
+                let _ = mgr
+                    .client
+                    .send_command_typed::<_, Value>(
+                        "ABExt.ungroupTab",
+                        &json!({ "sessionId": session_id, "targetId": target_id }),
+                        Some(&session_id),
+                    )
+                    .await;
                 if let Some(session) = session.as_deref() {
                     crate::connection::set_kept_tab(session, &target_id, "deliverable")?;
                 }
