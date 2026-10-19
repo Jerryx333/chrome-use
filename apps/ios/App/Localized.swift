@@ -136,6 +136,7 @@ func describe(_ error: Error) -> String {
         switch error {
         case .notAPairLink: return String(localized: "这不是 chrome-use 配对链接。")
         case .unsupportedVersion: return String(localized: "配对链接版本不受支持，请更新 App。")
+        case .plaintextToPublicHost: return String(localized: "公网地址必须用 wss://。ws:// 只能用于 Tailscale 或局域网地址。")
         default: return String(localized: "配对链接不完整或已损坏。")
         }
     }

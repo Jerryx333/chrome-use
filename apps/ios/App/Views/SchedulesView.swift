@@ -74,7 +74,7 @@ struct SchedulesView: View {
     }
 
     private func toggle(_ schedule: Schedule, _ on: Bool) async {
-        guard model.requireWrite() else { return }
+        guard model.allow(.toggleSchedule) else { return }
         busy = schedule.id
         defer { busy = nil }
         do { try await client.setSchedule(schedule.id, enabled: on) } catch { self.error = describe(error) }
@@ -82,7 +82,7 @@ struct SchedulesView: View {
     }
 
     private func run(_ schedule: Schedule) async {
-        guard model.requireWrite() else { return }
+        guard model.allow(.runSchedule) else { return }
         busy = schedule.id
         defer { busy = nil }
         do { try await client.runSchedule(schedule.id) } catch { self.error = describe(error) }

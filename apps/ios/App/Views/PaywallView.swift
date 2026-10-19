@@ -28,25 +28,27 @@ struct PaywallView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
                     .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-                    if let unlock = store.unlockProduct, store.entitlement != .unlocked {
+                    let trialFirst = store.entitlement == .trialNotStarted
+                    if let trial = store.trialProduct, trialFirst {
                         Button {
-                            Task { await store.buy(unlock) }
+                            Task { await store.buy(trial) }
                         } label: {
-                            Text("一次性解锁 \(unlock.displayPrice)").frame(maxWidth: .infinity)
+                            Text("开始 14 天免费试用").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
                         .disabled(store.purchasing)
                     }
-                    if let trial = store.trialProduct, store.entitlement == .trialNotStarted {
-                        Button {
-                            Task { await store.buy(trial) }
+                    if let unlock = store.unlockProduct, store.entitlement != .unlocked {
+                        let button = Button {
+                            Task { await store.buy(unlock) }
                         } label: {
-                            Text("免费试用 14 天").frame(maxWidth: .infinity)
+                            Text("一次性解锁 \(unlock.displayPrice)").frame(maxWidth: .infinity)
                         }
-                        .buttonStyle(.bordered)
                         .controlSize(.large)
                         .disabled(store.purchasing)
+                        // Before the trial, starting it is the primary action.
+                        if trialFirst { button.buttonStyle(.bordered) } else { button.buttonStyle(.borderedProminent) }
                     }
                     if store.unlockProduct == nil && store.trialProduct == nil {
                         ProgressView()
@@ -76,7 +78,8 @@ struct PaywallView: View {
             let days = state.daysLeft(clock: clock)
             Text("试用中，还剩 \(days) 天。")
         case .trialNotStarted: Text("先免费试用 14 天，或直接一次性解锁。")
-        case .expired: Text("试用已结束。查看对话仍然免费；发送、新建和审批需要解锁。")
+        case .expired: Text("试用已结束。查看对话、停止任务和拒绝请求仍然免费；发送、新建和允许请求需要解锁。")
         }
     }
 }
+

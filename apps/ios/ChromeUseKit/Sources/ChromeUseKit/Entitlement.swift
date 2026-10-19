@@ -46,3 +46,23 @@ public enum Entitlement: Equatable, Sendable {
         return max(0, Int((end.timeIntervalSince(clock.now) / 86_400).rounded(.up)))
     }
 }
+
+/// What the paywall gates. Reading, stopping a turn and refusing a request
+/// are always free; anything that lets the agent act needs `canWrite`.
+public enum GatedAction: Equatable, Sendable {
+    case send
+    case create
+    case runSchedule
+    case toggleSchedule
+    case stop
+    case answer(DecisionOption)
+    case answerQuestions
+
+    public var needsUnlock: Bool {
+        switch self {
+        case .send, .create, .runSchedule, .toggleSchedule, .answerQuestions: return true
+        case .stop: return false
+        case .answer(let option): return option.allows
+        }
+    }
+}

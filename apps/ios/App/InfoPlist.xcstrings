@@ -70,13 +70,13 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Connect to the computer running chrome-use on your local network."
+            "value": "Connect to your computer running chrome-use on your local network or Tailscale."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "连接同一局域网里运行 chrome-use 的电脑。"
+            "value": "连接你在同一局域网或 Tailscale 里运行 chrome-use 的电脑。"
           }
         }
       }

@@ -50,10 +50,21 @@ final class AppModel {
     let lock: AppLock
     @ObservationIgnored private let credentials: CredentialStore
     @ObservationIgnored private let cache: JournalCache
+    @ObservationIgnored private let pairer: Pairer
+    /// Off in tests, where the permission prompt would block.
+    @ObservationIgnored var asksForNotifications = true
 
-    init(credentials: CredentialStore? = nil, cache: JournalCache = FileJournalCache.applicationSupport()) {
+    /// Runs the pairing handshake; returns the open connection (nil in tests)
+    /// and the combined secret, after calling `store` with it.
+    typealias Pairer = (PairLink, @escaping (Data) throws -> Void) async throws -> (GatewayConnection?, Data)
+
+    init(credentials: CredentialStore? = nil, cache: JournalCache = FileJournalCache.applicationSupport(), pairer: Pairer? = nil) {
         self.credentials = credentials ?? KeychainCredentialStore(accessGroup: AppConfig.keychainGroup)
         self.cache = cache
+        self.pairer = pairer ?? { link, store in
+            let (connection, secret) = try await GatewayConnection.pair(link: link, store: store)
+            return (connection, secret)
+        }
         self.store = Store()
         self.push = PushManager()
         self.lock = AppLock()
@@ -100,7 +111,7 @@ final class AppModel {
         }
         let stored = StoredFlag()
         do {
-            let (connection, secret) = try await GatewayConnection.pair(link: link) { secret in
+            let (connection, secret) = try await pairer(link) { secret in
                 try keychain.save(credentialFor(secret))
                 stored.value = true
             }
@@ -111,8 +122,8 @@ final class AppModel {
             client.relayToken = push.relayToken
             clients.removeAll { $0.id == credential.deviceId }
             clients.append(client)
-            client.adopt(connection)
-            push.requestAuthorization()
+            if let connection { client.adopt(connection) } else { client.start() }
+            if asksForNotifications { push.requestAuthorization() }
             return client
         } catch {
             if stored.value, (error as? GatewayError) != .closed(.unauthorized) {
@@ -162,6 +173,12 @@ final class AppModel {
 
     // MARK: Deep links from notifications
 
+    /// The deep link a notification carries (`PushNotice.userInfo`, merged
+    /// in by the notification extension).
+    func openNotification(userInfo: [AnyHashable: Any]) {
+        openNotification(deviceId: userInfo["deviceId"] as? String, conversationId: userInfo["conversationId"] as? String)
+    }
+
     func openNotification(deviceId: String?, conversationId: String?) {
         guard let deviceId, client(deviceId) != nil else { return }
         if let conversationId, UUID(uuidString: conversationId) != nil {
@@ -179,9 +196,10 @@ final class AppModel {
         push.refreshIfNeeded()
     }
 
-    /// Writing (send, create, answer) needs the unlock or a running trial.
-    func requireWrite() -> Bool {
-        if store.entitlement.canWrite { return true }
+    /// Actions that let the agent act need the unlock or a running trial;
+    /// reading, Stop and refusing a request never do.
+    func allow(_ action: GatedAction) -> Bool {
+        if !action.needsUnlock || store.entitlement.canWrite { return true }
         showPaywall = true
         return false
     }

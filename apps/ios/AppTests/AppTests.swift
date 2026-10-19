@@ -99,3 +99,98 @@ final class SharedKeychainTests: XCTestCase {
         XCTAssertFalse(try store.all().contains { $0.deviceId == credential.deviceId })
     }
 }
+
+@MainActor
+final class RepairFlowTests: XCTestCase {
+    let gateway = Base64URL.encode(Data(repeating: 9, count: 16))
+
+    func credential() -> GatewayCredential {
+        GatewayCredential(url: URL(string: "ws://127.0.0.1:9/")!, deviceId: UUID().uuidString.lowercased(), secret: Data(repeating: 1, count: 64), gatewayId: gateway, name: "Studio", pairedAt: Date())
+    }
+
+    func link() -> PairLink {
+        PairLink(url: URL(string: "ws://127.0.0.1:9/")!, deviceId: UUID().uuidString.lowercased(), pairSecret: Data(repeating: 2, count: 32), gatewayId: gateway)
+    }
+
+    /// A revoked computer (4403) offers re-pairing; pairing it again replaces
+    /// the old credential and keeps the user's name for it.
+    func testRevokedComputerIsReplacedByRepairing() async throws {
+        let old = credential()
+        let keychain = InMemoryCredentialStore([old])
+        let model = AppModel(credentials: keychain, cache: InMemoryJournalCache()) { link, store in
+            let secret = link.pairSecret + Data(repeating: 0xAB, count: 32)
+            try store(secret)
+            return (nil, secret)
+        }
+        model.asksForNotifications = false
+        XCTAssertEqual(model.clients.map(\.id), [old.deviceId])
+        XCTAssertTrue(CloseReason(closeCode: 4403).offersRepair)
+
+        model.startRepair(old.deviceId)
+        XCTAssertTrue(model.showPairing)
+        XCTAssertEqual(model.repairing, old.deviceId)
+        let fresh = link()
+        let client = try await model.pair(fresh, name: "Studio")
+        XCTAssertEqual(model.clients.map(\.id), [fresh.deviceId])
+        let stored = try keychain.all()
+        XCTAssertEqual(stored.map(\.deviceId), [fresh.deviceId])
+        XCTAssertEqual(stored.first?.secret, fresh.pairSecret + Data(repeating: 0xAB, count: 32))
+        XCTAssertEqual(stored.first?.name, "Studio")
+        XCTAssertNil(model.repairing)
+        model.remove(client.id, tellGateway: false)
+    }
+
+    /// A refused re-pair (spent or expired QR: 4401) keeps the old entry and
+    /// leaves no half-stored credential behind.
+    func testRefusedRepairingKeepsTheOldComputer() async throws {
+        let old = credential()
+        let keychain = InMemoryCredentialStore([old])
+        let model = AppModel(credentials: keychain, cache: InMemoryJournalCache()) { link, store in
+            try store(link.pairSecret + Data(repeating: 0xCD, count: 32))
+            throw GatewayError.closed(.unauthorized)
+        }
+        model.asksForNotifications = false
+        model.startRepair(old.deviceId)
+        do {
+            _ = try await model.pair(link(), name: "Studio")
+            XCTFail("pairing was refused")
+        } catch {
+            XCTAssertEqual(error as? GatewayError, .closed(.unauthorized))
+        }
+        XCTAssertEqual(try keychain.all().map(\.deviceId), [old.deviceId])
+        XCTAssertEqual(model.clients.map(\.id), [old.deviceId])
+        XCTAssertEqual(model.repairing, old.deviceId, "the sheet can retry with a new QR")
+        model.remove(old.deviceId, tellGateway: false)
+    }
+}
+
+@MainActor
+final class NotificationRouteTests: XCTestCase {
+    static let payload = "YGFiY2RlZmdoaWprktav2wx9J+xArK4OvMDeVT9U88nqCouE9dpVi+i/sKRwrzQjUvK7YtXeHXjTSmiHAsnECRF00kOkE4HpgVcGP4qqcSRM3J51n02XKKZbglkIsNYdTiSgI72lAHJe/QpUul9s0W7solBQAJgEcxn+pmpcK8kHC7c5RjpK/lr+ZPVaAYhkZRR2bryeNaF6akuOC+m/FQmWvXOT/L1sD7M="
+
+    /// The extension decrypts the spec's push vector and merges its route;
+    /// tapping the notification opens that conversation (its approval card
+    /// sits at the bottom of the conversation view).
+    func testTapOpensTheConversation() throws {
+        let device = UUID().uuidString.lowercased()
+        let credential = GatewayCredential(url: URL(string: "ws://127.0.0.1:9/")!, deviceId: device, secret: Data(0x00...0x1f) + Data(0x80...0x9f), gatewayId: "g", name: "Mac", pairedAt: Date())
+        let model = AppModel(credentials: InMemoryCredentialStore([credential]), cache: InMemoryJournalCache())
+        let notice = try XCTUnwrap(PushNotice.open(payload: Self.payload, credentials: [credential]))
+        XCTAssertEqual(notice.kind, .needsInput)
+        let conversation = "7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e"
+
+        model.path = [.schedules(device)]
+        model.openNotification(userInfo: notice.userInfo)
+        XCTAssertEqual(model.path, [.computer(device), .conversation(device, conversation)])
+
+        // A test push has no conversation: open the computer.
+        model.openNotification(userInfo: ["deviceId": device, "conversationId": "", "kind": "test"])
+        XCTAssertEqual(model.path, [.computer(device)])
+
+        // Unknown computer (removed since) or the generic fallback: stay put.
+        model.openNotification(userInfo: ["deviceId": UUID().uuidString, "conversationId": conversation])
+        model.openNotification(userInfo: [:])
+        XCTAssertEqual(model.path, [.computer(device)])
+        model.remove(device, tellGateway: false)
+    }
+}

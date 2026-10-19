@@ -35,7 +35,7 @@ struct ConversationsView: View {
                 NavigationLink(value: Route.schedules(client.id)) { Image(systemName: "calendar.badge.clock") }
                     .accessibilityLabel("定时任务")
                 Button {
-                    if model.requireWrite() { creating = true }
+                    if model.allow(.create) { creating = true }
                 } label: { Image(systemName: "square.and.pencil") }
                     .accessibilityLabel("新建对话")
                     .disabled(client.status != .connected)

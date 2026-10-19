@@ -27,9 +27,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// approval card is at the bottom of that view.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
         let info = response.notification.request.content.userInfo
-        let deviceId = info["deviceId"] as? String
-        let conversationId = info["conversationId"] as? String
-        await MainActor.run { model?.openNotification(deviceId: deviceId, conversationId: conversationId) }
+        await MainActor.run { model?.openNotification(userInfo: info) }
     }
 }
 

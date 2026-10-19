@@ -35,7 +35,7 @@ struct ApprovalCard: View {
                     .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 }
                 FlowButtons(options: options, disabled: answering || sent, stopRequested: stopRequested) { option in
-                    Task { await respond(option.decision) }
+                    Task { await respond(option.decision, as: .answer(option)) }
                 }
             case .questions(let questions, let deny):
                 ForEach(Array(questions.enumerated()), id: \.offset) { index, question in
@@ -46,7 +46,7 @@ struct ApprovalCard: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(answering || sent || stopRequested)
                     if let deny {
-                        Button(deny.label) { Task { await respond(deny.decision) } }
+                        Button(deny.label) { Task { await respond(deny.decision, as: .answer(deny)) } }
                             .buttonStyle(.bordered)
                             .disabled(answering || sent)
                     }
@@ -88,11 +88,12 @@ struct ApprovalCard: View {
                 return
             }
         }
-        await respond(ApprovalForm.answers(answers))
+        await respond(ApprovalForm.answers(answers), as: .answerQuestions)
     }
 
-    private func respond(_ decision: JSONValue) async {
-        guard model.requireWrite() else { return }
+    /// Refusing (deny, decline, cancel) is always free; allowing is gated.
+    private func respond(_ decision: JSONValue, as action: GatedAction) async {
+        guard model.allow(action) else { return }
         answering = true
         defer { answering = false }
         do {

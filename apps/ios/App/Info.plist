@@ -50,19 +50,30 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- Gateways are reached over the user's own tailnet or LAN as plain
-		     ws://; frames are end-to-end encrypted regardless. -->
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
+		<!-- Plain ws:// only to the user's own network: IP addresses,
+		     unqualified and .local names (local networking) and Tailscale
+		     MagicDNS names. Public hosts need wss://; the app also refuses
+		     ws:// pairing links to public hosts (TransportPolicy). Frames are
+		     end-to-end encrypted either way. -->
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>扫描电脑终端上显示的配对二维码。</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>用面容 ID 解锁 chrome-use。</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>连接同一局域网里运行 chrome-use 的电脑。</string>
+	<string>连接你在同一局域网或 Tailscale 里运行 chrome-use 的电脑。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>选择要发给 agent 的图片。</string>
 	<key>UIApplicationSceneManifest</key>

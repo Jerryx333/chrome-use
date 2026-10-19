@@ -175,3 +175,44 @@ final class RelayRegistrationTests: XCTestCase {
         XCTAssertNil(PushRegistrar.date(.null))
     }
 }
+
+final class TransportPolicyTests: XCTestCase {
+    func testPlaintextOnlyInsideTheTailnetOrLAN() {
+        for host in ["127.0.0.1", "localhost", "10.0.0.5", "172.16.0.1", "172.31.255.1", "192.168.1.20", "169.254.3.4",
+                     "100.64.0.1", "100.101.102.103", "100.127.255.254", "mac.tail1234.ts.net", "studio.local", "macbook",
+                     "::1", "fd7a:115c:a1e0::1", "fe80::1"] {
+            XCTAssertTrue(TransportPolicy.allowsPlaintext(host: host), host)
+        }
+        for host in ["example.com", "8.8.8.8", "172.32.0.1", "100.128.0.1", "100.63.255.255", "192.169.0.1",
+                     "mac.example.ts.net.evil.com", "2001:db8::1", "tunnel.trycloudflare.com"] {
+            XCTAssertFalse(TransportPolicy.allowsPlaintext(host: host), host)
+        }
+    }
+
+    func testPairLinkRefusesPlaintextToAPublicHost() {
+        let secret = Base64URL.encode(Data(0x00...0x1f))
+        let fp = Base64URL.encode(Data(repeating: 9, count: 16))
+        let link = { (url: String) in "chromeuse://pair?v=1&url=\(url)&id=0f8fad5b-d9cb-469f-a165-70867728950e&k=\(secret)&fp=\(fp)" }
+        XCTAssertThrowsError(try PairLink(parsing: link("ws%3A%2F%2Fgateway.example.com"))) {
+            XCTAssertEqual($0 as? PairLink.ParseError, .plaintextToPublicHost)
+        }
+        XCTAssertNoThrow(try PairLink(parsing: link("wss%3A%2F%2Fgateway.example.com")))
+        XCTAssertNoThrow(try PairLink(parsing: link("ws%3A%2F%2F100.88.1.2%3A17345")))
+        XCTAssertNoThrow(try PairLink(parsing: link("ws%3A%2F%2Fmac.tail1234.ts.net%3A17345")))
+    }
+}
+
+final class GatedActionTests: XCTestCase {
+    func testStopAndRefusalsAreFree() {
+        XCTAssertFalse(GatedAction.stop.needsUnlock)
+        for kind in [DecisionOption.Kind.deny, .decline, .cancel, .agentOption(name: "Reject", allows: false)] {
+            XCTAssertFalse(GatedAction.answer(DecisionOption(kind: kind, decision: "x")).needsUnlock, "\(kind)")
+        }
+        for kind in [DecisionOption.Kind.allowOnce, .allowForSession, .allowTurn, .agentOption(name: "Allow", allows: true)] {
+            XCTAssertTrue(GatedAction.answer(DecisionOption(kind: kind, decision: "x")).needsUnlock, "\(kind)")
+        }
+        for action in [GatedAction.send, .create, .runSchedule, .toggleSchedule, .answerQuestions] {
+            XCTAssertTrue(action.needsUnlock, "\(action)")
+        }
+    }
+}

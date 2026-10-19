@@ -14,6 +14,8 @@ public struct PairLink: Equatable, Sendable {
         case badDeviceId
         case badSecret
         case badGatewayId
+        /// `ws://` to a host outside the tailnet / LAN; it needs `wss://`.
+        case plaintextToPublicHost
     }
 
     public init(url: URL, deviceId: String, pairSecret: Data, gatewayId: String) {
@@ -38,6 +40,9 @@ public struct PairLink: Equatable, Sendable {
               let scheme = url.scheme?.lowercased(), scheme == "ws" || scheme == "wss",
               url.host != nil
         else { throw ParseError.badURL }
+        if scheme == "ws", !TransportPolicy.allowsPlaintext(host: url.host ?? "") {
+            throw ParseError.plaintextToPublicHost
+        }
         guard let id = query["id"], UUID(uuidString: id) != nil else { throw ParseError.badDeviceId }
         guard let k = query["k"], let secret = Base64URL.decode(k), secret.count == MobileCrypto.secretLength
         else { throw ParseError.badSecret }

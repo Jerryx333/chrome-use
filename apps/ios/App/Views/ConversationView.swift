@@ -193,7 +193,7 @@ struct ConversationView: View {
     }
 
     private func send() async {
-        guard model.requireWrite() else { return }
+        guard model.allow(.send) else { return }
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
         sending = true
         defer { sending = false }
@@ -207,8 +207,8 @@ struct ConversationView: View {
         }
     }
 
+    /// Stop is never paywalled.
     private func stop() async {
-        guard model.requireWrite() else { return }
         do { try await client.stopTurn(conversationId: conversationId) } catch { self.error = describe(error) }
     }
 

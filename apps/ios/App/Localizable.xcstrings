@@ -251,12 +251,12 @@
         }
       }
     },
-    "免费试用 14 天": {
+    "公网地址必须用 wss://。ws:// 只能用于 Tailscale 或局域网地址。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Start 14-day free trial"
+            "value": "Public addresses need wss://. ws:// is only for Tailscale or local network addresses."
           }
         }
       }
@@ -667,6 +667,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Start"
+          }
+        }
+      }
+    },
+    "开始 14 天免费试用": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start 14-day free trial"
           }
         }
       }
@@ -1411,12 +1421,12 @@
         }
       }
     },
-    "试用已结束。查看对话仍然免费；发送、新建和审批需要解锁。": {
+    "试用已结束。查看对话、停止任务和拒绝请求仍然免费；发送、新建和允许请求需要解锁。": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Your trial has ended. Reading stays free; sending, starting conversations and approving need the unlock."
+            "value": "Your trial has ended. Reading, stopping and declining stay free; sending, starting conversations and allowing requests need the unlock."
           }
         }
       }
