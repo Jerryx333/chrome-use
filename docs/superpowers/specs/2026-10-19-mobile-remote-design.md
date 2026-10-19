@@ -43,28 +43,28 @@ phone app ──WSS/WS──▶ [user's tunnel / tailnet / LAN] ──▶ chrome
 
 ## Pairing
 1. `chrome-use mobile pair --url wss://… [--name "Leo's iPhone"]` creates a pending device: 32-byte `pair_secret` (getrandom, as in `native/auth.rs:120-122`), valid 10 min, single use.
-2. Terminal shows a QR: `chromeuse://pair?v=1&url=<percent-encoded url>&id=<deviceId>&k=<base64url pair_secret>&fp=<gateway id>`. `deviceId` is a UUID. `fp` is a random per-gateway identity (16 bytes, base64url, stored in `devices.json`; also sent in every challenge as `gateway`). It lets the app tell gateways apart; it is not a key and authenticates nothing (there is no gateway key pair). `pair --json` prints the link instead of a QR.
-3. Phone connects, proves possession of `pair_secret` (HMAC challenge, not sending the secret), receives nothing secret back; both sides derive long-term keys with HKDF-SHA256 from `pair_secret`:
+2. Terminal shows a QR: `chromeuse://pair?v=1&url=<percent-encoded url>&id=<deviceId>&k=<base64url pair_secret>&fp=<gateway id>`. `deviceId` is a UUID. `fp` is a random per-gateway identity (16 bytes, base64url, stored in `devices.json` on first use; also sent in every challenge as `gateway`). It lets the app tell gateways apart; it is not a key and authenticates nothing (there is no gateway key pair). `pair --json` prints the link instead of a QR.
+3. Phone connects, proves possession of `pair_secret` (HMAC challenge, not sending the secret), receives nothing secret back. On this pairing connection only, keys derive from `pair_secret` alone. The phone then generates a 32-byte `phone_secret` and sends it in its first encrypted frame (`pairComplete`, see Transport); from then on every long-term key derives from `pair_secret ‖ phone_secret`:
    - `auth_key` (per-connection challenge-response),
-   - `frame_key` (E2E frame encryption, see below).
-4. Pending entry becomes active. The QR is now useless; scanning it again fails: the app's first connection after a scan sends `pairing:true`, which the gateway accepts only for a pending, unexpired device. Two phones racing with one QR: activation is committed under the store lock, so one wins.
-   - Caveat (see Open questions): the long-term keys derive from `pair_secret` alone, so whoever holds the link text can still complete a normal (`pairing:false`) handshake after pairing. The link printed in the terminal is a long-term credential.
-- Storage: `~/.chrome-use/mobile/devices.json` + `keys/<deviceId>.key` (raw 32 bytes); `$CHROME_USE_RELAY_DIR/mobile` instead when that variable is set, mirroring `agent-panel`. Changes run under `store.lock`, so `pair`, `revoke` and a running gateway do not lose each other's writes. Files: dir 0700, files 0600, via `private_tree` / `atomic_write` (`agent_panel/config_transaction.rs:670, 772`); Windows user-only ACL. Phone: iOS Keychain / Android Keystore.
+   - `frame_key` (E2E frame encryption, see below), and `push_key` from it.
+4. Pending entry becomes active when the gateway has stored `phone_secret`. The QR is now useless: scanning it again fails (the app's first connection after a scan sends `pairing:true`, accepted only for a pending, unexpired device), and a normal handshake with keys derived from the link alone fails too, because paired keys need `phone_secret`. The link left in terminal scrollback therefore authenticates nobody after pairing; it only matters to someone who also captured the pairing connection's traffic. Two phones racing with one QR: activation is committed under the store lock, so the first `pairComplete` wins and the other is closed with 4401. A pairing connection that drops before `pairComplete` leaves the device pending (the QR still works until it expires).
+- Storage: `~/.chrome-use/mobile/devices.json` + `keys/<deviceId>.key` (raw `pair_secret`, 32 bytes, while pending; `pair_secret ‖ phone_secret`, 64 bytes, once paired; a key file of the wrong length for the device's state authenticates nobody); `$CHROME_USE_RELAY_DIR/mobile` instead when that variable is set, mirroring `agent-panel`. Changes run under `store.lock`, so `pair`, `revoke` and a running gateway do not lose each other's writes. Files: dir 0700, files 0600, via `private_tree` / `atomic_write` (`agent_panel/config_transaction.rs:670, 772`); Windows user-only ACL. Phone: iOS Keychain / Android Keystore.
 - All secret comparisons are constant-time (the panel service's `!=` at `service.rs:3548` must not be copied). The gateway compares only the phone proof, with `Mac::verify_slice`.
 - `mobile devices [--json]` lists id, name, state (pending/expired/active/disabled), created, last seen, last IP, push on/off. `mobile revoke <id>` deletes the record, key and relay token; a running gateway re-reads the store every 500 ms and closes that device's connections with code 4403.
 
 ## Transport and encryption
-- Key schedule (HKDF-SHA256, RFC 5869, 32-byte output; `S = "chrome-use mobile v1"`):
-  - `auth_key = HKDF(ikm = pair_secret, salt = S, info = "auth")`
-  - `frame_key = HKDF(ikm = pair_secret, salt = S, info = "frame")`
+- Key schedule (HKDF-SHA256, RFC 5869, 32-byte output; `S = "chrome-use mobile v1"`). `IKM` is `pair_secret` (32 bytes) on the pairing connection and `pair_secret ‖ phone_secret` (64 bytes) for a paired device:
+  - `auth_key = HKDF(ikm = IKM, salt = S, info = "auth")`
+  - `frame_key = HKDF(ikm = IKM, salt = S, info = "frame")`
   - `push_key = HKDF(ikm = frame_key, salt = empty (32 zero bytes), info = "push")`
   - `c2p_key = HKDF(ikm = frame_key, salt = gatewayNonce‖phoneNonce, info = "c2p")` (gateway → phone), `p2c_key` likewise with `"p2c"` (phone → gateway).
 - One WebSocket per phone, any path. Handshake (text frames, JSON; binary values are base64url without padding):
   1. gateway → `{"type":"challenge","v":1,"gatewayNonce":<32 bytes>,"gateway":<fp>}`
   2. phone → `{"type":"auth","v":1,"deviceId","phoneNonce":<32 random bytes>,"proof","pairing":bool}`, `proof = HMAC-SHA256(auth_key, "chrome-use mobile v1 phone proof" ‖ gatewayNonce ‖ phoneNonce ‖ utf8(deviceId))`
   3. gateway → `{"type":"ready","proof"}`, `proof = HMAC-SHA256(auth_key, "chrome-use mobile v1 gateway proof" ‖ gatewayNonce ‖ phoneNonce ‖ utf8(deviceId))`. The phone must verify it before sending anything encrypted.
+  4. Pairing connection only (`pairing:true`), still within the 10 s handshake limit: the phone's first encrypted frame (pairing `p2c_key`, sequence 0) is `{"id":<any>,"op":"pairComplete","params":{"phoneSecret":<32 random bytes, base64url>}}`. The gateway stores it, activates the device and answers under pairing `c2p_key`, sequence 0: `{"id":<same>,"result":{"paired":true}}`. After this acknowledgement both sides switch, on the same connection, to `c2p`/`p2c` keys derived from the paired `frame_key` with the same nonces, and both sequence numbers start again at 0. Anything else as the first frame closes the connection (4400); a device that is no longer pending (another phone won, revoked, expired) gets 4401 instead of the acknowledgement.
   - Changed from the first draft (`HMAC(auth_key, nonce‖deviceId)`): the proof binds the phone's nonce too (it salts the session keys), and the two directions use different labels so neither proof can be reflected.
-  - Refusal is a close frame only, never a reason: 4401 (unknown/wrong key/wrong mode/revoked/disabled), 4429 (backoff), 4408 (no reply within 10 s), 4400 (malformed). After the handshake: 4400 for a rejected frame, 4403 when the device is revoked or disabled.
+  - Refusal is a close frame only, never a reason: 4401 (unknown/wrong key/wrong mode/revoked/disabled), 4429 (backoff), 4408 (no reply within 10 s), 4400 (malformed). One exception: a device that proves its key but is paired to another profile than a `serve --profile` gateway accepts gets 4409 with reason "device is paired to another profile", and this does not count toward backoff. After the handshake: 4400 for a rejected frame, 4403 when the device is revoked or disabled.
 - Every frame after the handshake: AES-256-GCM (available natively in CryptoKit, Android `javax.crypto` and the existing `aes-gcm` crate). Per-connection keys `HKDF(frame_key, salt = gatewayNonce‖phoneNonce, info = "c2p"|"p2c")`, one per direction; nonce = 4 zero bytes ‖ u64 BE sequence number, starting at 0 and strictly increasing, so nonces never repeat under one key. Each WebSocket binary message is `seq (8 bytes, BE) ‖ ciphertext ‖ tag (16)`, with the same 8 sequence bytes as associated data. A frame whose sequence is not exactly the next expected one, or that fails authentication, closes the connection (4400). Text frames after the handshake also close it. Plaintext is UTF-8 JSON. Messages are capped at 2 MiB.
 - Push payloads use `push_key` with a random 12-byte nonce carried in the payload, no associated data (pushes are not on a connection).
 - Rationale: Cloudflare tunnels terminate TLS at the edge, so TLS alone would let the tunnel provider read page content and instructions. Both ends are the user's devices, so a symmetric key carried in the QR is sufficient; no PKI.
@@ -81,6 +81,7 @@ Server events:
 Allowed ops (mapped 1:1 to panel operations unless noted):
 - `discover`, `conversationList`, `scheduleList`: `{}` only.
 - `conversationCreate {agentId, model?, options?, fullAccess?}`: `fullAccess` may only be `false` and is always sent as `false`. The effective tool access (`toolAccess`, else the agent default: OpenCode → runCommands, Codex → readFiles, others → browserOnly) must be at most `writeFiles`, so `runCommands` and OpenCode conversations are created on the desktop only.
+- Existing conversations (created on the desktop, resumed sessions, scheduled runs) keep their own access when driven from the phone: `send`, `stop`, `respond` neither cap nor raise `fullAccess` or `toolAccess`. A desktop conversation with full access or `runCommands` keeps it; one that asks for approvals asks the phone. Only `conversationCreate` (the cap above) and `conversationSetOptions` (no raise) touch access.
 - `conversationSend` / `conversationSendDirect {conversationId, messageId, text, attachments?, record?}`: `record` only `false` (dropped); at most 5 attachments, each `bytes` ≤ 512 KiB (the service re-verifies the files).
 - `conversationStop {conversationId}`, `conversationRead {conversationId, after?}` (initial page).
 - `conversationRespond {conversationId, requestId, generation, requestRevision, decision}`: all five required; the legacy `result` form is refused.
@@ -114,7 +115,7 @@ gateway ──POST /v1/push {relayToken, ciphertext}──▶ push Worker ──
   - iOS: `mutable-content: 1` alert with a generic fallback ("chrome-use needs you"); a Notification Service Extension decrypts and rewrites title/body. The key is shared with the extension via an App Group keychain entry.
   - Android: FCM data message; the app decrypts and posts the notification itself.
 - Triggers: `waitingInput` (high priority, time-sensitive on iOS), turn end (`terminal`, normal priority), scheduled run finished/failed. Per-conversation mute on the phone; the gateway debounces to ≤1 push per conversation per 10 s.
-- Gateway watcher (implemented): every 2 s, for each profile that has an active device with a relay token, it polls `conversationList` and `scheduleList` of the running service (never starting one). The first poll of a profile is a baseline and announces nothing. Then:
+- Gateway watcher (implemented): every 2 s, for each profile that has an active device with a relay token (only the `--profile` one on a filtered gateway), it polls `conversationList` and `scheduleList` of the running service (never starting one). The first poll of a profile is a baseline and announces nothing. Then:
   - a conversation entering `waitingInput` (from any other phase, or new) → `needsInput`, `high`, title = conversation title (first line, ≤80 chars), body `"Waiting for your approval"` (the request itself is not read for the push);
   - a conversation leaving a busy phase for a non-busy one, without `scheduleId` → `turnEnded`, `normal`, body = `lastTurn.preview` (already redacted, ≤120 chars) or Finished/Stopped/Failed;
   - a schedule whose `finishedAt` changed → `scheduleDone` (`lastResult == "completed"`) or `scheduleFailed` (body = `lastResult`, ≤120 chars), conversationId = `lastChat`, title = schedule name.
@@ -158,34 +159,59 @@ gateway ──POST /v1/push {relayToken, ciphertext}──▶ push Worker ──
 - Implementation: `cli/src/mobile/` (`crypto`, `store`, `policy`, `gateway`, `push`, `panel`); integration test `cli/tests/mobile_gateway.rs` drives a spec-written phone against a fake panel service and a fake push Worker.
 
 ## Open questions (from the gateway implementation)
-- QR as long-term credential: keys derive from `pair_secret` alone, and the link is printed in the terminal (scrollback, logs). Proposal: on the pairing connection the phone sends a fresh 32-byte `phoneSecret` in its first encrypted frame and both sides switch to `root = HKDF(pair_secret, salt = phoneSecret, info = "root")`, so a leaked link stops working once pairing completes (unless the attacker also captured the pairing traffic). Not implemented; needs the apps to agree.
-- The panel service caches one journal read offset per conversation; the gateway and the desktop panel polling the same conversation with different cursors defeat the cache and make each read rescan from the start of `events.jsonl`. Fine for normal journals; worth a per-reader cache if large ones get slow.
-- `needsInput` push body is generic. A better line (tool name, Codex command summary) needs a journal read of the request event and a decision on how much of a redacted request may travel even encrypted.
-- OpenCode (always runCommands) cannot be created from the phone under the writeFiles cap; confirm this is the wanted rule.
+- Resolved: the QR link is no longer a long-term credential (`phone_secret` rotation, above).
+- Resolved: the panel service's journal read cache kept one offset per conversation, matched only at its exact cursor, so the gateway and the side panel polling one conversation at different cursors rescanned `events.jsonl` from the start on every read. It now keeps up to 4 verified prefixes per conversation and resumes from the furthest one at or before the requested cursor (`conversation.rs`, `Store::events`).
+- Decided: the `needsInput` push body stays generic for privacy.
+- Decided: phone-created conversations are capped at `writeFiles`; OpenCode is not creatable from the phone in v1. Commands then reach the phone as approval requests.
 - The integration test is Unix-only (Windows would need the ACL fixture used by `agent_panel_native.rs`).
 
 ## Appendix: test vectors
-All values hex unless noted. Inputs: `pair_secret = 00 01 … 1f`, `gatewayNonce = 20 21 … 3f`, `phoneNonce = 40 41 … 5f`, `deviceId = "0f8fad5b-d9cb-469f-a165-70867728950e"`. Checked by `mobile::crypto::tests::spec_test_vectors` and computed independently with Python `cryptography`.
+All values hex unless noted. Inputs: `pair_secret = 00 01 … 1f`, `phone_secret = 80 81 … 9f` (base64url `gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8`), `gatewayNonce = 20 21 … 3f`, `phoneNonce = 40 41 … 5f`, `deviceId = "0f8fad5b-d9cb-469f-a165-70867728950e"`. Checked by `mobile::crypto::tests::spec_test_vectors` and computed independently with Python `cryptography`.
+
+Pairing connection (`IKM = pair_secret`):
 
 | Value | Result |
 |---|---|
 | `auth_key` | `a8344e0caf1c7d238af084ccdbeb9d4c2d8ac1abeea4314ca22d1d3aaa47e00e` |
 | `frame_key` | `1ab8cb618f09a935128d1aca5e0aa708610fd20cb23a3b473e2446052036400d` |
-| `push_key` | `27654b22292a6eab25b4c62370b206e71aac17dfef02e6a2cbf568565f85cd2e` |
 | `c2p_key` | `5bc1cde1dbe85a0bafb5c37868e4b8798a5d290b548b2c8eea7831449f33116a` |
 | `p2c_key` | `5f2d6790a8083d40200190969fa564fae1390dacab76bd4318c41185f10a6845` |
 | phone proof | `8dc9b0be57af6d6329053ba1807835eb333d617132c1f1c00d494fa21b99ec20` (base64url `jcmwvlevbWMpBTuhgHg16zM9YXEywfHADUlPohuZ7CA`) |
 | gateway proof | `7fcae67185c35186b70f2434a8ba5d593d40b2ea074558601cdd76b1e43f34e6` |
 
-First phone frame (p2c, sequence 0), plaintext `{"id":1,"op":"conversationList","params":{}}`; the WebSocket binary message is:
+`pairComplete` frame (p2c, sequence 0), plaintext `{"id":0,"op":"pairComplete","params":{"phoneSecret":"gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8"}}`:
 
 ```
-0000000000000000eecbbe0b87d98c8799928139b13079008dd2677e13613735094e30ac54db12d587633832f3eda22f16275d8d6cc4cb8d1b21400427884809662cfab2
+0000000000000000eecbbe0b87d98d8799928139b1306a0e8ad641630d702f3912455ee905df518bc47e2a62a8fbf37d44334e959fba8654b2a8ec58ee735b6d9d77cf5a8754981d6b520b9cec3c24c249fcdda6072bd7903904448ba4062b027abc2248c9370df66d6cc1bca2459aebcb0187444d0f2ed86431c5
 ```
 
-Push payload with nonce `60 61 … 6b` and plaintext
+Acknowledgement (c2p, sequence 0), plaintext `{"id":0,"result":{"paired":true}}`:
+
+```
+00000000000000002887dc6b0a83e1b96fccac5816546874f376ca967dc9dd031675a37003e6d635896c1495a11d67ef35831329b779c306a8
+```
+
+Paired device (`IKM = pair_secret ‖ phone_secret`, 64 bytes), same nonces:
+
+| Value | Result |
+|---|---|
+| `auth_key` | `1ff8540b97d115a12bf80351302fc1b97847bf21ad52bef5b46a2e305c1c5ddc` |
+| `frame_key` | `624f1577d77bcf36468bd37c6acd886a73fce2796128b9130416ec88849f46b3` |
+| `push_key` | `62ea56e406bb35ebf28f9c403bd6bfd0431aef952cd6d13d6ac50de785e0b621` |
+| `c2p_key` | `691a14378649adfe6b24fed30a8e12a6465b064ee71bc7f5eba952c04fd2b5b7` |
+| `p2c_key` | `9ae2fd1ae48966a3576dc7b61f2d8b6f59e9913596062e1940aa432dbc46d024` |
+| phone proof | `a2766a2b56dfecf634d78a5ff550d23f073cd6bc6a1b66538b0f27461f9c23c3` |
+| gateway proof | `3f56ef6947151350afa20a71ef7dfe4af26240a5e3d4814c6292005051e5b55b` |
+
+First phone frame of a paired connection (p2c, sequence 0), plaintext `{"id":1,"op":"conversationList","params":{}}`:
+
+```
+00000000000000003d3fea079d6d776461ebe1024f75712d9eb0b8324463906d3735ad868274cd09d2ed59f4fc423448e2dccb847c9f6b202838c5922a0c6c496cdb5726
+```
+
+Push payload under the paired `push_key`, nonce `60 61 … 6b`, plaintext
 `{"v":1,"conversationId":"7d444840-9dc0-41a2-9fb3-1d5b5d3b6c2e","kind":"needsInput","title":"Weekly report","body":"Waiting for your approval"}` (standard base64):
 
 ```
-YGFiY2RlZmdoaWprqoPM7QCXZkhyaRefvHAqHgEY+UOzCuAGhcMb8AMnhTeophCgMirT+P2+EAJ4WLnl48e4jehHaMj98HzDBDhx1zqQUyMs71Fy46iVJiGOKMmmDYeTkc51WH7yIMyUZfp4CADxrSXLZ8BPuy/0RvOBhHcvWPqF/CEQM3EYZ0eNtuz3yRqkiOABYIXUrTn31OrXOL/ukGxSZoSNvQCn4gM=
+YGFiY2RlZmdoaWprktav2wx9J+xArK4OvMDeVT9U88nqCouE9dpVi+i/sKRwrzQjUvK7YtXeHXjTSmiHAsnECRF00kOkE4HpgVcGP4qqcSRM3J51n02XKKZbglkIsNYdTiSgI72lAHJe/QpUul9s0W7solBQAJgEcxn+pmpcK8kHC7c5RjpK/lr+ZPVaAYhkZRR2bryeNaF6akuOC+m/FQmWvXOT/L1sD7M=
 ```
