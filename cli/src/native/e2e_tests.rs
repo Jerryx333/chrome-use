@@ -8116,6 +8116,172 @@ async fn e2e_auth_login_bwu_confirms_a_submit_that_navigates() {
     );
 }
 
+/// The sign-in frame of the App Store Connect fixture: one field per step, as
+/// on idmsa.apple.com. The same button first reveals the password field (and
+/// focuses it, as Apple does), then signs in and tells the page.
+const FRAMED_SIGN_IN: &str = r#"<!doctype html><html><body>
+<input type="text" id="account_name_text_field" placeholder="Email or Phone Number">
+<input type="password" id="password_text_field" placeholder="Password" style="display:none">
+<button type="button" id="sign-in" aria-label="Continue">→</button>
+<p id="err" role="alert"></p>
+<script>
+const user = document.getElementById('account_name_text_field');
+const pass = document.getElementById('password_text_field');
+const button = document.getElementById('sign-in');
+button.addEventListener('click', () => {
+  if (pass.style.display === 'none') {
+    if (!user.value) return;
+    setTimeout(() => {
+      pass.style.display = '';
+      button.setAttribute('aria-label', 'Sign In');
+      pass.focus();
+    }, 300);
+    return;
+  }
+  if (user.value === 'user@example.com' && pass.value === 'super-secret') {
+    parent.postMessage({ signedIn: true }, '*');
+  } else {
+    document.getElementById('err').textContent = 'Your Apple Account or password was incorrect.';
+  }
+});
+</script></body></html>"#;
+
+/// An App Store Connect-like sign-in: the page at `app.test.localhost:<top>/login`
+/// adds the sign-in frame from `idmsa.test.localhost:<frame>` (same site, another
+/// origin) after `delay_ms` (Apple's SPA inserts it once it booted) and goes to
+/// `/home` when the frame says so.
+/// Returns the page's origin, the frame's port and the servers.
+async fn start_framed_login_servers(
+    delay_ms: u64,
+) -> (
+    String,
+    u16,
+    tokio::task::JoinHandle<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (frame_port, frame_server) = spawn_html_server(FRAMED_SIGN_IN.to_string()).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 8192];
+                let n = stream.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .to_string();
+                let body = if path.starts_with("/login") {
+                    format!(
+                        r#"<!doctype html><html><head><title>App Store Connect</title></head><body>
+<div id="host"></div><script>
+setTimeout(() => {{
+  const f = document.createElement('iframe');
+  f.src = 'http://idmsa.test.localhost:{frame_port}/appleauth/auth/signin';
+  f.width = 480; f.height = 320;
+  document.getElementById('host').append(f);
+}}, {delay_ms});
+addEventListener('message', (e) => {{ if (e.data && e.data.signedIn) location.href = '/home'; }});
+</script></body></html>"#
+                    )
+                } else {
+                    "<!doctype html><html><body><h1>Apps</h1></body></html>".to_string()
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body,
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
+            });
+        }
+    });
+    (
+        format!("http://app.test.localhost:{port}"),
+        frame_port,
+        handle,
+        frame_server,
+    )
+}
+
+/// `auth login --bwu` on the App Store Connect fixture: the username goes into
+/// the frame, the frame's button reveals the password field, the password goes
+/// in and the button signs in. `isolate` puts the frame in its own process
+/// (`--isolate-origins`), so it is reached through its own session, which
+/// attaches after the login started.
+async fn framed_bwu_login(isolate: bool) {
+    let (origin, frame_port, _server, _frame_server) = start_framed_login_servers(800).await;
+    let mut state = DaemonState::new();
+    let mut launch = json!({ "id": "1", "action": "launch", "headless": true });
+    if isolate {
+        launch["args"] = json!([format!(
+            "--isolate-origins=http://idmsa.test.localhost:{frame_port}"
+        )]);
+    }
+    assert_success(&execute_command(&launch, &mut state).await);
+    let open_login = json!({ "id": "n", "action": "navigate", "url": format!("{origin}/login") });
+    if isolate {
+        // The frame really is out of process here: it gets its own session.
+        assert_success(&execute_command(&open_login, &mut state).await);
+        let mut attached = false;
+        for _ in 0..40 {
+            assert_evaluate(&mut state, "drain", "1", json!(1)).await;
+            if !state.iframe_sessions.is_empty() {
+                attached = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(
+            attached,
+            "the isolated sign-in frame should attach as its own target"
+        );
+    }
+    // Fresh page: the login starts before the frame exists.
+    assert_success(&execute_command(&open_login, &mut state).await);
+    let login = Box::pin(execute_command(
+        &json!({
+            "id": "l",
+            "action": "auth_login_bwu",
+            "origin": origin,
+            "item": "e2e",
+            "username": "user@example.com",
+            "password": "super-secret",
+        }),
+        &mut state,
+    ))
+    .await;
+    assert_success(&login);
+    let data = get_data(&login);
+    assert_eq!(data["filled"], json!(["username", "password"]), "{data}");
+    assert_eq!(data["signedIn"], true, "{data}");
+    assert_eq!(
+        data["frame"],
+        json!(format!("http://idmsa.test.localhost:{frame_port}")),
+        "{data}"
+    );
+    assert!(
+        data["url"].as_str().unwrap_or_default().ends_with("/home"),
+        "{data}"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_two_step_sign_in_frame() {
+    framed_bwu_login(false).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_two_step_out_of_process_sign_in_frame() {
+    framed_bwu_login(true).await;
+}
+
 #[tokio::test]
 #[ignore]
 async fn e2e_auth_login_waits_for_delayed_spa_form_render() {

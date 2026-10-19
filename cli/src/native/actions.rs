@@ -21546,6 +21546,40 @@ async fn refresh_auth_frames(
     }
 }
 
+/// Apply the frame attaches and detaches seen on `events` since the last call
+/// to `sessions` (frame id → session id, as `iframe_sessions`).
+fn track_frame_sessions(
+    events: &mut tokio::sync::broadcast::Receiver<super::cdp::types::CdpEvent>,
+    sessions: &mut HashMap<String, String>,
+) {
+    use tokio::sync::broadcast::error::TryRecvError;
+    loop {
+        let event = match events.try_recv() {
+            Ok(e) => e,
+            Err(TryRecvError::Lagged(_)) => continue,
+            Err(_) => return,
+        };
+        match event.method.as_str() {
+            "Target.attachedToTarget" => {
+                let info = &event.params["targetInfo"];
+                if let (Some(sid), Some(frame), Some("iframe")) = (
+                    event.params["sessionId"].as_str(),
+                    info["targetId"].as_str(),
+                    info["type"].as_str(),
+                ) {
+                    sessions.insert(frame.to_string(), sid.to_string());
+                }
+            }
+            "Target.detachedFromTarget" => {
+                if let Some(sid) = event.params["sessionId"].as_str() {
+                    sessions.retain(|_, s| s != sid);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Wait until the top document, or a same-site child frame, shows a usable
 /// field for `selectors`; mark it (see [`mark_usable_auth_element`]) and
 /// return where it is with its selector. The top document wins when both
@@ -21567,6 +21601,14 @@ async fn wait_for_auth_scope(
     let top = AuthScope::top(page_session);
     let mut frames: Vec<AuthScope> = Vec::new();
     let mut scanned: Option<tokio::time::Instant> = None;
+    // An out-of-process frame that attaches after this command started (a
+    // sign-in widget the page inserts once its scripts ran, or the frame's
+    // next document) is not in `iframe_sessions`, which is read between
+    // commands: its session is taken from the attach event here, or the frame
+    // is never searched (a same-site frame in another process has no world
+    // in the page's session).
+    let mut attach_events = client.subscribe();
+    let mut sessions = iframe_sessions.clone();
     loop {
         match mark_usable_auth_element(client, &top, selectors, tag, 0, strict, top_origin).await {
             Ok(sel) => return Ok((top, sel)),
@@ -21583,7 +21625,8 @@ async fn wait_for_auth_scope(
             Some(t) => t.elapsed() >= Duration::from_millis(500),
         };
         if rescan {
-            refresh_auth_frames(client, page_session, top_url, iframe_sessions, &mut frames).await;
+            track_frame_sessions(&mut attach_events, &mut sessions);
+            refresh_auth_frames(client, page_session, top_url, &sessions, &mut frames).await;
             scanned = Some(tokio::time::Instant::now());
         }
         let mut hit = None;
@@ -24079,6 +24122,9 @@ fn page_went_away(e: &str) -> bool {
     e.contains("Cannot find context with specified id")
         || e.contains("Execution context was destroyed")
         || e.contains("Inspected target navigated or closed")
+        // An out-of-process frame's session ends with its document (the page
+        // around it navigated away, as after a sign-in).
+        || e.contains("Session with given id not found")
 }
 
 /// Before Enter: every field filled since the last Enter is still the element

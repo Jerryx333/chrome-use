@@ -204,17 +204,62 @@ fn bwu_json(bwu: &std::path::Path, args: &[&str]) -> Result<Value, String> {
     })
 }
 
+/// The hosts a login on the tab's page involves: the page's own, and those of
+/// its same-site sign-in frames (App Store Connect signs in through an
+/// idmsa.apple.com iframe).
+struct LoginHosts {
+    page: String,
+    frames: Vec<String>,
+}
+
+impl LoginHosts {
+    fn page(host: &str) -> Self {
+        Self {
+            page: host.to_string(),
+            frames: Vec::new(),
+        }
+    }
+
+    /// What an item's name says it is for, if it names one of these hosts or
+    /// their site: the reason the error lists it first.
+    fn named_for(&self, c: &Value) -> Option<String> {
+        let name = c["name"].as_str()?.trim();
+        let is = |h: &str| !h.is_empty() && name.eq_ignore_ascii_case(h);
+        if is(&self.page) {
+            return Some("named for this page".to_string());
+        }
+        if let Some(f) = self.frames.iter().find(|f| is(f)) {
+            return Some(format!("named for the sign-in frame {f}"));
+        }
+        let site = crate::native::login_wall::site(&self.page);
+        (site != self.page && is(&site)).then(|| format!("named for {site}"))
+    }
+}
+
+/// Why an item was used without `--item`, for the "logging in as" line.
+const PICKED_REMEMBERED: &str = "the login used for this site last time";
+
 /// Choose the vault item: `--item` (id or exact name), else the only match,
-/// else the only one *named* exactly the page's host (#479: bwu matches by
-/// registrable domain, so `zentao.example.com` also lists every other
-/// `*.example.com` login; an item named `zentao.example.com` is the one meant
-/// for it). Otherwise several matches are listed for the caller to pick from,
-/// most recently used first; picking one silently could log in as the wrong
-/// account.
-fn choose(candidates: &[Value], item: Option<&str>, host: &str) -> Result<Value, String> {
+/// else the one used for this page's host last time (`remembered`: an id
+/// recorded after a login with it went through), else the only one *named*
+/// exactly the page's host (#479: bwu matches by registrable domain, so
+/// `zentao.example.com` also lists every other `*.example.com` login; an item
+/// named `zentao.example.com` is the one meant for it), else the only one
+/// named exactly a sign-in frame's host. Otherwise several matches are listed
+/// for the caller to pick from, those named for the page, its frame or its
+/// site first, then most recently used; picking one silently could log in as
+/// the wrong account. Returns the item and why it was picked (`None`: it was
+/// asked for, or the only one).
+fn choose(
+    candidates: &[Value],
+    item: Option<&str>,
+    hosts: &LoginHosts,
+    remembered: Option<&str>,
+) -> Result<(Value, Option<String>), String> {
+    let host = hosts.page.as_str();
     let line = |c: &Value| {
         format!(
-            "  --item {}  {}{}  (used {}×{})",
+            "  --item {}  {}{}  (used {}×{}){}",
             c["id"].as_str().unwrap_or(""),
             c["name"].as_str().unwrap_or(""),
             c["folder"]
@@ -226,32 +271,83 @@ fn choose(candidates: &[Value], item: Option<&str>, host: &str) -> Result<Value,
                 .as_str()
                 .map(|t| format!(", last {t}"))
                 .unwrap_or_default(),
+            hosts
+                .named_for(c)
+                .map(|why| format!("  ← {why}"))
+                .unwrap_or_default(),
         )
     };
-    let picked: Vec<&Value> = match item {
-        Some(want) => candidates
+    // Named for the page, a frame or the site first; otherwise bwu's order.
+    let listing = |many: &[&Value]| {
+        let mut sorted = many.to_vec();
+        sorted.sort_by_key(|c| hosts.named_for(c).is_none());
+        sorted
             .iter()
-            .filter(|c| c["id"] == want || c["name"] == want)
-            .collect(),
-        None => {
-            let named: Vec<&Value> = candidates
+            .map(|c| line(c))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let named = |h: &str| -> Vec<&Value> {
+        candidates
+            .iter()
+            .filter(|c| {
+                !h.is_empty()
+                    && c["name"]
+                        .as_str()
+                        .is_some_and(|n| n.trim().eq_ignore_ascii_case(h))
+            })
+            .collect()
+    };
+    let mut why = None;
+    let picked: Vec<&Value> = match item {
+        Some(want) => {
+            let exact: Vec<&Value> = candidates
                 .iter()
-                .filter(|c| {
-                    !host.is_empty()
-                        && c["name"]
-                            .as_str()
-                            .is_some_and(|n| n.trim().eq_ignore_ascii_case(host))
-                })
+                .filter(|c| c["id"] == want || c["name"] == want)
                 .collect();
-            if candidates.len() > 1 && named.len() == 1 {
-                named
+            // A name typed in another case still names one item, never two.
+            if exact.is_empty() {
+                named(want)
             } else {
-                candidates.iter().collect()
+                exact
             }
         }
+        None if candidates.len() > 1 => {
+            let last: Vec<&Value> = remembered
+                .map(|id| candidates.iter().filter(|c| c["id"] == id).collect())
+                .unwrap_or_default();
+            if last.len() == 1 {
+                why = Some(PICKED_REMEMBERED.to_string());
+                last
+            } else if let [one] = named(host).as_slice() {
+                why = Some(format!("its name is {host}"));
+                vec![*one]
+            } else {
+                // The sign-in frame's host, when exactly one item over all
+                // the frames is named for one.
+                let framed: Vec<(&String, &Value)> = hosts
+                    .frames
+                    .iter()
+                    .flat_map(|f| named(f).into_iter().map(move |c| (f, c)))
+                    .collect();
+                match framed.as_slice() {
+                    [(f, one)] if named(host).is_empty() => {
+                        why = Some(format!("its name is the sign-in frame's host {f}"));
+                        vec![*one]
+                    }
+                    _ => candidates.iter().collect(),
+                }
+            }
+        }
+        None => candidates.iter().collect(),
+    };
+    let frames = if hosts.frames.is_empty() {
+        String::new()
+    } else {
+        format!(" (its sign-in frame: {})", hosts.frames.join(", "))
     };
     match picked.as_slice() {
-        [one] => Ok((*one).clone()),
+        [one] => Ok(((*one).clone(), why)),
         [] if candidates.is_empty() => Err(format!(
             "no login in your Bitwarden vault matches {host}. Save one with this site's URL, or \
              fill the form by hand."
@@ -259,15 +355,94 @@ fn choose(candidates: &[Value], item: Option<&str>, host: &str) -> Result<Value,
         [] => Err(format!(
             "no login for {host} has the id or name '{}'. Logins for this site:\n{}",
             item.unwrap_or(""),
-            candidates.iter().map(line).collect::<Vec<_>>().join("\n")
+            listing(&candidates.iter().collect::<Vec<_>>())
         )),
         many => Err(format!(
-            "{} logins in your vault match {host}; pick one with --item (most recently used \
-             first):\n{}",
+            "{} logins in your vault match {host}{frames}; pick one with --item (those named for \
+             this page, its sign-in frame or its site first, then most recently used):\n{}",
             many.len(),
-            many.iter().map(|c| line(c)).collect::<Vec<_>>().join("\n")
+            listing(many)
         )),
     }
+}
+
+/// `~/.chrome-use/bwu-items.json`: the vault item last used to sign in to
+/// each host, by id. Only ids and names, never a value.
+fn remembered_path() -> Option<std::path::PathBuf> {
+    Some(dirs::home_dir()?.join(".chrome-use").join("bwu-items.json"))
+}
+
+/// The item id last used to sign in to `host`.
+fn remembered_item(host: &str) -> Option<String> {
+    let store: Value = std::fs::read_to_string(remembered_path()?)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())?;
+    store["hosts"][host.to_ascii_lowercase()]["id"]
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Remember that `id` signed in to `host`. Best effort: a failure to write
+/// only means the next login asks again.
+fn remember_item(host: &str, id: &str, name: &str) {
+    let Some(path) = remembered_path() else {
+        return;
+    };
+    let mut store: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    if !store["hosts"].is_object() {
+        store["hosts"] = json!({});
+    }
+    store["hosts"][host.to_ascii_lowercase()] = json!({ "id": id, "name": name });
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::to_string_pretty(&store).unwrap_or_default();
+    if std::fs::write(&tmp, body + "\n").is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// Hosts of the tab's same-site child frames (`frames`), where a sign-in
+/// form may live: App Store Connect's is an idmsa.apple.com iframe. Empty when
+/// they cannot be read; the page's own host is never listed.
+fn sign_in_frame_hosts(flags: &Flags, page_host: &str) -> Vec<String> {
+    let resp = crate::connection::send_command(
+        json!({ "id": crate::commands::gen_id(), "action": "frames" }),
+        &flags.session,
+    );
+    let frames = match resp {
+        Ok(r) if r.success => r
+            .data
+            .and_then(|d| d["frames"].as_array().cloned())
+            .unwrap_or_default(),
+        _ => return Vec::new(),
+    };
+    frame_hosts(&frames, page_host)
+}
+
+fn frame_hosts(frames: &[Value], page_host: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in frames {
+        let Some(u) = f["url"].as_str().and_then(|u| url::Url::parse(u).ok()) else {
+            continue;
+        };
+        let Some(h) = u.host_str().map(str::to_ascii_lowercase) else {
+            continue;
+        };
+        if matches!(u.scheme(), "http" | "https")
+            && !h.eq_ignore_ascii_case(page_host)
+            && crate::native::login_wall::related(&h, &page_host.to_ascii_lowercase())
+            && !out.contains(&h)
+        {
+            out.push(h);
+        }
+    }
+    out
 }
 
 /// The parent half: choose the account, then run this command line again
@@ -290,6 +465,8 @@ struct Prepared {
     name: String,
     custom: Vec<String>,
     steps: Option<Vec<String>>,
+    /// Why this item was used without `--item` (see [`choose`]).
+    why: Option<String>,
 }
 
 /// Choose the vault item for the tab's current page (masked), and which of
@@ -331,7 +508,21 @@ fn prepare(
 
     let listed = bwu_json(&bwu, &["login", "--domain", &url, "--list"])?;
     let candidates = listed["candidates"].as_array().cloned().unwrap_or_default();
-    let chosen = choose(&candidates, item_arg, &host)?;
+    // Sign-in frames matter only when the name has to settle it.
+    let hosts = if item_arg.is_none() && candidates.len() > 1 {
+        LoginHosts {
+            page: host.clone(),
+            frames: sign_in_frame_hosts(flags, &host),
+        }
+    } else {
+        LoginHosts::page(&host)
+    };
+    let (chosen, why) = choose(
+        &candidates,
+        item_arg,
+        &hosts,
+        remembered_item(&host).as_deref(),
+    )?;
     let id = chosen["id"].as_str().unwrap_or_default().to_string();
     let name = chosen["name"].as_str().unwrap_or_default().to_string();
     // Masked: which values the item has, and its `_autotype` steps.
@@ -388,6 +579,7 @@ fn prepare(
         name,
         custom,
         steps,
+        why,
     })
 }
 
@@ -425,11 +617,23 @@ fn run_inner(flags: &Flags, cmd: &Value) -> Result<i32, String> {
             p.host, p.name
         );
     }
+    // An item picked without --item is said even in --json mode, where the
+    // line above is not: an agent must be able to see which account it was.
+    if let Some(why) = &p.why {
+        eprintln!(
+            "auth login --bwu: used vault item '{}' ({why}); pass --item for another",
+            p.name
+        );
+    }
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let status = child_command(&p, &args)?
         .status()
         .map_err(|e| format!("couldn't run {}: {e}", p.bwu.display()))?;
-    Ok(status.code().unwrap_or(1))
+    let code = status.code().unwrap_or(1);
+    if code == 0 && !cmd["noSubmit"].as_bool().unwrap_or(false) {
+        remember_item(&p.host, &p.id, &p.name);
+    }
+    Ok(code)
 }
 
 /// Whether login walls are signed in automatically (#434):
@@ -501,8 +705,13 @@ pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
     };
     out["item"] = json!(p.name);
     eprintln!(
-        "login wall: signing in to {} as vault item '{}' (auto-login)",
-        p.host, p.name
+        "login wall: signing in to {} as vault item '{}' (auto-login{})",
+        p.host,
+        p.name,
+        p.why
+            .as_deref()
+            .map(|w| format!("; {w}"))
+            .unwrap_or_default()
     );
     let args: Vec<std::ffi::OsString> = [
         "--session",
@@ -528,7 +737,10 @@ pub fn auto_login(flags: &Flags, wall: &Value) -> Value {
     loop {
         attempt += 1;
         match run_login_child(&p, &args) {
-            Ok(()) => break,
+            Ok(()) => {
+                remember_item(&p.host, &p.id, &p.name);
+                break;
+            }
             // #482: a step the tab detached under, or a submit the site was
             // not seen to take. Logging in again from the sign-in page is
             // safe: on a page that is already signed in, `auth login --bwu`
@@ -580,17 +792,22 @@ mod tests {
         json!({ "id": id, "name": name, "folder": null, "uses": 0, "last_used": null })
     }
 
+    fn pick(cands: &[Value], item: Option<&str>, host: &str) -> Result<Value, String> {
+        choose(cands, item, &LoginHosts::page(host), None).map(|(c, _)| c)
+    }
+
     #[test]
     fn choose_needs_one_account() {
         let one = [c("1", "github")];
-        assert_eq!(choose(&one, None, "github.com").unwrap()["id"], "1");
+        assert_eq!(pick(&one, None, "github.com").unwrap()["id"], "1");
         let two = [c("1", "work"), c("2", "personal")];
-        let e = choose(&two, None, "github.com").unwrap_err();
+        let e = pick(&two, None, "github.com").unwrap_err();
         assert!(e.contains("--item 1") && e.contains("--item 2"), "{e}");
-        assert_eq!(choose(&two, Some("2"), "github.com").unwrap()["id"], "2");
-        assert_eq!(choose(&two, Some("work"), "github.com").unwrap()["id"], "1");
-        assert!(choose(&two, Some("x"), "github.com").is_err());
-        assert!(choose(&[], None, "github.com")
+        assert_eq!(pick(&two, Some("2"), "github.com").unwrap()["id"], "2");
+        assert_eq!(pick(&two, Some("work"), "github.com").unwrap()["id"], "1");
+        assert_eq!(pick(&two, Some("WORK"), "github.com").unwrap()["id"], "1");
+        assert!(pick(&two, Some("x"), "github.com").is_err());
+        assert!(pick(&[], None, "github.com")
             .unwrap_err()
             .contains("no login"));
     }
@@ -620,22 +837,91 @@ mod tests {
             c("2", "zentao.example.com"),
             c("3", "example.com"),
         ];
-        assert_eq!(
-            choose(&many, None, "zentao.example.com").unwrap()["id"],
-            "2"
-        );
-        assert_eq!(
-            choose(&many, None, "ZENTAO.example.com").unwrap()["id"],
-            "2"
-        );
+        assert_eq!(pick(&many, None, "zentao.example.com").unwrap()["id"], "2");
+        assert_eq!(pick(&many, None, "ZENTAO.example.com").unwrap()["id"], "2");
         // No item named for the host, or two of them: still ask.
-        assert!(choose(&many, None, "jira.example.com").is_err());
+        assert!(pick(&many, None, "jira.example.com").is_err());
         let twins = [c("1", "zentao.example.com"), c("2", "zentao.example.com")];
-        assert!(choose(&twins, None, "zentao.example.com").is_err());
+        assert!(pick(&twins, None, "zentao.example.com").is_err());
         // --item still wins.
         assert_eq!(
-            choose(&many, Some("1"), "zentao.example.com").unwrap()["id"],
+            pick(&many, Some("1"), "zentao.example.com").unwrap()["id"],
             "1"
+        );
+    }
+
+    /// App Store Connect: the page is appstoreconnect.apple.com, the form is
+    /// in an idmsa.apple.com frame, and bwu lists every apple.com login.
+    #[test]
+    fn choose_considers_the_sign_in_frame_and_lists_named_items_first() {
+        let apple = [
+            c("p1", "Apple ID personal"),
+            c("p2", "apple.com"),
+            c("p3", "iCloud"),
+            c("d1", "idmsa.apple.com"),
+        ];
+        let hosts = LoginHosts {
+            page: "appstoreconnect.apple.com".into(),
+            frames: vec!["idmsa.apple.com".into()],
+        };
+        let (item, why) = choose(&apple, None, &hosts, None).unwrap();
+        assert_eq!(item["id"], "d1");
+        assert!(why.unwrap().contains("idmsa.apple.com"));
+        // An item named for the page itself beats one named for its frame.
+        let mut both = apple.to_vec();
+        both.push(c("a1", "appstoreconnect.apple.com"));
+        assert_eq!(choose(&both, None, &hosts, None).unwrap().0["id"], "a1");
+
+        // Nothing named for the page or the frame: ask, the site's item first.
+        let plain = [
+            c("p1", "Apple ID personal"),
+            c("p3", "iCloud"),
+            c("p2", "apple.com"),
+        ];
+        let e = choose(&plain, None, &hosts, None).unwrap_err();
+        assert!(e.contains("its sign-in frame: idmsa.apple.com"), "{e}");
+        let first = e.lines().nth(1).unwrap();
+        assert!(
+            first.contains("--item p2") && first.contains("named for apple.com"),
+            "{e}"
+        );
+        // Two items named for frames: never guessed.
+        let twins = [c("x", "idmsa.apple.com"), c("y", "idmsa.apple.com")];
+        assert!(choose(&twins, None, &hosts, None).is_err());
+    }
+
+    #[test]
+    fn choose_uses_the_item_that_signed_in_here_last_time() {
+        let apple = [c("p1", "Apple ID personal"), c("d1", "Developer")];
+        let hosts = LoginHosts::page("appstoreconnect.apple.com");
+        let (item, why) = choose(&apple, None, &hosts, Some("d1")).unwrap();
+        assert_eq!(item["id"], "d1");
+        assert_eq!(why.as_deref(), Some(PICKED_REMEMBERED));
+        // --item overrides it; a remembered item no longer listed is ignored.
+        assert_eq!(
+            choose(&apple, Some("p1"), &hosts, Some("d1")).unwrap().0["id"],
+            "p1"
+        );
+        assert!(choose(&apple, None, &hosts, Some("gone")).is_err());
+        // The only match needs no reason.
+        assert_eq!(
+            choose(&apple[..1], None, &hosts, Some("d1")).unwrap().1,
+            None
+        );
+    }
+
+    #[test]
+    fn frame_hosts_are_same_site_children_only() {
+        let frames = [
+            json!({ "kind": "top", "url": "https://appstoreconnect.apple.com/login" }),
+            json!({ "kind": "iframe", "url": "https://idmsa.apple.com/appleauth/auth/signin" }),
+            json!({ "kind": "iframe", "url": "https://idmsa.apple.com/other" }),
+            json!({ "kind": "iframe", "url": "https://ads.example.net/x" }),
+            json!({ "kind": "iframe", "url": "about:blank" }),
+        ];
+        assert_eq!(
+            frame_hosts(&frames, "appstoreconnect.apple.com"),
+            ["idmsa.apple.com"]
         );
     }
 
