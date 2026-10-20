@@ -2600,6 +2600,78 @@ where
     }
 }
 
+/// What the extension says about a session's tab after a renderer command
+/// timed out (#661).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TabProbe {
+    /// Chrome still has the tab and answers for it; its page did not.
+    Alive {
+        status: Option<String>,
+        discarded: bool,
+        frozen: bool,
+    },
+    /// Nothing answered for the tab: the connection to it is gone.
+    Unreachable(String),
+}
+
+/// Marks a relay timeout that already carries its diagnosis.
+pub(crate) const RELAY_TIMEOUT_DIAGNOSIS: &str = "Diagnosis:";
+
+/// The extension's own advice on a relay timeout, which is right only when
+/// the connection itself is gone.
+const RELAY_TIMEOUT_RESTART_ADVICE: &str =
+    "The Chrome debugger stopped responding; restart the session and retry. ";
+
+pub(crate) fn is_relay_timeout(error: &str) -> bool {
+    error.contains("relay timeout after")
+        // A payload-scaled insert has its own, already specific advice.
+        && !error.contains("budget already scaled with the payload")
+}
+
+/// Rewrite a relay timeout with what the probe found: a busy page (wait and
+/// retry, do not restart anything) or a lost connection (a fresh tab or
+/// session is the way out).
+pub(crate) fn diagnose_relay_timeout(error: &str, probe: &TabProbe) -> String {
+    let error = error.replace(RELAY_TIMEOUT_RESTART_ADVICE, "");
+    match probe {
+        TabProbe::Alive {
+            status,
+            discarded,
+            frozen,
+        } => {
+            let why = if *discarded || *frozen {
+                "Chrome has discarded or frozen the tab to save resources; it wakes up when \
+                 it is shown again (`tab select <ref>`), or reload it"
+                    .to_string()
+            } else if status.as_deref() == Some("loading") {
+                "the page is still loading: its network is held open (a slow or stalled \
+                 server) or a script is blocking the main thread"
+                    .to_string()
+            } else {
+                "page JavaScript is blocking the main thread (a long-running script, or a \
+                 tight loop)"
+                    .to_string()
+            };
+            format!(
+                "{error}\n{RELAY_TIMEOUT_DIAGNOSIS} the tab is alive — Chrome still answers for \
+                 it (status: {}) — but its page did not answer in time: {why}. The connection \
+                 is fine: do NOT restart the session or re-adopt the tab, that does not help. \
+                 Wait a few seconds and run the same command again; reads (snapshot, get, \
+                 screenshot, eval of a read) are safe to retry, but a command that changes \
+                 the page may already have run. If the page stays stuck for a minute or more, \
+                 reload it (`reload`), or close the tab and `open` the url in a fresh one.",
+                status.as_deref().unwrap_or("unknown")
+            )
+        }
+        TabProbe::Unreachable(reason) => format!(
+            "{error}\n{RELAY_TIMEOUT_DIAGNOSIS} the session's connection to this tab is gone — \
+             not even the extension could answer for it ({reason}). Waiting or retrying will \
+             not help: open the page in a fresh tab (`open <url>`, `tab new <url>`) or start a \
+             new session, then `snapshot` again."
+        ),
+    }
+}
+
 /// Converts common error messages into AI-friendly, actionable descriptions.
 pub fn to_ai_friendly_error(error: &str) -> String {
     // A first-tab refusal (#486) already says what happened to the tab and
@@ -2673,6 +2745,10 @@ pub fn to_ai_friendly_error(error: &str) -> String {
             .to_string();
     }
     if lower.contains("relay timeout") {
+        // Already diagnosed by the daemon's probe of the tab (#661).
+        if error.contains(RELAY_TIMEOUT_DIAGNOSIS) {
+            return error.to_string();
+        }
         return format!(
             "{error}\nHint: Chrome still knows about the tab, but its renderer or debugger did \
              not answer in time. This can happen when page JavaScript blocks the main thread. \
@@ -7394,6 +7470,37 @@ impl BrowserManager {
     /// the user logs in and the tab moves on, the note kept naming the old page
     /// (#357). `chrome.tabs` metadata needs no debugger access, so ask it and
     /// refresh the cache. Falls back to the cached url when it cannot ask.
+    /// After a renderer command timed out on the relay (#661): ask the
+    /// extension about the pinned tab through `chrome.tabs`, which does not
+    /// need the page's renderer. `None` off the relay or with no pinned tab.
+    pub async fn probe_pinned_tab(&self) -> Option<TabProbe> {
+        if !self.on_relay() {
+            return None;
+        }
+        let pinned = self.active_target_id.clone()?;
+        let page = self.pages.iter().find(|p| p.target_id == pinned)?;
+        let reply = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            self.client.send_command_typed::<_, Value>(
+                "ABExt.inspectTab",
+                &json!({ "sessionId": page.session_id, "targetId": page.target_id }),
+                None,
+            ),
+        )
+        .await;
+        Some(match reply {
+            Ok(Ok(info)) => TabProbe::Alive {
+                status: info.get("status").and_then(Value::as_str).map(String::from),
+                discarded: info.get("discarded") == Some(&Value::Bool(true)),
+                frozen: info.get("frozen") == Some(&Value::Bool(true)),
+            },
+            Ok(Err(error)) => TabProbe::Unreachable(error),
+            Err(_) => TabProbe::Unreachable(
+                "the extension did not answer about the tab within 3 s either".into(),
+            ),
+        })
+    }
+
     pub async fn live_pinned_tab_summary(&mut self) -> Option<(String, String)> {
         let pinned = self.active_target_id.clone()?;
         let index = self.pages.iter().position(|p| p.target_id == pinned)?;
@@ -12836,6 +12943,51 @@ mod tests {
         assert!(m.contains("open <url>") && m.contains("adopt"));
         assert!(m.contains("did NOT") || m.contains("not silently"));
         assert_ne!(m, raw, "should rewrite the cryptic CDP text");
+    }
+
+    #[test]
+    fn relay_timeouts_are_diagnosed_by_what_answers_for_the_tab() {
+        let raw = "CDP error (Runtime.evaluate): relay timeout after 8000ms: \
+                   chrome.debugger.sendCommand(Runtime.evaluate). The Chrome debugger stopped \
+                   responding; restart the session and retry. [diag in-flight=1 \
+                   oldest-in-flight=8011ms worker-age=12871ms]";
+        assert!(is_relay_timeout(raw));
+        assert!(!is_relay_timeout(
+            "relay timeout after 9000ms: x. That budget already scaled with the payload size"
+        ));
+        assert!(!is_relay_timeout(
+            "CDP command timed out after 30s: Page.enable"
+        ));
+        let busy = diagnose_relay_timeout(
+            raw,
+            &TabProbe::Alive {
+                status: Some("complete".into()),
+                discarded: false,
+                frozen: false,
+            },
+        );
+        assert!(!busy.contains("restart the session and retry"), "{busy}");
+        assert!(busy.contains("blocking the main thread"), "{busy}");
+        assert!(busy.contains("do NOT restart"), "{busy}");
+        assert!(busy.contains("in-flight=1"), "diagnostics kept: {busy}");
+        let loading = diagnose_relay_timeout(
+            raw,
+            &TabProbe::Alive {
+                status: Some("loading".into()),
+                discarded: false,
+                frozen: false,
+            },
+        );
+        assert!(loading.contains("still loading"), "{loading}");
+        let dead = diagnose_relay_timeout(
+            raw,
+            &TabProbe::Unreachable("inspectTab: Chrome tab 7 no longer exists".into()),
+        );
+        assert!(dead.contains("connection to this tab is gone"), "{dead}");
+        assert!(dead.contains("fresh tab"), "{dead}");
+        // The generic hint is not stacked on a diagnosed timeout.
+        assert_eq!(to_ai_friendly_error(&busy), busy);
+        assert_eq!(to_ai_friendly_error(&dead), dead);
     }
 
     #[test]

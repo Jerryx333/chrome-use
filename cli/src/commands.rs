@@ -961,11 +961,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // args. Say so loudly instead of shipping `1155` to the DOM as a
             // selector and reporting the misleading "selector matched nothing"
             // (reported by the chatgpt-use session).
-            if coord_args
-                .iter()
-                .any(|a| !a.is_empty() && a.chars().all(|c| c.is_ascii_digit()))
-                && parse_coords(&coord_args).is_none()
-            {
+            if looks_like_coordinate(&coord_args) {
                 return Err(ParseError::InvalidValue {
                     message: format!(
                         "click: `{}` looks like a coordinate but the arguments are not a single \
@@ -1152,10 +1148,34 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             Ok(json!({ "id": id, "action": "pick", "selector": sel, "option": option }))
         }
         "hover" => {
-            let sel = rest.first().ok_or_else(|| ParseError::MissingArguments {
-                context: "hover".to_string(),
-                usage: "hover <selector>",
-            })?;
+            // Coordinates as for `click` (#662): `hover <x> <y>`, `hover <x>,<y>`,
+            // `hover --coords <x>,<y>`, for a tooltip trigger with no selector.
+            let coord_args: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|a| !a.starts_with("--"))
+                .collect();
+            if let Some((x, y)) = parse_coords(&coord_args) {
+                return Ok(json!({ "id": id, "action": "hover", "x": x, "y": y }));
+            }
+            let sel = rest
+                .iter()
+                .find(|arg| !arg.starts_with("--"))
+                .ok_or_else(|| ParseError::MissingArguments {
+                    context: "hover".to_string(),
+                    usage: "hover <selector> | hover <x> <y> | hover --coords <x>,<y>",
+                })?;
+            if looks_like_coordinate(&coord_args) {
+                return Err(ParseError::InvalidValue {
+                    message: format!(
+                        "hover: `{}` looks like a coordinate but the arguments are not a single \
+                         `x y` (or `x,y`) pair — got {:?}. Pass exactly two numbers, e.g. \
+                         `hover 767 340` or `hover --coords 767,340`.",
+                        sel, coord_args
+                    ),
+                    usage: "hover <x> <y> | hover --coords <x>,<y>",
+                });
+            }
             Ok(json!({ "id": id, "action": "hover", "selector": sel }))
         }
         "focus" => {
@@ -5492,7 +5512,26 @@ fn parse_coords(args: &[&str]) -> Option<(f64, f64)> {
         [a, b] => (*a, *b),
         _ => return None,
     };
-    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+    // `x=50 y=50` (or `x=50,y=50`) is read as the same pair.
+    let a = a.trim();
+    let b = b.trim();
+    let (a, b) = match (a.strip_prefix("x="), b.strip_prefix("y=")) {
+        (Some(x), Some(y)) => (x, y),
+        (None, None) => (a, b),
+        _ => return None,
+    };
+    Some((a.parse().ok()?, b.parse().ok()?))
+}
+
+/// Whether the arguments carry a coordinate that did not parse as a pair: a
+/// purely numeric token (never a valid CSS selector or @ref) or an `x=`/`y=`
+/// one, e.g. an odd token count when a stray value slipped into the args.
+fn looks_like_coordinate(args: &[&str]) -> bool {
+    args.iter().any(|a| {
+        !a.is_empty() && a.chars().all(|c| c.is_ascii_digit())
+            || a.starts_with("x=")
+            || a.starts_with("y=")
+    }) && parse_coords(args).is_none()
 }
 
 fn parse_mouse(rest: &[&str], id: &str) -> Result<Value, ParseError> {
@@ -7190,6 +7229,39 @@ mod tests {
         let cmd = parse_command(&args("click --coords 449,320"), &default_flags()).unwrap();
         assert_eq!(cmd["x"], 449.0);
         assert_eq!(cmd["y"], 320.0);
+    }
+
+    #[test]
+    fn test_hover_takes_coordinates_like_click() {
+        for form in [
+            "hover 767 340",
+            "hover 767,340",
+            "hover --coords 767,340",
+            "hover x=767 y=340",
+        ] {
+            let cmd = parse_command(&args(form), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], "hover", "{form}");
+            assert_eq!(cmd["x"], 767.0, "{form}");
+            assert_eq!(cmd["y"], 340.0, "{form}");
+            assert!(cmd.get("selector").is_none(), "{form}");
+        }
+        let cmd = parse_command(&args("hover @e3"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "@e3");
+        assert!(cmd.get("x").is_none());
+        let cmd = parse_command(&args("click x=50 y=50"), &default_flags()).unwrap();
+        assert_eq!(cmd["x"], 50.0);
+    }
+
+    #[test]
+    fn test_hover_lone_number_names_the_coordinate_form() {
+        for form in ["hover 767", "hover 100 100 100", "hover x=50"] {
+            match parse_command(&args(form), &default_flags()) {
+                Err(ParseError::InvalidValue { message, .. }) => {
+                    assert!(message.contains("hover 767 340"), "{form}: {message}")
+                }
+                other => panic!("{form}: {other:?}"),
+            }
+        }
     }
 
     #[test]

@@ -2522,13 +2522,16 @@ pub async fn resolve_element_object_id(
     // be mistaken for "the element" and silently no-op a `.click()` on it. Treat
     // any thrown exception as a hard error so a typo'd selector fails loudly.
     if let Some(ex) = result.exception_details {
-        return Err(format!(
-            "Invalid selector '{}': {}",
-            selector_or_ref, ex.text
+        return Err(with_coordinate_hint(
+            format!("Invalid selector '{}': {}", selector_or_ref, ex.text),
+            selector_or_ref,
         ));
     }
 
     let Some(object_id) = result.result.object_id else {
+        if let Some(hint) = coordinate_hint(selector_or_ref) {
+            return Err(format!("Element not found: {}\n{}", selector_or_ref, hint));
+        }
         // Element not found. If the selector carries a quoted text — most often a
         // `[placeholder="…"]` — Element-Plus-style widgets render that text on an
         // inner <span>, not the real <input>, so the CSS selector matches nothing
@@ -3213,6 +3216,35 @@ pub(crate) fn xpath_of(selector: &str) -> Option<&str> {
     None
 }
 
+/// A "selector" that is really a viewport coordinate (`767`, `767 340`,
+/// `767,340`, `x=50 y=50`) names no element; say how to pass a point (#662).
+pub(crate) fn coordinate_hint(selector: &str) -> Option<String> {
+    let s = selector.trim();
+    let numeric = |t: &str| {
+        let t = t.trim_start_matches("x=").trim_start_matches("y=");
+        !t.is_empty() && t.parse::<f64>().is_ok()
+    };
+    let parts: Vec<&str> = s
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() || parts.len() > 2 || !parts.iter().all(|p| numeric(p)) {
+        return None;
+    }
+    Some(format!(
+        "Hint: `{s}` is a coordinate, not a selector. `click` and `hover` take a viewport point \
+         as two numbers: `click <x> <y>` / `hover <x> <y>` (e.g. `hover 767 340`); in MCP pass \
+         `x` and `y` instead of `selector`."
+    ))
+}
+
+fn with_coordinate_hint(error: String, selector: &str) -> String {
+    match coordinate_hint(selector) {
+        Some(hint) => format!("{error}\n{hint}"),
+        None => error,
+    }
+}
+
 /// The XPath `text()` gotcha, spelled out for the error message. `text()` is a
 /// node-set; `contains(text(), …)` string-converts only its FIRST node, so a
 /// row rendered as `<div>{a} - {b}</div>` (three sibling text nodes) or a label
@@ -3585,7 +3617,10 @@ async fn resolve_by_selector(
     // A syntactically-invalid CSS selector makes querySelector throw — surface
     // that as "invalid selector" rather than a misleading "element not found".
     if let Some(ex) = result.exception_details {
-        return Err(format!("Invalid selector '{}': {}", selector, ex.text));
+        return Err(with_coordinate_hint(
+            format!("Invalid selector '{}': {}", selector, ex.text),
+            selector,
+        ));
     }
 
     let val = result.result.value.unwrap_or(Value::Null);
@@ -3594,7 +3629,7 @@ async fn resolve_by_selector(
 
     match (x, y) {
         (Some(x), Some(y)) => Ok((x, y)),
-        _ => match xpath_miss_hint(selector) {
+        _ => match xpath_miss_hint(selector).or_else(|| coordinate_hint(selector)) {
             Some(hint) => Err(format!("Element not found: {}\n{}", selector, hint)),
             None => Err(format!("Element not found: {}", selector)),
         },
@@ -4636,6 +4671,17 @@ pub async fn get_element_styles(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn numeric_selectors_point_at_the_coordinate_form() {
+        for raw in ["767", "767 340", "767,340", "x=50 y=50", " 12.5 , 3 "] {
+            let hint = super::coordinate_hint(raw).unwrap_or_else(|| panic!("{raw}"));
+            assert!(hint.contains("hover <x> <y>"), "{raw}");
+        }
+        for raw in ["#a", "@e3", "button.submit", "1 2 3", "x=a", "//div", ""] {
+            assert!(super::coordinate_hint(raw).is_none(), "{raw}");
+        }
+    }
+
     /// A fake CDP endpoint that answers every command and records the
     /// object groups it was asked to release.
     async fn release_recorder() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {

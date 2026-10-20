@@ -2853,6 +2853,18 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         // detail instead of collapsing it into the generic locator guidance.
         Err(e) if action == "a11y" => error_response(&id, &e),
         Err(e) => {
+            // A renderer command that timed out on the relay: tell a busy page
+            // (wait and retry) from a lost connection (fresh tab) by asking the
+            // extension about the tab, which needs no renderer (#661).
+            let e = match state.browser.as_ref() {
+                Some(mgr) if super::browser::is_relay_timeout(&e) => {
+                    match mgr.probe_pinned_tab().await {
+                        Some(probe) => super::browser::diagnose_relay_timeout(&e, &probe),
+                        None => e,
+                    }
+                }
+                _ => e,
+            };
             let mut msg = super::browser::to_ai_friendly_error(&e);
             // A tab-gone error right after an unconfirmed switch means the
             // documented recovery has already been tried (#235).
@@ -7966,9 +7978,18 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     // A blocked read is not a drifted session. Reporting it as "attached to
     // an unknown target" and advising `adopt` sent agents to re-adopt the very
     // tab Chrome was refusing (#357); surface the real error instead.
+    // Likewise a page too busy to answer (a relay timeout) or a tab that is
+    // gone: their own errors say what to do, "drifted" sent agents to re-pin
+    // a tab that was fine (#661).
     let live_url = match mgr.get_url().await {
         Ok(url) => url,
-        Err(e) if super::browser::is_debugger_access_denied(&e) => return Err(e),
+        Err(e)
+            if super::browser::is_debugger_access_denied(&e)
+                || super::browser::is_relay_timeout(&e)
+                || super::browser::is_stale_target_error(&e) =>
+        {
+            return Err(e)
+        }
         Err(_) => String::new(),
     };
     let tracked_url = mgr.cached_active_url();
@@ -10177,6 +10198,22 @@ fn parse_key_chord(input: &str) -> (String, Option<i32>) {
 }
 
 async fn handle_hover(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    // `hover <x> <y>` (#662): a viewport point, as `click <x> <y>` takes one.
+    if let (Some(x), Some(y)) = (
+        cmd.get("x").and_then(|v| v.as_f64()),
+        cmd.get("y").and_then(|v| v.as_f64()),
+    ) {
+        let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+        let session_id = mgr.active_session_id()?.to_string();
+        let resting = Some((state.mouse_state.x, state.mouse_state.y));
+        let outcome = interaction::hover_point(&mgr.client, &session_id, x, y, resting).await?;
+        // A later coordinate-less `mouse down`/`up` presses where the pointer is.
+        state.mouse_state.x = x;
+        state.mouse_state.y = y;
+        let mut out = hover_json("", &outcome);
+        out["hovered"] = json!({ "x": x, "y": y });
+        return Ok(out);
+    }
     let selector = cmd
         .get("selector")
         .and_then(|v| v.as_str())

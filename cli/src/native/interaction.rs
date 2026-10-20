@@ -1456,6 +1456,174 @@ pub async fn hover_reporting(
     hover_outcome(selector_or_ref, last, ancestor.as_deref(), check)
 }
 
+/// Records the first trusted pointer/mouse move the top document sees, and
+/// what is under it; read back by [`HOVER_POINT_READ_JS`]. The recorder is
+/// held only through its remote object handle: nothing is stored on the page.
+const HOVER_POINT_PROBE_JS: &str = r#"(() => {
+  const describe = (n) => {
+    if (!n || !n.tagName) return 'nothing';
+    let d = '<' + n.tagName.toLowerCase();
+    if (n.id) d += ' id="' + n.id + '"';
+    const cls = typeof n.className === 'string' ? n.className.trim().split(/\s+/).slice(0, 2).join(' ') : '';
+    if (cls) d += ' class="' + cls + '"';
+    d += '>';
+    const t = (n.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    return t ? d + ' "' + t + '"' : d;
+  };
+  const seen = { hit: null };
+  const record = (e) => { if (e.isTrusted && !seen.hit) seen.hit = describe(e.composedPath ? e.composedPath()[0] : e.target); };
+  addEventListener('pointermove', record, true);
+  addEventListener('mousemove', record, true);
+  return {
+    seen,
+    describe,
+    stop() { removeEventListener('pointermove', record, true); removeEventListener('mousemove', record, true); },
+  };
+})()"#;
+
+/// Called on the recorder: what it saw, and the element under (x, y).
+const HOVER_POINT_READ_JS: &str = r#"function(x, y) {
+  const under = document.elementFromPoint(x, y);
+  const frame = !!under && /^(IFRAME|FRAME)$/.test(under.tagName);
+  return { probe: true, hit: this.seen.hit, under: this.describe(under), frame };
+}"#;
+
+/// Hover a viewport point (`hover <x> <y>`, #662): a trusted pointer move to
+/// (x, y) in top-level CSS pixels, the same event a selector hover sends.
+/// Verified when the top document saw a trusted move; a point inside a
+/// cross-origin frame is moved to but cannot be confirmed from here.
+pub async fn hover_point(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    resting: Option<(f64, f64)>,
+) -> Result<HoverOutcome, String> {
+    let recorder = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": HOVER_POINT_PROBE_JS, "returnByValue": false })),
+            Some(session_id),
+        )
+        .await
+        .ok()
+        .filter(|r| r.get("exceptionDetails").is_none())
+        .and_then(|r| r.get("result")?.get("objectId")?.as_str().map(String::from));
+    let probe = recorder.is_some();
+    restore_rendering_if_hidden(client, session_id).await;
+    // A move to where the pointer already rests produces no event: step off
+    // by one pixel first so the page sees an arrival at the point.
+    let mut moves = Vec::new();
+    if resting.is_some_and(|(rx, ry)| (rx - x).abs() < 0.5 && (ry - y).abs() < 0.5) {
+        moves.push((if x >= 1.0 { x - 1.0 } else { x + 1.0 }, y));
+    }
+    moves.push((x, y));
+    for (mx, my) in moves {
+        client
+            .send_command_typed::<_, Value>(
+                "Input.dispatchMouseEvent",
+                &DispatchMouseEventParams {
+                    event_type: "mouseMoved".to_string(),
+                    x: mx,
+                    y: my,
+                    button: Some("none".to_string()),
+                    buttons: Some(0),
+                    click_count: None,
+                    delta_x: None,
+                    delta_y: None,
+                    modifiers: None,
+                },
+                Some(session_id),
+            )
+            .await?;
+    }
+    let mut read = Value::Null;
+    if let Some(recorder) = recorder.as_deref() {
+        for attempt in 0..HOVER_VERIFY_ATTEMPTS {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(HOVER_VERIFY_INTERVAL_MS))
+                    .await;
+            }
+            read = client
+                .send_command(
+                    "Runtime.callFunctionOn",
+                    Some(json!({
+                        "objectId": recorder,
+                        "functionDeclaration": HOVER_POINT_READ_JS,
+                        "arguments": [{ "value": x }, { "value": y }],
+                        "returnByValue": true,
+                    })),
+                    Some(session_id),
+                )
+                .await
+                .ok()
+                .and_then(|r| r.get("result")?.get("value").cloned())
+                .unwrap_or(Value::Null);
+            if read.get("hit").is_some_and(|h| !h.is_null()) {
+                break;
+            }
+        }
+        let _ = client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": recorder,
+                    "functionDeclaration": "function() { this.stop(); }",
+                })),
+                Some(session_id),
+            )
+            .await;
+        let _ = client
+            .send_command(
+                "Runtime.releaseObject",
+                Some(json!({ "objectId": recorder })),
+                Some(session_id),
+            )
+            .await;
+    }
+    Ok(hover_point_outcome(x, y, probe, &read))
+}
+
+/// The reply for a coordinate hover, from what the page reported.
+fn hover_point_outcome(x: f64, y: f64, probe: bool, read: &Value) -> HoverOutcome {
+    let point = Some((x, y));
+    let hit = read.get("hit").and_then(Value::as_str).map(String::from);
+    let under = read.get("under").and_then(Value::as_str).map(String::from);
+    if let Some(hit) = hit {
+        return HoverOutcome {
+            dispatch: "pointer",
+            point,
+            verified: true,
+            warning: None,
+            received_by: Some(hit),
+        };
+    }
+    let why = if !probe {
+        "the event check could not be installed on the page".to_string()
+    } else if read.get("frame") == Some(&Value::Bool(true)) {
+        format!(
+            "the point is inside a frame ({}), whose events the page's top document does not \
+             see",
+            under.as_deref().unwrap_or("an iframe")
+        )
+    } else {
+        format!(
+            "no trusted pointer event reached the page there (the element under it is {})",
+            under.as_deref().unwrap_or("unknown")
+        )
+    };
+    HoverOutcome {
+        dispatch: "pointer",
+        point,
+        verified: false,
+        warning: Some(format!(
+            "hover unverified: a real mouse move was dispatched at ({x:.0}, {y:.0}), but {why}. \
+             Check the effect with `snapshot` before relying on it"
+        )),
+        received_by: under,
+    }
+}
+
 /// Turn the verification result into the reply: confirmed is success,
 /// contradicted is an error, unknown is success with a warning that says so.
 fn hover_outcome(
@@ -5634,6 +5802,36 @@ mod select_all_chord_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn coordinate_hover_reports_what_the_page_saw() {
+        use serde_json::{json, Value};
+        let ok = super::hover_point_outcome(
+            767.0,
+            340.0,
+            true,
+            &json!({"probe":true,"hit":"<span class=\"badge\">","under":"<span class=\"badge\">","frame":false}),
+        );
+        assert!(ok.verified);
+        assert_eq!(ok.received_by.as_deref(), Some("<span class=\"badge\">"));
+        assert!(ok.warning.is_none());
+        let frame = super::hover_point_outcome(
+            10.0,
+            20.0,
+            true,
+            &json!({"probe":true,"hit":null,"under":"<iframe>","frame":true}),
+        );
+        assert!(!frame.verified);
+        assert!(frame.warning.as_deref().unwrap().contains("inside a frame"));
+        let no_probe = super::hover_point_outcome(1.0, 2.0, false, &Value::Null);
+        assert!(!no_probe.verified);
+        assert!(no_probe
+            .warning
+            .as_deref()
+            .unwrap()
+            .contains("could not be installed"));
+        assert_eq!(no_probe.point, Some((1.0, 2.0)));
+    }
+
     /// The error the comparison run hit on a batch `fill`, verbatim, must take
     /// the re-resolve-and-verify path; ordinary failures must not.
     #[test]

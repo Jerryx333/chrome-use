@@ -3060,9 +3060,10 @@ See Also:
         }
         "hover" => {
             r##"
-chrome-use hover - Hover over an element
+chrome-use hover - Hover over an element or a coordinate
 
 Usage: chrome-use hover <selector>
+       chrome-use hover <x> <y> | <x>,<y> | --coords <x>,<y>
 
 Moves the real mouse pointer onto the element, the way a user does (trusted
 input, not synthetic DOM events). Useful for triggering hover states or
@@ -3091,6 +3092,12 @@ is about event delivery only; it does not inspect CSS styles. --json
 carries `verified`, `dispatch` (pointer | dom), `point` (where the pointer
 is now) and `receivedBy`.
 
+`hover <x> <y>` moves the pointer to that viewport point (CSS pixels, as for
+`click <x> <y>`), for a tooltip trigger with no stable selector. The reply
+names the element under the point (`receivedBy`) and is `verified` when a
+trusted pointer event reached the page there; a point inside a cross-origin
+frame is moved to but cannot be confirmed.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
@@ -3099,6 +3106,7 @@ Examples:
   chrome-use hover "#dropdown-trigger"
   chrome-use hover @e4
   chrome-use hover @e4 --observe   # also return the menu/caption it revealed
+  chrome-use hover 767 340         # a viewport point, as for click
 "##
         }
         "focus" => {
@@ -6242,7 +6250,7 @@ Core Commands:
                              `keydown d` … `keyup d`
   keyboard type <text>       Type text with real keystrokes (no selector)
   keyboard inserttext <text> Insert text without key events
-  hover <sel>                Hover element
+  hover <sel> | <x> <y>      Hover element or viewport point
   focus <sel>                Focus element
   check <sel>                Check checkbox
   uncheck <sel>              Uncheck checkbox
