@@ -2318,7 +2318,9 @@ mod tests {
             .await
             .is_err());
         // A process record whose group is gone proves the exit.
-        let sid = unsafe { libc::getsid(0) };
+        // A runner started by launchd can report session 1, which a record
+        // rejects; the group is gone either way, so any valid session works.
+        let sid = unsafe { libc::getsid(0) }.max(2);
         {
             let mut e = c.engine.lock().await;
             e.record(
