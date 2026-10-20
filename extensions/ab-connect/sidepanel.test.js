@@ -287,7 +287,12 @@ test('agent list reports CLI version, account and model count without claiming m
   });
   await settle();
   const lines = f.nodes.get('agentList').children.map(row => row.children[0].children[1].textContent);
-  assert.deepEqual(lines, ['v0.50.0 · Signed in (chatgpt) · 2 models', 'Configuration found; program not installed']);
+  assert.deepEqual(lines, ['v0.50.0 · Signed in (chatgpt) · 2 models']);
+  // Agents that are not installed move to the chips below the list.
+  const missing = f.nodes.get('agentMissingList').children.map(row => row.children[0].children[1].textContent);
+  assert.deepEqual(missing, ['Configuration found; program not installed']);
+  assert.equal(f.nodes.get('agentMissing').hidden, false);
+  assert.equal(f.nodes.get('agentMissingCount').textContent, '1');
   assert.equal(f.calls.filter(call => call.operation === 'agentInspect').length, 1);
   f.panel.close();
 });

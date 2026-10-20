@@ -1450,7 +1450,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   // The report is not proof of model access; that is settled by the first turn.
   async function agentStatus(agent, line, epoch, row) {
     const mark = state => { if (row) row.className = `agent-row ${state}${configuration?.agentId === agent.id && !nodes.configuration.hidden ? ' selected' : ''}`; };
-    if (!agent.executable) { mark('missing'); line.textContent = agent.configFiles?.length ? t('panel_agent_config_only') : t('panel_agent_not_installed'); return; }
+    if (!agent.executable) { mark(agent.configFiles?.length ? 'missing config-only' : 'missing'); line.textContent = agent.configFiles?.length ? t('panel_agent_config_only') : t('panel_agent_not_installed'); return; }
     mark('installed');
     if (!(panelSupport?.chatAgents || ['codex', 'claude']).includes(agent.id)) { line.textContent = t('panel_agent_chat_unsupported'); return; }
     if (panelSupport?.mode !== 'full' || !panelSupport?.modelInspection) { line.textContent = t('panel_agent_installed'); return; }
@@ -1470,14 +1470,24 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   async function discover() {
     const epoch = ++discoverEpoch;
     const result = await api('discover'); if (epoch !== discoverEpoch) return; nodes.agentList.replaceChildren(); agentRows.clear();
+    // Agents that are not installed collapse into chips under the list.
+    const missingBox = document.getElementById('agentMissing'), missingList = document.getElementById('agentMissingList');
+    missingList?.replaceChildren();
     for (const agent of result.agents) {
       const row = element('div', undefined, 'agent-row'), info = element('div', undefined, 'agent-info'), line = element('div', undefined, 'agent-evidence');
       info.append(element('div', agent.name, 'agent-name'), line);
-      row.append(info, button(t('panel_agent_configure'), () => loadConfig(agent.id, agent.name), 'pill')); nodes.agentList.append(row); agentRows.set(agent.id, row);
+      const open = button(t('panel_agent_configure'), () => loadConfig(agent.id, agent.name), 'agent-open'); open.title = `${t('panel_agent_configure')} · ${agent.name}`;
+      row.append(info, open); (!agent.executable && missingList ? missingList : nodes.agentList).append(row); agentRows.set(agent.id, row);
       if (nodes.agentsView.hidden) line.textContent = agent.executable ? t('panel_agent_installed') : t('panel_agent_not_installed'); else void agentStatus(agent, line, epoch, row);
     }
+    if (missingBox) { const count = missingList?.children?.length || 0; missingBox.hidden = !count; const label = document.getElementById('agentMissingCount'); if (label) label.textContent = String(count); }
     // The open configuration sits under its agent's row; rebuilding the list detached it.
-    if (configuration && !nodes.configuration.hidden) agentRows.get(configuration.agentId)?.after?.(nodes.configuration);
+    if (configuration && !nodes.configuration.hidden) placeConfiguration(configuration.agentId);
+  }
+  // Under its row in the list; a chip's configuration goes below the chips.
+  function placeConfiguration(agentId) {
+    const row = agentRows.get(agentId), chips = document.getElementById('agentMissing');
+    (row && chips && row.parentNode === document.getElementById('agentMissingList') ? chips : row)?.after?.(nodes.configuration);
   }
   function closeConfig() {
     configEpoch++; preview = null; nodes.configuration.hidden = true;
@@ -1490,7 +1500,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     nodes.configWarnings.textContent = (configuration.warnings || []).join('\n'); nodes.configFields.replaceChildren(); nodes.configPreview.hidden = true; nodes.restoreConfig.hidden = true; nodes.configResult.textContent = '';
     for (const button of nodes.configForm.querySelectorAll('button')) button.disabled = panelSupport?.mode !== 'full';
     for (const [id, row] of agentRows) row.classList.toggle('selected', id === agentId);
-    agentRows.get(agentId)?.after?.(nodes.configuration);
+    placeConfiguration(agentId);
     const modelInputs = [];
     for (const field of configuration.fields) {
       const label = element('label', undefined, 'field'); label.append(element('span', fieldLabels[field.id] || field.id)); const input = element('input'); input.disabled = panelSupport?.mode !== 'full'; input.value = field.value || ''; input.placeholder = t('panel_cli_default'); input.dataset.field = field.id;
