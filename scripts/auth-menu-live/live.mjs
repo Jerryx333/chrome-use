@@ -88,7 +88,7 @@ try {
   for (const [label, b] of runs) {
     const session = `aml-${label}`;
     const run0 = {};
-    await inPm(`chrome.storage.local.set({ events: [] })`);
+    await inPm(`resetEvents().then(() => true)`);
     const version = cli(b, ['--version']).stdout.trim();
     // `--wait-until none`: in this headless rig a relay `open` that waits for
     // `load` does not see it arrive (a navigation in an existing tab), though
@@ -114,7 +114,7 @@ try {
       CU_BWU_CHILD: '1', CU_BWU_USER: 'user@example.com', CU_BWU_PW: 'super-secret',
       CU_BWU_ORIGIN: origin, CU_BWU_ITEM: 'fixture', CU_BWU_ITEM_ID: 'fixture-id',
     });
-    const events = (await inPm(`chrome.storage.local.get('events')`)).events || [];
+    const events = (await inPm(`readEvents()`)).events || [];
     const front = await inExt(`chrome.tabs.query({ active: true, windowId: ${user.window} }).then(([t]) => t && t.id)`);
     const windows = await inExt(`chrome.windows.getAll({ populate: true }).then((ws) => ws.map((w) => ({ id: w.id, focused: w.focused, tabs: w.tabs.map((t) => ({ id: t.id, active: t.active, url: t.url })) })))`);
     const tabList = cli(b, ['--session', session, '--json', 'tab', 'list']).stdout;

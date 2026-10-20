@@ -4,11 +4,21 @@
 let menuTab = null;
 const menuTabReady = chrome.storage.session.get('menuTab').then((o) => { menuTab = o.menuTab ?? null; });
 const setMenuTab = (tab) => { menuTab = tab; chrome.storage.session.set({ menuTab: tab }); };
-const log = async (entry) => {
-  const { events = [] } = await chrome.storage.local.get('events');
-  events.push({ at: Date.now(), ...entry });
-  await chrome.storage.local.set({ events });
+// One read-modify-write at a time: overlapping events would drop entries.
+let logChain = Promise.resolve();
+const log = (entry) => {
+  const at = Date.now();
+  logChain = logChain.then(async () => {
+    const { events = [] } = await chrome.storage.local.get('events');
+    events.push({ at, ...entry });
+    await chrome.storage.local.set({ events });
+  }).catch(() => {});
+  return logChain;
 };
+// For the driver: clear the log after every queued write.
+globalThis.resetEvents = () => (logChain = logChain.then(() => chrome.storage.local.set({ events: [] })));
+// For the driver: the log once every queued write landed.
+globalThis.readEvents = () => logChain.then(() => chrome.storage.local.get('events'));
 const hide = (tab, why) => {
   log({ kind: 'close', why, tab });
   chrome.tabs.sendMessage(tab, { cmd: 'hide' }, { frameId: 0 }).catch(() => {});

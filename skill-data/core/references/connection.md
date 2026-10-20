@@ -179,7 +179,9 @@ its agent window instead: Bitwarden closes the menu of a tab that is not in
 front whenever another tab is activated, so the user's window, its front tab
 and the focus stay as they were. The agent window is kept minimized for the
 session (one blank tab, closed with the session): the first time it is seen for
-about a second while it minimizes, later times nothing shows. A locked vault, or another password manager, may
+about a second while it minimizes, later times nothing shows. An agent window
+that already holds other agent tabs (`--window dedicated`) is used as it is and
+not minimized. A locked vault, or another password manager, may
 not do that; the error then says so. A background tab is never brought to the
 front on its own: the error gives the exact `extension call tabs.update`
 command that does it (`tab select --activate` cannot, it needs the debugger

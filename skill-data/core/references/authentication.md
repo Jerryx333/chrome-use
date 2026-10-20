@@ -269,7 +269,8 @@ tab in front, and for a background tab in your own window (where agent tabs
 open), by activating a blank tab in its agent window, which leaves your window,
 the tab you are on and the focus alone. That window is kept minimized for the
 session: the first time it appears for about a second while it minimizes,
-later times nothing shows. Only a tab you are looking at in
+later times nothing shows (an agent window that already holds other agent
+tabs, `--window dedicated`, is used as it is). Only a tab you are looking at in
 your own window is left to you (press Escape there). `auth login` also takes
 the cursor out of each field it filled, so the menu usually closes before it
 gets in the way. Filling through `bwu run` does not need that menu at all.
