@@ -65,7 +65,10 @@ const summary = r => ({ code: r.code, ms: r.ms, success: r.json?.success, errorC
 const sessionOf = (agent, pane) => cu(agent, pane, ['status']).json?.data?.currentSession;
 const tabs = () => rig.ev('chrome.tabs.query({})');
 const createdOf = name => { try { return JSON.parse(fs.readFileSync(path.join(socketDir, `${name}.created-targets.json`), 'utf8')); } catch { return null; } };
-const tookOver = r => /tabs of ended session/.test(r.stderr) || /taken over/.test(r.stderr);
+// Whether `name`'s record now holds any of `targets` (A's tabs). The
+// takeover note is not printed in --json mode, so the records tell.
+const holds = (name, targets) => (createdOf(name)?.target_ids || []).some(t => targets.includes(t));
+const socketOf = name => fs.existsSync(path.join(socketDir, `${name}.sock`));
 // This rig's native host only: its command line runs the binary copied
 // into this run's directory.
 const nmHosts = () => spawnSync('pgrep', ['-f', `${work}/.*__nm-host`], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
@@ -77,17 +80,20 @@ try {
   const openA = cu(A.agent, A.pane, ['open', rig.site + '/a?A']);
   step('A open', summary(openA));
   const nameA = sessionOf(A.agent, A.pane)?.name;
-  step('A session', { name: nameA, created: createdOf(nameA) });
+  const targetsA = createdOf(nameA)?.target_ids || [];
+  step('A session', { name: nameA, targetsA });
+  check(targetsA.length > 0, 'A has no recorded tab');
+  const tookOver = name => holds(name, targetsA);
 
   // 1. B starts while A's command is in flight.
   const inflight1 = cuAsync(A.agent, A.pane, slow(6000));
   await sleep(1500);
   const openB = cu(B.agent, B.pane, ['open', rig.site + '/b?B']);
   const nameB = sessionOf(B.agent, B.pane)?.name;
-  step('B open while A busy', { ...summary(openB), session: nameB, tookOver: tookOver(openB) });
+  step('B open while A busy', { ...summary(openB), session: nameB, tookOver: tookOver(nameB) });
   const a1 = await inflight1;
   step('A slow command finished', summary(a1));
-  check(!tookOver(openB), 'B took over tabs while A had a command in flight');
+  check(!tookOver(nameB), 'B took over tabs while A had a command in flight');
   check(a1.code === 0 && a1.json?.data?.result === 'done', 'A\'s command did not finish normally');
 
   // 2. A's daemon dies while A's command runs (as in the report, where a
@@ -101,18 +107,21 @@ try {
   const C = { agent: 6003, pane: '%93' };
   const openC = cu(C.agent, C.pane, ['open', rig.site + '/c?C']);
   const nameC = sessionOf(C.agent, C.pane)?.name;
-  step('C starts while A waits on its dead daemon', { ...summary(openC), session: nameC, tookOver: tookOver(openC), createdA: createdOf(nameA) });
+  step('C starts while A waits on its dead daemon', { ...summary(openC), session: nameC, tookOver: tookOver(nameC), createdA: createdOf(nameA)?.target_ids });
   const a2 = await inflight2;
   step('A command whose daemon died', summary(a2));
   check(a2.code !== 0, 'A exited 0 although its command was never confirmed');
   check(a2.json?.code === 'action_outcome_unknown', `A's unconfirmed command was not reported as action_outcome_unknown: ${a2.json?.code}`);
-  check(!tookOver(openC), 'C took over A\'s tabs while A still waited on its command');
+  check(!tookOver(nameC), 'C took over A\'s tabs while A still waited on its command');
   // Right after A's command ended, a new session still must not take them:
   // A ran a command moments ago.
   const D = { agent: 6004, pane: '%94' };
   const openD = cu(D.agent, D.pane, ['open', rig.site + '/d?D']);
-  step('D starts right after A\'s failure', { ...summary(openD), tookOver: tookOver(openD), createdA: createdOf(nameA) });
-  check(!tookOver(openD), 'D took over A\'s tabs moments after A\'s command');
+  const nameD = sessionOf(D.agent, D.pane)?.name;
+  step('D starts right after A\'s failure', { ...summary(openD), session: nameD, tookOver: tookOver(nameD), createdA: createdOf(nameA)?.target_ids });
+  check(!tookOver(nameD), 'D took over A\'s tabs moments after A\'s command');
+  const pageA = await rig.ev(`chrome.tabs.query({}).then(t => t.filter(x => (x.url || '').includes('/a?A')).length)`);
+  check(pageA === 1, `A's page is not open any more (${pageA})`);
 
   // 3. What happened to A's last command, without running anything.
   const last = cu(A.agent, A.pane, ['session', 'last']);
@@ -122,7 +131,9 @@ try {
 
   // 4. The relay drops while A's command runs.
   const reopenA = cu(A.agent, A.pane, ['tab', 'list']);
-  step('A again', summary(reopenA));
+  step('A again', { ...summary(reopenA), live: { B: socketOf(nameB), C: socketOf(nameC), D: socketOf(nameD) } });
+  const listedA = JSON.stringify(reopenA.json?.data?.tabs || []);
+  check(!/\/b\?B|\/c\?C|\/d\?D/.test(listedA), `A's tab list shows other running sessions' tabs: ${listedA}`);
   const inflight3 = cuAsync(A.agent, A.pane, slow(6000));
   await sleep(1500);
   const hosts = nmHosts();
