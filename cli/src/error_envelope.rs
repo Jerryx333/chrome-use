@@ -49,6 +49,28 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    if lower.contains("action_outcome_unknown:") {
+        return ErrorMetadata {
+            code: "action_outcome_unknown",
+            retryable: false,
+        };
+    }
+    // These refusals quote page text, which may itself say "timeout",
+    // "connection" or "first tab setup failed", so they come before every
+    // substring match. The hit-test guard dispatched no click; fix the blocker
+    // rather than classifying its label as a retryable transport failure.
+    if (lower.starts_with("ref ")
+        && lower.contains(" is occluded by ")
+        && lower.contains(" at the click point (still occluded after "))
+        || (lower.starts_with("click refused: ")
+            && lower.contains(" is covered by ")
+            && lower.contains(" at its click point, so a click there would hit that instead."))
+    {
+        return ErrorMetadata {
+            code: "element_occluded",
+            retryable: false,
+        };
+    }
     // Before `timeout` and `connection`: these quote what failed, and each
     // has its own next step (#486). Only a setup failure whose tab Chrome
     // confirms gone is safe to simply rerun.
@@ -92,12 +114,6 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
-    if lower.contains("action_outcome_unknown:") {
-        return ErrorMetadata {
-            code: "action_outcome_unknown",
-            retryable: false,
-        };
-    }
     // A download that did not finish. Before `timeout`: a download that
     // timed out may still be running, and a retry would start a second one.
     // The relay path (`download-manager.js`) throws `downloadUrl: interrupted
@@ -134,21 +150,6 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
     {
         return ErrorMetadata {
             code: "debugger_access_denied",
-            retryable: false,
-        };
-    }
-    // These refusals quote page text, which may itself say "timeout" or
-    // "connection". The hit-test guard dispatched no click; fix the blocker
-    // rather than classifying its label as a retryable transport failure.
-    if (lower.starts_with("ref ")
-        && lower.contains(" is occluded by ")
-        && lower.contains(" at the click point (still occluded after "))
-        || (lower.starts_with("click refused: ")
-            && lower.contains(" is covered by ")
-            && lower.contains(" at its click point, so a click there would hit that instead."))
-    {
-        return ErrorMetadata {
-            code: "element_occluded",
             retryable: false,
         };
     }
@@ -515,6 +516,10 @@ mod tests {
             "timeout"
         );
         assert_eq!(classify_error("action_outcome_unknown: Ref e9 is occluded by DIV at the click point (still occluded after 3 retries / 600ms).").code, "action_outcome_unknown");
+        assert_eq!(
+            classify_error("Ref e9 is occluded by DIV text=\"first tab setup failed\" at the click point (still occluded after 3 retries / 600ms).").code,
+            "element_occluded"
+        );
     }
 
     #[test]
