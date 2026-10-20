@@ -97,6 +97,9 @@ chrome-use click @e3 --observe     # fill, select, pick, press, hover also take 
 chrome-use snapshot -i --diff      # only if the observation leaves a question
 ```
 
+For MCP, `chrome_use_snapshot` accepts `diff: true` for this same incremental
+reread. Keep its baseline; omit it when a complete current tree is needed.
+
 1. Copy refs exactly from the latest snapshot or observation; never guess or
    renumber them. Navigation and tab switches reset refs. When a ref errors
    or a control is newly rendered, discover it again. If an action's
@@ -127,6 +130,8 @@ chrome-use snapshot -i --diff      # only if the observation leaves a question
    `click --help`).
 3. Follow the error's instructions: its last line says what to do next.
    Do not pipe output through `tail` or drop stderr.
+   `element_occluded` means no click was dispatched: inspect a fresh snapshot
+   and resolve the blocker before trying again; do not repeat unchanged.
 4. An action that changed nothing: read its `why:` note and ⚠ warnings, fix
    the blocker, then retry the direct semantic verb. Do not repeat blindly or
    switch to coordinate clicks. A field showing your text is not proof it saved.
@@ -300,3 +305,7 @@ Run `chrome-use skills get <name>` with one name below.
 | Cloud browsers | `vercel-sandbox` or `agentcore` |
 
 For repeated control names, discover the container with `find query`, then use semantic `find ... --within <CSS|@ref>`. Semantic queries refuse multiple visible matches; see core/interacting for bounded candidate diagnostics and explicit first/nth selection. A CSS selector or XPath given to `click`/`fill`/`hover`/… is refused the same way when it matches several elements (`selector_ambiguous`, with each match's text and position): narrow it, use a `@ref`, or `find nth <index> <selector> <action>`.
+
+Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.
+
+`read --filter` uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use `read --outline` to find a heading. `snapshot --filter` separately accepts a regex. `read --help` lists the reading options.

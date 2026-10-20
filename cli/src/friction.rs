@@ -401,6 +401,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn occlusion_uses_the_non_retryable_envelope_category() {
+        assert_eq!(categorize("Ref e9 is occluded by DIV text=\"Connection timeout\" at the click point (still occluded after 3 retries / 600ms)."), "element_occluded");
+    }
+
+    #[test]
     fn signatures_ignore_the_page_specific_parts() {
         let a = signature_key("click", "Element not found: #missing-a");
         let b = signature_key("click", "Element not found: \"#other .thing\"");

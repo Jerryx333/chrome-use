@@ -39,7 +39,8 @@ pub struct ReadOptions {
     pub llms: Option<LlmsMode>,
     /// Return a heading outline for the selected page content.
     pub outline: bool,
-    /// Filter page sections, /llms.txt links, /llms-full.txt sections, or outline headings.
+    /// Literal ASCII-case-insensitive filter for page sections, llms links/sections or headings.
+    /// Page reads prefer matching headings with descendants; this is not a regex.
     pub filter: Option<String>,
     /// HTTP request timeout in milliseconds.
     pub timeout_ms: u64,
@@ -2259,6 +2260,19 @@ Inline [Authentication](/inline-auth) should not become a TOC item.
         assert!(filtered.contains("Use a component."));
         assert!(!filtered.contains("## Setup"));
         assert!(!filtered.contains("## Further reading"));
+    }
+
+    #[test]
+    fn page_filter_treats_regex_metacharacters_as_literal_text() {
+        let content = "# Guide\n\n## Alpha\n\nFirst.\n\n## Beta\n\nSecond.\n\n## Alpha|Beta\n\nLiteral match.\n";
+        assert_eq!(
+            filter_page_sections(content, "ALPHA|BETA"),
+            "## Alpha|Beta\n\nLiteral match."
+        );
+        assert_eq!(
+            filter_page_sections("# Alpha\n\nFirst.\n\n# Beta\n\nSecond.", "Alpha|Beta"),
+            "No matching page sections"
+        );
     }
 
     #[test]
