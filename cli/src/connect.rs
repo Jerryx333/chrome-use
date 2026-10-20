@@ -2853,11 +2853,19 @@ fn hosts_to_reap(
     hosts: &[(u32, String)],
     serving: &std::collections::HashSet<u32>,
     exe: &str,
+    canonical: impl Fn(&str) -> Option<String>,
 ) -> Vec<u32> {
     hosts
         .iter()
         .filter(|(pid, command)| {
-            command.contains("__nm-host") && command.contains(exe) && !serving.contains(pid)
+            // The executable is everything before the mode argument; a
+            // symlinked launcher path is compared by what it points at.
+            let Some((program, _)) = command.split_once(" __nm-host") else {
+                return false;
+            };
+            let program = program.trim();
+            let same = program == exe || canonical(program).as_deref() == Some(exe);
+            same && !serving.contains(pid)
         })
         .map(|(pid, _)| *pid)
         .collect()
@@ -2901,13 +2909,23 @@ pub fn reap_orphaned_hosts() {
             // Cannot tell which host serves what: stop nothing.
             return;
         };
+        // Exit 1 with nothing on stderr means "no listener"; anything else is
+        // an inspection failure, so which hosts serve is unknown: stop nothing.
+        if !out.status.success() && (!out.stderr.is_empty() || out.status.code() != Some(1)) {
+            return;
+        }
         serving.extend(
             String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .filter_map(|l| l.trim().parse::<u32>().ok()),
         );
     }
-    for pid in hosts_to_reap(&hosts, &serving, &exe) {
+    let canonical = |p: &str| {
+        std::fs::canonicalize(p)
+            .ok()
+            .map(|c| c.to_string_lossy().into_owned())
+    };
+    for pid in hosts_to_reap(&hosts, &serving, &exe, canonical) {
         let _ = std::process::Command::new("kill")
             .arg(pid.to_string())
             .output();
@@ -4755,6 +4773,7 @@ mod tests {
     #[test]
     fn relay_recovery_stops_only_idle_hosts_of_this_install() {
         let exe = "/Users/u/.local/share/chrome-use/ChromeUse.app/Contents/MacOS/chrome-use";
+        let link = "/Users/u/.local/bin/chrome-use";
         let hosts = vec![
             (10, format!("{exe} __nm-host chrome-extension://x/")),
             (11, format!("{exe} __nm-host chrome-extension://x/")),
@@ -4764,9 +4783,15 @@ mod tests {
                     .to_string(),
             ),
             (13, format!("{exe} mobile serve")),
+            (14, format!("{link} __nm-host chrome-extension://x/")),
+            (15, format!("{exe}-old __nm-host chrome-extension://x/")),
         ];
         let serving: std::collections::HashSet<u32> = [11].into_iter().collect();
-        assert_eq!(super::hosts_to_reap(&hosts, &serving, exe), vec![10]);
+        let canonical = |p: &str| (p == link).then(|| exe.to_string());
+        assert_eq!(
+            super::hosts_to_reap(&hosts, &serving, exe, canonical),
+            vec![10, 14]
+        );
         assert_eq!(
             super::ws_port("ws://127.0.0.1:53211/devtools/browser/abc"),
             Some(53211)

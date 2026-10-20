@@ -3945,6 +3945,9 @@ impl BrowserManager {
             .into_iter()
             .filter(|t| !kept.contains(&t.target_id) || self.created_targets.contains(&t.target_id))
             .filter(|t| match others.get(&t.target_id) {
+                // A tab this session created stays its own, even if a record
+                // another session left behind still names it.
+                _ if self.created_targets.contains(&t.target_id) => true,
                 Some(session) => !*live
                     .entry(session.as_str())
                     .or_insert_with(|| crate::group_lifecycle::lease_held(session)),

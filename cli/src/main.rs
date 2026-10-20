@@ -3426,7 +3426,23 @@ fn main() {
     // This process works with the session until it exits: another session of
     // the project must not take its tabs over meanwhile, even if its daemon
     // goes away for a moment (#687).
-    let _client_presence = connection::hold_client_presence(&flags.session);
+    let _client_presence = match connection::hold_client_presence(&flags.session) {
+        Some(presence) => presence,
+        None => {
+            let error = format!(
+                "cannot mark this process as a client of session '{}' (its lock file in the \
+                 socket directory cannot be opened); not starting it, so another session cannot \
+                 take its tabs while it runs",
+                flags.session
+            );
+            if flags.json {
+                print_json_error(&error);
+            } else {
+                output::print_error_line(&format!("{} {}", color::error_indicator(), error));
+            }
+            exit(1);
+        }
+    };
 
     // Serialize this session's relay teardown and daemon replacement across CLI
     // processes. The lock stays held through ensure_daemon below, preventing a
