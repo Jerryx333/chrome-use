@@ -25,6 +25,7 @@ mod jev;
 #[cfg(target_os = "macos")]
 mod launchd;
 mod mcp;
+mod mobile;
 mod native;
 mod opencli;
 mod output;
@@ -1867,6 +1868,13 @@ fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let mut flags = parse_flags(&args);
     let mut clean = clean_args(&args);
+
+    // `mobile …` (the phone gateway) parses its own options; global flags such
+    // as `--profile` mean something else there.
+    if clean.first().map(String::as_str) == Some("mobile") {
+        let at = args.iter().position(|a| a == "mobile").unwrap_or(0);
+        exit(mobile::run_cli(&args[at + 1..]));
+    }
 
     // Loudly warn when launching a fresh browser with no profile: it gets a
     // temporary EMPTY profile (no cookies / no login). For logged-in sites the

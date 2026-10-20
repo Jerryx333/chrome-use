@@ -1,0 +1,547 @@
+//! Paired devices: `devices.json` plus one 32-byte key file per device, in a
+//! private directory. Every change runs under `store.lock`, so `mobile pair`,
+//! `mobile revoke` and a running gateway never lose each other's writes.
+
+use super::crypto::{self, KEY_LEN};
+use crate::agent_panel::private_fs;
+use serde::{Deserialize, Serialize};
+use std::io::Read;
+use std::path::PathBuf;
+
+/// A pending pairing is usable for this long, once.
+pub const PAIR_TTL_MS: u64 = 10 * 60 * 1000;
+/// Muted conversations kept per device.
+pub const MAX_MUTED: usize = 512;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum State {
+    Pending,
+    Active,
+    Disabled,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    /// The panel profile every call from this device is bound to.
+    pub profile: String,
+    pub state: State,
+    pub created: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ip: Option<String>,
+    #[serde(default)]
+    /// Not counted any more (a device is never disabled by failures, which
+    /// anyone knowing its id could cause); kept so older files still load.
+    pub failures: u32,
+    /// Set on the computer only (`mobile pair --allow-full-access`,
+    /// `mobile access`): lets the phone drive conversations with full access,
+    /// command execution or Pi beyond browser tools.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_full_access: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_token: Option<String>,
+    /// The last relay token the push Worker refused, and why
+    /// (`invalid`, `expired` or `unregistered`). Registering it again is
+    /// refused; registering another token clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_reason: Option<String>,
+    /// Conversations this device gets no pushes for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub muted: Vec<String>,
+}
+
+impl Device {
+    /// Whether a handshake may be attempted for this device now.
+    pub fn usable(&self, now: u64) -> bool {
+        match self.state {
+            State::Active => true,
+            State::Pending => self.expires.is_some_and(|e| now < e),
+            State::Disabled => false,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Registry {
+    pub schema_version: u32,
+    /// Random identity of this gateway, shown to the phone as `fp`.
+    pub gateway_id: String,
+    /// Shown to the phone; set by `mobile serve --name`, else the system's
+    /// computer name is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub computer_name: Option<String>,
+    pub devices: Vec<Device>,
+}
+
+impl Registry {
+    pub fn device(&self, id: &str) -> Option<&Device> {
+        self.devices.iter().find(|d| d.id == id)
+    }
+    pub fn device_mut(&mut self, id: &str) -> Option<&mut Device> {
+        self.devices.iter_mut().find(|d| d.id == id)
+    }
+}
+
+/// Atomic write that leaves the file at 0600 even when an existing file had
+/// wider permissions (the shared writer keeps an existing file's mode).
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.is_file() && meta.permissions().mode() & 0o777 != 0o600 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|_| "Cannot protect the paired-device files")?;
+        }
+    }
+    private_fs::write(path, bytes)
+}
+
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[derive(Clone)]
+pub struct Store {
+    directory: PathBuf,
+}
+
+impl Store {
+    /// `$CHROME_USE_RELAY_DIR/mobile` when set (as the panel service uses
+    /// `$CHROME_USE_RELAY_DIR/agent-panel`), otherwise `~/.chrome-use/mobile`.
+    pub fn open() -> Result<Self, String> {
+        let directory = match std::env::var_os("CHROME_USE_RELAY_DIR").filter(|s| !s.is_empty()) {
+            Some(dir) => {
+                let dir = PathBuf::from(dir);
+                if !dir.is_absolute() {
+                    return Err("CHROME_USE_RELAY_DIR must be absolute".into());
+                }
+                dir.join("mobile")
+            }
+            None => dirs::home_dir()
+                .ok_or("Cannot locate the user's home directory")?
+                .join(".chrome-use/mobile"),
+        };
+        Self::at(directory)
+    }
+
+    pub fn at(directory: PathBuf) -> Result<Self, String> {
+        private_fs::directory(&directory)?;
+        private_fs::directory(&directory.join("keys"))?;
+        Ok(Self { directory })
+    }
+
+    #[cfg(all(test, unix))]
+    pub fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
+    fn registry_path(&self) -> PathBuf {
+        self.directory.join("devices.json")
+    }
+
+    fn key_path(&self, id: &str) -> Result<PathBuf, String> {
+        uuid::Uuid::parse_str(id).map_err(|_| "Invalid device id")?;
+        Ok(self.directory.join("keys").join(format!("{id}.key")))
+    }
+
+    fn load(&self) -> Result<Registry, String> {
+        let path = self.registry_path();
+        if !path.exists() {
+            return Ok(Registry {
+                schema_version: 1,
+                gateway_id: crypto::b64url(&crypto::random::<16>()?),
+                computer_name: None,
+                devices: Vec::new(),
+            });
+        }
+        let mut bytes = Vec::new();
+        private_fs::open(&path, false)?
+            .take(4 * 1024 * 1024)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Cannot read the paired-device list")?;
+        let registry: Registry =
+            serde_json::from_slice(&bytes).map_err(|_| "The paired-device list is invalid")?;
+        if registry.schema_version != 1 {
+            return Err("The paired-device list has an unsupported version".into());
+        }
+        Ok(registry)
+    }
+
+    /// Read without changing anything. Taken under the lock too, so a reader
+    /// never sees a half-applied change of another process.
+    pub fn read(&self) -> Result<Registry, String> {
+        let lock = private_fs::open(&self.directory.join("store.lock"), true)?;
+        lock.lock()
+            .map_err(|_| "Cannot lock the paired-device list")?;
+        let registry = self.load()?;
+        // The gateway id is created on first use and kept from then on.
+        if !self.registry_path().exists() {
+            self.save(&registry)?;
+        }
+        Ok(registry)
+    }
+
+    fn save(&self, registry: &Registry) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(registry).map_err(|_| "Cannot encode device list")?;
+        write_private(&self.registry_path(), &bytes)
+    }
+
+    /// Apply one change and write it back atomically.
+    pub fn update<T>(
+        &self,
+        change: impl FnOnce(&mut Registry) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let lock = private_fs::open(&self.directory.join("store.lock"), true)?;
+        lock.lock()
+            .map_err(|_| "Cannot lock the paired-device list")?;
+        let mut registry = self.load()?;
+        let result = change(&mut registry)?;
+        self.save(&registry)?;
+        Ok(result)
+    }
+
+    /// The device's key material: the 32-byte pair secret while pending,
+    /// `pair_secret || phone_secret` (64 bytes) once paired.
+    pub fn secret(&self, id: &str) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+        private_fs::open(&self.key_path(id)?, false)?
+            .take(2 * KEY_LEN as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Cannot read the device key")?;
+        if bytes.len() != KEY_LEN && bytes.len() != 2 * KEY_LEN {
+            return Err("The device key file is invalid".into());
+        }
+        Ok(bytes)
+    }
+
+    /// Finish pairing: append the phone's secret to the device key and make
+    /// the device active, only if it is still pending and unexpired. Of two
+    /// phones racing with one QR code, the first to get here wins.
+    pub fn complete_pairing(
+        &self,
+        id: &str,
+        phone_secret: &[u8; KEY_LEN],
+        ip: String,
+    ) -> Result<(), String> {
+        let key = self.key_path(id)?;
+        self.update(|registry| {
+            let device = registry.device_mut(id).ok_or("The device was revoked")?;
+            if device.state != State::Pending || !device.usable(now_ms()) {
+                return Err("This pairing code was already used or has expired".into());
+            }
+            let mut bytes = Vec::new();
+            private_fs::open(&key, false)?
+                .take(KEY_LEN as u64 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "Cannot read the device key")?;
+            if bytes.len() != KEY_LEN {
+                return Err("The device key file is invalid".into());
+            }
+            bytes.extend_from_slice(phone_secret);
+            write_private(&key, &bytes)?;
+            device.state = State::Active;
+            device.expires = None;
+            device.failures = 0;
+            device.last_seen = Some(now_ms());
+            device.last_ip = Some(ip);
+            Ok(())
+        })
+    }
+
+    /// A new pending device and its pair secret. Expired pending entries are
+    /// removed on the way.
+    pub fn create_pending(
+        &self,
+        name: &str,
+        profile: &str,
+    ) -> Result<(Device, [u8; KEY_LEN], String), String> {
+        let secret = crypto::random::<KEY_LEN>()?;
+        let now = now_ms();
+        let device = Device {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: name.into(),
+            profile: profile.into(),
+            state: State::Pending,
+            created: now,
+            expires: Some(now + PAIR_TTL_MS),
+            last_seen: None,
+            last_ip: None,
+            failures: 0,
+            allow_full_access: false,
+            relay_token: None,
+            rejected_token: None,
+            rejected_reason: None,
+            muted: Vec::new(),
+        };
+        // The key exists before the record that refers to it.
+        write_private(&self.key_path(&device.id)?, &secret)?;
+        let stored = device.clone();
+        let expired = self.update(move |registry| {
+            let expired: Vec<String> = registry
+                .devices
+                .iter()
+                .filter(|d| d.state == State::Pending && !d.usable(now))
+                .map(|d| d.id.clone())
+                .collect();
+            registry.devices.retain(|d| !expired.contains(&d.id));
+            registry.devices.push(stored);
+            Ok((expired, registry.gateway_id.clone()))
+        });
+        let (expired, gateway) = match expired {
+            Ok(v) => v,
+            Err(error) => {
+                let _ = std::fs::remove_file(self.key_path(&device.id)?);
+                return Err(error);
+            }
+        };
+        for id in expired {
+            let _ = std::fs::remove_file(self.key_path(&id)?);
+        }
+        Ok((device, secret, gateway))
+    }
+
+    /// Store a relay token from the phone, unless the Worker already refused
+    /// that exact token: then `Some(reason)` and nothing changes.
+    pub fn register_token(&self, id: &str, token: &str) -> Result<Option<String>, String> {
+        self.update(|registry| {
+            let device = registry.device_mut(id).ok_or("Device was revoked")?;
+            if device.rejected_token.as_deref() == Some(token) {
+                return Ok(Some(
+                    device
+                        .rejected_reason
+                        .clone()
+                        .unwrap_or_else(|| "invalid".into()),
+                ));
+            }
+            device.relay_token = Some(token.into());
+            device.rejected_token = None;
+            device.rejected_reason = None;
+            Ok(None)
+        })
+    }
+
+    /// Remember a token the Worker refused and stop using it. Only that
+    /// token: the phone may already have registered a new one.
+    pub fn reject_token(&self, id: &str, token: &str, reason: &str) -> Result<(), String> {
+        self.update(|registry| {
+            if let Some(device) = registry.device_mut(id) {
+                if device.relay_token.as_deref() == Some(token) {
+                    device.relay_token = None;
+                }
+                device.rejected_token = Some(token.into());
+                device.rejected_reason = Some(reason.into());
+            }
+            Ok(())
+        })
+    }
+
+    /// Allow or stop the phone driving high-access conversations.
+    pub fn set_full_access(&self, id: &str, allowed: bool) -> Result<Device, String> {
+        self.update(|registry| {
+            let device = registry
+                .device_mut(id)
+                .ok_or("No paired device has that id")?;
+            device.allow_full_access = allowed;
+            Ok(device.clone())
+        })
+    }
+
+    /// Mute or unmute pushes for one conversation; returns the muted list.
+    pub fn set_mute(
+        &self,
+        id: &str,
+        conversation: &str,
+        muted: bool,
+    ) -> Result<Vec<String>, String> {
+        self.update(|registry| {
+            let device = registry.device_mut(id).ok_or("Device was revoked")?;
+            device.muted.retain(|c| c != conversation);
+            if muted {
+                if device.muted.len() >= MAX_MUTED {
+                    return Err(format!("At most {MAX_MUTED} conversations can be muted"));
+                }
+                device.muted.push(conversation.into());
+            }
+            Ok(device.muted.clone())
+        })
+    }
+
+    /// Delete a device's record, key and push token.
+    pub fn revoke(&self, id: &str) -> Result<Device, String> {
+        let key = self.key_path(id)?;
+        let device = self.update(|registry| {
+            let index = registry
+                .devices
+                .iter()
+                .position(|d| d.id == id)
+                .ok_or("No paired device has that id")?;
+            Ok(registry.devices.remove(index))
+        })?;
+        match std::fs::remove_file(key) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("The device was removed but its key file remains".into()),
+        }
+        Ok(device)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::path::Path;
+
+    #[test]
+    fn pairing_records_are_private_and_revocable() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let (device, secret, gateway) = store.create_pending("Phone", "profile-1").unwrap();
+        assert_eq!(store.secret(&device.id).unwrap(), secret);
+        let registry = store.read().unwrap();
+        assert_eq!(registry.gateway_id, gateway);
+        let stored = registry.device(&device.id).unwrap();
+        assert_eq!(stored.state, State::Pending);
+        assert!(stored.usable(now_ms()));
+        assert!(!stored.usable(now_ms() + PAIR_TTL_MS));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(store.directory()), 0o700);
+            assert_eq!(mode(&store.directory().join("keys")), 0o700);
+            assert_eq!(mode(&store.directory().join("devices.json")), 0o600);
+            assert_eq!(mode(&store.key_path(&device.id).unwrap()), 0o600);
+        }
+        // Pairing appends the phone's secret, once.
+        let phone = [7u8; KEY_LEN];
+        store
+            .complete_pairing(&device.id, &phone, "127.0.0.1".into())
+            .unwrap();
+        let mut both = secret.to_vec();
+        both.extend_from_slice(&phone);
+        assert_eq!(store.secret(&device.id).unwrap(), both);
+        assert_eq!(
+            store.read().unwrap().device(&device.id).unwrap().state,
+            State::Active
+        );
+        assert!(store
+            .complete_pairing(&device.id, &phone, "127.0.0.1".into())
+            .is_err());
+        // The gateway identity is stable across changes.
+        store.create_pending("Tablet", "profile-1").unwrap();
+        assert_eq!(store.read().unwrap().gateway_id, gateway);
+        store.revoke(&device.id).unwrap();
+        assert!(store.read().unwrap().device(&device.id).is_none());
+        assert!(store.secret(&device.id).is_err());
+        assert!(store.revoke(&device.id).is_err());
+        assert!(store.secret("../escape").is_err());
+    }
+
+    #[test]
+    fn rejected_relay_tokens_are_not_registered_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let (device, _, _) = store.create_pending("Phone", "p").unwrap();
+        let token = |s: &Store| {
+            s.read()
+                .unwrap()
+                .device(&device.id)
+                .unwrap()
+                .relay_token
+                .clone()
+        };
+        assert_eq!(store.register_token(&device.id, "a").unwrap(), None);
+        assert_eq!(token(&store).as_deref(), Some("a"));
+        store.reject_token(&device.id, "a", "expired").unwrap();
+        assert_eq!(token(&store), None);
+        assert_eq!(
+            store.register_token(&device.id, "a").unwrap().as_deref(),
+            Some("expired")
+        );
+        assert_eq!(token(&store), None);
+        // A new token is accepted and clears the rejection.
+        assert_eq!(store.register_token(&device.id, "b").unwrap(), None);
+        assert_eq!(store.register_token(&device.id, "a").unwrap(), None);
+        // Rejecting an old token leaves the current one alone.
+        store.reject_token(&device.id, "b", "invalid").unwrap();
+        assert_eq!(token(&store).as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn mutes_are_per_device_and_toggle() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let (device, _, _) = store.create_pending("Phone", "p").unwrap();
+        assert_eq!(store.set_mute(&device.id, "a", true).unwrap(), ["a"]);
+        assert_eq!(store.set_mute(&device.id, "a", true).unwrap(), ["a"]);
+        assert_eq!(store.set_mute(&device.id, "b", true).unwrap(), ["a", "b"]);
+        assert_eq!(store.set_mute(&device.id, "a", false).unwrap(), ["b"]);
+        assert!(store
+            .set_mute("0f8fad5b-d9cb-469f-a165-70867728950e", "a", true)
+            .is_err());
+    }
+
+    #[test]
+    fn the_gateway_id_is_kept_from_the_first_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let first = store.read().unwrap().gateway_id;
+        assert_eq!(store.read().unwrap().gateway_id, first);
+        let (_, _, gateway) = store.create_pending("Phone", "p").unwrap();
+        assert_eq!(gateway, first);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewrites_narrow_widened_files_back_to_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let (device, _, _) = store.create_pending("Phone", "p").unwrap();
+        let path = store.registry_path();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        store.set_full_access(&device.id, true).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(
+            store
+                .read()
+                .unwrap()
+                .device(&device.id)
+                .unwrap()
+                .allow_full_access
+        );
+    }
+
+    #[test]
+    fn expired_pending_devices_are_pruned() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::at(temp.path().join("mobile")).unwrap();
+        let (old, _, _) = store.create_pending("Old", "p").unwrap();
+        store
+            .update(|r| {
+                r.device_mut(&old.id).unwrap().expires = Some(1);
+                Ok(())
+            })
+            .unwrap();
+        store.create_pending("New", "p").unwrap();
+        assert!(store.read().unwrap().device(&old.id).is_none());
+        assert!(store.secret(&old.id).is_err());
+    }
+}

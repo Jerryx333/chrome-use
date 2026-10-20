@@ -1,0 +1,37 @@
+name = "chrome-use-push"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+workers_dev = false
+
+# One level under leeguoo.com so Universal SSL covers it.
+routes = [{ pattern = "chrome-use-push.leeguoo.com", custom_domain = true }]
+
+# No KV / D1 / Durable Objects: tokens are self-verifying and nothing is stored.
+
+# Workers Rate Limiting binding. `period` may only be 10 or 60 seconds, so the
+# spec's "60/h per relayToken" is enforced as a per-minute burst cap instead.
+# Counters are per Cloudflare location and approximate; calls cost no storage.
+[[ratelimits]]
+name = "RL_TOKEN"
+namespace_id = "41001"
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+
+[[ratelimits]]
+name = "RL_IP"
+namespace_id = "41002"
+  [ratelimits.simple]
+  limit = 120
+  period = 60
+
+[[ratelimits]]
+name = "RL_REGISTER"
+namespace_id = "41003"
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+
+# Secrets (set with `wrangler secret put`, never in this file):
+#   RELAY_SECRET, APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID,
+#   FCM_SERVICE_ACCOUNT_JSON

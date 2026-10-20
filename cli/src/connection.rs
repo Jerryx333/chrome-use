@@ -2594,6 +2594,21 @@ fn client_read_budget(cmd: &Value) -> Duration {
     daemon_cdp_budget(cmd) + Duration::from_secs(15)
 }
 
+/// One command to a session's running daemon, as is: no daemon is started,
+/// no stale daemon is stopped, nothing is retried. For callers that must
+/// never cause a browser launch (the mobile gateway's screenshots).
+pub(crate) fn send_to_running_daemon(cmd: &Value, session: &str) -> Result<Response, String> {
+    let read_to = client_read_budget(cmd);
+    exchange_command(
+        connect(session)?,
+        cmd,
+        session,
+        read_to,
+        client_overall_ceiling(cmd, read_to),
+        false,
+    )
+}
+
 fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
     let read_to = client_read_budget(cmd);
     exchange_command(
@@ -2602,6 +2617,7 @@ fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
         session,
         read_to,
         client_overall_ceiling(cmd, read_to),
+        true,
     )
 }
 
@@ -2632,6 +2648,7 @@ fn exchange_command(
     session: &str,
     read_to: Duration,
     overall: Duration,
+    stop_on_close: bool,
 ) -> Result<Response, String> {
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
     let mut cmd = cmd.clone();
@@ -2644,7 +2661,14 @@ fn exchange_command(
 
     let started = std::time::Instant::now();
     let mut reader = BufReader::new(stream);
-    await_reply(&mut reader, || started.elapsed(), session, read_to, overall)
+    await_reply(
+        &mut reader,
+        || started.elapsed(),
+        session,
+        read_to,
+        overall,
+        stop_on_close,
+    )
 }
 
 /// One bounded read of the daemon's reply stream.
@@ -2691,13 +2715,16 @@ impl ReplySource for BufReader<Connection> {
 /// Under load, commands that succeeded at 51s were killed at 45s: one
 /// command can make several sequential CDP calls. Blank keepalives renew
 /// the stall budget (`read_to`), not the overall ceiling (`overall`). Older
-/// daemons just reply once.
+/// daemons just reply once. A daemon that closes the connection without a
+/// reply is stopped and its state cleared, unless `stop_on_close` is false
+/// (a caller that must leave the session's daemon alone).
 fn await_reply(
     reader: &mut impl ReplySource,
     elapsed: impl Fn() -> Duration,
     session: &str,
     read_to: Duration,
     overall: Duration,
+    stop_on_close: bool,
 ) -> Result<Response, String> {
     let mut heard_keepalive = false;
     let busy = || {
@@ -2723,6 +2750,11 @@ fn await_reply(
                 ))
             }
             ReplyRead::Failed(e) => return Err(format!("Failed to read: {}", e)),
+            ReplyRead::Closed if !stop_on_close => {
+                return Err(format!(
+                    "daemon for session '{session}' closed the connection without replying"
+                ))
+            }
             ReplyRead::Closed => {
                 kill_stale_daemon(session);
                 return Err(format!(
@@ -2887,6 +2919,7 @@ mod tests {
             "keepalive-test",
             Duration::from_millis(120),
             Duration::from_millis(overall_ms),
+            true,
         );
         (result, clock.get(), daemon.reads)
     }
@@ -2964,6 +2997,7 @@ mod tests {
             "keepalive-test",
             Duration::from_millis(120),
             Duration::from_secs(1),
+            true,
         )
         .unwrap_or_else(|e| panic!("{e}"));
         assert!(reply.success);
@@ -2972,6 +3006,37 @@ mod tests {
         BufReader::new(daemon).read_line(&mut line).unwrap();
         let cmd: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(cmd["_keepalive"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_caller_that_must_not_stop_the_daemon_only_gets_an_error_on_close() {
+        use std::io::BufRead;
+        use std::time::Duration;
+        let (client, daemon) = std::os::unix::net::UnixStream::pair().unwrap();
+        // The daemon reads the command and hangs up without a reply.
+        let hangup = std::thread::spawn(move || {
+            let mut line = String::new();
+            std::io::BufReader::new(&daemon)
+                .read_line(&mut line)
+                .unwrap();
+        });
+        let error = super::exchange_command(
+            super::Connection::Unix(client),
+            &json!({"action": "screenshot"}),
+            "panel-no-stop-test",
+            Duration::from_millis(120),
+            Duration::from_secs(1),
+            false,
+        )
+        .err()
+        .unwrap_or_default();
+        hangup.join().unwrap();
+        // Not the stopping path, which would report the daemon stopped.
+        assert!(
+            error.contains("closed the connection without replying"),
+            "{error}"
+        );
     }
 
     #[test]

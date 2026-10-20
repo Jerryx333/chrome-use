@@ -9,7 +9,7 @@ use std::{
 };
 
 pub(super) const MAX_IMAGES: usize = 5;
-const MAX_BYTES: usize = 512 * 1024;
+pub(super) const MAX_BYTES: usize = 512 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

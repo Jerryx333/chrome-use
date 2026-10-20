@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.243
+## 1.5.244
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.77.
+
+### Changes
+
+- **Drive the agent chat from your phone: `chrome-use mobile`.** `chrome-use mobile serve` runs a gateway that the chrome-use Remote app (iOS) connects to over your own route: Tailscale, a Cloudflare named tunnel or the LAN; we run no relay for traffic. From the phone you can list conversations, start one, send text and up to five images, follow progress live (a reconnect resumes without missing or repeated events), answer approval requests, stop a turn, screenshot the conversation's own browser session (only if it is already running; a phone never opens a browser), list models (`agentInspect`) and run or switch scheduled tasks.
+  - `mobile pair --url ws(s)://… [--name] [--profile] [--allow-full-access]` prints a QR code that works once within 10 minutes; `mobile devices`, `mobile revoke <id>` (drops the live connection within a second), `mobile access <id> full|limited`, `mobile push-test <id>`. `serve` binds `127.0.0.1:17345` by default; another interface needs `--bind`, every interface also `--allow-all-interfaces`; `--trust-cf-header` for cloudflared on the same computer; `--name` sets the computer name the app shows.
+  - Every frame is end-to-end encrypted (HMAC handshake, AES-256-GCM per direction, strict sequence numbers), so a tunnel that terminates TLS sees no instructions, page text or screenshots. Pairing adds a secret generated on the phone, so the QR link left in the terminal no longer works once paired. Keys live in `~/.chrome-use/mobile/` (0700/0600).
+  - The phone gets less than the desktop: no full access, conversations it creates go up to `writeFiles` (Pi: browser tools only), no project folder, executable, configuration, skill or schedule edits, and it cannot raise a conversation's access. Conversations with full access, command execution or Pi beyond the browser can be read, stopped and declined from the phone, but sending, approving and running them needs `mobile access <id> full` on the computer. The gateway never forwards `/api/v1/*`, the stream WebSocket or the panel service's capability; browser connections (any `Origin`) are refused, and failed handshakes back off per source.
+- **Push notifications** when an agent needs your approval, a turn ends, or a scheduled run finishes or fails, at most one per conversation every 10 seconds; each conversation can be muted from the phone. They go through a stateless Cloudflare Worker (`https://chrome-use-push.leeguoo.com`, or `--push-url` / `CHROME_USE_PUSH_URL`) that only forwards ciphertext: the title and a short redacted preview are encrypted on the computer. Tokens the Worker refuses are dropped and the app is told to register again.
+- **Faster conversation reads with two readers.** The panel service remembered one verified journal position per conversation, so the side panel and another reader polling the same conversation at different positions made every read rescan the whole journal. It now keeps a few positions per conversation.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.243
+
 Works with extension ab-connect 0.5.77.
 
 ### Changes
@@ -19,7 +37,6 @@ Works with extension ab-connect 0.5.77.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.242
 

@@ -1,0 +1,79 @@
+{
+  "identifier": "5C2E7A10",
+  "nonRenewingSubscriptions": [],
+  "products": [
+    {
+      "displayPrice": "1.99",
+      "familyShareable": false,
+      "internalID": "6740000001",
+      "localizations": [
+        {
+          "locale": "en_US",
+          "displayName": "Unlock chrome-use Remote",
+          "description": "One-time purchase to control your desktop browser agent"
+        },
+        {
+          "locale": "zh_Hans",
+          "displayName": "解锁 chrome-use Remote",
+          "description": "一次购买，永久从手机遥控电脑上的 AI 浏览器 agent"
+        },
+        {
+          "locale": "zh_Hant",
+          "displayName": "解鎖 chrome-use Remote",
+          "description": "一次購買，永久用手機遙控電腦上的 AI 瀏覽器 agent"
+        },
+        {
+          "locale": "ja",
+          "displayName": "chrome-use Remote をアンロック",
+          "description": "一度の購入で、デスクトップのブラウザエージェントを操作"
+        }
+      ],
+      "productID": "com.leeguoo.chromeuse.unlock",
+      "referenceName": "Unlock",
+      "type": "NonConsumable"
+    },
+    {
+      "displayPrice": "0.0",
+      "familyShareable": false,
+      "internalID": "6740000002",
+      "localizations": [
+        {
+          "locale": "en_US",
+          "displayName": "14-Day Free Trial",
+          "description": "Try every feature free for 14 days"
+        },
+        {
+          "locale": "zh_Hans",
+          "displayName": "14 天免费试用",
+          "description": "免费试用全部功能 14 天，到期后可一次性解锁"
+        },
+        {
+          "locale": "zh_Hant",
+          "displayName": "14 天免費試用",
+          "description": "免費試用全部功能 14 天，到期後可一次性解鎖"
+        },
+        {
+          "locale": "ja",
+          "displayName": "14日間の無料トライアル",
+          "description": "全機能を14日間無料でお試しいただけます"
+        }
+      ],
+      "productID": "com.leeguoo.chromeuse.trial",
+      "referenceName": "Trial",
+      "type": "NonConsumable"
+    }
+  ],
+  "settings": {
+    "_applicationInternalID": "6740000000",
+    "_developerTeamID": "6ZPXG4KVVS",
+    "_failTransactionsEnabled": false,
+    "_locale": "en_US",
+    "_storefront": "USA",
+    "_storeKitErrors": []
+  },
+  "subscriptionGroups": [],
+  "version": {
+    "major": 4,
+    "minor": 0
+  }
+}

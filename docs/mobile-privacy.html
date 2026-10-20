@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — chrome-use Remote</title>
+<meta name="description" content="Privacy policy for the chrome-use Remote iOS and Android app: end-to-end encrypted control of your own computer, no accounts, no analytics.">
+<style>
+  :root{
+    --fg:#1a1a1a; --muted:#5c5c5c; --accent:#2563eb; --border:#e2e2e2; --bg:#fff; --code:#f5f5f5;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --fg:#e8e8e8; --muted:#a0a0a0; --accent:#6ea8fe; --border:#333; --bg:#141414; --code:#1f1f1f; }
+  }
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    color:var(--fg);background:var(--bg);max-width:820px;margin:0 auto;padding:48px 24px;line-height:1.65}
+  header{border-bottom:2px solid var(--fg);padding-bottom:16px;margin-bottom:28px}
+  h1{font-size:1.7rem;margin:0 0 4px}
+  .sub{color:var(--muted);font-size:.95rem}
+  h2{font-size:1.15rem;margin:32px 0 8px;border-left:3px solid var(--accent);padding-left:10px}
+  a{color:var(--accent)}
+  code{background:var(--code);padding:1px 5px;border-radius:4px;font-size:.88em;word-break:break-all}
+  .scroll{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:.92rem}
+  th,td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:var(--code)}
+  .key{font-weight:600;color:var(--accent)}
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem}
+  strong{color:var(--fg)}
+  .zh-note{border-left:3px solid var(--accent);background:var(--code);padding:12px 16px;margin:0 0 28px;border-radius:0 6px 6px 0;font-size:.92rem}
+  .zh-note .zh-note-title{font-weight:700;margin-bottom:4px}
+</style>
+
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/mobile-privacy.html" />
+</head>
+<body>
+<header>
+  <h1>Privacy Policy — chrome-use Remote</h1>
+  <div class="sub">iOS and Android app · Last updated 2026-10-19</div>
+</header>
+
+<aside class="zh-note" lang="zh-CN"><div class="zh-note-title">概要（中文）</div>chrome-use Remote 是你自己电脑上 chrome-use 的遥控器。没有账号，没有统计或广告追踪。手机和电脑之间的内容端到端加密，经过你自己选择的网络（局域网、Tailscale 或你自己的 Cloudflare 隧道），我们看不到。为了发送推送通知，App 会把系统推送令牌交给我们的推送中继，中继不保存它，推送内容同样端到端加密。购买通过 App Store / Google Play 完成，我们拿不到你的付款信息。</aside>
+
+<p><strong>chrome-use Remote is a remote control for chrome-use running on your own computer.</strong> It has no user accounts, no analytics, no advertising and no tracking SDKs. The developer operates no server that receives your conversations, pages or files.</p>
+
+<h2>Connection to your computer</h2>
+<p>You pair the app with your computer by scanning a QR code that your computer shows. Pairing keys are stored in the device keychain (iOS) or keystore (Android) and on your computer under <code>~/.chrome-use/mobile/</code>. Everything exchanged after pairing — tasks you type, images you attach, agent replies, approval requests, screenshots and schedule information — is end-to-end encrypted (AES-256-GCM) between the app and your computer. It travels over the network path you choose (local network, Tailscale, or your own tunnel such as Cloudflare Tunnel); operators of that path cannot read it.</p>
+<p>Your computer's agent (Codex, Claude Code, OpenCode or Pi) may send tasks and page content to the model service it is configured with; that service's own terms and privacy policy apply. See the <a href="privacy.html">chrome-use privacy policy</a> for what happens on the computer.</p>
+
+<h2>Push notifications</h2>
+<p>If you allow notifications, the app sends its Apple Push Notification service or Firebase Cloud Messaging device token to the developer's push relay (<code>chrome-use-push.leeguoo.com</code>, a Cloudflare Worker). The relay returns a signed token that the app hands to your paired computers. When something needs you, your computer encrypts a short notice (conversation title, the reason, and at most a 120-character preview of the agent's reply) with a key only your phone has, and the relay forwards the encrypted blob to Apple or Google. The relay stores nothing: no device tokens, no notification contents and no logs of contents. Cloudflare, Apple and Google process the request as infrastructure providers.</p>
+
+<h2>Purchases</h2>
+<p>The 14-day free trial and the one-time unlock are handled by the App Store or Google Play (or, for directly downloaded Android builds, an activation code). The developer receives no payment details. Purchase status is checked on the device.</p>
+
+<h2>Data handling summary</h2>
+<div class="scroll"><table>
+<tr><th>Data</th><th>Where it goes</th></tr>
+<tr><td>Tasks, images, agent replies, screenshots</td><td>Only between the app and your paired computer, end-to-end encrypted. Cached on the device to show history; deleted when you remove the computer or uninstall the app.</td></tr>
+<tr><td>Pairing keys</td><td>Device keychain/keystore and your computer. Never sent to the developer. Deleted when you remove the computer in the app; on iOS, keychain entries can remain after the app is uninstalled, so revoke the device on the computer to make them useless.</td></tr>
+<tr><td>Push device token</td><td>Sent to the push relay to obtain a relay token and to deliver notifications; not stored by the relay.</td></tr>
+<tr><td>Camera</td><td>Used only to scan the pairing QR code; images are not saved or sent.</td></tr>
+<tr><td>Face ID / passcode</td><td>Handled by the operating system; the app only receives success or failure.</td></tr>
+</table></div>
+
+<h2>Your control</h2>
+<p>Remove a computer in the app, or run <code>chrome-use mobile revoke &lt;id&gt;</code> on the computer, to end access immediately. Uninstalling the app deletes its cached history; pairing keys in the iOS keychain can remain until you remove the computer in the app or revoke the device on the computer. The app is not directed at children.</p>
+
+<h2>Contact</h2>
+<p>Questions: <a href="mailto:leeguoooo@gmail.com">leeguoooo@gmail.com</a> · Source: <a href="https://github.com/leeguooooo/chrome-use">github.com/leeguooooo/chrome-use</a></p>
+
+<footer>chrome-use Remote · Apache-2.0 open-source client and gateway.</footer>
+</body>
+</html>
