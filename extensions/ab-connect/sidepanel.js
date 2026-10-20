@@ -1449,7 +1449,15 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   // One line per agent that answers "can I use this?" from the CLI's own report.
   // The report is not proof of model access; that is settled by the first turn.
   async function agentStatus(agent, line, epoch, row) {
-    const mark = state => { if (row) row.className = `agent-row ${state}${configuration?.agentId === agent.id && !nodes.configuration.hidden ? ' selected' : ''}`; };
+    const mark = state => {
+      if (!row) return;
+      const open = configuration?.agentId === agent.id && !nodes.configuration.hidden;
+      row.className = `agent-row ${state}${open ? ' selected' : ''}`;
+      // Agents you can chat with move up, ahead of the ones still being checked.
+      const rows = Array.from(nodes.agentList.children);
+      const first = state === 'ready' && rows.includes(row) ? rows.find(other => other !== row && other !== nodes.configuration && !/\bready\b/.test(other.className)) : null;
+      if (first && rows.indexOf(first) < rows.indexOf(row)) { nodes.agentList.insertBefore(row, first); if (open) placeConfiguration(agent.id); }
+    };
     if (!agent.executable) { mark(agent.configFiles?.length ? 'missing config-only' : 'missing'); line.textContent = agent.configFiles?.length ? t('panel_agent_config_only') : t('panel_agent_not_installed'); return; }
     mark('installed');
     if (!(panelSupport?.chatAgents || ['codex', 'claude']).includes(agent.id)) { line.textContent = t('panel_agent_chat_unsupported'); return; }

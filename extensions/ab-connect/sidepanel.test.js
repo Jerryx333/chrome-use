@@ -297,6 +297,19 @@ test('agent list reports CLI version, account and model count without claiming m
   f.panel.close();
 });
 
+test('agents you can chat with move ahead of installed agents in the list', async () => {
+  const f = await fixture({
+    discover: () => ({ success: true, result: { agents: [{ id: 'gemini', name: 'Gemini CLI', executable: '/x/gemini' }, { id: 'codex', name: 'Codex', executable: '/x/codex' }] } }),
+    agentInspect: () => ({ success: true, result: { inspection: { versionReported: '0.50.0', account: { status: 'reportedSignedIn', kind: 'chatgpt' }, models: [], complete: true } } }),
+  });
+  f.nodes.get('agentsTab').fire('click');
+  for (let i = 0; i < 5; i++) await settle();
+  const rows = f.nodes.get('agentList').children;
+  assert.deepEqual(rows.map(row => row.children[0].children[0].textContent), ['Codex', 'Gemini CLI']);
+  assert.match(rows[0].className, /\bready\b/);
+  f.panel.close();
+});
+
 test('a failed explicit-model conversation offers a retry that starts a default-model conversation with the same prompt', async () => {
   const failed = { ...chat('a', 'failed'), agentId: 'codex', model: 'bad-model', requestedModel: 'bad-model' };
   const created = [];

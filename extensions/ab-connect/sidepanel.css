@@ -256,15 +256,12 @@ button.pill:hover:not(:disabled) { background:var(--surface); }
 button.pill.warn { color:var(--warning); border-color:currentColor; }
 button.pill.danger-text { color:var(--error); border-color:transparent; background:transparent; margin-left:auto; }
 .badge.on { color:var(--ok); }
-/* Agent rows: usable agents first, then installed ones; a row opens its
-   configuration from anywhere on it. Missing agents sit below as chips. */
+/* Agent rows: usable agents first (moved up in sidepanel.js), then installed
+   ones; a row opens its configuration from anywhere on it. Missing agents sit
+   below as chips. */
 #agentList { display:flex; flex-direction:column; }
 #agentList:empty { display:none; }
-.agent-row { position:relative; padding:10px 12px 10px 14px; display:flex; align-items:center; gap:10px; order:1; }
-/* Rows are reordered by state, so each draws its own top rule; the card's
-   border covers the first one. */
-#agentList > .agent-row { border-top:1px solid var(--line); margin-top:-1px; }
-.agent-row.ready { order:0; }
+.agent-row { position:relative; padding:10px 12px 10px 14px; display:flex; align-items:center; gap:10px; }
 .agent-row:hover { background:var(--page); }
 .agent-row.selected { background:var(--accent-soft); }
 .agent-info { flex:1; min-width:0; }
@@ -294,6 +291,7 @@ button.agent-open:hover:not(:disabled) { background:transparent; color:var(--ink
 .agent-chips .agent-name { font-weight:500; font-size:12px; color:var(--muted); }
 .agent-chips .agent-name::before,.agent-chips .agent-evidence,.agent-chips button.agent-open::after { display:none; }
 .agent-chips button.agent-open { position:static; width:0; height:0; }
+.agent-chips .agent-row:has(button:focus-visible) { outline:2px solid var(--accent); outline-offset:1px; }
 .agent-chips .agent-row.config-only { border-style:dashed; border-color:var(--warning); }
 .agent-chips .agent-row.config-only .agent-name { color:var(--warning); }
 .agent-chips .agent-row.selected { background:var(--accent-soft); border-color:var(--accent); }
