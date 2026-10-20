@@ -111,6 +111,13 @@ def main():
         if c is None:
             return None
         if op in ("conversationSend", "conversationSendDirect"):
+            # The service deduplicates by message id: a retry is not a second message.
+            if any(e["kind"] == "user" and e["data"].get("messageId") == p["messageId"] for e in c["events"]):
+                return {"schemaVersion": 1, "conversation": summary(c), "message": {"id": p["messageId"], "accepted": False, "replayed": True}}
+            # A first send that fails once, to exercise retries.
+            if p["text"].startswith("FAIL ONCE") and not c.get("failed_once"):
+                c["failed_once"] = True
+                return None
             c["phase"] = "running"
             if c["title"] == "New conversation":
                 c["title"] = p["text"].splitlines()[0][:80]

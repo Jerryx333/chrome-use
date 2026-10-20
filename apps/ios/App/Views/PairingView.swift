@@ -42,7 +42,7 @@ struct PairingView: View {
                             if conflict == nil { Task { await pair(link, replacing: false) } } else { confirmReplace = true }
                         } label: {
                             HStack {
-                                Text(pairing ? LocalizedStringKey("Pairing…") : conflict == nil ? LocalizedStringKey("Pair") : LocalizedStringKey("Replace and pair"))
+                                Text(pairing ? (model.waitingForLocalNetwork ? LocalizedStringKey("Waiting for Local Network permission…") : LocalizedStringKey("Pairing…")) : conflict == nil ? LocalizedStringKey("Pair") : LocalizedStringKey("Replace and pair"))
                                 if pairing { Spacer(); ProgressView() }
                             }
                         }
@@ -67,9 +67,14 @@ struct PairingView: View {
                         Text("On the computer, run chrome-use mobile pair --url <address your phone can reach> and scan the QR code in the terminal.")
                     }
                     Section("Or paste a pairing link") {
-                        TextField("chromeuse://pair?…", text: $pasted, axis: .vertical)
+                        // Single line: Return submits, so the keyboard never
+                        // hides the Use button on a small phone.
+                        TextField("chromeuse://pair?…", text: $pasted)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                            .submitLabel(.go)
+                            .onSubmit { if !pasted.isEmpty { accept(pasted) } }
                             .font(.footnote.monospaced())
                         HStack {
                             Button("Paste from clipboard") {
@@ -84,6 +89,7 @@ struct PairingView: View {
                     Section { Text(error).foregroundStyle(.red) }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(model.repairing == nil ? LocalizedStringKey("Pair a computer") : LocalizedStringKey("Pair again"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -109,6 +115,8 @@ struct PairingView: View {
     private func use(_ found: PairLink) {
         link = found
         error = nil
+        // Ask for Local Network permission now, not in the middle of pairing.
+        LocalNetwork.touch(found.url)
         conflict = model.conflict(for: found)
         if conflict != nil {
             // Never presented as an ordinary re-pair of the saved computer.

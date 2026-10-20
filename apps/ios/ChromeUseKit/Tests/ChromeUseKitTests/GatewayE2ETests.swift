@@ -101,6 +101,37 @@ final class GatewayE2ETests: XCTestCase {
         return nil
     }
 
+    /// A send whose reply was lost is retried with the same message id and
+    /// delivered once; a failed first message after create reuses the
+    /// conversation instead of creating another.
+    @MainActor
+    func retries(_ client: GatewayClient) async throws {
+        var outgoing = OutgoingMessage()
+        let first = outgoing.id(text: "Once only")
+        try await client.send(conversationId: conversation, text: "Once only", messageId: first)
+        let retry = outgoing.id(text: "Once only")
+        XCTAssertEqual(retry, first, "not confirmed yet: same id")
+        try await client.send(conversationId: conversation, text: "Once only", messageId: retry)
+        outgoing.sent()
+        let read = try await client.call("conversationRead", ["conversationId": .string(conversation), "after": 0])
+        let copies = (read["journal"]["events"].array ?? []).filter { $0["kind"] == "user" && $0["data"]["messageId"].string == first }
+        XCTAssertEqual(copies.count, 1, "delivered once")
+
+        var createdId: String?
+        var firstMessage = OutgoingMessage()
+        let before = try await client.refreshConversations().count
+        do {
+            _ = try await client.startConversation(createdId: &createdId, outgoing: &firstMessage, agentId: "claude", model: nil, toolAccess: nil, text: "FAIL ONCE then work")
+            XCTFail("the first send was set up to fail")
+        } catch GatewayError.remote {}
+        let made = try XCTUnwrap(createdId, "the conversation was created")
+        let id = try await client.startConversation(createdId: &createdId, outgoing: &firstMessage, agentId: "claude", model: nil, toolAccess: nil, text: "FAIL ONCE then work")
+        XCTAssertEqual(id, made, "the retry reused it")
+        let after = try await client.refreshConversations().count
+        XCTAssertEqual(after, before + 1, "one conversation, not two")
+        try await client.delete(conversationId: id)
+    }
+
     func testPairDriveRespondPushRevoke() async throws {
         guard let binary = ProcessInfo.processInfo.environment["CHROME_USE_E2E_BIN"] else {
             throw XCTSkip("CHROME_USE_E2E_BIN is not set")
@@ -361,6 +392,7 @@ final class GatewayE2ETests: XCTestCase {
         let created = try await client.create(agentId: "claude", model: nil, toolAccess: .writeFiles)
         XCTAssertEqual(created.toolAccess, .writeFiles)
         try await client.delete(conversationId: created.id)
+        try await retries(client)
 
         // Revoking drops the live connection with 4403 within a second or so.
         let started = Date()

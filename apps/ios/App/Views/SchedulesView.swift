@@ -84,6 +84,7 @@ struct SchedulesView: View {
     }
 
     private func run(_ schedule: Schedule) async {
+        if let refusal = model.elevatedRefusal(client, elevated: schedule.elevated) { error = refusal; return }
         guard model.allow(.runSchedule) else { return }
         busy = schedule.id
         defer { busy = nil }

@@ -62,6 +62,7 @@ struct RootView: View {
 
     var body: some View {
         @Bindable var model = model
+        let locked = model.lock.locked
         NavigationStack(path: $model.path) {
             ComputersView()
                 .navigationDestination(for: Route.self) { route in
@@ -75,11 +76,19 @@ struct RootView: View {
                     }
                 }
         }
+        // While locked nothing behind the lock is drawn or readable by
+        // accessibility; state (navigation, drafts) is kept.
+        .opacity(locked ? 0 : 1)
+        .accessibilityHidden(locked)
+        .allowsHitTesting(!locked)
         .sheet(isPresented: $model.showPairing) { PairingView() }
         .sheet(isPresented: $model.showSettings) { SettingsView() }
         .sheet(isPresented: $model.showPaywall) { PaywallView() }
         .overlay {
-            if model.lock.locked { LockView() }
+            if locked { LockView() }
+        }
+        .onChange(of: locked) { _, now in
+            if now { model.showPairing = false; model.showSettings = false; model.showPaywall = false }
         }
     }
 }

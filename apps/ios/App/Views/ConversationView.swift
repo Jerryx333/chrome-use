@@ -16,6 +16,8 @@ struct ConversationView: View {
     @State private var shot: GatewayClient.Screenshot?
     @State private var shooting = false
     @State private var confirmDelete = false
+    /// Kept across retries so a timed-out send is not delivered twice.
+    @State private var outgoing = OutgoingMessage()
     @FocusState private var composing: Bool
 
     struct PreparedImage: Identifiable {
@@ -49,7 +51,7 @@ struct ConversationView: View {
                             .font(.footnote)
                     }
                     ForEach(timeline.openRequests) { request in
-                        ApprovalCard(client: client, conversationId: conversationId, request: request, stopRequested: summary?.stopRequested ?? false)
+                        ApprovalCard(client: client, conversationId: conversationId, request: request, stopRequested: summary?.stopRequested ?? false, elevated: summary?.elevated ?? false)
                             .id("request-\(request.key)")
                     }
                     if !queued.isEmpty {
@@ -207,12 +209,16 @@ struct ConversationView: View {
     }
 
     private func send() async {
+        if let refusal = model.elevatedRefusal(client, elevated: summary?.elevated ?? false) { error = refusal; return }
         guard model.allow(.send) else { return }
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
         sending = true
         defer { sending = false }
         do {
-            try await client.send(conversationId: conversationId, text: message, images: images.map(\.jpeg))
+            let jpegs = images.map(\.jpeg)
+            let messageId = outgoing.id(text: message, images: jpegs)
+            try await client.send(conversationId: conversationId, text: message, images: jpegs, messageId: messageId)
+            outgoing.sent()
             text = ""
             images = []
             error = nil

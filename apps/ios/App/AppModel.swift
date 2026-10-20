@@ -47,6 +47,10 @@ final class AppModel {
     var showSettings = false
     var showPaywall = false
     var storeError: String?
+    /// Pairing is waiting for the person to answer iOS's Local Network prompt.
+    private(set) var waitingForLocalNetwork = false
+    /// Delay before retrying a failed pairing attempt (1-based), or nil.
+    @ObservationIgnored var pairingRetryDelay: (Error, Int, String) -> TimeInterval? = LocalNetwork.pairingRetryDelay
 
     let store: Store
     let push: PushManager
@@ -157,12 +161,37 @@ final class AppModel {
             GatewayCredential(url: link.url, deviceId: link.deviceId, secret: secret, gatewayId: link.gatewayId, name: name, pairedAt: pairedAt, nameIsCustom: custom)
         }
         let stored = StoredFlag()
+        // A link for a computer already saved under the same key (its QR
+        // scanned again) can only be refused, but the attempt may overwrite
+        // the saved credential before that: keep a copy to put back.
+        let storageKey = credentialFor(Data()).storageKey
+        let previous = (try? keychain.all())?.first { $0.storageKey == storageKey }
         do {
-            let (connection, secret) = try await pairer(link) { secret in
+            let save = { (secret: Data) throws in
                 let credential = credentialFor(secret)
                 try keychain.save(credential)
                 try pushKeys.save(PushKeyEntry(credential: credential))
                 stored.value = true
+            }
+            var attempt = 0
+            let (connection, secret): (GatewayConnection?, Data)
+            while true {
+                do {
+                    (connection, secret) = try await pairer(link, save)
+                    waitingForLocalNetwork = false
+                    break
+                } catch {
+                    // The first LAN connection fails while iOS asks for Local
+                    // Network permission; nothing secret has left the phone
+                    // yet, so the same link can be tried again.
+                    attempt += 1
+                    guard !stored.value, let delay = pairingRetryDelay(error, attempt, link.url.host ?? "") else {
+                        waitingForLocalNetwork = false
+                        throw error
+                    }
+                    waitingForLocalNetwork = true
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
             }
             let credential = credentialFor(secret)
             if let conflicting {
@@ -178,16 +207,19 @@ final class AppModel {
             if asksForNotifications { push.requestAuthorization() }
             return client
         } catch {
-            if stored.value, (error as? GatewayError) != .closed(.unauthorized) {
+            if let previous {
+                // The computer was already paired: leave it exactly as it was.
+                try? credentials.save(previous)
+                try? self.pushKeys.save(PushKeyEntry(credential: previous))
+            } else if stored.value, (error as? GatewayError) != .closed(.unauthorized) {
                 // pairComplete left the phone; the gateway may have committed
                 // it before the connection dropped. Keep the credential: the
                 // next connection either works or is refused with 4401.
                 load()
             } else {
                 // Only what this attempt stored; never a computer it was about to replace.
-                let key = credentialFor(Data()).storageKey
-                try? credentials.delete(storageKey: key)
-                try? self.pushKeys.delete(storageKey: key)
+                try? credentials.delete(storageKey: storageKey)
+                try? self.pushKeys.delete(storageKey: storageKey)
             }
             throw error
         }
@@ -267,6 +299,18 @@ final class AppModel {
 
     /// Actions that let the agent act need the unlock or a running trial;
     /// reading, Stop and refusing a request never do.
+    /// A computer that allows high-access conversations relies on the app
+    /// lock; a phone without a passcode cannot provide it, so it treats that
+    /// computer as limited and refuses elevated operations itself.
+    func elevatedRefusal(_ client: GatewayClient, elevated: Bool) -> String? {
+        guard elevated, client.credential.fullAccessAllowed, !lock.passcodeSet else { return nil }
+        return Self.noPasscodeMessage
+    }
+
+    static var noPasscodeMessage: String {
+        String(localized: "This phone has no passcode, so it cannot drive high-access conversations. Set a passcode in Settings first.")
+    }
+
     func allow(_ action: GatedAction) -> Bool {
         if !action.needsUnlock || store.entitlement.canWrite { return true }
         showPaywall = true

@@ -25,6 +25,9 @@ struct SettingsView: View {
                             if client.credential.fullAccessAllowed {
                                 Label("This computer allows high-access conversations from the phone", systemImage: "exclamationmark.shield")
                                     .font(.caption).foregroundStyle(.orange)
+                                if !model.lock.passcodeSet {
+                                    Text(AppModel.noPasscodeMessage).font(.caption).foregroundStyle(.red)
+                                }
                             }
                             if let version = client.credential.gatewayVersion {
                                 Text("chrome-use \(version)").font(.caption2).foregroundStyle(.secondary)
@@ -47,10 +50,12 @@ struct SettingsView: View {
                     Button("Restore purchases") { Task { await model.store.restore() } }
                 }
                 Section {
-                    Toggle("Face ID lock", isOn: Binding(get: { model.lock.active }, set: { on in Task { await model.lock.setEnabled(on) } }))
+                    Toggle("Face ID lock", isOn: Binding(get: { model.lock.active && model.lock.passcodeSet }, set: { on in Task { await model.lock.setEnabled(on) } }))
                         .disabled(model.lock.required || (!model.lock.available && !model.lock.enabled))
                 } footer: {
-                    if model.lock.required {
+                    if model.lock.requirementUnenforceable {
+                        Text(AppModel.noPasscodeMessage)
+                    } else if model.lock.required {
                         Text("A computer lets this phone drive high-access conversations, so the lock is required: at launch and after more than 5 minutes away.")
                     } else {
                         Text("When on, you authenticate every time you return to the app.")
@@ -123,7 +128,7 @@ struct SettingsView: View {
     }
 
     private func applyWorker() {
-        guard let url = URL(string: workerURL.trimmingCharacters(in: .whitespaces)), url.scheme == "https" || url.scheme == "http", url.host != nil else {
+        guard let url = PushRegistrar.workerURL(workerURL) else {
             workerError = String(localized: "Enter a full https:// URL.")
             return
         }

@@ -31,6 +31,15 @@ public enum ToolAccess: String, Sendable, CaseIterable, Comparable {
         return .browserOnly
     }
 
+    /// Beyond what a phone may start (`policy::elevated`): full access,
+    /// commands (every OpenCode conversation), or Pi above `browserOnly`.
+    /// The gateway refuses to drive these unless the computer allowed this
+    /// phone full access.
+    public static func elevated(agentId: String, toolAccess: ToolAccess?, fullAccess: Bool) -> Bool {
+        let rank = effective(agentId: agentId, toolAccess: toolAccess, fullAccess: fullAccess)
+        return fullAccess || rank > phoneCreateMaximum || (agentId == "pi" && rank > .browserOnly)
+    }
+
     /// The most a conversation created from the phone may have.
     public static let phoneCreateMaximum: ToolAccess = .writeFiles
 
@@ -55,6 +64,7 @@ public struct ConversationSummary: Identifiable, Hashable, Sendable {
     public var fullAccess: Bool { raw["fullAccess"].bool ?? false }
     public var toolAccess: ToolAccess? { raw["options"]["toolAccess"].string.flatMap(ToolAccess.init(rawValue:)) }
     public var effectiveAccess: ToolAccess { .effective(agentId: agentId, toolAccess: toolAccess, fullAccess: fullAccess) }
+    public var elevated: Bool { ToolAccess.elevated(agentId: agentId, toolAccess: toolAccess, fullAccess: fullAccess) }
     public var stopRequested: Bool { raw["control"].string == "stopRequested" }
     public var scheduleId: String? { raw["scheduleId"].string }
     public var lastTurnOutcome: String? { raw["lastTurn"]["outcome"].string }
@@ -122,6 +132,10 @@ public struct Schedule: Identifiable, Hashable, Sendable {
     public var nextRun: Date? { raw["nextRun"].int.map(Date.init(milliseconds:)) }
     public var rule: JSONValue { raw["rule"] }
     public var running: Bool { raw["activeChat"].string != nil }
+    public var elevated: Bool {
+        ToolAccess.elevated(agentId: agentId, toolAccess: raw["options"]["toolAccess"].string.flatMap(ToolAccess.init(rawValue:)),
+                            fullAccess: raw["fullAccess"].bool ?? false)
+    }
 
     public init(_ raw: JSONValue) { self.raw = raw }
 

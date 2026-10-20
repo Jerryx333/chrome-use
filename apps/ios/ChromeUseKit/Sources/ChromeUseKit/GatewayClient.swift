@@ -263,6 +263,23 @@ public final class GatewayClient: Identifiable {
         return summary
     }
 
+    /// Create a conversation and send its first message. `createdId` keeps
+    /// a conversation an earlier attempt created, so retrying after a failed
+    /// first send reuses it rather than creating another; `outgoing` keeps
+    /// the message id, so a send whose reply was lost is not delivered twice.
+    public func startConversation(createdId: inout String?, outgoing: inout OutgoingMessage, agentId: String, model: String?, toolAccess: ToolAccess?, text: String) async throws -> String {
+        let id: String
+        if let createdId {
+            id = createdId
+        } else {
+            id = try await create(agentId: agentId, model: model, toolAccess: toolAccess).id
+            createdId = id
+        }
+        try await send(conversationId: id, text: text, messageId: outgoing.id(text: text))
+        outgoing.sent()
+        return id
+    }
+
     /// Upload prepared JPEGs, then send. `messageId` is fresh per message.
     public func send(conversationId: String, text: String, images: [Data] = [], messageId: String = UUID().uuidString.lowercased()) async throws {
         var attachments: [JSONValue] = []
