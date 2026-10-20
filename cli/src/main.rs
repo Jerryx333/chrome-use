@@ -596,6 +596,93 @@ fn run_session_name(session: &str, json_mode: bool, zh: bool) {
     }
 }
 
+/// A recorded command's state as `session last` reports it: a command still
+/// marked running whose daemon is gone never finished as far as anyone can
+/// tell, so its outcome is unknown.
+fn last_command_state(entry: &Value, daemon_pid: Option<u32>, daemon_live: bool) -> &'static str {
+    match entry.get("state").and_then(Value::as_str) {
+        Some("completed") => "completed",
+        Some("failed") => "failed",
+        Some("running") => {
+            let ran_in = entry
+                .get("daemonPid")
+                .and_then(Value::as_u64)
+                .map(|p| p as u32);
+            if daemon_live && ran_in.is_some() && ran_in == daemon_pid {
+                "running"
+            } else {
+                "unknown"
+            }
+        }
+        _ => "unknown",
+    }
+}
+
+/// `session last`: what happened to this session's recent commands, read
+/// from what its daemon recorded. Runs nothing and starts no daemon, so it is
+/// safe after an unconfirmed side-effecting command (#687).
+fn run_session_last(session: &str, json_mode: bool) {
+    let live = connection::daemon_ready(session);
+    let pid = connection::read_registered_daemon_pid(session);
+    let mut commands: Vec<Value> = connection::read_last_commands(session)
+        .into_iter()
+        .rev()
+        .map(|mut e| {
+            let state = last_command_state(&e, pid, live);
+            e["state"] = json!(state);
+            e
+        })
+        .collect();
+    for e in &mut commands {
+        if let Some(o) = e.as_object_mut() {
+            o.remove("daemonPid");
+        }
+    }
+    let last = commands.first().cloned().unwrap_or(Value::Null);
+    if json_mode {
+        println!(
+            "{}",
+            json!({"success": true, "ok": true, "data": {
+                "session": session,
+                "daemonRunning": live,
+                "lastCommand": last,
+                "recent": commands,
+            }})
+        );
+        return;
+    }
+    if commands.is_empty() {
+        println!("Session '{session}' has no recorded commands.");
+        return;
+    }
+    println!(
+        "Session '{session}' ({}), newest first:",
+        if live {
+            "daemon running"
+        } else {
+            "no daemon running"
+        }
+    );
+    for e in &commands {
+        let action = e["action"].as_str().unwrap_or("?");
+        let site = e["site"]
+            .as_str()
+            .map(|s| format!(" {s}"))
+            .unwrap_or_default();
+        let state = e["state"].as_str().unwrap_or("unknown");
+        let note = match state {
+            "unknown" => " — the daemon stopped while it ran: it may or may not have taken effect; check the page before repeating it",
+            "running" => " — still running",
+            _ => "",
+        };
+        let code = e["errorCode"]
+            .as_str()
+            .map(|c| format!(" ({c})"))
+            .unwrap_or_default();
+        println!("  {action}{site}: {state}{code}{note}");
+    }
+}
+
 /// `session <handoff|resume|status|list>` — ownership + human handoff (#89,
 /// ported from ego-lite). CLI-local: only touches the `.owner` sidecar.
 fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
@@ -606,6 +693,7 @@ fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
         // something the human can read in their own browser, instead of the
         // routing id. With no argument it reports the current label.
         Some("name") => run_session_name(session, json_mode, zh),
+        Some("last") => run_session_last(session, json_mode),
         Some("handoff") => {
             if let Err(e) = hand_off(session) {
                 if json_mode {
@@ -731,7 +819,7 @@ fn run_session_ownership(sub: Option<&str>, session: &str, json_mode: bool) {
         }
         Some(other) => {
             let msg = format!(
-                "unknown `session` subcommand '{other}'. Use: handoff | resume | status | list | stop | prune"
+                "unknown `session` subcommand '{other}'. Use: handoff | resume | status | last | list | stop | prune"
             );
             if json_mode {
                 print_json_error(&msg);
@@ -3330,6 +3418,11 @@ fn main() {
         return;
     }
 
+    // This process works with the session until it exits: another session of
+    // the project must not take its tabs over meanwhile, even if its daemon
+    // goes away for a moment (#687).
+    let _client_presence = connection::hold_client_presence(&flags.session);
+
     // Serialize this session's relay teardown and daemon replacement across CLI
     // processes. The lock stays held through ensure_daemon below, preventing a
     // concurrent command from entering the missing-socket window (issue #152).
@@ -3412,17 +3505,14 @@ fn main() {
         {
             connection::kill_stale_daemon(&flags.session);
             connect::ensure_host_installed();
-            // Reap any zombie native-messaging host (it already lost its Chrome port —
-            // relay-cdp-url is gone — but the process can linger). Killing it makes the
-            // extension worker's port disconnect fire immediately, so it reconnects and
-            // republishes the relay in ~2s instead of waiting ~30s for the keepalive
-            // alarm. Best-effort, unix-only; safe here because the relay is already down.
+            // Reap native-messaging hosts left without their Chrome (it already
+            // closed their port, so they are orphaned), so the extension worker
+            // reconnects and republishes the relay at once. Only those: a host
+            // that still has its Chrome serves another profile's relay, or one
+            // another session just brought back, and killing every host here
+            // took the relay down again for everyone (#687).
             #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("pkill")
-                    .args(["-f", "__nm-host"])
-                    .output();
-            }
+            connect::reap_orphaned_hosts();
             // With no browser running there is no relay to wait for: the old
             // path sat here for the full 45s deadline and then failed with "no
             // connected Chrome profiles" without ever starting Chrome (#213).
@@ -4807,6 +4897,33 @@ fn run_batch(flags: &Flags, bail: bool, commands: Vec<Vec<String>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_left_running_by_a_gone_daemon_has_an_unknown_outcome() {
+        use serde_json::json;
+        let running = json!({"state":"running","daemonPid":42});
+        assert_eq!(
+            super::last_command_state(&running, Some(42), true),
+            "running"
+        );
+        assert_eq!(
+            super::last_command_state(&running, Some(43), true),
+            "unknown"
+        );
+        assert_eq!(
+            super::last_command_state(&running, Some(42), false),
+            "unknown"
+        );
+        assert_eq!(super::last_command_state(&running, None, false), "unknown");
+        assert_eq!(
+            super::last_command_state(&json!({"state":"completed"}), None, false),
+            "completed"
+        );
+        assert_eq!(
+            super::last_command_state(&json!({"state":"failed"}), None, false),
+            "failed"
+        );
+    }
 
     /// Stopping another session leaves it a reason naming who stopped it;
     /// stopping your own does not.

@@ -2836,6 +2836,84 @@ pub fn is_relay_url(ws: &str) -> bool {
     relay_url().as_deref() == Some(ws) || list_relay_profiles().iter().any(|(_, _, u)| u == ws)
 }
 
+/// The port of a `ws://host:port/...` relay endpoint.
+#[cfg(any(unix, test))]
+fn ws_port(ws: &str) -> Option<u16> {
+    let rest = ws.strip_prefix("ws://")?;
+    let authority = rest.split('/').next()?;
+    authority.rsplit_once(':')?.1.parse().ok()
+}
+
+/// Which of `hosts` (pid, command line) relay recovery may stop: hosts of
+/// this install (`exe`) that serve none of the published endpoints. A host
+/// that still serves a relay (another profile's, or one another session just
+/// restored) and a host of another install (a test rig) are left alone (#687).
+#[cfg(any(unix, test))]
+fn hosts_to_reap(
+    hosts: &[(u32, String)],
+    serving: &std::collections::HashSet<u32>,
+    exe: &str,
+) -> Vec<u32> {
+    hosts
+        .iter()
+        .filter(|(pid, command)| {
+            command.contains("__nm-host") && command.contains(exe) && !serving.contains(pid)
+        })
+        .map(|(pid, _)| *pid)
+        .collect()
+}
+
+/// Stop native hosts of this install that no longer serve a relay, so the
+/// extension worker reconnects at once instead of after its keepalive alarm.
+/// Without `ps`/`lsof` nothing is stopped.
+#[cfg(unix)]
+pub fn reap_orphaned_hosts() {
+    let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|p| std::fs::canonicalize(p).ok())
+        .map(|p| p.to_string_lossy().into_owned())
+    else {
+        return;
+    };
+    let Ok(ps) = std::process::Command::new("ps")
+        .args(["-axo", "pid=,command="])
+        .output()
+    else {
+        return;
+    };
+    let hosts: Vec<(u32, String)> = String::from_utf8_lossy(&ps.stdout)
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let (pid, command) = line.split_once(' ')?;
+            Some((pid.parse().ok()?, command.to_string()))
+        })
+        .collect();
+    let mut serving = std::collections::HashSet::new();
+    let endpoints = relay_url()
+        .into_iter()
+        .chain(list_relay_profiles().into_iter().map(|(_, _, ws)| ws));
+    for port in endpoints.filter_map(|ws| ws_port(&ws)) {
+        let Ok(out) = std::process::Command::new("lsof")
+            .args(["-nP", "-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
+            .output()
+        else {
+            // Cannot tell which host serves what: stop nothing.
+            return;
+        };
+        serving.extend(
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|l| l.trim().parse::<u32>().ok()),
+        );
+    }
+    for pid in hosts_to_reap(&hosts, &serving, &exe) {
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .output();
+    }
+}
+
 pub fn relay_url() -> Option<String> {
     if let Ok(s) = std::fs::read_to_string(relay_url_path()) {
         let s = s.trim().to_string();
@@ -4674,6 +4752,29 @@ where
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn relay_recovery_stops_only_idle_hosts_of_this_install() {
+        let exe = "/Users/u/.local/share/chrome-use/ChromeUse.app/Contents/MacOS/chrome-use";
+        let hosts = vec![
+            (10, format!("{exe} __nm-host chrome-extension://x/")),
+            (11, format!("{exe} __nm-host chrome-extension://x/")),
+            (
+                12,
+                "/tmp/rig/ChromeUse.app/Contents/MacOS/chrome-use __nm-host chrome-extension://x/"
+                    .to_string(),
+            ),
+            (13, format!("{exe} mobile serve")),
+        ];
+        let serving: std::collections::HashSet<u32> = [11].into_iter().collect();
+        assert_eq!(super::hosts_to_reap(&hosts, &serving, exe), vec![10]);
+        assert_eq!(
+            super::ws_port("ws://127.0.0.1:53211/devtools/browser/abc"),
+            Some(53211)
+        );
+        assert_eq!(super::ws_port("ws://[::1]:9/x"), Some(9));
+        assert_eq!(super::ws_port("http://x"), None);
+    }
+
     #[test]
     fn chrome_is_started_only_when_it_provably_is_not_running() {
         use super::{classify_chrome_process as classify, should_launch_chrome, ChromeProcess};

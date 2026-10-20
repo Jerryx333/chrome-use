@@ -1,15 +1,16 @@
 // Live check of #687 on the build host (one browser run per host at a time):
 //   HOST_BIN=<chrome-use> CHROME=<Chrome for Testing> EXT_DIR=<extension> node takeover-live.mjs
-// Two agent sessions of one project, as two agent CLIs in two panes would
-// run them. While session A has a slow command in flight:
-//   1. session B starts: it must not take A's tabs, and A's command must
-//      finish normally;
-//   2. the rig's native host dies (the relay drops) while A's command runs,
-//      then B starts again: B must not take A's tabs while A's command is
-//      still waiting, and A must exit non-zero with an "outcome unknown"
-//      error, never 0;
-//   3. `session last` tells what happened to A's last command without
-//      running anything.
+// Agent sessions of one project, as agent CLIs in separate panes run them.
+// While session A has a slow page-changing command in flight:
+//   1. session B starts: it must not take A's tabs, and A's command finishes;
+//   2. A's daemon dies (as a relay recovery stopped it in the report) and C
+//      starts at once: C must not take A's tabs while A still waits, A must
+//      exit non-zero with code action_outcome_unknown, and D, starting right
+//      after A's failure, must not take them either;
+//   3. `session last` reports A's interrupted command as unknown, without
+//      running anything;
+//   4. the rig's native host dies while A's command runs: A must not exit 0
+//      without a confirmed result.
 // Only this run's native host is ever stopped. With TAKEOVER_EXPLORE=1
 // nothing is asserted: the steps only record what happens.
 import fs from 'node:fs';
@@ -79,53 +80,66 @@ try {
   step('A session', { name: nameA, created: createdOf(nameA) });
 
   // 1. B starts while A's command is in flight.
-  const inflight1 = cuAsync(A.agent, A.pane, slow(12000));
-  await sleep(2000);
+  const inflight1 = cuAsync(A.agent, A.pane, slow(6000));
+  await sleep(1500);
   const openB = cu(B.agent, B.pane, ['open', rig.site + '/b?B']);
   const nameB = sessionOf(B.agent, B.pane)?.name;
-  step('B open while A busy', { ...summary(openB), session: nameB, tookOver: tookOver(openB), createdA: createdOf(nameA), createdB: createdOf(nameB) });
+  step('B open while A busy', { ...summary(openB), session: nameB, tookOver: tookOver(openB) });
   const a1 = await inflight1;
   step('A slow command finished', summary(a1));
   check(!tookOver(openB), 'B took over tabs while A had a command in flight');
   check(a1.code === 0 && a1.json?.data?.result === 'done', 'A\'s command did not finish normally');
 
-  // 2. The relay drops while A's command runs.
-  const inflight2 = cuAsync(A.agent, A.pane, slow(15000));
+  // 2. A's daemon dies while A's command runs (as in the report, where a
+  // relay recovery stopped it); B starts right then.
+  const inflight2 = cuAsync(A.agent, A.pane, slow(6000));
   await sleep(1500);
-  const hosts = nmHosts();
-  step('stop this rig\'s native host', { pids: hosts });
-  for (const pid of hosts) spawnSync('kill', ['-9', pid]);
-  await sleep(1500);
-  const relayFile = path.join(socketDir, 'relay-cdp-url');
-  step('relay after the host died', { relayUrlFile: fs.existsSync(relayFile), aSocket: fs.existsSync(path.join(socketDir, `${nameA}.sock`)) });
-  // B's next command, as another agent would run one meanwhile; let the
-  // relay come back first so B does not go through its own recovery.
-  const back = await waitFor(() => fs.existsSync(relayFile), { timeout: 60000, label: 'relay back' }).then(() => true, () => false);
-  step('relay back', { back });
-  // Without the relay, a command would run the CLI's relay recovery, which
-  // must never be triggered from a rig (it is not scoped to this HOME in
-  // older builds).
-  check(back, 'the relay did not come back after the native host died');
-  const againB = back ? cu(B.agent, B.pane, ['tab', 'list']) : { code: null, json: null, ms: 0, stderr: 'skipped: relay down' };
-  step('B command after the relay drop', { ...summary(againB), tookOver: tookOver(againB), createdA: createdOf(nameA), createdB: createdOf(nameB), aSocket: fs.existsSync(path.join(socketDir, `${nameA}.sock`)) });
+  const pidA = fs.readFileSync(path.join(socketDir, `${nameA}.pid`), 'utf8').trim();
+  spawnSync('kill', ['-9', pidA]);
+  step('killed A\'s daemon mid-command', { pid: pidA });
+  await sleep(300);
+  const C = { agent: 6003, pane: '%93' };
+  const openC = cu(C.agent, C.pane, ['open', rig.site + '/c?C']);
+  const nameC = sessionOf(C.agent, C.pane)?.name;
+  step('C starts while A waits on its dead daemon', { ...summary(openC), session: nameC, tookOver: tookOver(openC), createdA: createdOf(nameA) });
   const a2 = await inflight2;
-  step('A command that was in flight when the relay dropped', summary(a2));
-  check(a2.code !== 0 || a2.json?.success === true, 'A exited 0 without a confirmed result');
-  if (a2.json?.success !== true) {
-    check(a2.json?.code === 'outcome_unknown', `A's unconfirmed command was not reported as outcome_unknown: ${a2.json?.code}`);
-  }
-  check(!tookOver(againB) || a2.code !== null, 'B took over A\'s tabs while A waited on its command');
+  step('A command whose daemon died', summary(a2));
+  check(a2.code !== 0, 'A exited 0 although its command was never confirmed');
+  check(a2.json?.code === 'action_outcome_unknown', `A's unconfirmed command was not reported as action_outcome_unknown: ${a2.json?.code}`);
+  check(!tookOver(openC), 'C took over A\'s tabs while A still waited on its command');
+  // Right after A's command ended, a new session still must not take them:
+  // A ran a command moments ago.
+  const D = { agent: 6004, pane: '%94' };
+  const openD = cu(D.agent, D.pane, ['open', rig.site + '/d?D']);
+  step('D starts right after A\'s failure', { ...summary(openD), tookOver: tookOver(openD), createdA: createdOf(nameA) });
+  check(!tookOver(openD), 'D took over A\'s tabs moments after A\'s command');
 
   // 3. What happened to A's last command, without running anything.
   const last = cu(A.agent, A.pane, ['session', 'last']);
   step('A session last', summary(last));
   check(last.code === 0 && last.json?.data?.lastCommand?.action === 'evaluate', 'session last did not report A\'s last command');
-  const afterA = cu(A.agent, A.pane, ['tab', 'list']);
-  step('A tab list afterwards', summary(afterA));
+  check(last.json?.data?.lastCommand?.state === 'unknown', `A's interrupted command was not reported as unknown: ${last.json?.data?.lastCommand?.state}`);
+
+  // 4. The relay drops while A's command runs.
+  const reopenA = cu(A.agent, A.pane, ['tab', 'list']);
+  step('A again', summary(reopenA));
+  const inflight3 = cuAsync(A.agent, A.pane, slow(6000));
+  await sleep(1500);
+  const hosts = nmHosts();
+  for (const pid of hosts) spawnSync('kill', ['-9', pid]);
+  step('stopped this rig\'s native host', { pids: hosts });
+  const a3 = await inflight3;
+  step('A command in flight when the relay dropped', summary(a3));
+  check(a3.code !== 0 || a3.json?.success === true, 'A exited 0 without a confirmed result');
+  const relayFile = path.join(socketDir, 'relay-cdp-url');
+  const back = await waitFor(() => fs.existsSync(relayFile), { timeout: 60000, label: 'relay back' }).then(() => true, () => false);
+  step('relay back', { back });
+  check(back, 'the relay did not come back after the native host died');
+  const lastAfterDrop = cu(A.agent, A.pane, ['session', 'last']);
+  step('A session last after the drop', summary(lastAfterDrop));
   const title = await rig.ev(`chrome.tabs.query({}).then(t => t.filter(x => (x.url || '').includes('/a?A')).map(x => x.title))`);
   step('A page title (did the side effect run?)', { title });
-  cu(A.agent, A.pane, ['done']);
-  cu(B.agent, B.pane, ['done']);
+  for (const s of [A, B, C, D]) cu(s.agent, s.pane, ['done']);
   step('END', {});
   evidence.pass = true;
 } catch (error) {

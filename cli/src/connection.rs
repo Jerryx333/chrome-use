@@ -194,6 +194,90 @@ pub fn try_lock_session_lifecycle(session: &str) -> Option<SessionLifecycleLock>
     })
 }
 
+/// Held (shared) by every CLI process while it works with a session, from
+/// before its daemon starts until the process exits: a session with a client
+/// holding it is not over, even when its daemon is gone for a moment (#687).
+pub struct ClientPresence {
+    _file: FileLockGuard,
+}
+
+fn client_presence_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{session}.clients.lock"))
+}
+
+/// Mark this process as a client of `session`. Best effort: `None` when the
+/// lock file cannot be opened.
+pub fn hold_client_presence(session: &str) -> Option<ClientPresence> {
+    fs::create_dir_all(get_socket_dir()).ok()?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(client_presence_path(session))
+        .ok()?;
+    file.lock_shared().ok()?;
+    Some(ClientPresence {
+        _file: FileLockGuard { file },
+    })
+}
+
+/// Whether some CLI process is working with `session` right now: a command
+/// in flight, or one starting its daemon.
+pub fn session_has_client(session: &str) -> bool {
+    let Ok(file) = fs::OpenOptions::new()
+        .write(true)
+        .open(client_presence_path(session))
+    else {
+        return false;
+    };
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = file.unlock();
+            false
+        }
+        Err(_) => true,
+    }
+}
+
+/// The few most recent top-level commands of a session, newest last, as its
+/// daemon recorded them: what ran and how it ended, never its arguments or
+/// output. Read by `session last` without touching the daemon (#687).
+pub fn last_commands_path(session: &str) -> PathBuf {
+    get_socket_dir().join(format!("{session}.last-commands.json"))
+}
+
+pub fn read_last_commands(session: &str) -> Vec<Value> {
+    fs::read_to_string(last_commands_path(session))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Vec<Value>>(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Insert or update the entry with the same `id`, keeping the last few.
+pub fn write_last_command(session: &str, entry: Value) {
+    const KEEP: usize = 8;
+    let mut entries = read_last_commands(session);
+    let id = entry.get("id").cloned();
+    match entries
+        .iter_mut()
+        .find(|e| id.is_some() && e.get("id") == id.as_ref())
+    {
+        Some(existing) => *existing = entry,
+        None => entries.push(entry),
+    }
+    if entries.len() > KEEP {
+        let drop = entries.len() - KEEP;
+        entries.drain(..drop);
+    }
+    let path = last_commands_path(session);
+    let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    if let Ok(raw) = serde_json::to_vec(&entries) {
+        if fs::write(&tmp, raw).is_ok() {
+            let _ = fs::rename(&tmp, &path);
+        }
+    }
+}
+
 pub fn lock_relay_recovery() -> Result<RelayRecoveryLock, String> {
     let path = config_home().join("relay-recovery.lock");
     let file = acquire_file_lock(&path, "relay recovery")?;
@@ -301,7 +385,7 @@ fn get_pid_path(session: &str) -> PathBuf {
     get_socket_dir().join(format!("{}.pid", session))
 }
 
-fn read_registered_daemon_pid(session: &str) -> Option<u32> {
+pub(crate) fn read_registered_daemon_pid(session: &str) -> Option<u32> {
     fs::read_to_string(get_pid_path(session))
         .ok()
         .and_then(|value| value.trim().parse::<u32>().ok())
@@ -2419,6 +2503,10 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
         match send_command_once(&cmd, session) {
             Ok(response) => return Ok(response),
             Err(e) => {
+                // Sent and unconfirmed: never replayed (#687).
+                if e.starts_with(OUTCOME_UNKNOWN) {
+                    return Err(e);
+                }
                 if is_transient_error(&e) {
                     last_error = e;
                     continue;
@@ -2438,7 +2526,9 @@ pub fn send_command(mut cmd: Value, session: &str) -> Result<Response, String> {
                     // daemon behind). Name one successor and say to keep it.
                     let next = successor_session(session);
                     return Err(format!(
-                        "session unresponsive: the stuck '{session}' daemon was stopped \
+                        "{OUTCOME_UNKNOWN} the command was sent but no reply came, so it may \
+                         have run: check with `chrome-use session last` before rerunning a \
+                         side-effecting command. session unresponsive: the stuck '{session}' daemon was stopped \
                          automatically. '{session}' frees up on its own after a while; until \
                          then rerunning it can return this same message. Do not start a new \
                          name for every error: each one leaves a daemon behind (`session list`). \
@@ -2609,6 +2699,10 @@ pub(crate) fn send_to_running_daemon(cmd: &Value, session: &str) -> Result<Respo
     )
 }
 
+/// The prefix of an error for a command that was sent and never confirmed:
+/// it may have run (code `action_outcome_unknown`, never retried).
+pub(crate) const OUTCOME_UNKNOWN: &str = "action_outcome_unknown:";
+
 fn send_command_once(cmd: &Value, session: &str) -> Result<Response, String> {
     let read_to = client_read_budget(cmd);
     exchange_command(
@@ -2729,8 +2823,10 @@ fn await_reply(
     let mut heard_keepalive = false;
     let busy = || {
         format!(
-            "daemon still busy with the previous command for session '{session}'. \
-             Wait before checking the session again; do not replay a side-effecting command."
+            "{OUTCOME_UNKNOWN} daemon still busy with the previous command for session \
+             '{session}'. The command was sent and may still run or have run: wait, then check \
+             what happened with `chrome-use session last`; do not replay a side-effecting \
+             command."
         )
     };
     loop {
@@ -2749,7 +2845,16 @@ fn await_reply(
                     read_to.as_secs()
                 ))
             }
-            ReplyRead::Failed(e) => return Err(format!("Failed to read: {}", e)),
+            // The command was already written: whatever ends the read now, it
+            // may have run, so it is never retried and never reported as
+            // done (#687).
+            ReplyRead::Failed(e) => {
+                return Err(format!(
+                    "{OUTCOME_UNKNOWN} lost the reply from the daemon for session '{session}' \
+                     ({e}). The command was sent and may have run; check what happened with \
+                     `chrome-use session last` before repeating a side-effecting command."
+                ))
+            }
             ReplyRead::Closed if !stop_on_close => {
                 return Err(format!(
                     "daemon for session '{session}' closed the connection without replying"
@@ -2758,9 +2863,11 @@ fn await_reply(
             ReplyRead::Closed => {
                 kill_stale_daemon(session);
                 return Err(format!(
-                    "daemon disconnected unexpectedly for session '{session}'. \
-                     The unreachable daemon was stopped and its stale state was cleared. \
-                     Rerun the command to start a fresh daemon."
+                    "{OUTCOME_UNKNOWN} daemon disconnected unexpectedly for session '{session}' \
+                     while it ran this command, which may have run. The unreachable daemon was \
+                     stopped and its stale state was cleared. Check what happened with \
+                     `chrome-use session last` (and the page) before repeating a side-effecting \
+                     command; a read can simply be run again."
                 ));
             }
         };

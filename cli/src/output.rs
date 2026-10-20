@@ -5156,7 +5156,7 @@ Examples:
 chrome-use session - Manage sessions
 
 Usage:
-  chrome-use session [status|handoff|resume|list|prune]
+  chrome-use session [status|handoff|resume|last|list|prune]
   chrome-use session stop [name]
 
 Manage isolated browser sessions, daemon lifecycle, and ownership handoff.
@@ -5175,6 +5175,12 @@ Operations:
                        old label unless the live extension can rename the group.
                        A short, task-relevant name with a leading emoji reads
                        best in the tab strip: `session name "🔎 track a parcel"`
+  last                 What happened to this session's recent commands
+                       (completed | failed | running | unknown), newest first,
+                       without running anything. After a command that was sent
+                       but never confirmed (error code action_outcome_unknown),
+                       check here before repeating a side-effecting command:
+                       `unknown` means the daemon stopped while it ran.
   list                 List active sessions and their owners
   status               Show the current session owner
   handoff              Hand control to the user
@@ -5193,6 +5199,7 @@ Examples:
   chrome-use session
   chrome-use session list
   chrome-use session status
+  chrome-use session last --json
   chrome-use session handoff
   chrome-use session resume
   chrome-use session stop
@@ -6540,6 +6547,7 @@ Sessions:
   session                    Show current session owner
   session list               List active sessions and their owners
   session status             Show current session owner
+  session last               What happened to the session's recent commands (read-only)
   session handoff            Hand control to the user
   session resume             Return control to the agent
   session stop [name]        Stop one session daemon (default: current) — graceful,
