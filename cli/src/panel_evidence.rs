@@ -1750,17 +1750,17 @@ mod tests {
         .unwrap();
         assert!(!ran && refused["isError"] == true);
         let fake = Fake::default();
+        // The grant must be absolute on this platform; `/w/...` is not on Windows.
+        let path = std::env::temp_dir()
+            .join(".chrome-use-out/rec1/recording.webm")
+            .display()
+            .to_string();
         fake.answer(
             proto::OP_RECORDING_AUTHORIZE,
-            vec![Ok(
-                json!({"artifactId": "rec1", "path": "/w/.chrome-use-out/rec1/recording.webm"}),
-            )],
+            vec![Ok(json!({"artifactId": "rec1", "path": &path}))],
         );
         let started = call_record::<()>(&context(&fake), &json!({"action": "start"}), |argv| {
-            assert_eq!(
-                argv,
-                ["record", "start", "/w/.chrome-use-out/rec1/recording.webm"]
-            );
+            assert_eq!(argv, ["record", "start", path.as_str()]);
             Ok(cli(json!({"success": true, "data": {}}), Some(0)))
         })
         .unwrap();
