@@ -602,6 +602,11 @@ fn run_session_name(session: &str, json_mode: bool, zh: bool) {
 fn last_command_state(entry: &Value, daemon_pid: Option<u32>, daemon_live: bool) -> &'static str {
     match entry.get("state").and_then(Value::as_str) {
         Some("completed") => "completed",
+        // Failed without a confirmed result (the browser connection broke
+        // mid-command): it may have run.
+        Some("failed") if entry.get("errorCode") == Some(&json!("action_outcome_unknown")) => {
+            "unknown"
+        }
         Some("failed") => "failed",
         Some("running") => {
             let ran_in = entry
@@ -671,7 +676,7 @@ fn run_session_last(session: &str, json_mode: bool) {
             .unwrap_or_default();
         let state = e["state"].as_str().unwrap_or("unknown");
         let note = match state {
-            "unknown" => " — the daemon stopped while it ran: it may or may not have taken effect; check the page before repeating it",
+            "unknown" => " — never confirmed (the daemon or its browser connection stopped while it ran): it may or may not have taken effect; check the page before repeating it",
             "running" => " — still running",
             _ => "",
         };
@@ -4922,6 +4927,14 @@ mod tests {
         assert_eq!(
             super::last_command_state(&json!({"state":"failed"}), None, false),
             "failed"
+        );
+        assert_eq!(
+            super::last_command_state(
+                &json!({"state":"failed","errorCode":"action_outcome_unknown"}),
+                None,
+                true
+            ),
+            "unknown"
         );
     }
 
