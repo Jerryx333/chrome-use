@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.248
+## 1.5.249
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.80.
+
+### Bug Fixes
+
+- **The side panel no longer asks you to reinstall a CLI that is already current (ab-connect 0.5.80).** After an upgrade, a `__nm-host` that Chrome started earlier keeps running the old binary, and one from before 1.5.239 sends no version, so the panel said "chrome-use CLI 太旧" and told you to reinstall even when the binary on disk was new. The extension now reconnects once, when no command or side panel request is running, before it shows that notice, and shows it only if the fresh host still sends no version. (#684)
+- Two Rust tests that failed on Windows (a recording path that is not absolute there) and intermittently on macOS (a runner in session 1) are platform-independent. (#685)
+
+### Contributors
+
+- @Jerryx333
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.248
+
 Works with extension ab-connect 0.5.79.
 
 ### Changes
@@ -13,7 +28,6 @@ Works with extension ab-connect 0.5.79.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.247
 
