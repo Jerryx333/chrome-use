@@ -1,8 +1,30 @@
 # Changelog
 
-## 1.5.246
+## 1.5.247
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.79.
+
+### Changes
+
+- **Copy what you picked, for another agent or tool (ab-connect 0.5.79).** Under the picked elements in the side panel composer, Copy elements puts every picked element's context (page, selector, how to reach it inside frames and shadow roots, source, text, bounds, HTML) on the clipboard, and Copy message adds your words in front, as the agent would get them. Nothing is cut to the send limit, and a screenshot or attached image says plainly that it is not in the copied text. (#680)
+- **Agents get the attached images' file paths in the message text.** Images you attach or that come with picked elements already reached Codex, Claude Code, OpenCode and Pi as image input, but the text never said where they were, so an agent handing the task on to another session (ocs, a terminal) passed only words. The message now ends with the numbered list of local files; "attached image N" in the element context is item N. (#680)
+- **`snapshot --diff` in MCP.** `chrome_use_snapshot` takes `diff: true` for the same incremental read as the CLI; changing `filter` needs a new full baseline instead of reporting a different excerpt as page changes, and a valid delta lists only the refs it shows while the session keeps every live ref.
+- **`read --help`** has its own page, and `read --filter` is documented as a literal, case-insensitive match (not a regex, unlike `snapshot --filter`).
+
+### Bug Fixes
+
+- **Closed agent tabs no longer leave saved tab groups behind (ab-connect 0.5.79).** Chrome keeps a group as a saved (synced) tab group when its last tab is closed while still in it. Agent tabs were taken out of their group before closing, except right after the extension's worker restarted (ownership not loaded yet), for agent pop-ups, and for tabs the cleanup closed through the raw `tabs.remove` passthrough, so groups such as `cu-chatdev-*` piled up. All three now leave the group first; tabs you own, lent or adopted keep theirs. (#674)
+- **A click refused because something covers the element is reported as `element_occluded`, not retried.** The refusal quotes the covering element's text; a label like "Connection timeout" made it look like a retryable timeout. No click was dispatched, so the agent is told to deal with the blocker instead.
+- A snapshot diff now recognizes a ref on an inserted root line (`+- button … [ref=e99]`).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.246
+
 Works with extension ab-connect 0.5.78.
 
 ### Bug Fixes
@@ -14,7 +36,6 @@ Works with extension ab-connect 0.5.78.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.245
 

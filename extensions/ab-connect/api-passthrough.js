@@ -183,6 +183,7 @@ export async function mutationTargets(call, lookups) {
  *   - api:       the `chrome` object (or a stub in tests)
  *   - isOwned:   (tabId) => boolean
  *   - tabsInGroup / tabsInWindow: see `mutationTargets`
+ *   - ungroup:   optional (tabId) => Promise; run before `tabs.remove`
  *
  * Resolves to `{ result }` or throws an Error whose message names the rule
  * that refused it. A Chrome API rejection is passed through with the
@@ -191,8 +192,9 @@ export async function mutationTargets(call, lookups) {
 export async function executeCall(request, env) {
   const v = validateCall(request);
   if (!v.ok) throw new Error(v.error);
+  let scope = { tabIds: [] };
   if (v.mutates) {
-    const scope = await mutationTargets(v, env);
+    scope = await mutationTargets(v, env);
     if (scope.error) throw new Error(`call: ${scope.error}`);
     const foreign = scope.tabIds.filter((id) => !env.isOwned(id));
     if (foreign.length > 0) {
@@ -204,6 +206,16 @@ export async function executeCall(request, env) {
   }
   const ns = env.api?.[v.namespace];
   const fn = ns?.[v.method];
+  if (v.namespace === 'tabs' && v.method === 'remove' && typeof env.ungroup === 'function' && typeof fn === 'function') {
+    // Closing a grouped tab leaves Chrome a saved tab group (#674). Every id
+    // here passed the ownership gate; one at a time, since a missing tab
+    // would fail a batch ungroup.
+    for (const id of scope.tabIds) {
+      try {
+        await env.ungroup(id);
+      } catch {}
+    }
+  }
   if (typeof fn !== 'function') {
     throw new Error(`call: chrome.${v.namespace}.${v.method} is unavailable in this Chrome`);
   }

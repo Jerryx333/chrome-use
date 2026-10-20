@@ -883,7 +883,7 @@ async fn pi_turn(
     workspace: &std::path::Path,
 ) -> Result<(), String> {
     let message = queued.take().ok_or("No queued backend turn")?;
-    let text = message.prompt_text();
+    let text = message.agent_text(workspace)?;
     let images: Vec<Value> = message
         .attachments
         .iter()
@@ -920,7 +920,8 @@ fn codex_browser_server(setup: &Setup, browser_env: &Value) -> Value {
 
 /// Encode the same saved images for the backend's native multimodal protocol.
 fn codex_input(message: &Message, workspace: &std::path::Path) -> Result<Vec<Value>, String> {
-    let mut input = vec![json!({"type":"text","text":message.prompt_text(),"text_elements":[]})];
+    let mut input =
+        vec![json!({"type":"text","text":message.agent_text(workspace)?,"text_elements":[]})];
     for image in &message.attachments {
         image.read(workspace)?;
         input.push(json!({"type":"localImage","path":image.path(workspace)?}));
@@ -931,7 +932,7 @@ fn claude_input(message: &Message, workspace: &std::path::Path) -> Result<Value,
     if message.attachments.is_empty() {
         return Ok(json!(message.prompt_text()));
     }
-    let mut input = vec![json!({"type":"text","text":message.prompt_text()})];
+    let mut input = vec![json!({"type":"text","text":message.agent_text(workspace)?})];
     for image in &message.attachments {
         input.push(json!({"type":"image","source":{"type":"base64","media_type":image.media_type,"data":image.base64(workspace)?}}));
     }

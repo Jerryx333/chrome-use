@@ -97,6 +97,33 @@ test('a mutation on a tab the relay does not own is refused, naming the tab', as
   assert.deepEqual(await executeCall({ namespace: 'tabs', method: 'remove', args: [1] }, e), { result: 1 });
 });
 
+test('tabs.remove ungroups each owned tab first so Chrome keeps no saved group (#674)', async () => {
+  const calls = [];
+  const e = {
+    ...env({
+      owned: [1, 2, 3],
+      api: {
+        tabs: {
+          remove: async (ids) => calls.push(['remove', ids]),
+          update: async (id) => calls.push(['update', id]),
+        },
+      },
+    }),
+    ungroup: async (id) => {
+      calls.push(['ungroup', id]);
+      if (id === 2) throw new Error('No tab with id: 2.');
+    },
+  };
+  await executeCall({ namespace: 'tabs', method: 'remove', args: [[1, 2, 3]] }, e);
+  assert.deepEqual(calls, [['ungroup', 1], ['ungroup', 2], ['ungroup', 3], ['remove', [1, 2, 3]]]);
+  calls.length = 0;
+  await executeCall({ namespace: 'tabs', method: 'update', args: [1, { pinned: true }] }, e);
+  assert.deepEqual(calls, [['update', 1]], 'only removal ungroups');
+  calls.length = 0;
+  await assert.rejects(executeCall({ namespace: 'tabs', method: 'remove', args: [[1, 9]] }, e), /tab 9 is not owned/);
+  assert.deepEqual(calls, [], 'a refused removal ungroups nothing');
+});
+
 test('read-only calls run without an ownership check and return the API result', async () => {
   const e = env({ owned: [], api: { tabs: { query: async (q) => [{ id: 4, ...q }] } } });
   assert.deepEqual(await executeCall({ namespace: 'tabs', method: 'query', args: [{ active: true }] }, e), {

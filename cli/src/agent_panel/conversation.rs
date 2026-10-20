@@ -139,6 +139,22 @@ impl Message {
             .unwrap_or_default();
         format!("{continuation}{skill}{grant}{page}{}", self.text)
     }
+    /// The prompt as an agent receives it: `prompt_text` plus where each
+    /// attached image lives. The agent gets the pictures as image input too,
+    /// but only text survives a handoff to another session (#680).
+    pub(super) fn agent_text(&self, workspace: &std::path::Path) -> Result<String, String> {
+        let text = self.prompt_text();
+        if self.attachments.is_empty() {
+            return Ok(text);
+        }
+        let mut list = String::new();
+        for (i, image) in self.attachments.iter().enumerate() {
+            list.push_str(&format!("\n{}. {}", i + 1, image.path(workspace)?.display()));
+        }
+        Ok(format!(
+            "{text}\n\n[Attached images, in order (\"attached image N\" above is item N), also saved as local files on this computer:{list}]"
+        ))
+    }
     /// Request identity. The rule is the one v1.5.214 used and runs on the
     /// raw input, before any redaction, so retries across the upgrade match.
     pub(super) fn fingerprint(&self) -> Result<String, String> {
@@ -1209,6 +1225,25 @@ mod tests {
                 .unwrap_err(),
             TOO_LONG_ENCODED
         );
+    }
+
+    #[test]
+    fn agent_text_names_each_attached_image_file_in_order() {
+        let workspace = std::path::Path::new("/tmp/cu-ws");
+        let mut m = message("Compare the layout");
+        assert_eq!(m.agent_text(workspace).unwrap(), m.prompt_text());
+        m.attachments = vec![
+            Attachment { id: "a".repeat(64), media_type: "image/png".into(), bytes: 1 },
+            Attachment { id: "b".repeat(64), media_type: "image/jpeg".into(), bytes: 1 },
+        ];
+        let text = m.agent_text(workspace).unwrap();
+        assert!(text.starts_with(&m.prompt_text()));
+        let first = format!("\n1. /tmp/cu-ws/attachments/{}.png", "a".repeat(64));
+        let second = format!("\n2. /tmp/cu-ws/attachments/{}.jpg", "b".repeat(64));
+        assert!(text.contains(&first), "{text}");
+        assert!(text.contains(&second), "{text}");
+        m.attachments[0].id = "../x".into();
+        assert!(m.agent_text(workspace).is_err());
     }
 
     #[test]

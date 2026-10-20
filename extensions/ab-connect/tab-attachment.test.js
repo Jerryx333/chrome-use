@@ -206,11 +206,14 @@ test('the agent cannot close a tab the user lent it (0.5.62)', async () => {
     tabForTarget: targetId => Number(targetId.slice(1)),
     removeAgentTab: async tabId => { removed.push(tabId) },
     agentTabRemoval: {},
+    // Ownership is read from disk before deciding how to close (#674).
+    loadOwnedTabs: async () => { removed.push('owned loaded') },
+    loadAgentPopups: async () => { removed.push('popups loaded') },
   }
   vm.createContext(context)
   vm.runInContext('globalThis.closeTarget = async function (params) { const method = "Target.closeTarget";\n' + section("if (method === 'Target.closeTarget') {", "if (method === 'Target.activateTarget')") + '}', context)
   await assert.rejects(context.closeTarget({ targetId: 'T5' }), /cannot close it/)
   assert.deepEqual(removed, [])
   assert.equal(JSON.stringify(await context.closeTarget({ targetId: 'T6' })), '{"success":true}')
-  assert.deepEqual(removed, [6])
+  assert.deepEqual(removed, ['owned loaded', 'popups loaded', 6])
 })

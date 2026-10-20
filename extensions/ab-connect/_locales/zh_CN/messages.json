@@ -3614,5 +3614,17 @@
   },
   "ext_version_cli_legacy": {
     "message": "chrome-use CLI 太旧，没法在这里自动更新。请在终端重新安装："
+  },
+  "sidepanel_copy_elements": {
+    "message": "复制元素"
+  },
+  "sidepanel_copy_input": {
+    "message": "复制整条输入"
+  },
+  "sidepanel_copy_input_title": {
+    "message": "输入的文字和所有选中的元素，复制为文本"
+  },
+  "panel_copy_failed": {
+    "message": "无法复制到剪贴板"
   }
 }
