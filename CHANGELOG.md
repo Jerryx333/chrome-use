@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.247
+## 1.5.248
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.79.
+
+### Changes
+
+- **`hover` takes a viewport point, like `click`.** `hover 767 340` (also `767,340`, `--coords 767,340` and `x=767 y=340`, which `click` now reads too) moves the real pointer to that point, for a tooltip or badge with no stable selector. The reply names the element that received the trusted move (`receivedBy`, `verified`), and a point inside a cross-origin frame is moved to but reported unconfirmed. MCP `chrome_use_hover` takes `x` and `y`. A lone or odd number of numeric arguments, or a numeric "selector" the page rejects, now points at the coordinate form instead of the CSS selector hint. (#662)
+- **A page that stops answering is told apart from a lost connection.** When a command times out on the extension relay, chrome-use asks the extension about the tab, which needs no renderer. If Chrome still answers for it, the reply says the tab is alive but its page is busy (a script blocking the main thread, or a page still loading on a held-open connection) and to wait and retry, instead of "restart the session and retry", which did not help. If nothing answers, it says the connection is gone and to open a fresh tab or session. A screenshot of a busy or closed tab now reports that, not "screenshot target drifted … attached to an unknown target". (#661)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.247
+
+
 Works with extension ab-connect 0.5.79.
 
 ### Changes
