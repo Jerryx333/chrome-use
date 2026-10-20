@@ -4756,8 +4756,10 @@ Login Options:
 Bitwarden Login Options:
   --bwu                    Use bitwarden-use (0.7.0+); reuse the current login page
   --item <id|name>          Choose an account when the site has several
-                           (without it, the one item named exactly the
-                           site's host is used, else the matches are listed)
+                           (without it: the item that signed in to the host
+                           last time, else the one named exactly the site's
+                           or its sign-in frame's host, else the matches are
+                           listed)
   --passkey                Sign in with a vault passkey in --launch mode (bwu 0.9.0+)
   --no-submit              Fill only; skip TOTP and passkey authenticators
                            Cannot be combined with --passkey
@@ -6261,7 +6263,8 @@ Core Commands:
   connect <port|url>         Connect to browser via CDP
   debugger_access_denied: protected extension content blocks this tab; do not
   loop on reattach. A password manager's inline menu is closed automatically
-  (a brief tab switch); otherwise follow the error's next step.
+  (a brief tab switch, or a blank tab in the minimized agent window for a
+  background tab in your own window); otherwise follow the error's next step.
   Relay lifecycle waits stop early on a confirmed access denial; ordinary
   slow pages retain their normal readiness wait.
   Extension popup: Connected means the native host replied; Connecting means

@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "fakepm",
+  "version": "1.0",
+  "description": "Test stand-in for a password manager's inline menu (auth-menu-live only)",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "bg.js" },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "all_frames": true, "js": ["content.js"], "run_at": "document_start" }
+  ],
+  "web_accessible_resources": [{ "resources": ["menu.html"], "matches": ["<all_urls>"] }]
+}

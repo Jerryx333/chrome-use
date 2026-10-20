@@ -76,7 +76,7 @@ fn http_url(s: &str) -> Option<url::Url> {
 
 /// The registrable part of a host, roughly: the last two labels, or three
 /// under a two-letter TLD with a generic second level (`example.co.uk`).
-fn site(host: &str) -> String {
+pub fn site(host: &str) -> String {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     if host.parse::<std::net::IpAddr>().is_ok() || !host.contains('.') {
         return host;

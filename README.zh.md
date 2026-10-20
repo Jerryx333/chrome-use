@@ -378,8 +378,9 @@ chrome-use 会保留该标签并报告目标 ID。保持相同 session 和连接
 
 ### 用 Bitwarden 登录
 
-打开网站登录页后运行 `chrome-use auth login --bwu`。多个账号匹配、且没有一个名字正好是该站点主机名时，用
-`--item <id|name>` 选一个。在 `--launch` 浏览器中加 `--passkey` 只用 passkey
+打开网站登录页后运行 `chrome-use auth login --bwu`。多个账号匹配时，先用上次在这个主机上登录成功的那个，
+其次用名字正好是站点主机名、或是它登录 iframe 主机名的那个（App Store Connect 的登录框是 `idmsa.apple.com`
+的 iframe）；都没有时用 `--item <id|name>` 选一个。在 `--launch` 浏览器中加 `--passkey` 只用 passkey
 登录（需 bitwarden-use 0.9.0+），不读取密码、TOTP 或自定义字段。扩展 relay
 暂不支持 passkey：passkey-only 登录立即报错，普通登录继续走密码/TOTP。仅支持签名计数器为 0 的同步型 passkey；非零计数器需要写回密码库，当前会拒绝。
 临时 WebAuthn 验证器在尝试结束后移除。页面拦截会拒绝普通 passkey 注册调用，

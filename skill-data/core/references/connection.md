@@ -173,9 +173,19 @@ names the password managers installed in this Chrome. The menu closes when the
 tab is hidden and shown again. For a tab the session created that is in front,
 chrome-use does that itself (a blank tab for a moment) and repeats the command if
 repeating it is harmless (a read, `fill`, `select`); a click or key press is not
-repeated and the error says so. A background tab is never brought to the front
-on its own: the error gives the exact `extension call tabs.update` command that
-does it (`tab select --activate` cannot, it needs the debugger first).
+repeated and the error says so. For a background tab in a window with the
+user's own tabs (where agent tabs open by default), it activates a blank tab in
+its agent window instead: Bitwarden closes the menu of a tab that is not in
+front whenever another tab is activated, so the user's window, its front tab
+and the focus stay as they were. The agent window is kept minimized for the
+session (one blank tab, closed with the session): the first time it is seen for
+about a second while it minimizes, later times nothing shows. An agent window
+that already holds other agent tabs (`--window dedicated`) is used as it is and
+not minimized. A locked vault, or another password manager, may
+not do that; the error then says so. A background tab is never brought to the
+front on its own: the error gives the exact `extension call tabs.update`
+command that does it (`tab select --activate` cannot, it needs the debugger
+first).
 Reattaching does not help. To avoid it, fill those fields with `fill` rather than
 `type --key-events`, turn the extension's inline menu off for the site, or use a
 `--launch` profile.
