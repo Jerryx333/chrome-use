@@ -340,6 +340,16 @@ fn group_members() -> Vec<GroupMember> {
         .collect()
 }
 
+/// Whether `session` still holds its lease on its tabs: its daemon runs, a
+/// CLI process is working with it, or it ran a command within
+/// [`LEASE_GRACE`]. Another session of the project neither takes over nor
+/// adopts its tabs meanwhile (#687).
+pub fn lease_held(session: &str) -> bool {
+    crate::connection::daemon_ready(session)
+        || crate::connection::session_has_client(session)
+        || recently_active(last_activity(session), SystemTime::now())
+}
+
 /// Whether a session last ran a command within [`LEASE_GRACE`].
 pub fn recently_active(last: Option<SystemTime>, now: SystemTime) -> bool {
     last.and_then(|t| now.duration_since(t).ok())
