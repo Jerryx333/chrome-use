@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.245
+## 1.5.246
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.78.
+
+### Bug Fixes
+
+- **`auth login --bwu` picks the right vault item among many.** bwu lists every login of the site's registrable domain (32 for apple.com), and the login stopped at "pick one with --item". Among several it now uses the item that signed in to the host last time (recorded only once the site was seen to take the login, by id only, in `~/.chrome-use/bwu-items.json`), else the one named exactly the page's host, else the one named exactly the host of the page's sign-in frame (App Store Connect signs in through an `idmsa.apple.com` iframe). It says which and why on stderr, even with `--json`. Otherwise the list shows items named for the page, its sign-in frame or its site first, and `--item` takes a name in any case. Login walls with auto-login choose the same way. (#672)
+- **Sign-in frames that load late in their own process are found.** `auth login` (with or without `--bwu`) searched an out-of-process sign-in frame only if it existed when the command started, so a frame the page inserted afterwards was never filled ("no login field appeared"). The submit no longer fails when the sign-in frame goes away with the page after it. (#672)
+- **A password manager's inline menu on a background agent tab in your own window is closed without touching your window.** Since agent tabs open in your window, Bitwarden's menu on one blocked every command and the recovery refused to switch your tabs, so the agent had to ask you to press Escape. chrome-use now activates a blank tab in its own agent window, which Bitwarden takes as a tab change and closes the menu; your window, the tab you are on and the focus stay as they were. A window opened for this holds only that blank tab and stays minimized for the session: the first time it is seen for about a second while it minimizes (measured on macOS), later times nothing shows. An agent window that already holds other agent tabs (`--window dedicated`) is used as it is and not minimized. A tab you are looking at in your own window is still left to you. `auth login` also takes the cursor out of each field it filled, so the menu usually closes before it gets in the way. (#672)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.245
+
 Works with extension ab-connect 0.5.78.
 
 ### Changes
@@ -14,7 +29,6 @@ Works with extension ab-connect 0.5.78.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.244
 
