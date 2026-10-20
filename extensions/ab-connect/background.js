@@ -940,7 +940,7 @@ function cursorOverlayExpression(x, y, click) {
 function publishHostStatus() {
   try {
     chrome.runtime
-      .sendMessage({ type: 'ab-host-state', ...hostConnection.snapshot(), tabCount: tabs.size, ...versionState() })
+      .sendMessage({ type: 'ab-host-state', ...hostStatusForUi(), tabCount: tabs.size, ...versionState() })
       .catch(() => {}); // Popup may be closed; state still lives in the worker.
   } catch {}
 }
@@ -966,6 +966,13 @@ let cliUpgradeTimer = null;
 // not reconnected again for the same version.
 let cliSwitchedTo = null;
 let cliSwitchTimer = null;
+// A running host may predate the binary on disk; reconnect once before judging it.
+let legacyCliRechecked = false;
+
+function hostStatusForUi() {
+  const state = hostConnection.snapshot();
+  return { ...state, legacyCli: state.legacyCli && legacyCliRechecked };
+}
 
 // What the popup and side panel need to show version notices.
 function versionState() {
@@ -1022,7 +1029,10 @@ function onUpgradeCliResult(params) {
 // After each pong: settle a running upgrade, and hand over to a newer binary.
 function afterCliStatus() {
   const cli = hostConnection.snapshot().cli;
-  if (!cli) return;
+  if (!cli) {
+    switchToNewCliWhenIdle();
+    return;
+  }
   if (cliUpgrade && cli.latest && compareVersions(cli.version, cli.latest) !== -1 && !cliSwitchPending(cli)) {
     // The running host is current: whatever was started has landed.
     cliUpgrade = null;
@@ -1041,19 +1051,22 @@ function afterCliStatus() {
 function switchToNewCliWhenIdle() {
   if (cliSwitchTimer) clearTimeout(cliSwitchTimer);
   cliSwitchTimer = null;
-  const cli = hostConnection.snapshot().cli;
-  if (!port || !cliSwitchPending(cli) || cliSwitchedTo === cli.onDisk) return;
+  const state = hostConnection.snapshot();
+  const cli = state.cli;
+  const recheckLegacy = state.connected && state.legacyCli && !legacyCliRechecked;
+  if (!port || (!recheckLegacy && (!cliSwitchPending(cli) || cliSwitchedTo === cli.onDisk))) return;
   const plan = currentUpdatePlan();
   // Side panel requests ride the same port; let them finish too.
   if (!plan.apply || agentPanelBridge.pending.size > 0) {
     if (plan.appliesInMs != null) cliSwitchTimer = setTimeout(switchToNewCliWhenIdle, plan.appliesInMs + 250);
     return; // a command's end re-arms through the next pong
   }
-  cliSwitchedTo = cli.onDisk;
+  if (recheckLegacy) legacyCliRechecked = true;
+  else cliSwitchedTo = cli.onDisk;
   const old = port;
   try { old.disconnect(); } catch {}
   // disconnect() from this side fires no onDisconnect: clean up the same way.
-  hostGone(old, 'Switching to the updated chrome-use CLI');
+  hostGone(old, recheckLegacy ? 'Rechecking the installed chrome-use CLI' : 'Switching to the updated chrome-use CLI');
   connectHost();
 }
 
@@ -3036,7 +3049,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         connectHost();
       } catch (e) {}
     }
-    sendResponse({ ...hostConnection.snapshot(), tabCount: tabs.size, host: HOST_NAME, agentPanelEntry, ...versionState() });
+    sendResponse({ ...hostStatusForUi(), tabCount: tabs.size, host: HOST_NAME, agentPanelEntry, ...versionState() });
   }
   return false;
 });
