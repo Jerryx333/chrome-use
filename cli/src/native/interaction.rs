@@ -1457,10 +1457,9 @@ pub async fn hover_reporting(
 }
 
 /// Records the first trusted pointer/mouse move the top document sees, and
-/// what is under it; read back by [`HOVER_POINT_READ_JS`].
+/// what is under it; read back by [`HOVER_POINT_READ_JS`]. The recorder is
+/// held only through its remote object handle: nothing is stored on the page.
 const HOVER_POINT_PROBE_JS: &str = r#"(() => {
-  const prev = window.__chromeUseHoverPoint;
-  if (prev) prev.stop();
   const describe = (n) => {
     if (!n || !n.tagName) return 'nothing';
     let d = '<' + n.tagName.toLowerCase();
@@ -1475,23 +1474,19 @@ const HOVER_POINT_PROBE_JS: &str = r#"(() => {
   const record = (e) => { if (e.isTrusted && !seen.hit) seen.hit = describe(e.composedPath ? e.composedPath()[0] : e.target); };
   addEventListener('pointermove', record, true);
   addEventListener('mousemove', record, true);
-  window.__chromeUseHoverPoint = {
+  return {
     seen,
     describe,
-    stop() { removeEventListener('pointermove', record, true); removeEventListener('mousemove', record, true); delete window.__chromeUseHoverPoint; },
+    stop() { removeEventListener('pointermove', record, true); removeEventListener('mousemove', record, true); },
   };
-  return true;
 })()"#;
 
-const HOVER_POINT_READ_JS: &str = r#"((x, y) => {
-  const p = window.__chromeUseHoverPoint;
-  if (!p) return { probe: false };
+/// Called on the recorder: what it saw, and the element under (x, y).
+const HOVER_POINT_READ_JS: &str = r#"function(x, y) {
   const under = document.elementFromPoint(x, y);
   const frame = !!under && /^(IFRAME|FRAME)$/.test(under.tagName);
-  const out = { probe: true, hit: p.seen.hit, under: p.describe(under), frame };
-  if (p.seen.hit) p.stop();
-  return out;
-})"#;
+  return { probe: true, hit: this.seen.hit, under: this.describe(under), frame };
+}"#;
 
 /// Hover a viewport point (`hover <x> <y>`, #662): a trusted pointer move to
 /// (x, y) in top-level CSS pixels, the same event a selector hover sends.
@@ -1504,15 +1499,17 @@ pub async fn hover_point(
     y: f64,
     resting: Option<(f64, f64)>,
 ) -> Result<HoverOutcome, String> {
-    let probe = client
+    let recorder = client
         .send_command(
             "Runtime.evaluate",
-            Some(json!({ "expression": HOVER_POINT_PROBE_JS, "returnByValue": true })),
+            Some(json!({ "expression": HOVER_POINT_PROBE_JS, "returnByValue": false })),
             Some(session_id),
         )
         .await
         .ok()
-        .is_some_and(|r| r.get("exceptionDetails").is_none());
+        .filter(|r| r.get("exceptionDetails").is_none())
+        .and_then(|r| r.get("result")?.get("objectId")?.as_str().map(String::from));
+    let probe = recorder.is_some();
     restore_rendering_if_hidden(client, session_id).await;
     // A move to where the pointer already rests produces no event: step off
     // by one pixel first so the page sees an arrival at the point.
@@ -1541,7 +1538,7 @@ pub async fn hover_point(
             .await?;
     }
     let mut read = Value::Null;
-    if probe {
+    if let Some(recorder) = recorder.as_deref() {
         for attempt in 0..HOVER_VERIFY_ATTEMPTS {
             if attempt > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(HOVER_VERIFY_INTERVAL_MS))
@@ -1549,9 +1546,11 @@ pub async fn hover_point(
             }
             read = client
                 .send_command(
-                    "Runtime.evaluate",
+                    "Runtime.callFunctionOn",
                     Some(json!({
-                        "expression": format!("({HOVER_POINT_READ_JS})({x}, {y})"),
+                        "objectId": recorder,
+                        "functionDeclaration": HOVER_POINT_READ_JS,
+                        "arguments": [{ "value": x }, { "value": y }],
                         "returnByValue": true,
                     })),
                     Some(session_id),
@@ -1564,18 +1563,23 @@ pub async fn hover_point(
                 break;
             }
         }
-        // Stop the probe if nothing arrived; a hit already stopped it.
-        if read.get("hit").is_none_or(Value::is_null) {
-            let _ = client
-                .send_command(
-                    "Runtime.evaluate",
-                    Some(json!({
-                        "expression": "window.__chromeUseHoverPoint && window.__chromeUseHoverPoint.stop()",
-                    })),
-                    Some(session_id),
-                )
-                .await;
-        }
+        let _ = client
+            .send_command(
+                "Runtime.callFunctionOn",
+                Some(json!({
+                    "objectId": recorder,
+                    "functionDeclaration": "function() { this.stop(); }",
+                })),
+                Some(session_id),
+            )
+            .await;
+        let _ = client
+            .send_command(
+                "Runtime.releaseObject",
+                Some(json!({ "objectId": recorder })),
+                Some(session_id),
+            )
+            .await;
     }
     Ok(hover_point_outcome(x, y, probe, &read))
 }
