@@ -27530,8 +27530,6 @@ mod tests {
         assert!(!action_stalled(A::ShowMenu, &[A::ShowMenu]));
     }
 
-    /// A diff against a baseline from a different page would report the whole
-    /// document as replaced — worse than just sending the tree.
     #[test]
     fn snapshot_diff_filter_changes_require_a_full_baseline() {
         let options = SnapshotOptions::default();
@@ -27556,6 +27554,8 @@ mod tests {
         );
     }
 
+    /// A diff against a baseline from a different page would report the whole
+    /// document as replaced — worse than just sending the tree.
     #[test]
     fn snapshot_diff_refuses_a_baseline_from_another_page() {
         let last = (
