@@ -208,13 +208,27 @@ export async function executeCall(request, env) {
   const fn = ns?.[v.method];
   if (v.namespace === 'tabs' && v.method === 'remove' && typeof env.ungroup === 'function' && typeof fn === 'function') {
     // Closing a grouped tab leaves Chrome a saved tab group (#674). Every id
-    // here passed the ownership gate; one at a time, since a missing tab
-    // would fail a batch ungroup.
+    // here passed the ownership gate. One at a time: a batch ungroup or
+    // remove stops at the first tab that is already gone, which would leave
+    // the live ones ungrouped but open.
+    let firstError = null;
+    let removed = 0;
     for (const id of scope.tabIds) {
       try {
         await env.ungroup(id);
       } catch {}
+      try {
+        await fn.call(ns, id);
+        removed++;
+      } catch (e) {
+        firstError ??= e;
+      }
     }
+    // A tab that is already gone is closed; only report when nothing was.
+    if (removed === 0 && firstError) {
+      throw new Error(`${v.namespace}.${v.method}: ${String(firstError?.message || firstError)}`);
+    }
+    return { result: null };
   }
   if (typeof fn !== 'function') {
     throw new Error(`call: chrome.${v.namespace}.${v.method} is unavailable in this Chrome`);

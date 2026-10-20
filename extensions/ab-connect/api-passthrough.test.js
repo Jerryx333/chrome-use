@@ -115,10 +115,19 @@ test('tabs.remove ungroups each owned tab first so Chrome keeps no saved group (
     },
   };
   await executeCall({ namespace: 'tabs', method: 'remove', args: [[1, 2, 3]] }, e);
-  assert.deepEqual(calls, [['ungroup', 1], ['ungroup', 2], ['ungroup', 3], ['remove', [1, 2, 3]]]);
+  assert.deepEqual(calls, [['ungroup', 1], ['remove', 1], ['ungroup', 2], ['remove', 2], ['ungroup', 3], ['remove', 3]]);
   calls.length = 0;
   await executeCall({ namespace: 'tabs', method: 'update', args: [1, { pinned: true }] }, e);
   assert.deepEqual(calls, [['update', 1]], 'only removal ungroups');
+  // A tab already gone does not stop the live ones after it from closing.
+  calls.length = 0;
+  e.api.tabs.remove = async (id) => {
+    calls.push(['remove', id]);
+    if (id === 2) throw new Error('No tab with id: 2.');
+  };
+  assert.deepEqual(await executeCall({ namespace: 'tabs', method: 'remove', args: [[2, 3]] }, e), { result: null });
+  assert.deepEqual(calls.filter(([op]) => op === 'remove'), [['remove', 2], ['remove', 3]]);
+  await assert.rejects(executeCall({ namespace: 'tabs', method: 'remove', args: [2] }, e), /tabs\.remove: No tab with id: 2/);
   calls.length = 0;
   await assert.rejects(executeCall({ namespace: 'tabs', method: 'remove', args: [[1, 9]] }, e), /tab 9 is not owned/);
   assert.deepEqual(calls, [], 'a refused removal ungroups nothing');
