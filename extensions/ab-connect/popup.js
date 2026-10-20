@@ -3,6 +3,7 @@
 // chrome-use CLI is live, and renders a paired / not-paired indicator.
 
 import { t, applyI18n } from './i18n.js'
+import { missingHostHint } from './native-host-hint.js'
 import { versionNotices } from './version-notice.js'
 import { renderVersionNotices } from './version-banner.js'
 
@@ -70,11 +71,11 @@ function render(state) {
       return
     }
     hint.style.display = 'block'
-    const missingHost = (state?.connectionError || '').toLowerCase().includes('host not found')
+    const missingHost = missingHostHint(state?.connectionError)
     hintText.textContent = missingHost
       ? t('popup_hint_install_host')
       : t('popup_hint_check_and_reopen')
-    hintCommand.textContent = missingHost ? 'chrome-use extension install' : 'chrome-use status'
+    hintCommand.textContent = missingHost ? missingHost.command : 'chrome-use status'
   }
 }
 

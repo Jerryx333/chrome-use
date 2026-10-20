@@ -6,6 +6,7 @@ import vm from 'node:vm'
 import { t, applyI18n } from './i18n.js'
 import { versionNotices } from './version-notice.js'
 import { renderVersionNotices } from './version-banner.js'
+import { missingHostHint } from './native-host-hint.js'
 
 // popup.js is a module; vm runs it as a script with its i18n import supplied.
 const source = readFileSync(new URL('./popup.js', import.meta.url), 'utf8')
@@ -30,7 +31,7 @@ function popup(initial, extensionAvailable = true, deferred = false) {
       onMessage: { addListener(fn) { changed = fn } },
     } },
     setTimeout(callback, delay) { timers.push({ callback, delay }) },
-    t, applyI18n, versionNotices, renderVersionNotices,
+    t, applyI18n, versionNotices, renderVersionNotices, missingHostHint,
   }
   if (!extensionAvailable) delete context.chrome
   vm.runInNewContext(source, context)

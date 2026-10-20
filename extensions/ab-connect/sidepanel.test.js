@@ -1386,3 +1386,17 @@ test('the empty state says the agent works in this tab, or in its own window whe
   assert.match(h.nodes.get('emptyDetail').textContent, /its own browser window/);
   h.panel.close();
 });
+
+test('missing-host guidance appears below the error and clears for other failures', async () => {
+  const original = 'Specified native messaging host not found.';
+  const f = await fixture({ status: () => ({ connected: false, connectionError: original }) });
+  assert.equal(f.nodes.get('connection').textContent, original);
+  assert.equal(f.nodes.get('hostHint').hidden, false);
+  assert.equal(f.nodes.get('hostHint').children[0].textContent, en.popup_hint_install_host.message);
+  assert.equal(f.nodes.get('hostHint').children[1].textContent, 'chrome-use extension install');
+  assert.equal(f.nodes.get('hostHint').children[2].textContent, en.panel_copy_command.message);
+  f.hostUpdate({ connected: false, connectionError: 'Access denied' });
+  assert.equal(f.nodes.get('hostHint').hidden, true);
+  assert.equal(f.nodes.get('hostHint').children.length, 0);
+  f.panel.close();
+});

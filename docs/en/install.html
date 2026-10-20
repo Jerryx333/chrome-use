@@ -159,6 +159,8 @@ programs.chrome-use = {
         To drive the real Chrome you're <em>already logged into</em> (reusing existing sessions, no confirmation prompts), install the browser extension and register the local bridge once. This is the recommended path.
       </p>
 
+      <p>On macOS/Linux, <code>chrome-use extension install</code> also registers the native host in existing custom data directories of running Chromium-family browsers started with <code>--user-data-dir=&lt;path&gt;</code>. For a browser that is not running or cannot be discovered, use <code>chrome-use extension install --user-data-dir &quot;/path/Chrome Data&quot;</code>; <code>--user-data-dir=&lt;path&gt;</code> is also accepted and the option may be repeated. Every explicit directory must already exist. The command lists written manifests and reads back their name and launcher path. This confirms registration only: reopen the side panel in that Chrome or wait for automatic reconnection. Windows uses HKCU registration and rejects this option.</p>
+
       <ol>
         <li>
           <a href="https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk">Install the <strong>chrome-use</strong> extension from the Chrome Web Store</a> with a one-click <em>Add to Chrome</em>.

@@ -848,6 +848,8 @@ One-time setup:
 chrome-use extension install        # writes the native-messaging host manifest
 ```
 
+On macOS/Linux, `chrome-use extension install` also registers the native host in existing custom data directories of running Chromium-family browsers started with `--user-data-dir=<path>`. For a browser that is not running or cannot be discovered, use `chrome-use extension install --user-data-dir "/path/Chrome Data"`; `--user-data-dir=<path>` is also accepted and the option may be repeated. Every explicit directory must already exist. The command lists written manifests and reads back their name and launcher path. This confirms registration only: reopen the side panel in that Chrome or wait for automatic reconnection. Windows uses HKCU registration and rejects this option.
+
 On macOS the guided setup also offers a policy profile that installs the
 extension into every Chrome profile silently. It works, but it puts Chrome in
 **"managed by your organization"** mode: Chrome then disables and locks the

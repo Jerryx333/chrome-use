@@ -6634,6 +6634,15 @@ Setup:
                              Store route instead); --all-profiles opens the Store page
                              in each profile; --no-open writes the policy without
                              queueing it.
+                             On macOS/Linux, also registers running Chromium-family
+                             browsers with existing --user-data-dir=<path> directories.
+  extension install --user-data-dir <path>
+                             Add an existing custom data directory explicitly (repeatable;
+                             also accepts --user-data-dir=<path>). Missing directories
+                             fail. macOS/Linux only; Windows uses HKCU registration.
+                             Lists manifests and verifies their name and launcher path.
+                             Registration is not a connection: reopen the side panel in
+                             that Chrome or wait for automatic extension reconnection.
   extension status           Host/relay/extension versions, driving profile, per-profile
                              coverage, and what the install policy currently costs
                              The extension toolbar opens its agent side panel when

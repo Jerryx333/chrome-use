@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## Side panel: "Specified native messaging host not found."
+
+If this Chrome was started with `--user-data-dir` (for example by a script), its native-host manifest must be registered in that data directory on macOS/Linux. Keep it running and run `chrome-use extension install`; this also registers discovered running Chromium-family browsers with existing custom directories. For an undiscovered or stopped instance, run `chrome-use extension install --user-data-dir "/path/Chrome Data"` (repeatable, also accepts the equals form; the directory must exist). Reopen the side panel afterward or wait for automatic reconnection. Verified manifests confirm registration, not a live connection. Windows uses HKCU registration and rejects this option.
+
 ## Relay and debugger health
 
 `status`, `extension status`, and doctor's relay check read `ABExt.state` over one diagnostic connection with a total 10-second budget. An error reply falls back to `ABExt.inspectTab` on that same connection. They send no debugger commands. The debugger summary passively counts answered commands (including non-timeout errors) and timeouts with “in the last 10 min” for a full reporting window, otherwise “since the extension worker started <age> ago” (whole seconds below 120 seconds, such as “45s”; whole minutes otherwise, such as “3 min”). No samples means “not exercised”; an older extension without health data reports that explicitly. Counts use bounded one-second buckets and reset when the service worker restarts. If commands keep failing, reload the chrome-use extension at `chrome://extensions` or restart Chrome.
