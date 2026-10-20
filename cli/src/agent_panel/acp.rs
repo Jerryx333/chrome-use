@@ -244,7 +244,7 @@ pub(super) async fn protocol(
                     );
                 }
                 let mut prompt = vec![
-                    json!({"type":"text","text":format!("{instructions}\n\n{}",message.prompt_text())}),
+                    json!({"type":"text","text":format!("{instructions}\n\n{}",message.agent_text(&setup.workspace)?)}),
                 ];
                 for image in &message.attachments {
                     prompt.push(json!({"type":"image","mimeType":image.media_type,"data":image.base64(&setup.workspace)?}));

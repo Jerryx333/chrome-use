@@ -182,6 +182,9 @@ details summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .page-chip.inspect-chip button { flex:none; border:0; background:transparent; padding:0 4px; color:var(--muted); line-height:1; }
 .page-chip.inspect-chip button:hover { color:var(--ink); background:transparent; }
 .inspect-chip.landed { animation:chip-land 1.2s ease-out; }
+.chip-actions { display:inline-flex; gap:2px; align-items:center; }
+.chip-actions button { border:0; background:transparent; padding:2px 6px; border-radius:6px; color:var(--muted); font-size:12px; }
+.chip-actions button:hover { color:var(--ink); background:var(--surface); }
 @keyframes chip-land { 0% { transform:scale(.92); background:var(--accent-soft); box-shadow:0 0 0 2px var(--accent); } 60% { transform:none; background:var(--accent-soft); box-shadow:0 0 0 2px var(--accent); } 100% { background:var(--surface); box-shadow:0 0 0 0 transparent; } }
 @media (prefers-reduced-motion:reduce) { .inspect-chip.landed, .inspect-chip-pending, .pick-hint::before { animation:none; } }
 /* Details of a chip, above the composer, on hover or focus. */

@@ -3614,5 +3614,17 @@
   },
   "ext_version_cli_legacy": {
     "message": "Your chrome-use CLI is too old to update itself from here. Reinstall it in a terminal:"
+  },
+  "sidepanel_copy_elements": {
+    "message": "Copy elements"
+  },
+  "sidepanel_copy_input": {
+    "message": "Copy message"
+  },
+  "sidepanel_copy_input_title": {
+    "message": "Your words and every picked element, as text"
+  },
+  "panel_copy_failed": {
+    "message": "Could not copy to the clipboard"
   }
 }

@@ -10,7 +10,7 @@ import { grantRefusal, originOf } from './tab-grant.js';
 import { panelTabKey, panelTabFrom } from './panel-tabs.js';
 import { versionNotices } from './version-notice.js';
 import { renderVersionNotices } from './version-banner.js';
-import { inspectChipsKey, inspectPickKey, chipTitle, composeMessage, removeChip, withinLabel, splitElementContext, sourceShort } from './inspect-chips.js';
+import { inspectChipsKey, inspectPickKey, chipTitle, composeMessage, clipboardText, removeChip, withinLabel, splitElementContext, sourceShort } from './inspect-chips.js';
 
 const busyPhases = new Set(['starting', 'running', 'waitingInput', 'stopping']);
 // Main domain of a host: the last two labels, or three under common
@@ -68,7 +68,7 @@ function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? 
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
 export function createPanel({ document, runtime, storage, tabs, windows, permissions, scripting, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
-  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'inspectChips', 'pickElement', 'pickHint', 'pickCancel', 'chipCard', 'chipLive', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
+  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'inspectChips', 'chipActions', 'copyElements', 'copyInput', 'pickElement', 'pickHint', 'pickCancel', 'chipCard', 'chipLive', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -1763,6 +1763,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     const fresh = shownChipIds ? items.filter(chip => !shownChipIds.has(chip.id)) : [];
     shownChipIds = new Set(items.map(chip => chip.id));
     nodes.inspectChips.hidden = !items.length;
+    nodes.chipActions.hidden = !items.length;
     for (const [id, node] of chipNodes) if (!shownChipIds.has(id)) { node.remove(); chipNodes.delete(id); }
     items.forEach((chip, index) => {
       let item = chipNodes.get(chip.id);
@@ -1885,6 +1886,17 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   }
   nodes.attachImages.addEventListener('click', () => nodes.imageFiles.click());
   nodes.pickElement.addEventListener('click', event => void togglePick(event).catch(error));
+  // Copy is for handing the context to another agent or tool (#680): the
+  // picked elements alone, or the whole message as the user would send it.
+  async function copyContext(target, withWords, labelKey) {
+    const images = withWords ? (imageDrafts.get(selected) || []).length : 0;
+    const text = clipboardText(withWords ? nodes.message.value : '', chipRecord.items, { tabId: panelTab, images });
+    try { await navigator.clipboard.writeText(text); target.textContent = t('panel_copied'); }
+    catch { target.textContent = t('panel_copy_failed'); }
+    schedule(() => { target.textContent = t(labelKey); }, 1500);
+  }
+  nodes.copyElements.addEventListener('click', () => void copyContext(nodes.copyElements, false, 'sidepanel_copy_elements').catch(error));
+  nodes.copyInput.addEventListener('click', () => void copyContext(nodes.copyInput, true, 'sidepanel_copy_input').catch(error));
   nodes.pickCancel.addEventListener('click', cancelPick);
   // Esc cancels picking from the panel too (focus stays here while the
   // pointer works on the page).

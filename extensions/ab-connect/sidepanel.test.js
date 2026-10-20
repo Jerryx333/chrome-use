@@ -1246,6 +1246,21 @@ test('picked elements wait as chips in their tab\'s composer and ride in the nex
   chips.children[1].querySelectorAll('button')[0].fire('click'); await settle(); await settle();
   assert.deepEqual(f.session.data.ab_inspect_tab_21.items.map(c => c.id), ['save']);
   assert.equal(chips.children.length, 1);
+  // Copy hands the same context to another tool, without sending (#680).
+  assert.equal(f.nodes.get('chipActions').hidden, false);
+  let copied = '';
+  globalThis.navigator ??= {};
+  const clipboard = Object.getOwnPropertyDescriptor(globalThis.navigator, 'clipboard');
+  Object.defineProperty(globalThis.navigator, 'clipboard', { configurable: true, value: { async writeText(text) { copied = text; } } });
+  f.nodes.get('copyElements').fire('click'); await settle();
+  assert.ok(copied.startsWith('[Page elements the user picked'), copied);
+  assert.match(copied, /selector: `form > button\.save`/);
+  assert.match(copied, /screenshot: taken in the side panel, not part of this copied text/);
+  assert.equal(f.nodes.get('copyElements').textContent, en.panel_copied.message);
+  f.nodes.get('copyInput').fire('click'); await settle();
+  assert.ok(copied.startsWith('Why is it gray?\n\n[Page elements the user picked'), copied);
+  if (clipboard) Object.defineProperty(globalThis.navigator, 'clipboard', clipboard); else delete globalThis.navigator.clipboard;
+  assert.equal(sent.length, 0, 'copying sends nothing');
   await f.panel.send(); await settle();
   assert.equal(sent.length, 1);
   assert.ok(sent[0].text.startsWith('Why is it gray?\n\n[Page elements the user picked'), sent[0].text);
@@ -1259,6 +1274,7 @@ test('picked elements wait as chips in their tab\'s composer and ride in the nex
   assert.equal(f.session.data.ab_inspect_tab_21, undefined, 'sent chips leave the composer');
   assert.equal(chips.hidden, true);
   assert.equal(f.nodes.get('message').value, '');
+  assert.equal(f.nodes.get('chipActions').hidden, true);
   f.panel.close();
 });
 

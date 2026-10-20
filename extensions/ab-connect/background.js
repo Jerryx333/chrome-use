@@ -571,8 +571,9 @@ async function unmarkOwned(tabId) {
 
 // Closing an agent tab ungroups it first so Chrome keeps no saved tab group;
 // a user's own tab (`tab close --force`) keeps its group (see remove-agent-tab.js).
+// Agent pop-ups join their opener's group, so they are ungrouped too.
 const agentTabRemoval = {
-  isAgentTab: (tabId) => ownedTabs.has(tabId),
+  isAgentTab: (tabId) => ownedTabs.has(tabId) || agentPopups.has(tabId),
   ungroup: (tabId) => chrome.tabs.ungroup(tabId),
   remove: (tabId) => chrome.tabs.remove(tabId),
 };
@@ -1787,6 +1788,7 @@ async function handleForwardCdpCommand(msg) {
     return await executeCall(params, {
       api: chrome,
       isOwned: (tabId) => ownedTabs.has(tabId),
+      ungroup: agentTabRemoval.ungroup,
       tabsInGroup: async (groupId) =>
         (await chrome.tabs.query({ groupId }).catch(() => [])).map((t) => t.id),
       tabsInWindow: async (windowId) =>
@@ -1899,6 +1901,9 @@ async function handleForwardCdpCommand(msg) {
     // A tab the user lent stays theirs: the agent never closes it.
     await tabGrants.load();
     if (tabGrants.get(tabId)) throw new Error(LENT_TAB_CLOSE);
+    // Right after a worker restart both sets are still on disk; an unloaded
+    // set would make an agent tab look like a user's and skip the ungroup.
+    await Promise.all([loadOwnedTabs(), loadAgentPopups()]);
     try {
       await removeAgentTab(tabId, agentTabRemoval);
     } catch {

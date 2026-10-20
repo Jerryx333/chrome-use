@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chipsFromAnnotations, mergeChips, markStale, removeChip, composeMessage, elementContext, locateExpression, withinLabel, inspectChipsKey, splitElementContext, MAX_CHIPS } from './inspect-chips.js';
+import { chipsFromAnnotations, mergeChips, markStale, removeChip, composeMessage, clipboardText, elementContext, locateExpression, withinLabel, inspectChipsKey, splitElementContext, MAX_CHIPS } from './inspect-chips.js';
 
 const element = { label: 'button "Save"', selector: 'form > button.save', path: 'form > button.save', classes: 'save', rect: { x: 1, y: 2, width: 30, height: 10 }, text: 'Save', selectedText: '', nearby: [], styles: [], html: '<button>Save</button>', source: { kind: 'insp', path: 'src/Order.tsx', line: 4, column: 2 } };
 let n = 0;
@@ -81,4 +81,17 @@ test('a sent message splits back into the words and the folded element block', (
   assert.ok(split.block.startsWith('[Page elements'));
   assert.equal(splitElementContext('plain words'), null);
   assert.equal(splitElementContext(composeMessage('', [make()])).words, '');
+});
+
+test('clipboard text keeps every element and says images are left out', () => {
+  const chips = Array.from({ length: 8 }, (_, i) => ({ id: `c${i}`, pageUrl: 'https://a.example/', label: `button "b${i}"`, selector: `#b${i}`, text: 'x'.repeat(3000), html: '<b>'.repeat(400), image: i === 0 ? 'data:image/png;base64,AA==' : null, rect: null }));
+  const text = clipboardText('  Fix these  ', chips, { tabId: 5, images: 2 });
+  assert.ok(text.startsWith('Fix these\n\n[Page elements the user picked with Inspect & Ask in tab "chrome-tab:5"'), text.slice(0, 120));
+  assert.equal((text.match(/^Element \d+: /gm) || []).length, 8, 'nothing is cut to the send limit');
+  assert.ok(new TextEncoder().encode(text).length > 32 * 1024);
+  assert.match(text, /Element 1: [^\n]*\n[\s\S]*?- screenshot: taken in the side panel, not part of this copied text/);
+  assert.equal((text.match(/screenshot:/g) || []).length, 1);
+  assert.ok(text.endsWith('[2 attached images are not included in this copied text.]'));
+  assert.equal(clipboardText('', chips.slice(0, 1)).startsWith('[Page elements'), true);
+  assert.equal(clipboardText('only words', [], { images: 1 }), 'only words\n\n[1 attached image is not included in this copied text.]');
 });
