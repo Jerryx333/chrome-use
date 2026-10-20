@@ -325,6 +325,8 @@ curl -fsS -X POST "$ORIGIN/api/v1/command" \
 Failure envelopes expose `success`, `error`, `code`, and `retryable` through
 CLI JSON, MCP structured content, and HTTP.
 
+A click refused by the hit-test guard reports `element_occluded` with `retryable: false`, even when the covering element says "timeout" or "connection". No click was dispatched. Read a fresh snapshot and resolve the blocker before trying again; repeating the same command does not resolve an overlay.
+
 ## Account identity (whoami / --as) — never act as the wrong account
 
 Needs the [cookie-use](https://github.com/leeguooooo/cookie-use) vault (the
@@ -1118,3 +1120,7 @@ AGENT_BROWSER_ADAPTIVE_REF="0"        # Disable adaptive @ref relocation (on by 
 > fork. Both commands return `{"messages":[]}` / `{"errors":[]}` plus a `hint` until you
 > launch the session with `AGENT_BROWSER_CAPTURE_CONSOLE=1`. This keeps the CDP `Runtime`
 > domain disabled (a known bot signal) for the common automation path.
+
+Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.
+
+`read --filter` uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use `read --outline` to find a heading. `snapshot --filter` separately accepts a regex. `read --help` lists the reading options.

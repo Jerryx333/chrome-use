@@ -7001,6 +7001,26 @@ fn endpoint_matching_created_record(session: &str, dead: &str) -> Option<String>
 // Phase 2 handlers
 // ---------------------------------------------------------------------------
 
+/// Include the filter in the baseline identity: different excerpts are not
+/// page changes. Empty filters have the same meaning as no filter.
+fn snapshot_options_key(
+    options: &SnapshotOptions,
+    dom_forced: bool,
+    filter: Option<&str>,
+) -> String {
+    format!(
+        "i={} c={} d={:?} s={:?} u={} dom={} rv={} f={:?}",
+        options.interactive,
+        options.compact,
+        options.depth,
+        options.selector,
+        options.urls,
+        dom_forced,
+        options.reveal_values,
+        filter.filter(|s| !s.is_empty())
+    )
+}
+
 /// What `snapshot --diff` has to compare against.
 #[derive(Debug, PartialEq)]
 pub(crate) enum SnapshotDiffBasis<'a> {
@@ -7437,21 +7457,18 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     let want_diff = cmd.get("diff").and_then(|v| v.as_bool()).unwrap_or(false);
     // Options fingerprint: diffing an `-i` tree against a full one, or two
     // different `--selector` scopes, compares unrelated documents.
-    let opts_key = format!(
-        "i={} c={} d={:?} s={:?} u={} dom={} rv={}",
-        options.interactive,
-        options.compact,
-        options.depth,
-        options.selector,
-        options.urls,
+    let opts_key = snapshot_options_key(
+        &options,
         dom_forced,
-        options.reveal_values
+        cmd.get("filter").and_then(Value::as_str),
     );
     let mut diff_note: Option<&'static str> = None;
     let full_tree = tree.clone();
+    let mut diff_is_excerpt = false;
     let tree = if want_diff {
         match snapshot_diff_basis(state.last_snapshot.as_ref(), &url, &opts_key) {
             SnapshotDiffBasis::Compare(prev_tree) => {
+                diff_is_excerpt = true;
                 let d = diff::diff_snapshots(
                     &format!("{}\n", prev_tree.trim_end()),
                     &format!("{}\n", tree.trim_end()),
@@ -7505,7 +7522,10 @@ async fn handle_snapshot(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
     // Sparse-page detection uses the complete live map, not an intentionally
     // limited excerpt. Filtering output metadata must not trigger screenshots.
     let ref_count = refs.len();
-    let limited = options.selector.is_some()
+    // A valid diff, including an empty one, exposes only refs in its excerpt.
+    // The complete live state.ref_map stays intact for actions using prior refs.
+    let limited = diff_is_excerpt
+        || options.selector.is_some()
         || options.depth.is_some()
         || budget.is_some()
         || from > 0
@@ -27512,6 +27532,30 @@ mod tests {
 
     /// A diff against a baseline from a different page would report the whole
     /// document as replaced — worse than just sending the tree.
+    #[test]
+    fn snapshot_diff_filter_changes_require_a_full_baseline() {
+        let options = SnapshotOptions::default();
+        let first = snapshot_options_key(&options, false, Some("Save"));
+        let last = (
+            "https://fixture.invalid".to_string(),
+            first.clone(),
+            "old".to_string(),
+        );
+        let changed = snapshot_options_key(&options, false, Some("Done"));
+        assert!(matches!(
+            snapshot_diff_basis(Some(&last), &last.0, &changed),
+            SnapshotDiffBasis::FullTree(_)
+        ));
+        assert_eq!(
+            snapshot_diff_basis(Some(&last), &last.0, &first),
+            SnapshotDiffBasis::Compare("old")
+        );
+        assert_eq!(
+            snapshot_options_key(&options, false, None),
+            snapshot_options_key(&options, false, Some(""))
+        );
+    }
+
     #[test]
     fn snapshot_diff_refuses_a_baseline_from_another_page() {
         let last = (

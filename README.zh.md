@@ -50,6 +50,7 @@
 </table>
 
 
+
 ## 付费接入与项目赞助
 
 需要帮你把 agent 接到已登录的 Chrome，或跑通浏览器流程？ 发邮件说明设备环境、要跑通的流程和预期结果，以及目前卡在哪里。我们先评估可行性，再确认服务范围、验收方式和报价。
@@ -282,7 +283,7 @@ chrome-use click @e3 --observe         # 操作，并观察页面的反应
 chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的部分
 ```
 
-限定范围、深度、正则筛选或字节预算的快照，JSON `refs` 只返回正文摘录中出现的引用。会话仍保留完整的实时 ref 映射，缩小输出不会让先前已捕获的 ref 失效；稀疏页面检测仍使用完整映射。
+限定范围、深度、正则筛选或字节预算的快照，JSON `refs` 只返回正文摘录中出现的引用。会话仍保留完整的实时 ref 映射，缩小输出不会让先前已捕获的 ref 失效；稀疏页面检测仍使用完整映射。 有效增量快照的 JSON `refs` 只包含增量片段中的节点；无变化时为空。会话仍保留完整实时映射和先前引用；回退完整树时保持普通完整快照的行为。
 
 交互快照只给角色和名称重复、且父级命名行无法区分的控件添加 `context`。上下文去掉控件自身名称和纯标点，最多约 100 个字符（无名称控件约 60 个），且不同控件的上下文必须不同。名称唯一的控件不带上下文；缺少商品价格等信息时，读取对应区域或完整快照。
 
@@ -308,6 +309,10 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 脚本在 `advisories`（CLI `script --json` 顶层；daemon envelope 中为 `data.advisories`） 中保留提示，最多 20 条，嵌套脚本和后续失败的运行也会保留。JSON op-list 的对应 `steps` 条目另带 `noProgress`；文字输出只打印汇总提示一次。JS 脚本失败时保留 `ok:false`、`return:null`、`error`、`logs` 和 `advisories`。daemon envelope 中嵌套脚本的 `data.ok:false` 会使父脚本失败，即使传输层 `success` 为 true；调度成功不能证明程序成功。
 
 普通 CLI `--json` 返回 `success`/`data`/`timing` envelope；加 `--no-timing`（或 `AGENT_BROWSER_TIMING=0`）时回复不带 `timing`，`timing.jsonl` 照常记录。`batch --json` 打印 `{command,success,result,error}` 条目的数组；`script --json` 打印程序结果本身（`ok`、`return`、`logs`、`error`、`advisories` 等）。batch 和 script 的 CLI 输出没有顶层 `timing`。
+
+MCP `chrome_use_snapshot` 可用 `diff: true` 增量重读同一页面；快照选项（包括 filter）必须与基线一致，对应 CLI `snapshot --diff`。无有效基线时返回完整树及 `diffNote`；需要当前完整树时省略 diff 或设为 false。增量是片段，须保留基线，删除行不能当作当前可操作控件。
+
+点击被命中检查拒绝时返回 `element_occluded`、`retryable: false`；遮挡元素文字中的 timeout 或 connection 不再改变分类。此时没有派发点击。先读取新快照、处理遮挡，再决定是否点击；重复原命令不会消除遮挡。
 
 JSON 命令计时包含 `cdpMs`（已完成前台 CDP 请求耗时之和）、`cdpBusyMs`（请求时间区间在命令总耗时内的并集）和 `nonCdpMs`（总耗时减去并集）。请求并发时 `cdpMs` 可以超过总耗时；这些都是经过时间，不是 CPU 占用。后台任务不继承计时器，`nonCdpMs` 也不等于纯 daemon 处理时间。tool/HTTP 调用数不能当成模型回合，模型回合需要调用方 trace。任务测量见[核心循环](https://chrome-use.leeguoo.com/core-loop.html#task-efficiency)。
 
@@ -539,3 +544,5 @@ Apache-2.0
 ---
 
 > 由 **leeguooooo** 打造。AI agent、逆向工程与 Cloudflare Workers 的实战笔记见 **[blog.leeguoo.com](https://blog.leeguoo.com)** · 关注 **[X @leeguooooo](https://x.com/leeguooooo)**
+
+`read --filter` 按字面文本匹配，忽略 ASCII 大小写，不支持正则；优先返回匹配标题及其子章节，否则按正文内容筛选章节。可先用 `read --outline` 找标题。`snapshot --filter` 则支持正则。读取选项见 `read --help`。

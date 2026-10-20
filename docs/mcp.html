@@ -81,6 +81,7 @@
 
       <hr class="du-divider" />
 
+      <p><code>read --filter</code> 按字面文本匹配，忽略 ASCII 大小写，不支持正则；优先返回匹配标题及其子章节，否则按正文内容筛选章节。可先用 <code>read --outline</code> 找标题。<code>snapshot --filter</code> 则支持正则。读取选项见 <code>read --help</code>。</p>
       <h2>12 个核心工具</h2>
       <p>
         MCP 服务器暴露一套精简的<strong>核心 profile</strong>：12 个有类型的工具，覆盖打开页面、
@@ -95,7 +96,7 @@
         <tbody>
           <tr><td><code>chrome_use_open</code></td><td>打开一个 URL / 新标签</td></tr>
           <tr><td><code>chrome_use_read</code></td><td>把当前标签或某个 URL 读成 agent 可读文本</td></tr>
-          <tr><td><code>chrome_use_snapshot</code></td><td>拉取结构化、带 <code>@ref</code> 的可访问性快照</td></tr>
+          <tr><td><code>chrome_use_snapshot</code></td><td>拉取结构化、带 <code>@ref</code> 的可访问性快照<br>MCP <code>chrome_use_snapshot</code> 可用 <code>diff: true</code> 增量重读同一页面；快照选项（包括 filter）必须与基线一致，对应 CLI <code>snapshot --diff</code>。无有效基线时返回完整树及 <code>diffNote</code>；需要当前完整树时省略 diff 或设为 false。增量是片段，须保留基线，删除行不能当作当前可操作控件。 有效增量结果的 JSON <code>refs</code> 只包含返回片段中的节点；无变化时为空，但后台实时映射仍保留。回退完整树时保持普通完整快照的行为。</td></tr>
           <tr><td><code>chrome_use_click</code></td><td>按选择器 / <code>@ref</code> 点击</td></tr>
           <tr><td><code>chrome_use_fill</code></td><td>清空后填入表单字段</td></tr>
           <tr><td><code>chrome_use_type</code></td><td>在现有内容后追加输入</td></tr>
