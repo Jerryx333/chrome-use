@@ -2652,6 +2652,44 @@ fn print_warning(resp: &Response) {
 /// Print command-specific help. Returns true if help was printed, false if command unknown.
 pub fn print_command_help(command: &str) -> bool {
     let help = match command {
+        "read" => {
+            r##"
+chrome-use read - Read a URL or the active page as text
+
+Usage: chrome-use read [url] [options]
+
+With a URL, prefers Markdown and falls back to extracted page text.
+Without a URL, reads the rendered active tab. Check source, finalUrl,
+contentType and truncated in JSON before treating the result as complete.
+
+Options:
+  --filter <text>     Literal, ASCII-case-insensitive filter, not a regex.
+                      Page reads prefer matching headings and their descendants,
+                      then matching Markdown sections. In outline mode it filters
+                      headings; in llms index mode it filters links.
+  --outline           Return the page's heading outline
+  --llms index|full   Read the nearest llms.txt or llms-full.txt
+  --raw               Return the original body instead of processed text
+  --require-md        Require Content-Type: text/markdown; fail otherwise
+  --links             Append absolute links (default maximum: 100)
+  --max-links <n>     Set the link maximum (1-1000); implies --links
+  --timeout <ms>      Set the HTTP request timeout in milliseconds
+  --headers <json>    Add HTTP headers; an explicit Accept disables negotiation
+  --json              Return content and source metadata as JSON
+  --session <name>    Use your task's isolated session
+
+This filter differs from snapshot --filter, which accepts a regex.
+A no-match message is not proof that the page lacks a fact: inspect the
+outline, use a relevant literal heading, or read the surrounding section.
+
+Examples:
+  chrome-use read https://example.com/docs
+  chrome-use read https://example.com/docs --filter "Other configuration options"
+  chrome-use read https://example.com/docs --outline
+  chrome-use read https://example.com/docs --llms index
+  chrome-use read --links
+"##
+        }
         // === Navigation ===
         "open" | "goto" | "navigate" => {
             r##"
@@ -3998,11 +4036,13 @@ Options:
   --diff               Only what changed since this session's last snapshot of
                        the same page (same options). Falls back to the full tree
                        — and says why — when there is no valid baseline.
+  MCP chrome_use_snapshot accepts diff: true for the same incremental read;
+  changing the filter also requires a new full baseline.
   --max-bytes <n>      Cap the tree at n bytes, cut between nodes (never
                        mid-node). Reports what was omitted and a --from cursor.
                        For long feeds/comment threads whose bulk is prose.
   --from <n>           Resume a budgeted snapshot at node n.
-  Scoped/depth-limited/filtered/budgeted JSON refs contain only excerpt refs;
+  Scoped/depth-limited/filtered/budgeted/incremental JSON refs contain only excerpt refs;
   the session's complete live ref map is preserved.
   -f, --filter <regex> Keep only lines matching <regex> (case-insensitive) + their
                        ancestor context; refs preserved. For desktop-shell apps
@@ -6300,6 +6340,8 @@ Navigation:
   Re-read the page before retrying a failed frame action.
   action_outcome_unknown means an interrupted action may have executed; it was
   not replayed (JSON retryable: false). Observe the page before acting again.
+  element_occluded (JSON retryable: false) means a hit-test guard refused the
+  click. No click was dispatched. Snapshot and resolve the blocker before retrying.
   kept_ref_unverified (JSON retryable: false, whatever cause it quotes) means a
   ref kept after a failed post-action capture could not be confirmed live:
   nothing was acted on and nothing is retried. Run snapshot -i.

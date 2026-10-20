@@ -348,7 +348,7 @@ fn core_tools() -> Vec<Value> {
                 ("requireMd", json!({ "type": "boolean", "description": "Fail instead of falling back to raw text if markdown conversion is unavailable." })),
                 ("llms", json!({ "type": "string", "enum": ["index", "full"], "description": "Read from the site's llms.txt instead of the page itself." })),
                 ("outline", json!({ "type": "boolean", "description": "Return only the heading outline instead of full content." })),
-                ("filter", json!({ "type": "string", "description": "Keep only lines matching this text/regex filter." })),
+                ("filter", json!({ "type": "string", "description": "Literal, ASCII-case-insensitive filter for page sections, llms links/sections or outline headings. Not a regex; page reads prefer matching headings and their descendants." })),
                 ("links", json!({ "type": "boolean", "description": "Append the page's links as absolute URLs (a `## Links` section; at most 100 unless maxLinks)." })),
                 ("maxLinks", json!({ "type": "integer", "minimum": 1, "maximum": 1000, "description": "Cap for links (1-1000); implies links." })),
                 ("timeoutMs", json!({ "type": "integer", "description": "Read-specific timeout in ms (distinct from the top-level timeoutMs, which bounds the whole child process)." })),
@@ -362,6 +362,7 @@ fn core_tools() -> Vec<Value> {
             "inputSchema": build_schema(obj(&[
                 ("interactive", json!({ "type": "boolean", "description": "Only interactive elements (-i)." })),
                 ("compact", json!({ "type": "boolean", "description": "Remove empty structural elements (-c)." })),
+                ("diff", json!({ "type": "boolean", "description": "Only changes since this session last read the same page with the same options (--diff). Without a valid baseline returns the full tree and a diffNote. Omit or false for a full snapshot. Valid deltas include only excerpt refs; unchanged deltas have empty refs while the live session map is kept." })),
                 ("cursor", json!({ "type": "boolean", "description": "Include the current cursor position marker (-C)." })),
                 ("urls", json!({ "type": "boolean", "description": "Include link/image URLs (-u)." })),
                 ("depth", json!({ "type": "integer", "description": "Limit tree depth (-d)." })),
@@ -935,7 +936,14 @@ fn call_read(arguments: &Value) -> Result<Value, ProtocolError> {
 }
 
 fn call_snapshot(arguments: &Value) -> Result<Value, ProtocolError> {
+    run_tool(arguments, snapshot_args(arguments)?)
+}
+
+fn snapshot_args(arguments: &Value) -> Result<Vec<String>, ProtocolError> {
     let mut args = vec!["snapshot".to_string()];
+    if optional_bool(arguments, "diff")?.unwrap_or(false) {
+        args.push("--diff".to_string());
+    }
     if optional_bool(arguments, "interactive")?.unwrap_or(false) {
         args.push("-i".to_string());
     }
@@ -967,7 +975,7 @@ fn call_snapshot(arguments: &Value) -> Result<Value, ProtocolError> {
             args.push("--force".to_string());
         }
     }
-    run_tool(arguments, args)
+    Ok(args)
 }
 
 fn call_click(arguments: &Value) -> Result<Value, ProtocolError> {
@@ -2343,6 +2351,30 @@ mod tests {
                 assert!(props.get("force").is_some(), "{}", tool["name"]);
             }
         }
+    }
+
+    #[test]
+    fn snapshot_diff_reaches_the_real_cli_parser_and_is_optional() {
+        let _guard = crate::test_utils::EnvGuard::new(&[]);
+        let args = snapshot_args(&json!({"diff":true,"compact":true,"filter":"Save|Done"}))
+            .ok()
+            .expect("valid snapshot");
+        let flags = crate::flags::parse_flags(&args);
+        let command = crate::commands::parse_command(&args, &flags).unwrap();
+        assert_eq!(command["action"], "snapshot");
+        assert_eq!(command["diff"], true);
+        assert_eq!(command["filter"], "Save|Done");
+        for arguments in [json!({}), json!({"diff":false})] {
+            let args = snapshot_args(&arguments).ok().expect("valid snapshot");
+            assert!(!args.iter().any(|arg| arg == "--diff"));
+        }
+        assert!(snapshot_args(&json!({"diff":"true"})).is_err());
+        let tools = tools_for(Profile::Core);
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == TOOL_SNAPSHOT)
+            .unwrap();
+        assert_eq!(tool["inputSchema"]["properties"]["diff"]["type"], "boolean");
     }
 
     #[test]
