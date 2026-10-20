@@ -57,7 +57,11 @@ try {
   step('tab list while blocked', summary(busyList));
   const busyText = `${busyEval.json?.error || ''}`;
   check(busyEval.json?.success === false, 'eval during the block did not fail');
-  check(/busy|blocking|main thread/i.test(busyText) && !/restart the session/i.test(busyText.split('\n').slice(1).join('\n')), `busy eval did not say the page is busy: ${busyText}`);
+  check(/Diagnosis: the tab is alive/.test(busyText) && /main thread/.test(busyText), `busy eval did not say the page is busy: ${busyText}`);
+  check(!/restart the session and retry/.test(busyText), `busy eval still says to restart the session: ${busyText}`);
+  const busyShotText = `${busyShot.json?.error || ''}`;
+  check(!/drifted/.test(busyShotText), `a busy page was reported as a drifted target: ${busyShotText}`);
+  check(busyShot.json?.success === true || /Diagnosis: the tab is alive/.test(busyShotText), `busy screenshot neither worked nor said the page is busy: ${busyShotText}`);
 
   // 2. After the block, the same read works again.
   const wait = blockedAt + 27000 - Date.now();
@@ -85,6 +89,8 @@ try {
   step('eval after the tab closed', summary(goneEval));
   const goneShot = cu(['screenshot', path.join(out, 'gone.png')]);
   step('screenshot after the tab closed', summary(goneShot));
+  check(goneEval.json?.success === false && goneShot.json?.success === false, 'commands on a closed tab did not fail');
+  check(!/drifted/.test(`${goneShot.json?.error || ''}`), `a closed tab was reported as a drifted target: ${goneShot.json?.error}`);
   cu(['done']);
   step('END', {});
   evidence.pass = true;
