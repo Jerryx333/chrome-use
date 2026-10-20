@@ -3814,6 +3814,61 @@ async fn e2e_viewport_emulation() {
 // Hover, scroll, press
 // ---------------------------------------------------------------------------
 
+/// `hover <x> <y>` (#662): a trusted move to a viewport point reaches the
+/// element there, reports it, and leaves the pointer at that point.
+#[tokio::test]
+#[ignore]
+async fn e2e_hover_at_a_viewport_point() {
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let html = concat!(
+        "data:text/html,<html><body style='margin:0'>",
+        "<span id='badge' style='position:absolute;left:700px;top:300px;width:120px;height:80px' ",
+        "onmouseover=\"document.title='tip'\">badge</span>",
+        "</body></html>"
+    );
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": html }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "hover", "x": 767, "y": 340 }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["hovered"], json!({ "x": 767.0, "y": 340.0 }));
+    assert_eq!(data["verified"], true, "{data}");
+    assert!(
+        data["receivedBy"].as_str().unwrap_or("").contains("badge"),
+        "{data}"
+    );
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "document.title" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["result"], "tip");
+    // The same point again: the pointer already rests there, and the move
+    // still reaches the page.
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "hover", "x": 767, "y": 340 }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["verified"], true, "{resp}");
+    let resp = execute_command(&json!({ "id": "6", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
 #[tokio::test]
 #[ignore]
 async fn e2e_hover_scroll_press() {

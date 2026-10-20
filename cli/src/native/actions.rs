@@ -10177,6 +10177,22 @@ fn parse_key_chord(input: &str) -> (String, Option<i32>) {
 }
 
 async fn handle_hover(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    // `hover <x> <y>` (#662): a viewport point, as `click <x> <y>` takes one.
+    if let (Some(x), Some(y)) = (
+        cmd.get("x").and_then(|v| v.as_f64()),
+        cmd.get("y").and_then(|v| v.as_f64()),
+    ) {
+        let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+        let session_id = mgr.active_session_id()?.to_string();
+        let resting = Some((state.mouse_state.x, state.mouse_state.y));
+        let outcome = interaction::hover_point(&mgr.client, &session_id, x, y, resting).await?;
+        // A later coordinate-less `mouse down`/`up` presses where the pointer is.
+        state.mouse_state.x = x;
+        state.mouse_state.y = y;
+        let mut out = hover_json("", &outcome);
+        out["hovered"] = json!({ "x": x, "y": y });
+        return Ok(out);
+    }
     let selector = cmd
         .get("selector")
         .and_then(|v| v.as_str())

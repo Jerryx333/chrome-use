@@ -473,12 +473,14 @@ fn extended_tools() -> Vec<Value> {
     vec![
         json!({
             "name": TOOL_HOVER,
-            "description": "Hover the pointer over an element.",
+            "description": "Hover the pointer over an element (by CSS selector or @ref) or a raw viewport coordinate. Provide either `selector` or both `x` and `y`.",
             "inputSchema": build_schema(obj(&[
                 ("selector", json!({ "type": "string", "description": "CSS selector or @ref to hover." })),
+                ("x", json!({ "type": "number", "description": "Viewport x coordinate (use with y instead of selector)." })),
+                ("y", json!({ "type": "number", "description": "Viewport y coordinate (use with x instead of selector)." })),
                 ("tabId", json!({ "type": "string", "description": "Target tab id (e.g. t2), label, or targetId (--tab)." })),
                 ("force", json!({ "type": "boolean", "description": "With tabId: act on a tab this session does not own (the user's own, or another session's), in place and in the background (--tab <handle> --force). Only when the user asked you to act on that tab; the result has forced: true and the tab's title and url." })),
-            ]), &["selector"]),
+            ]), &[]),
         }),
         json!({
             "name": TOOL_SELECT,
@@ -1153,10 +1155,24 @@ fn call_wait(arguments: &Value) -> Result<Value, ProtocolError> {
 
 // === Extended profile (`--tools all`) ===
 
-/// `hover <selector>`.
+/// `hover <selector>` or `hover <x> <y>`.
 fn call_hover(arguments: &Value) -> Result<Value, ProtocolError> {
-    let selector = required_string(arguments, "selector")?;
-    let mut args = vec!["hover".to_string(), selector];
+    let selector = optional_string(arguments, "selector")?;
+    let x = optional_number_string(arguments, "x")?;
+    let y = optional_number_string(arguments, "y")?;
+    let mut args = vec!["hover".to_string()];
+    match (selector, x, y) {
+        (Some(sel), _, _) => args.push(sel),
+        (None, Some(x), Some(y)) => {
+            args.push(x);
+            args.push(y);
+        }
+        _ => {
+            return Err(ProtocolError::invalid_params(
+                "chrome_use_hover requires either `selector` or both `x` and `y`",
+            ))
+        }
+    }
     if let Some(tab_id) = optional_string(arguments, "tabId")? {
         args.push("--tab".to_string());
         args.push(tab_id);
@@ -2245,6 +2261,24 @@ fn write_json_line(stdout: &mut io::Stdout, value: &Value) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn hover_takes_a_selector_or_a_point() {
+        let tool = extended_tools()
+            .into_iter()
+            .find(|t| t["name"] == TOOL_HOVER)
+            .unwrap();
+        let props = &tool["inputSchema"]["properties"];
+        assert_eq!(props["x"]["type"], "number");
+        assert_eq!(props["y"]["type"], "number");
+        assert!(tool["inputSchema"]["required"]
+            .as_array()
+            .is_none_or(|r| r.is_empty()));
+        for missing in [json!({}), json!({"x": 1}), json!({"y": 2})] {
+            let error = call_hover(&missing).unwrap_err();
+            assert!(error.message.contains("both `x` and `y`"), "{missing}");
+        }
+    }
 
     /// #503 review: `links` is type-checked even when `maxLinks` is present,
     /// and `maxLinks` is range-checked, before any CLI runs.
