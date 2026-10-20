@@ -1,0 +1,35 @@
+/* Shared tokens for every extension page: side panel, popup, settings and the
+   Inspect & Ask frame. Warm paper ground, one clay accent; text colours pass
+   4.5:1 on --bg, --surface and --bubble in both schemes. System fonts only:
+   pages run offline under the extension CSP. */
+:root {
+  color-scheme: light dark;
+  --page: #f4f1ea; --bg: #fcfbf8; --raised: #ffffff; --surface: #efebe2; --bubble: #eee8dc;
+  --ink: #24211c; --muted: #655e53; --line: #e2dcd0; --line-strong: #cfc7b8;
+  --accent: #a34a24; --accent-ink: #ffffff; --accent-soft: #f5e7dd;
+  --ok: #3b7346; --ok-soft: rgb(59 115 70 / .15);
+  --warning: #93560c; --warning-bg: #f8eedf;
+  --error: #ae3427; --error-bg: #f8e5e1;
+  --agent: #6b4fb8; --agent-soft: rgb(107 79 184 / .09);
+  --full: #b4501a;
+  --shadow-color: 60 45 25;
+  --lift: 0 1px 2px rgb(var(--shadow-color) / .05), 0 8px 24px rgb(var(--shadow-color) / .08);
+  --pop: 0 2px 4px rgb(var(--shadow-color) / .08), 0 16px 40px rgb(var(--shadow-color) / .18);
+  /* Latin display in a system serif; CJK falls through to the sans. */
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, Charter, Georgia, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #191815; --bg: #211f1c; --raised: #262420; --surface: #2b2925; --bubble: #312e29;
+    --ink: #ede8de; --muted: #a59e92; --line: #3a3631; --line-strong: #4a453e;
+    --accent: #e39167; --accent-ink: #1c1a17; --accent-soft: #3b2a21;
+    --ok: #8dc49a; --ok-soft: rgb(141 196 154 / .16);
+    --warning: #e3b260; --warning-bg: #352c1e;
+    --error: #f0a497; --error-bg: #3a2422;
+    --agent: #b7a3f0; --agent-soft: rgb(183 163 240 / .1);
+    --full: #f0a070;
+    --shadow-color: 0 0 0;
+  }
+}

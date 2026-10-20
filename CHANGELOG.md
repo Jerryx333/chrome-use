@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.244
+## 1.5.245
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.78.
+
+### Changes
+
+- **A new look for the extension (ab-connect 0.5.78).** The side panel, popup, settings page and Inspect & Ask frame share one warm theme: paper-coloured ground, a single clay accent, system serif for titles and agent replies, monospace for status and metadata, softer cards and a rounded composer. Light and dark both pass 4.5:1 text contrast. All four pages read their colours from one `theme.css`, so the Inspect & Ask frame and the "agent is using this tab" bar no longer carry their own blues and purples.
+- **New icon:** a cream pointer on clay, drawn separately for the 16 px toolbar size so it stays readable.
+- **Agents & models is grouped.** Agents you can chat with come first, installed ones below, and agents that are not installed collapse into chips under the list (a dashed chip means a configuration was found but the program is missing). A whole row opens its configuration; the per-row Configure buttons are gone.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.244
+
 Works with extension ab-connect 0.5.77.
 
 ### Changes
@@ -17,7 +32,6 @@ Works with extension ab-connect 0.5.77.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.243
 

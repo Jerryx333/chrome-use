@@ -287,8 +287,26 @@ test('agent list reports CLI version, account and model count without claiming m
   });
   await settle();
   const lines = f.nodes.get('agentList').children.map(row => row.children[0].children[1].textContent);
-  assert.deepEqual(lines, ['v0.50.0 · Signed in (chatgpt) · 2 models', 'Configuration found; program not installed']);
+  assert.deepEqual(lines, ['v0.50.0 · Signed in (chatgpt) · 2 models']);
+  // Agents that are not installed move to the chips below the list.
+  const missing = f.nodes.get('agentMissingList').children.map(row => row.children[0].children[1].textContent);
+  assert.deepEqual(missing, ['Configuration found; program not installed']);
+  assert.equal(f.nodes.get('agentMissing').hidden, false);
+  assert.equal(f.nodes.get('agentMissingCount').textContent, '1');
   assert.equal(f.calls.filter(call => call.operation === 'agentInspect').length, 1);
+  f.panel.close();
+});
+
+test('agents you can chat with move ahead of installed agents in the list', async () => {
+  const f = await fixture({
+    discover: () => ({ success: true, result: { agents: [{ id: 'gemini', name: 'Gemini CLI', executable: '/x/gemini' }, { id: 'codex', name: 'Codex', executable: '/x/codex' }] } }),
+    agentInspect: () => ({ success: true, result: { inspection: { versionReported: '0.50.0', account: { status: 'reportedSignedIn', kind: 'chatgpt' }, models: [], complete: true } } }),
+  });
+  f.nodes.get('agentsTab').fire('click');
+  for (let i = 0; i < 5; i++) await settle();
+  const rows = f.nodes.get('agentList').children;
+  assert.deepEqual(rows.map(row => row.children[0].children[0].textContent), ['Codex', 'Gemini CLI']);
+  assert.match(rows[0].className, /\bready\b/);
   f.panel.close();
 });
 
