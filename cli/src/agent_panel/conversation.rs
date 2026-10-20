@@ -149,7 +149,11 @@ impl Message {
         }
         let mut list = String::new();
         for (i, image) in self.attachments.iter().enumerate() {
-            list.push_str(&format!("\n{}. {}", i + 1, image.path(workspace)?.display()));
+            list.push_str(&format!(
+                "\n{}. {}",
+                i + 1,
+                image.path(workspace)?.display()
+            ));
         }
         Ok(format!(
             "{text}\n\n[Attached images, in order (\"attached image N\" above is item N), also saved as local files on this computer:{list}]"
@@ -1233,13 +1237,25 @@ mod tests {
         let mut m = message("Compare the layout");
         assert_eq!(m.agent_text(workspace).unwrap(), m.prompt_text());
         m.attachments = vec![
-            Attachment { id: "a".repeat(64), media_type: "image/png".into(), bytes: 1 },
-            Attachment { id: "b".repeat(64), media_type: "image/jpeg".into(), bytes: 1 },
+            Attachment {
+                id: "a".repeat(64),
+                media_type: "image/png".into(),
+                bytes: 1,
+            },
+            Attachment {
+                id: "b".repeat(64),
+                media_type: "image/jpeg".into(),
+                bytes: 1,
+            },
         ];
         let text = m.agent_text(workspace).unwrap();
         assert!(text.starts_with(&m.prompt_text()));
-        let first = format!("\n1. /tmp/cu-ws/attachments/{}.png", "a".repeat(64));
-        let second = format!("\n2. /tmp/cu-ws/attachments/{}.jpg", "b".repeat(64));
+        let file = |name: String| {
+            let path = workspace.join("attachments").join(name);
+            path.display().to_string()
+        };
+        let first = format!("\n1. {}", file(format!("{}.png", "a".repeat(64))));
+        let second = format!("\n2. {}", file(format!("{}.jpg", "b".repeat(64))));
         assert!(text.contains(&first), "{text}");
         assert!(text.contains(&second), "{text}");
         m.attachments[0].id = "../x".into();
