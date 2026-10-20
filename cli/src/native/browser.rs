@@ -3925,9 +3925,10 @@ impl BrowserManager {
     }
 
     /// Sessions of one project share its tab group, so the relay lists each
-    /// of them the others' tabs too, and the tabs they left for the user. A tab another running session opened is
-    /// its lease: leave it to that session. A tab of a session that has ended
-    /// is free to take over.
+    /// of them the others' tabs too, and the tabs they left for the user. A tab another session opened is
+    /// its lease while that session is at work (see
+    /// [`crate::group_lifecycle::lease_held`]): leave it to that session. A tab
+    /// of a session that has ended is free to take over.
     fn without_leased_elsewhere(&self, targets: Vec<TargetInfo>) -> Vec<TargetInfo> {
         if !self.via_relay() {
             return targets;
@@ -3944,9 +3945,12 @@ impl BrowserManager {
             .into_iter()
             .filter(|t| !kept.contains(&t.target_id) || self.created_targets.contains(&t.target_id))
             .filter(|t| match others.get(&t.target_id) {
+                // A tab this session created stays its own, even if a record
+                // another session left behind still names it.
+                _ if self.created_targets.contains(&t.target_id) => true,
                 Some(session) => !*live
                     .entry(session.as_str())
-                    .or_insert_with(|| session_is_live(session)),
+                    .or_insert_with(|| crate::group_lifecycle::lease_held(session)),
                 None => true,
             })
             .collect()
@@ -8025,7 +8029,9 @@ impl BrowserManager {
             .into_iter()
             .filter(should_track_target)
             .collect();
-        let live = self.live_relay_targets(live).await;
+        // A tab another session of the project opened meanwhile is not the
+        // one this action opened (#687).
+        let live = self.without_leased_elsewhere(self.live_relay_targets(live).await);
         let mut opened: Option<PageInfo> = None;
         for target in &live {
             if before.contains(&target.target_id) {
@@ -8103,7 +8109,8 @@ impl BrowserManager {
             .into_iter()
             .filter(should_track_target)
             .collect();
-        let live = self.live_relay_targets(live).await;
+        // Not another session's tabs: the relay lists the whole group (#687).
+        let live = self.without_leased_elsewhere(self.live_relay_targets(live).await);
         let live_ids: HashSet<String> = live.iter().map(|t| t.target_id.clone()).collect();
         let on_relay = self.agent_group().is_some();
         if on_relay && self.relay_scoped {

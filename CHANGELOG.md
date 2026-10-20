@@ -1,8 +1,24 @@
 # Changelog
 
-## 1.5.249
+## 1.5.250
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.80.
+
+### Bug Fixes
+
+- **A session no longer takes over the tabs of another session that is still at work.** Sessions of one project share its tab group, and a new session took over the tabs of any session whose daemon was not answering, also while that session's agent was still waiting on a command (seen after a relay recovery stopped the daemon mid-command). A session now counts as ended only when no daemon runs for it, no `chrome-use` process is working with it, and it ran no command for two minutes. The same rule keeps a daemon that starts or resyncs from adopting such a session's tabs, and a tab another session opens meanwhile is no longer taken as the one a click opened. (#687)
+- **A command that was sent but never confirmed fails as `action_outcome_unknown`.** When the daemon stays busy past the deadline, its reply is lost, or it disappears mid-command, the command exits non-zero with code `action_outcome_unknown`, is never retried, and the message says it may have run. (#687)
+- **New `chrome-use session last`** reports a session's recent commands as `completed`, `failed`, `running` or `unknown` (never confirmed), newest first, without running anything or starting a daemon, so an agent can check an unconfirmed side-effecting command instead of repeating it. Only the action (and site adapter name) and how it ended are recorded, never arguments or output. (#687)
+- **Relay recovery no longer takes the relay down for everyone.** When the relay was down for one profile, chrome-use stopped every native host on the machine, including those serving other profiles or a relay another session had just brought back, so the extension had to reconnect again ("background worker hasn't reconnected"). It now stops only hosts of this install that serve no published relay endpoint. (#687)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.249
+
 Works with extension ab-connect 0.5.80.
 
 ### Bug Fixes
@@ -14,7 +30,6 @@ Works with extension ab-connect 0.5.80.
 
 - @Jerryx333
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.248
 

@@ -23,11 +23,67 @@ pub(crate) struct PanelStamp {
 /// never stamped.
 pub(crate) async fn execute_command_stamped(cmd: &Value, state: &mut DaemonState) -> Value {
     let stamp = begin(cmd, state);
+    let logged = log_start(cmd);
     let mut response = execute_command_recovering(cmd, state).await;
+    if let Some(entry) = logged {
+        log_finish(entry, &response);
+    }
     if let Some(stamp) = stamp {
         finish(stamp, cmd, &mut response, state);
     }
     response
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Record that a top-level command started, for `session last` (#687): its
+/// id, action and, for a site adapter, which one. Never its arguments.
+/// Liveness probes are not commands anyone asked for.
+fn log_start(cmd: &Value) -> Option<(String, Value)> {
+    let session = super::browser::DAEMON_SESSION.get()?;
+    let id = cmd.get("id").and_then(Value::as_str)?;
+    if id == "probe" {
+        return None;
+    }
+    let mut entry = json!({
+        "id": id,
+        "action": cmd.get("action").and_then(Value::as_str).unwrap_or(""),
+        "state": "running",
+        "startedAt": now_ms(),
+        "daemonPid": std::process::id(),
+    });
+    if let Some(spec) = cmd.get("spec").and_then(Value::as_str) {
+        entry["site"] = json!(spec);
+    }
+    crate::connection::write_last_command(session, entry.clone());
+    Some((session.clone(), entry))
+}
+
+/// Record how the command ended: completed or failed, with the error's code
+/// (never its text, which can quote the page).
+fn log_finish((session, mut entry): (String, Value), response: &Value) {
+    let ok = response.get("success").and_then(Value::as_bool) == Some(true);
+    entry["state"] = json!(if ok { "completed" } else { "failed" });
+    entry["finishedAt"] = json!(now_ms());
+    if !ok {
+        let code = response
+            .get("code")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                response
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .map(|e| crate::error_envelope::classify_error(e).code.to_string())
+            });
+        entry["errorCode"] = json!(code);
+    }
+    crate::connection::write_last_command(&session, entry);
 }
 
 pub(crate) fn begin(cmd: &Value, state: &DaemonState) -> Option<PanelStamp> {

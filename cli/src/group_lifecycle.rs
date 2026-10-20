@@ -290,14 +290,27 @@ pub struct GroupMember {
     pub group: Option<String>,
     pub live: bool,
     pub has_record: bool,
+    /// Not over even with no daemon: a CLI process is working with it (a
+    /// command in flight, a daemon starting), or it ran a command within
+    /// [`LEASE_GRACE`]. A daemon can be gone for a moment mid-task (a relay
+    /// recovery, a crash) while its agent still counts on its tabs (#687).
+    pub busy: bool,
 }
 
+/// How long after its last command a session without a daemon keeps its
+/// tabs. Longer than any relay recovery; far shorter than the idle exit, so
+/// a session that idled out has long passed it.
+pub const LEASE_GRACE: Duration = Duration::from_secs(120);
+
 /// The sessions of group `key` whose tabs `own` may take over: their daemon
-/// is gone, so their lease on those tabs has ended.
+/// is gone and nothing has used them lately, so their lease on those tabs
+/// has ended.
 pub fn expired_leases<'a>(own: &str, key: &str, members: &'a [GroupMember]) -> Vec<&'a str> {
     let mut out: Vec<&str> = members
         .iter()
-        .filter(|m| m.name != own && !m.live && m.has_record && m.group.as_deref() == Some(key))
+        .filter(|m| {
+            m.name != own && !m.live && !m.busy && m.has_record && m.group.as_deref() == Some(key)
+        })
         .map(|m| m.name.as_str())
         .collect();
     out.sort_unstable();
@@ -320,9 +333,27 @@ fn group_members() -> Vec<GroupMember> {
             group: session_group(&name),
             live: crate::connection::daemon_ready(&name),
             has_record: crate::connection::has_created_targets(&name),
+            busy: crate::connection::session_has_client(&name)
+                || recently_active(last_activity(&name), SystemTime::now()),
             name,
         })
         .collect()
+}
+
+/// Whether `session` still holds its lease on its tabs: its daemon runs, a
+/// CLI process is working with it, or it ran a command within
+/// [`LEASE_GRACE`]. Another session of the project neither takes over nor
+/// adopts its tabs meanwhile (#687).
+pub fn lease_held(session: &str) -> bool {
+    crate::connection::daemon_ready(session)
+        || crate::connection::session_has_client(session)
+        || recently_active(last_activity(session), SystemTime::now())
+}
+
+/// Whether a session last ran a command within [`LEASE_GRACE`].
+pub fn recently_active(last: Option<SystemTime>, now: SystemTime) -> bool {
+    last.and_then(|t| now.duration_since(t).ok())
+        .is_some_and(|age| age < LEASE_GRACE)
 }
 
 /// Whether some other session of `session`'s project group is running.
@@ -376,7 +407,7 @@ pub fn join_project_group(session: &str) -> Option<Joined> {
         let Some(_lock) = crate::connection::try_lock_session_lifecycle(other) else {
             continue;
         };
-        if crate::connection::daemon_ready(other) {
+        if crate::connection::daemon_ready(other) || crate::connection::session_has_client(other) {
             continue;
         }
         if crate::connection::merge_created_targets(other, session).is_ok() {
@@ -1147,6 +1178,7 @@ mod tests {
             group: Some(group.to_string()),
             live,
             has_record: record,
+            busy: false,
         }
     }
 
@@ -1163,6 +1195,23 @@ mod tests {
         ];
         assert_eq!(expired_leases("cu-a-me", "K", &members), vec!["cu-a-old"]);
         assert!(expired_leases("cu-x", "N", &members).is_empty());
+    }
+
+    /// A session whose daemon is gone but whose agent is still at work (a
+    /// command in flight, or one just now) keeps its tabs (#687).
+    #[test]
+    fn a_session_still_at_work_keeps_its_tabs_without_a_daemon() {
+        let mut busy = member("cu-a-busy", "K", false, true);
+        busy.busy = true;
+        let members = vec![busy, member("cu-a-old", "K", false, true)];
+        assert_eq!(expired_leases("cu-a-me", "K", &members), vec!["cu-a-old"]);
+        let now = SystemTime::now();
+        assert!(recently_active(Some(now - Duration::from_secs(5)), now));
+        assert!(!recently_active(
+            Some(now - LEASE_GRACE - Duration::from_secs(1)),
+            now
+        ));
+        assert!(!recently_active(None, now));
     }
 
     #[test]
