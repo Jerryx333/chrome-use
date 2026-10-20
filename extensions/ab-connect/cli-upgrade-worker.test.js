@@ -14,10 +14,13 @@ const source = readFileSync(new URL('./background.js', import.meta.url), 'utf8')
 const from = source.indexOf('// ---- keeping the CLI and this extension current')
 const to = source.indexOf('function connectHost()')
 const section = source.slice(from, to)
+const publishSection = source.slice(source.indexOf('function publishHostStatus()'), from)
+const statusFrom = source.indexOf("  if (msg && msg.type === 'ab-status')")
+const statusSection = source.slice(statusFrom, source.indexOf('\n  return false;\n});', statusFrom))
 
-function worker({ cli, plan = { apply: true, appliesInMs: 0 }, pending = 0 } = {}) {
-  const posted = [], timers = [], calls = { disconnect: 0, connect: 0, gone: [], published: 0 }
-  const host = { cli }
+function worker({ cli, connected = true, legacyCli = false, plan = { apply: true, appliesInMs: 0 }, pending = 0 } = {}) {
+  const posted = [], timers = [], uiStates = [], calls = { disconnect: 0, connect: 0, gone: [], published: 0 }
+  const host = { cli, connected, legacyCli }
   const port = { disconnect() { calls.disconnect++ } }
   const context = {
     Date, JSON, Number,
@@ -25,20 +28,25 @@ function worker({ cli, plan = { apply: true, appliesInMs: 0 }, pending = 0 } = {
     setTimeout: (fn, ms) => { const timer = { fn, ms }; timers.push(timer); return timer },
     clearTimeout: timer => { const i = timers.indexOf(timer); if (i >= 0) timers.splice(i, 1) },
     port,
-    hostConnection: { snapshot: () => ({ cli: host.cli }) },
+    hostConnection: { snapshot: () => ({ ...host }) },
     postToHost: msg => posted.push(msg),
-    publishHostStatus: () => { calls.published++ },
+    tabs: new Map(), HOST_NAME: 'test-host', agentPanelEntry: 'panel.html',
+    sendResponse: state => uiStates.push(state),
     currentUpdatePlan: () => plan,
     updateStateSnapshot: () => ({ pending: false }),
     updatePending: false, applyingUpdate: false,
     agentPanelBridge: { pending: { size: pending } },
     hostGone: (p, why) => { calls.gone.push(why); context.port = null },
     connectHost: () => { calls.connect++ },
-    chrome: { runtime: { getManifest: () => ({ version: '0.5.72' }) } },
+    chrome: { runtime: {
+      getManifest: () => ({ version: '0.5.72' }),
+      sendMessage: state => { calls.published++; uiStates.push(state); return Promise.resolve() },
+    } },
   }
   vm.createContext(context)
-  vm.runInContext(section, context)
-  return { context, posted, timers, calls, host, run: expr => vm.runInContext(expr, context) }
+  vm.runInContext(publishSection + section, context)
+  vm.runInContext(`function queryHostStatus() { const msg = { type: 'ab-status' }; ${statusSection} }`, context)
+  return { context, posted, timers, calls, host, uiStates, run: expr => vm.runInContext(expr, context) }
 }
 
 const record = (fields = {}) => ({ version: '1.5.235', latest: '1.5.240', onDisk: '1.5.235', autoUpgrade: false, selfUpgrade: 'ready', lastAutoUpgrade: null, ...fields })
@@ -95,6 +103,84 @@ test('a busy relay or a side panel request in flight holds the switch', () => {
   const panel = worker({ cli: record({ onDisk: '1.5.240' }), pending: 1 })
   panel.run('afterCliStatus()')
   assert.equal(panel.calls.disconnect, 0)
+})
+
+test('a legacy host is reconnected once per worker when idle', () => {
+  const w = worker({ legacyCli: true })
+  w.run('afterCliStatus()')
+  assert.equal(w.calls.disconnect, 1)
+  assert.equal(w.calls.connect, 1)
+  assert.equal(w.calls.gone.length, 1)
+  // The replacement still lacks a version record: show the notice, no loop.
+  w.context.port = { disconnect() { w.calls.disconnect++ } }
+  w.run('afterCliStatus()')
+  assert.equal(w.calls.disconnect, 1)
+  assert.equal(w.calls.connect, 1)
+  assert.equal(w.timers.length, 0)
+})
+
+test('a legacy recheck waits for the quiet period and reschedules until idle', () => {
+  const plan = { apply: false, appliesInMs: 40_000 }
+  const w = worker({ legacyCli: true, plan })
+  w.run('afterCliStatus()')
+  assert.equal(w.calls.disconnect, 0)
+  assert.equal(w.timers.length, 1)
+  assert.equal(w.timers[0].ms, 40_250)
+  plan.appliesInMs = 12_000
+  w.timers.shift().fn()
+  assert.equal(w.calls.disconnect, 0)
+  assert.equal(w.timers.length, 1)
+  assert.equal(w.timers[0].ms, 12_250)
+  plan.apply = true
+  w.timers.shift().fn()
+  assert.equal(w.calls.disconnect, 1)
+  assert.equal(w.calls.connect, 1)
+  assert.equal(w.timers.length, 0)
+})
+
+test('a pending side panel request also holds a legacy recheck', () => {
+  const w = worker({ legacyCli: true, pending: 1 })
+  w.run('afterCliStatus()')
+  assert.equal(w.calls.disconnect, 0)
+  assert.equal(w.timers[0].ms, 250)
+  w.context.agentPanelBridge.pending.size = 0
+  w.timers.shift().fn()
+  assert.equal(w.calls.disconnect, 1)
+  assert.equal(w.calls.connect, 1)
+})
+
+test('both UI paths hide legacy status until rechecked and reflect the replacement host', () => {
+  const plan = { apply: false, appliesInMs: 1000 }
+  const w = worker({ legacyCli: true, plan })
+  const assertUiLegacy = expected => {
+    w.run('publishHostStatus(); queryHostStatus()')
+    assert.equal(w.uiStates.at(-2).type, 'ab-host-state')
+    assert.equal(w.uiStates.at(-2).legacyCli, expected, 'broadcast')
+    assert.equal(w.uiStates.at(-1).legacyCli, expected, 'status response')
+  }
+  assertUiLegacy(false)
+  w.run('afterCliStatus()')
+  assertUiLegacy(false)
+  plan.apply = true
+  w.timers.shift().fn()
+  w.context.port = {}
+  w.run('afterCliStatus()')
+  assertUiLegacy(true)
+  w.host.cli = record()
+  w.host.legacyCli = false
+  w.run('afterCliStatus()')
+  assertUiLegacy(false)
+  assert.equal(w.calls.connect, 1)
+})
+
+test('an unconfirmed or current host does not trigger a legacy recheck', () => {
+  for (const options of [{}, { legacyCli: true, connected: false }, { cli: record() }]) {
+    const w = worker(options)
+    w.run('afterCliStatus()')
+    assert.equal(w.calls.disconnect, 0)
+    assert.equal(w.calls.connect, 0)
+    assert.equal(w.timers.length, 0)
+  }
 })
 
 test('version state carries the upgrade record and whether an update can apply now', () => {
