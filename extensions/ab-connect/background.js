@@ -60,6 +60,7 @@ import {
 } from './reload-loop.js';
 import { targetInfoForTab } from './target-info.js';
 import { isMissingTabError, targetPresence } from './tab-presence.js';
+import { ungroupRestoredAgentGroups } from './restored-groups.js';
 import {
   announceVerdict,
   createRemovedTabs,
@@ -2734,7 +2735,23 @@ async function settleOwnershipAfterInstall(reason) {
   } catch {}
   ownedTabs.clear();
 }
-chrome.runtime.onStartup.addListener(() => void whenReady(connectHost));
+chrome.runtime.onStartup.addListener(() => {
+  void whenReady(connectHost);
+  ungroupRestoredGroupsAfterStartup();
+});
+
+// A restored session brings agent groups back open, and Chrome saves a group
+// that is open when the browser quits (#692): take their tabs out. Restore
+// finishes after startup, so look again a little later.
+function ungroupRestoredGroupsAfterStartup() {
+  for (const ms of [2000, 10000, 30000]) {
+    setTimeout(() => {
+      void ungroupRestoredAgentGroups({
+        groups: chrome.tabGroups, tabs: chrome.tabs, inUse: tabId => tabs.has(tabId),
+      }).catch(() => {});
+    }, ms);
+  }
+}
 
 // ---- self-update ----------------------------------------------------------
 //
