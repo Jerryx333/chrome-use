@@ -97,10 +97,9 @@ fn site_add_opencli(src: &str, trust_flag: bool, json_out: bool) -> Option<i32> 
         Err(e) => {
             let _ = std::fs::remove_dir_all(&staged);
             eprintln!(
-                "{}",
-                color::dim(&format!(
-                    "site add: could not fetch `{src}` to check its format ({e}); adding it as a chrome-use source"
-                ))
+                "{} could not fetch `{src}` to check its format ({e}); adding it as a chrome-use adapter pack. \
+                 If it is an OpenCLI plugin, `chrome-use site remove` it and add it again once it can be fetched",
+                color::warning_indicator()
             );
             return None;
         }
@@ -2645,7 +2644,12 @@ fn main() {
             }
             // `site add <owner/repo|zip-url|local-dir>` — register an extra source.
             Some("add") => {
-                let src = clean.get(2).cloned().unwrap_or_default();
+                let src = clean
+                    .iter()
+                    .skip(2)
+                    .find(|a| !a.starts_with("--"))
+                    .cloned()
+                    .unwrap_or_default();
                 if src.is_empty() {
                     eprintln!(
                         "{} usage: chrome-use site add <owner/repo[@ref] | https://…zip | /local/dir> [--trust-node-code]",

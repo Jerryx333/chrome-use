@@ -1501,14 +1501,7 @@ pub async fn fetch_pinned(
     let token = sources_token();
     if source.starts_with("http://") || source.starts_with("https://") {
         let bytes = download(&client, source, token.as_deref()).await?;
-        let digest = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes));
-        if let Some(p) = pin.filter(|p| *p != digest) {
-            return Err(format!(
-                "its content changed since it was added (sha256 {} → {}); run `chrome-use site add {source}` again to review and trust the new version",
-                short_pin(p),
-                short_pin(&digest)
-            ));
-        }
+        let digest = check_digest(source, &bytes, pin)?;
         let strip = source.contains("github.com");
         extract_zip(&bytes, dest, strip)?;
         return Ok(Some(digest));
@@ -1519,6 +1512,26 @@ pub async fn fetch_pinned(
     };
     let (owner, repo) = parse_owner_repo(repo_part)
         .ok_or("unrecognized source (want `owner/repo[@ref]`, a .zip URL, or a local dir path)")?;
+    // Pinned by content: commit resolution failed when it was added (e.g. the
+    // unauthenticated GitHub API rate limit), so it was fetched as an archive.
+    if pin.is_some_and(|p| p.starts_with(DIGEST_PIN)) || (pin.is_none() && token.is_none()) {
+        let resolved = match pin {
+            Some(_) => None,
+            None => resolve_commit(&client, &owner, &repo, git_ref.unwrap_or("HEAD"), None)
+                .await
+                .ok(),
+        };
+        let Some(sha) = resolved else {
+            let bytes = download_archive(&client, &owner, &repo, git_ref).await?;
+            let digest = check_digest(source, &bytes, pin)?;
+            extract_zip(&bytes, dest, true)?;
+            return Ok(Some(digest));
+        };
+        let url = format!("https://github.com/{owner}/{repo}/archive/{sha}.zip");
+        let bytes = download(&client, &url, None).await?;
+        extract_zip(&bytes, dest, true)?;
+        return Ok(Some(sha));
+    }
     let sha = match pin {
         Some(p) => p.to_string(),
         None => {
@@ -1539,6 +1552,47 @@ pub async fn fetch_pinned(
     let bytes = download(&client, &url, token.as_deref()).await?;
     extract_zip(&bytes, dest, true)?;
     Ok(Some(sha))
+}
+
+/// Prefix of a pin that is a SHA-256 of the downloaded zip, not a commit.
+const DIGEST_PIN: &str = "sha256:";
+
+/// The `sha256:` pin of `bytes`, refusing content that no longer matches `pin`.
+fn check_digest(source: &str, bytes: &[u8], pin: Option<&str>) -> Result<String, String> {
+    let digest = format!(
+        "{DIGEST_PIN}{}",
+        hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes))
+    );
+    match pin.filter(|p| *p != digest) {
+        Some(p) => Err(format!(
+            "its content changed since it was added ({} → {}); run `chrome-use site add {source}` again to review and trust the new version",
+            short_pin(p),
+            short_pin(&digest)
+        )),
+        None => Ok(digest),
+    }
+}
+
+/// A repo's branch archive without the GitHub API: `git_ref`, else main, then master.
+async fn download_archive(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    git_ref: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let refs: Vec<&str> = match git_ref {
+        Some(r) => vec![r],
+        None => vec!["main", "master"],
+    };
+    let mut last = String::new();
+    for r in refs {
+        let url = format!("https://github.com/{owner}/{repo}/archive/{r}.zip");
+        match download(client, &url, None).await {
+            Ok(b) => return Ok(b),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 async fn resolve_commit(
@@ -1574,9 +1628,10 @@ async fn resolve_commit(
     Ok(sha)
 }
 
-/// The first 12 characters of a commit SHA or digest, for messages.
+/// A commit SHA or digest pin shortened for messages.
 pub fn short_pin(pin: &str) -> &str {
-    &pin[..pin.len().min(12)]
+    let n = if pin.starts_with(DIGEST_PIN) { 19 } else { 12 };
+    &pin[..pin.len().min(n)]
 }
 
 /// Copy every file under `src` into `dest`, skipping `.git` and `node_modules`.
@@ -3685,5 +3740,15 @@ async function(args){ return args; }"#;
         std::fs::create_dir_all(base.join("empty")).unwrap();
         assert_eq!(detect_format(&base.join("empty")), SourceFormat::Unknown);
         let _ = std::fs::remove_dir_all(&base);
+    }
+    #[test]
+    fn digest_pins_refuse_changed_content() {
+        let pin = check_digest("x", b"one", None).unwrap();
+        assert!(pin.starts_with("sha256:"));
+        assert_eq!(check_digest("x", b"one", Some(&pin)).unwrap(), pin);
+        let err = check_digest("x", b"two", Some(&pin)).unwrap_err();
+        assert!(err.contains("changed since it was added"), "{err}");
+        assert_eq!(short_pin(&pin).len(), 19);
+        assert_eq!(short_pin("0123456789abcdef0123"), "0123456789ab");
     }
 }
