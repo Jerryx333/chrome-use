@@ -276,6 +276,13 @@ site adapters for github.com — prefer these for structured data:
         <code>AGENT_BROWSER_SITES_NO_SUGGEST=1</code> turns it off.
       </p>
 
+      <h3>Adding OpenCLI-format adapters</h3>
+      <p>
+        <code>site add</code> detects OpenCLI-format sources: an OpenCLI plugin repo (e.g. <code>chrome-use site add darinouyang/opencli-plugin-shipxy</code>), a zip, or a local dir such as your existing <code>~/.opencli/clis</code>.
+        Their commands run through the same OpenCLI runtime over your chrome-use session and show as <code>(opencli: &lt;source&gt;)</code> in <code>site list</code>. <code>.js</code> modules are supported, and <code>.ts</code> ones on Node 22.13+; YAML-only plugins are not (OpenCLI itself stopped loading YAML in 1.8).
+        OpenCLI adapters are Node code running on your computer with your user's permissions, not inside the page like chrome-use adapters. So a local dir is added directly, while a remote source is pinned to the commit (zip: SHA-256) you trusted: at a terminal <code>site add</code> lists its modules and asks, and scripts or agents must pass <code>--trust-node-code</code>.
+        <code>site update</code> re-copies local dirs but never moves a remote pin; run <code>site add</code> again to take a newer version. On a shared name: our adapters, then your OpenCLI sources, then the OpenCLI package.
+      </p>
       <h3>OpenCLI is a last resort</h3>
       <p>
         With Node.js 20+ on PATH, <code>site update</code> also installs <a href="https://github.com/jackwener/OpenCLI">OpenCLI</a> (about 180 sites and 1,300 commands; a pinned version, installed with <code>--ignore-scripts</code>).

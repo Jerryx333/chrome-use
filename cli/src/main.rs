@@ -78,6 +78,203 @@ fn print_json_value(value: serde_json::Value) {
     println!("{}", serialize_json_value(&value));
 }
 
+/// `site add` for an OpenCLI-format source. Fetches `src` (at a pinned commit
+/// or digest when remote), and if it holds OpenCLI adapters, asks for trust and
+/// installs it: those adapters run as local Node code, unlike ours, which run in
+/// the page. A local dir is the user's own code and needs no confirmation; a
+/// remote one needs a "y" at a terminal or `--trust-node-code`, which agents
+/// pass only after the user agreed. Returns None when `src` isn't an OpenCLI
+/// source (the caller registers it as a pack of ours), else the exit code.
+fn site_add_opencli(src: &str, trust_flag: bool, json_out: bool) -> Option<i32> {
+    use std::io::IsTerminal;
+    if opencli::disabled() {
+        return None;
+    }
+    let staged = opencli::staging_dir().ok()?;
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let pin = match rt.block_on(site::fetch_pinned(src, None, &staged)) {
+        Ok(pin) => pin,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staged);
+            eprintln!(
+                "{}",
+                color::dim(&format!(
+                    "site add: could not fetch `{src}` to check its format ({e}); adding it as a chrome-use source"
+                ))
+            );
+            return None;
+        }
+    };
+    if site::detect_format(&staged) != site::SourceFormat::OpenCli {
+        let yaml = site::is_yaml_opencli_plugin(&staged);
+        let _ = std::fs::remove_dir_all(&staged);
+        if yaml {
+            let msg = format!(
+                "not added: `{src}` is an OpenCLI plugin of YAML adapters, which OpenCLI itself no longer loads (1.8+). \
+                 It needs to be converted to .js with the cli() API first"
+            );
+            if json_out {
+                print_json_error(&msg);
+            } else {
+                eprintln!("{} {msg}", color::error_indicator());
+            }
+            return Some(1);
+        }
+        return None;
+    }
+    let fail = |msg: String| -> Option<i32> {
+        let _ = std::fs::remove_dir_all(&staged);
+        if json_out {
+            print_json_error(&msg);
+        } else {
+            eprintln!("{} {msg}", color::error_indicator());
+        }
+        Some(1)
+    };
+
+    let local = std::path::Path::new(src).is_dir();
+    let files = opencli::adapter_files(&staged);
+    let deps = opencli::declared_dependencies(&staged);
+    let pinned = pin
+        .as_deref()
+        .map(|p| format!(", pinned at {}", site::short_pin(p)))
+        .unwrap_or_default();
+    eprintln!(
+        "`{src}` is an OpenCLI source: {} module(s) that import OpenCLI{pinned}",
+        files.len()
+    );
+    for f in files.iter().take(20) {
+        eprintln!("  {f}");
+    }
+    if files.len() > 20 {
+        eprintln!("  … and {} more", files.len() - 20);
+    }
+    eprintln!(
+        "{}",
+        color::yellow(
+            "OpenCLI adapters run as Node code on this computer with your user's permissions \
+             (files, network, commands), not inside the page like chrome-use adapters."
+        )
+    );
+    if !deps.is_empty() {
+        eprintln!(
+            "{}",
+            color::yellow(&format!(
+                "It declares npm dependencies chrome-use does not install ({}); adapters that import them will fail to load.",
+                deps.join(", ")
+            ))
+        );
+    }
+
+    let trusted = if local || trust_flag {
+        true
+    } else if !json_out && std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+        eprint!("Trust this code and add it? [y/N] ");
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    } else {
+        return fail(format!(
+            "not added: `{src}` is remote OpenCLI code. Rerun with --trust-node-code to trust it{pinned}. \
+             Agents: show the user this source and ask before passing --trust-node-code"
+        ));
+    };
+    if !trusted {
+        return fail(format!("not added: `{src}` was not trusted"));
+    }
+
+    if !opencli::installed() {
+        match opencli::sync() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return fail(
+                    "OpenCLI sources need Node.js 20+ and npm on PATH (https://nodejs.org)".into(),
+                )
+            }
+            Err(e) => return fail(e),
+        }
+    }
+    if let Err(e) = opencli::install_staged(src, pin.as_deref(), &staged) {
+        return fail(e);
+    }
+    if let Err(e) = opencli::set_source(src, pin.as_deref()) {
+        return fail(e);
+    }
+    let report = match opencli::index_sources() {
+        Ok(reports) => reports.into_iter().find(|r| r.source == src),
+        Err(e) => return fail(e),
+    }
+    .unwrap_or_default();
+    let commands = report.commands.clone();
+    let shadowed: Vec<&String> = commands
+        .iter()
+        .filter(|c| site::load_adapter(c).is_ok())
+        .collect();
+    if json_out {
+        println!(
+            "{}",
+            json!({
+                "success": !commands.is_empty(),
+                "added": src,
+                "format": "opencli",
+                "pin": pin,
+                "commands": commands,
+                "shadowedByChromeUse": shadowed,
+                "providedByEarlierSource": report.taken.iter().map(|(c, by)| json!({ "command": c, "source": by })).collect::<Vec<_>>(),
+                "problems": report.problems,
+            })
+        );
+    } else {
+        for p in &report.problems {
+            eprintln!("{} {p}", color::warning_indicator());
+        }
+        println!(
+            "{} added OpenCLI source `{src}`{pinned}: {} command(s){}",
+            color::success_indicator(),
+            commands.len(),
+            if commands.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", commands.join(", "))
+            }
+        );
+        if !shadowed.is_empty() {
+            eprintln!(
+                "{}",
+                color::dim(&format!(
+                    "chrome-use's own adapter runs instead for: {}",
+                    shadowed
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            );
+        }
+        if !report.taken.is_empty() {
+            let by: Vec<String> = report
+                .taken
+                .iter()
+                .map(|(c, by)| format!("{c} (from {by})"))
+                .collect();
+            eprintln!(
+                "{}",
+                color::dim(&format!(
+                    "a source added earlier already provides: {}; `chrome-use site remove` it to use this one",
+                    by.join(", ")
+                ))
+            );
+        }
+        let usable = commands
+            .iter()
+            .find(|c| !shadowed.contains(c) && !report.taken.iter().any(|(t, _)| t == *c));
+        if let Some(c) = usable {
+            eprintln!("{}", color::dim(&format!("run: chrome-use site {c}")));
+        }
+    }
+    Some(if commands.is_empty() { 1 } else { 0 })
+}
+
 fn print_json_error(message: impl AsRef<str>) {
     print_json_value(error_envelope::error_value(message.as_ref()));
 }
@@ -2315,17 +2512,21 @@ fn main() {
                 return;
             }
             Some("list") => {
-                let theirs: Vec<String> = {
+                // (spec, the added source it came from, if any)
+                let theirs_tagged: Vec<(String, Option<String>)> = {
                     let ours = site::list_adapters().unwrap_or_default();
-                    let mut v: Vec<String> = opencli::manifest()
+                    let mut v: Vec<(String, Option<String>)> = opencli::manifest()
                         .iter()
-                        .filter_map(opencli::spec_of)
-                        .filter(|s| !ours.contains(s))
+                        .filter_map(|e| {
+                            opencli::spec_of(e).map(|s| (s, opencli::origin(e).map(String::from)))
+                        })
+                        .filter(|(s, _)| !ours.contains(s))
                         .collect();
                     v.sort();
-                    v.dedup();
+                    v.dedup_by(|a, b| a.0 == b.0);
                     v
                 };
+                let theirs: Vec<String> = theirs_tagged.iter().map(|(s, _)| s.clone()).collect();
                 match site::list_adapters() {
                     Ok(list) if flags.json => {
                         println!(
@@ -2340,8 +2541,13 @@ fn main() {
                         for a in &list {
                             println!("{a}");
                         }
-                        for a in &theirs {
-                            println!("{a} {}", color::dim("(opencli)"));
+                        for (a, origin) in &theirs_tagged {
+                            match origin {
+                                Some(o) => {
+                                    println!("{a} {}", color::dim(&format!("(opencli: {o})")))
+                                }
+                                None => println!("{a} {}", color::dim("(opencli)")),
+                            }
                         }
                         eprintln!(
                             "{}",
@@ -2399,13 +2605,18 @@ fn main() {
             // `site sources` — list the built-in defaults and configured extras.
             Some("sources") => {
                 let sources = site::read_sources();
+                let opencli_sources = opencli::read_sources();
                 if flags.json {
                     println!(
                         "{}",
                         json!({
                             "success": true,
                             "defaultSources": site::default_sources(),
-                            "sources": sources
+                            "sources": sources,
+                            "opencliSources": opencli_sources
+                                .iter()
+                                .map(|s| json!({ "source": s.source, "pin": s.pin }))
+                                .collect::<Vec<_>>()
                         })
                     );
                 } else {
@@ -2414,11 +2625,19 @@ fn main() {
                     for source in &sources {
                         println!("{source} (extra)");
                     }
+                    for s in &opencli_sources {
+                        match &s.pin {
+                            Some(p) => {
+                                println!("{} (opencli, pinned {})", s.source, site::short_pin(p))
+                            }
+                            None => println!("{} (opencli, local)", s.source),
+                        }
+                    }
                     eprintln!(
                         "{}",
                         color::dim(&format!(
                             "2 default source(s) + {} extra source(s) · synced on `site update`",
-                            sources.len()
+                            sources.len() + opencli_sources.len()
                         ))
                     );
                 }
@@ -2429,10 +2648,14 @@ fn main() {
                 let src = clean.get(2).cloned().unwrap_or_default();
                 if src.is_empty() {
                     eprintln!(
-                        "{} usage: chrome-use site add <owner/repo | https://…zip | /local/dir>",
+                        "{} usage: chrome-use site add <owner/repo[@ref] | https://…zip | /local/dir> [--trust-node-code]",
                         color::error_indicator()
                     );
                     exit(2);
+                }
+                let trust = clean.iter().any(|a| a == "--trust-node-code");
+                if let Some(code) = site_add_opencli(&src, trust, flags.json) {
+                    exit(code);
                 }
                 match site::add_source(&src) {
                     Ok(true) => {
@@ -2478,6 +2701,28 @@ fn main() {
                         color::error_indicator()
                     );
                     exit(2);
+                }
+                match opencli::remove_source(&src) {
+                    Ok(true) => {
+                        if flags.json {
+                            println!(
+                                "{}",
+                                json!({ "success": true, "removed": src, "format": "opencli" })
+                            );
+                        } else {
+                            println!(
+                                "{} removed OpenCLI source `{}` and its installed copy",
+                                color::success_indicator(),
+                                src
+                            );
+                        }
+                        return;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        eprintln!("{} {}", color::error_indicator(), e);
+                        exit(1);
+                    }
                 }
                 match site::remove_source(&src) {
                     Ok(true) => {

@@ -268,6 +268,13 @@ site adapters for github.com — prefer these for structured data:
         设 <code>AGENT_BROWSER_SITES_NO_SUGGEST=1</code> 关闭这个提示。
       </p>
 
+      <h3>添加 OpenCLI 格式的适配器</h3>
+      <p>
+        <code>site add</code> 会自动识别 OpenCLI 格式：OpenCLI 插件仓库（如 <code>chrome-use site add darinouyang/opencli-plugin-shipxy</code>）、zip，或本地目录（比如你已有的 <code>~/.opencli/clis</code>）。
+        识别后，这些命令走同一套 OpenCLI 运行时，操作你当前的 chrome-use 会话，<code>site list</code> 里标 <code>(opencli: 来源)</code>。支持 <code>.js</code>，Node 22.13+ 时也支持 <code>.ts</code>；只有 YAML 的插件不支持（OpenCLI 1.8 起自己也不再加载 YAML）。
+        OpenCLI 适配器是在你电脑上以你的用户权限运行的 Node 代码，不像 chrome-use 适配器那样关在网页里。所以：本地目录直接加；远程仓库会锁定到你确认时的 commit（zip 锁定 SHA-256），在终端里会列出模块让你确认，脚本或 agent 调用时要加 <code>--trust-node-code</code>。
+        <code>site update</code> 会重新拷贝本地目录，但不会挪动远程的锁定版本；想用新版本就再 <code>site add</code> 一次。同名命令的优先级：我们的适配器 → 你加的 OpenCLI 来源 → OpenCLI 官方包。
+      </p>
       <h3>OpenCLI：最后的选择</h3>
       <p>
         装了 Node.js 20+ 时，<code>site update</code> 会顺带安装 <a href="https://github.com/jackwener/OpenCLI">OpenCLI</a>（约 180 个站点、1300 多条命令，固定版本，<code>--ignore-scripts</code>）。
