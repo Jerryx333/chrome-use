@@ -2696,6 +2696,10 @@ chrome.webNavigation.onCommitted.addListener((details) => {
 // ---- bootstrap + keepalive ------------------------------------------------
 
 chrome.runtime.onInstalled.addListener((details) => {
+  // Also a browser start: Chrome updated itself, or the extension is loaded
+  // from the command line. Not an extension update, which can land while a
+  // session works in its group.
+  if (details?.reason === 'install' || details?.reason === 'chrome_update') ungroupRestoredGroupsAfterStartup();
   // One-time purge: a prior build persisted ADOPTED user tabs into the owned set,
   // which then re-attached them on every restart and left the debugger banner
   // stuck on the user's pages. Clear the persisted set on install/update — agent
@@ -2747,7 +2751,9 @@ function ungroupRestoredGroupsAfterStartup() {
   for (const ms of [2000, 10000, 30000]) {
     setTimeout(() => {
       void ungroupRestoredAgentGroups({
-        groups: chrome.tabGroups, tabs: chrome.tabs, inUse: tabId => tabs.has(tabId),
+        // A tab an agent created in this browser run is owned before it is
+        // grouped; a restored tab is not (tab ids change across a restart).
+        groups: chrome.tabGroups, tabs: chrome.tabs, inUse: tabId => tabs.has(tabId) || ownedTabs.has(tabId),
       }).catch(() => {});
     }, ms);
   }

@@ -53,4 +53,10 @@ test('the worker runs it when the browser starts', () => {
   const start = background.indexOf('chrome.runtime.onStartup.addListener(')
   assert.ok(start >= 0)
   assert.match(background.slice(start, start + 400), /ungroupRestoredGroupsAfterStartup\(\)/)
+  const installed = background.indexOf('chrome.runtime.onInstalled.addListener(')
+  const body = background.slice(installed, installed + 600)
+  assert.match(body, /reason === 'install' \|\| details\?\.reason === 'chrome_update'\) ungroupRestoredGroupsAfterStartup\(\)/)
+  assert.doesNotMatch(body, /reason === 'update'\) ungroupRestoredGroupsAfterStartup/)
+  // A group an agent made in this browser run is never taken apart.
+  assert.match(background, /inUse: tabId => tabs\.has\(tabId\) \|\| ownedTabs\.has\(tabId\)/)
 })
