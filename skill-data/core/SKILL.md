@@ -270,6 +270,11 @@ On a login wall (`login wall:` on stderr, `loginWall` in JSON, also from a
 its question to the user and run the command for their answer; never choose
 for them, least of all `always` (`core/authentication`). Without `ask`, sign
 in with `auth login --bwu` before asking the user.
+A `login verification:` warning (`loginVerification` in JSON) means a QR
+sign-in is waiting on a second, security-verification scan (Xiaohongshu's
+"Security Verification" / 安全验证 dialog): give the user that QR code
+(`screenshot`, or `loginVerification.qrSrc`) and do not reload, navigate or
+sign in again until they have scanned it (`core/authentication`).
 For a step only the human can do, `session handoff`, explain it, and wait
 for them before `session resume`.
 

@@ -2485,6 +2485,31 @@ pub fn apply_site_login_wall(
     let spec = wall["spec"].as_str().unwrap_or("").to_string();
     resp.success = false;
     resp.error = Some(hint.clone());
+    // The page is mid sign-in, waiting on a security-verification QR scan
+    // (`loginVerification`, from the daemon): the site is "signed out" only
+    // until the user scans it. Opening the sign-in page or asking about
+    // auto-login now would throw the verification away, so report that
+    // instead, and touch nothing.
+    let pending = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("loginVerification"))
+        .filter(|v| v.is_object())
+        .and_then(|v| v.get("hint"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    if let Some(pending) = pending {
+        if io.json {
+            eprintln!("{} {pending}", crate::color::warning_indicator());
+        }
+        if resp.warning.as_deref() == Some(pending.as_str()) {
+            resp.warning = None;
+        }
+        wall["verificationPending"] = json!(true);
+        resp.error = Some(pending);
+        set_wall(resp, wall);
+        return true;
+    }
     match (io.decide)(&wall) {
         crate::autologin::Outcome::SignIn { .. } => {
             eprintln!("{} {hint}", crate::color::warning_indicator());
@@ -3602,6 +3627,60 @@ async function(args){ return args; }"#;
         assert_eq!(wall["source"], "site");
         assert!(wall.get("autoLogin").is_none());
         assert!(navs.is_empty() && signs == 0 && ran == 0);
+    }
+
+    #[test]
+    fn pending_login_verification_holds_back_the_site_wall() {
+        // The daemon saw a security-verification QR dialog on the page: the
+        // adapter's "not signed in" is the sign-in still in progress.
+        let hint = crate::native::login_wall::verification_hint("z.example.com", true, 471);
+        let mut resp = site_resp(serde_json::from_str(WALLED).unwrap());
+        resp.data.as_mut().unwrap()["loginVerification"] =
+            json!({ "host": "z.example.com", "evidence": "dialog", "hint": hint });
+        resp.warning = Some(hint.clone());
+        promote_adapter_error(&mut resp);
+        let (mut decided, mut navs, mut signs, mut ran) = (0usize, 0usize, 0usize, 0usize);
+        let mut decide = |_w: &Value| {
+            decided += 1;
+            crate::autologin::Outcome::SignIn {
+                source: "test".into(),
+            }
+        };
+        let mut navigate = |_u: &str| {
+            navs += 1;
+            Ok(())
+        };
+        let mut sign_in = |_w: &Value| {
+            signs += 1;
+            json!({ "ok": true })
+        };
+        let mut rerun = || {
+            ran += 1;
+            Err("unexpected rerun".to_string())
+        };
+        let walled = apply_site_login_wall(
+            &site_cmd(true),
+            &mut resp,
+            SiteLoginIo {
+                decide: &mut decide,
+                json: false,
+                navigate: &mut navigate,
+                sign_in: &mut sign_in,
+                rerun: &mut rerun,
+            },
+        );
+        assert!(walled, "no OpenCLI fallback either");
+        assert_eq!(
+            (decided, navs, signs, ran),
+            (0, 0, 0, 0),
+            "nothing may leave the page"
+        );
+        assert!(!resp.success);
+        assert_eq!(resp.error.as_deref(), Some(hint.as_str()));
+        assert!(resp.warning.is_none(), "the hint is printed once");
+        let wall = &resp.data.as_ref().unwrap()["loginWall"];
+        assert_eq!(wall["verificationPending"], true);
+        assert!(wall.get("autoLogin").is_none());
     }
 
     #[test]

@@ -4647,7 +4647,15 @@ fn main() {
                 .and_then(|d| d.get("loginWall"))
                 .filter(|w| w.get("source").and_then(|v| v.as_str()) != Some("site"))
                 .cloned();
-            if let Some(wall) = wall.filter(|_| !site_wall) {
+            // A sign-in waiting on a security-verification QR scan
+            // (`loginVerification`, said in the warning) must not be
+            // interrupted by auto-login navigating away.
+            let verifying = resp
+                .data
+                .as_ref()
+                .and_then(|d| d.get("loginVerification"))
+                .is_some_and(|v| v.is_object());
+            if let Some(wall) = wall.filter(|_| !site_wall && !verifying) {
                 let host = wall["host"].as_str().unwrap_or("").to_string();
                 // #481: sign in, skip, or ask, from the user's decision for
                 // this host. The tab is on the sign-in page already.

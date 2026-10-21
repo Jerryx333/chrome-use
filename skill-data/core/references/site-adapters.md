@@ -137,6 +137,13 @@ signs in by itself and runs the command once more, adding
 reported the login itself (`rerunnable: true`): a write whose failure was
 inferred from a 401 or a redirect may have half-run, so it signs in and stops.
 
+When the page is in the middle of a QR sign-in that waits on a
+security-verification scan (`loginVerification` in the data, see
+`core/authentication`), a signed-out adapter fails with `login verification:
+…` instead: chrome-use neither asks about nor runs auto-login and opens no
+page, because leaving the page would throw the verification away. Give the
+user that QR code and run the command again after they have scanned it.
+
 ## Long text, local files, long runs
 
 Write adapters (publish an article, upload a video) take one command each:

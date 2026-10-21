@@ -236,6 +236,35 @@ the same kind of wall: `login wall: <host> is not signed in (site …)` and
 login --bwu`. With `always` for the host it opens that page, signs in and runs
 the adapter once more. See `core/site-adapters`.
 
+### QR sign-in waiting on a security verification
+
+Some QR sign-ins ask for a second scan after the phone confirmed the first.
+On Xiaohongshu (www.xiaohongshu.com) the QR status poll
+(`/api/sns/web/v1/login/qrcode/status`) answers HTTP 471 and a "Security
+Verification" (安全验证) dialog with a new QR code, valid for about a minute,
+appears over the page. The sign-in box under it (`.login-container`) still
+says 「扫码成功 / 请在手机上确认」, so reading only that box makes it look as if
+the phone's confirmation never arrived. It did; the site is waiting for the
+second scan.
+
+chrome-use reports it on every command while it is pending, reads included:
+`login verification: <host> is waiting for a second QR scan …` as the
+command's warning, and `loginVerification: {host, evidence, title, text,
+qrSrc, hint}` in the JSON data (`evidence` is `dialog`, or `http471` when only
+the status poll showed it). Then:
+
+1. Show the user that QR code: `chrome-use screenshot` of the page, or the
+   image in `loginVerification.qrSrc` (a data URL or an image URL). Ask them to
+   scan it with the site's app on a phone that is already signed in.
+2. Until they say they have, do not `reload`, `open` another page, run `auth
+   login`, or retry the sign-in: each throws the verification away and the
+   sign-in starts over. Auto-login and `site` login walls are held back while
+   it is pending (a `site` command fails with the same `login verification:`
+   line and opens nothing).
+3. After the scan, check that the sign-in went through (for example the
+   `site xiaohongshu/me` adapter, or a `snapshot`). A code that expired needs
+   a new sign-in from the start.
+
 ### Single fields
 
 ```bash

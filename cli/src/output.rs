@@ -4824,6 +4824,11 @@ Bitwarden Login Options:
   When the user has not decided for that site, it asks: a prompt in a
   terminal, or `loginWall.ask` (a question to relay and one command per
   answer) for an agent, which must ask the user and never choose itself.
+  QR sign-in waiting on a second scan: on sites that ask for one (Xiaohongshu's
+  "Security Verification" / 安全验证 dialog, or its QR status poll answering
+  HTTP 471), every command warns `login verification: …` (JSON:
+  loginVerification, with qrSrc). Give that QR code to the user to scan and do
+  not reload or navigate until they have; auto-login is held back meanwhile.
 
 Auto-login decisions (per site, ~/.chrome-use/autologin.json):
   auth autologin status              Show decisions and what overrides them
@@ -6161,6 +6166,9 @@ Signed out:
   the site, `loginWall.ask` asks them (see `auth --help`). With `auth autologin
   always <host>` that happens by itself and the command runs once more; a
   write is rerun only when the adapter reported the login itself.
+  When the page is waiting on a security-verification QR scan instead
+  (`loginVerification`), the command fails with `login verification: …` and
+  opens nothing: give the user that QR code, then run it again.
 
 Global Options:
   --json               Output as JSON (adapters usually return JSON already)
