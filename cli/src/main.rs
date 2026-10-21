@@ -205,6 +205,23 @@ fn site_add_opencli(src: &str, trust_flag: bool, json_out: bool) -> Option<i32> 
     }
     .unwrap_or_default();
     let commands = report.commands.clone();
+    if commands.is_empty() {
+        let _ = opencli::remove_source(src);
+        let why = if report.problems.is_empty() {
+            "none of its modules registers a command with cli()".to_string()
+        } else {
+            report.problems.join("; ")
+        };
+        if json_out {
+            print_json_error(format!("not added: no command loaded from `{src}`: {why}"));
+        } else {
+            eprintln!(
+                "{} not added: no command loaded from `{src}`: {why}",
+                color::error_indicator()
+            );
+        }
+        return Some(1);
+    }
     let shadowed: Vec<&String> = commands
         .iter()
         .filter(|c| site::load_adapter(c).is_ok())
@@ -213,7 +230,7 @@ fn site_add_opencli(src: &str, trust_flag: bool, json_out: bool) -> Option<i32> 
         println!(
             "{}",
             json!({
-                "success": !commands.is_empty(),
+                "success": true,
                 "added": src,
                 "format": "opencli",
                 "pin": pin,
@@ -228,14 +245,10 @@ fn site_add_opencli(src: &str, trust_flag: bool, json_out: bool) -> Option<i32> 
             eprintln!("{} {p}", color::warning_indicator());
         }
         println!(
-            "{} added OpenCLI source `{src}`{pinned}: {} command(s){}",
+            "{} added OpenCLI source `{src}`{pinned}: {} command(s) — {}",
             color::success_indicator(),
             commands.len(),
-            if commands.is_empty() {
-                String::new()
-            } else {
-                format!(" — {}", commands.join(", "))
-            }
+            commands.join(", ")
         );
         if !shadowed.is_empty() {
             eprintln!(
@@ -271,7 +284,7 @@ fn site_add_opencli(src: &str, trust_flag: bool, json_out: bool) -> Option<i32> 
             eprintln!("{}", color::dim(&format!("run: chrome-use site {c}")));
         }
     }
-    Some(if commands.is_empty() { 1 } else { 0 })
+    Some(0)
 }
 
 fn print_json_error(message: impl AsRef<str>) {

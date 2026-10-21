@@ -411,6 +411,57 @@ pub fn fallback_args(entry: &Value, ours: &Value) -> Vec<String> {
     out
 }
 
+/// Wait for `child`, killing it at `limit`. Its piped stdout and stderr are
+/// read on threads so a chatty command can't fill a pipe while we wait.
+/// Returns (stdout, stderr, timed out).
+fn wait_with_deadline(
+    mut child: std::process::Child,
+    limit: std::time::Duration,
+) -> (String, String, bool) {
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    );
+    let err = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+    );
+    let started = std::time::Instant::now();
+    let timed_out = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break false,
+            Ok(None) if started.elapsed() >= limit => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break true;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(_) => break false,
+        }
+    };
+    (
+        out.join().unwrap_or_default(),
+        err.join().unwrap_or_default(),
+        timed_out,
+    )
+}
+
+/// Ceiling for listing one added source (importing its modules).
+const LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Run `site/name` through OpenCLI's runtime. Returns the runner's envelope:
 /// `{success, data}` or `{success: false, error, hint?}`.
 pub fn run(spec: &str, entry: &Value, rest: &[String], session: &str) -> Value {
@@ -458,38 +509,15 @@ pub fn run(spec: &str, entry: &Value, rest: &[String], session: &str) -> Value {
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn();
-    let mut child = match child {
+    let child = match child {
         Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&req_path);
             return fail(format!("opencli: node: {e}"));
         }
     };
-    // Read stdout on a thread so a chatty command can't fill the pipe while
-    // we wait on the deadline.
-    let mut pipe = child.stdout.take();
-    let reader = std::thread::spawn(move || {
-        let mut buf = String::new();
-        if let Some(p) = pipe.as_mut() {
-            let _ = std::io::Read::read_to_string(p, &mut buf);
-        }
-        buf
-    });
-    let started = std::time::Instant::now();
-    let timed_out = loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break false,
-            Ok(None) if started.elapsed() >= limit => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break true;
-            }
-            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
-            Err(_) => break false,
-        }
-    };
+    let (stdout, _, timed_out) = wait_with_deadline(child, limit);
     let _ = std::fs::remove_file(&req_path);
-    let stdout = reader.join().unwrap_or_default();
     if timed_out {
         return fail(format!(
             "site {spec} (OpenCLI) did not finish within {}s; the page may still be working. \
@@ -734,15 +762,30 @@ pub fn list_dir(dir: &Path) -> Result<(Vec<Value>, Vec<String>), String> {
     let req_path =
         std::env::temp_dir().join(format!("cu-opencli-{}.json", uuid::Uuid::new_v4().simple()));
     std::fs::write(&req_path, req.to_string()).map_err(|e| format!("opencli: {e}"))?;
-    let out = Command::new("node")
+    let child = Command::new("node")
         .arg(&runner)
         .arg("--list")
         .arg(&req_path)
         .stdin(Stdio::null())
-        .output();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_file(&req_path);
+            return Err(format!("opencli: node: {e}"));
+        }
+    };
+    let (stdout, stderr, timed_out) = wait_with_deadline(child, LIST_TIMEOUT);
     let _ = std::fs::remove_file(&req_path);
-    let out = out.map_err(|e| format!("opencli: node: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    if timed_out {
+        return Err(format!(
+            "opencli: listing {} did not finish within {}s (a module may wait forever while it loads)",
+            dir.display(),
+            LIST_TIMEOUT.as_secs()
+        ));
+    }
     let env = stdout
         .lines()
         .rev()
@@ -751,7 +794,7 @@ pub fn list_dir(dir: &Path) -> Result<(Vec<Value>, Vec<String>), String> {
             format!(
                 "opencli: listing {} failed: {}",
                 dir.display(),
-                String::from_utf8_lossy(&out.stderr).trim()
+                stderr.trim()
             )
         })?;
     if env.get("success").and_then(|v| v.as_bool()) != Some(true) {
@@ -1144,5 +1187,31 @@ mod tests {
         assert_eq!(adapter_files(&dir), ["hn/new.ts", "hn/top.js"]);
         assert_eq!(declared_dependencies(&dir), ["cheerio"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn wait_with_deadline_collects_output_and_kills_a_hung_child() {
+        let spawn = |script: &str| {
+            Command::new("sh")
+                .args(["-c", script])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        };
+        let (out, err, timed_out) = wait_with_deadline(
+            spawn("echo out; echo err >&2"),
+            std::time::Duration::from_secs(10),
+        );
+        assert_eq!((out.trim(), err.trim(), timed_out), ("out", "err", false));
+
+        let started = std::time::Instant::now();
+        let (_, _, timed_out) = wait_with_deadline(
+            spawn("exec sleep 30"),
+            std::time::Duration::from_millis(300),
+        );
+        assert!(timed_out);
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
     }
 }

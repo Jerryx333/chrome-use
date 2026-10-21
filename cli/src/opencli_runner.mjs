@@ -216,7 +216,10 @@ if (listMode) {
     emit({ success: false, error: e?.message || String(e) });
     process.exitCode = 1;
   }
-  process.exit();
+  // Pipe writes are asynchronous on macOS: exit once the line is flushed.
+  // (The exit itself is needed: an imported module may keep handles open.)
+  process.stdout.write('', () => process.exit());
+  await new Promise(() => {});
 }
 
 try {
