@@ -118,6 +118,13 @@ try {
   check([...byUrl(t5, '/b'), ...byUrl(t5, '/d')].every(t => t.groupId === -1), 'outside any group');
 
   // 6. The project's next session takes A's tabs over and reuses A's tab.
+  //    A ran a command moments ago, so it holds its lease for LEASE_GRACE
+  //    (#687): age its activity stamps past it.
+  const aged = new Date(Date.now() - 5 * 60 * 1000);
+  for (const f of [`${A.name}.activity`, `${A.name}.created-targets.json`]) {
+    const p = path.join(socketDir, f);
+    if (fs.existsSync(p)) fs.utimesSync(p, aged, aged);
+  }
   ok(cu(3001, '%83', ['open', rig.site + '/b']), 'C open the page A left');
   const C = sessionOf(3001, '%83');
   const t6 = await tabs();
