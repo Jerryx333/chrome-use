@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.250
+## 1.5.251
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.80.
+
+### Features
+
+- **`site add` takes OpenCLI adapters and plugins.** It detects an OpenCLI-format source (an OpenCLI plugin repo such as `chrome-use site add darinouyang/opencli-plugin-shipxy`, a zip, or a local dir like `~/.opencli/clis`) and runs its commands through the OpenCLI runtime chrome-use already ships, over your chrome-use session; they show as `(opencli: <source>)` in `site list`. `.js` modules are supported, and `.ts`-only plugins on Node 22.13+ (compiled with Node's type stripping); YAML-only plugins are refused with a message, since OpenCLI itself stopped loading YAML in 1.8. OpenCLI adapters run as Node code with your user's permissions, not in the page like ours, so a local dir is added directly, while a remote source is pinned to the commit (a zip, or a repo fetched without the GitHub API: its SHA-256) you trusted: at a terminal `site add` lists its modules and asks, and scripts and agents must pass `--trust-node-code`. `site update` re-copies local dirs and never moves a pin; `site add` again to review a newer version. On a shared name our adapters still win, then added OpenCLI sources, then the OpenCLI package. `site sources` and `site remove` cover them too.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.250
+
 Works with extension ab-connect 0.5.80.
 
 ### Bug Fixes
@@ -15,7 +28,6 @@ Works with extension ab-connect 0.5.80.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.249
 
