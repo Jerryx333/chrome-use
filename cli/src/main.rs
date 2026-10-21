@@ -193,20 +193,26 @@ fn site_add_opencli(src: &str, trust_flag: bool, json_out: bool) -> Option<i32> 
             Err(e) => return fail(e),
         }
     }
-    if let Err(e) = opencli::install_staged(src, pin.as_deref(), &staged) {
-        return fail(e);
-    }
+    // A re-add keeps the working copy until the new one lists commands.
+    let replaced = match opencli::install_staged_replacing(src, pin.as_deref(), &staged) {
+        Ok(r) => r,
+        Err(e) => return fail(e),
+    };
     if let Err(e) = opencli::set_source(src, pin.as_deref()) {
+        opencli::rollback(replaced);
         return fail(e);
     }
     let report = match opencli::index_sources() {
         Ok(reports) => reports.into_iter().find(|r| r.source == src),
-        Err(e) => return fail(e),
+        Err(e) => {
+            opencli::rollback(replaced);
+            return fail(e);
+        }
     }
     .unwrap_or_default();
     let commands = report.commands.clone();
     if commands.is_empty() {
-        let _ = opencli::remove_source(src);
+        opencli::rollback(replaced);
         let why = if report.problems.is_empty() {
             "none of its modules registers a command with cli()".to_string()
         } else {
@@ -222,6 +228,7 @@ fn site_add_opencli(src: &str, trust_flag: bool, json_out: bool) -> Option<i32> 
         }
         return Some(1);
     }
+    opencli::commit(replaced);
     let shadowed: Vec<&String> = commands
         .iter()
         .filter(|c| site::load_adapter(c).is_ok())

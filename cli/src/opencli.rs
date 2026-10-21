@@ -413,19 +413,38 @@ pub fn fallback_args(entry: &Value, ours: &Value) -> Vec<String> {
 
 /// Wait for `child`, killing it at `limit`. Its piped stdout and stderr are
 /// read on threads so a chatty command can't fill a pipe while we wait.
+/// Output still held open by a process the child left behind is dropped.
 /// Returns (stdout, stderr, timed out).
 fn wait_with_deadline(
     mut child: std::process::Child,
     limit: std::time::Duration,
 ) -> (String, String, bool) {
-    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+    // Each reader sends its buffer when the pipe closes. A process the child
+    // started can hold the pipe open after the child is gone, so the buffers
+    // are awaited only briefly once it exits.
+    type Drained = (
+        std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        std::sync::mpsc::Receiver<()>,
+    );
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| -> Drained {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let sink = buf.clone();
         std::thread::spawn(move || {
-            let mut buf = String::new();
             if let Some(mut p) = pipe {
-                let _ = p.read_to_string(&mut buf);
+                let mut chunk = [0u8; 8192];
+                while let Ok(n) = p.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    if let Ok(mut b) = sink.lock() {
+                        b.extend_from_slice(&chunk[..n]);
+                    }
+                }
             }
-            buf
-        })
+            let _ = tx.send(());
+        });
+        (buf, rx)
     };
     let out = drain(
         child
@@ -452,11 +471,13 @@ fn wait_with_deadline(
             Err(_) => break false,
         }
     };
-    (
-        out.join().unwrap_or_default(),
-        err.join().unwrap_or_default(),
-        timed_out,
-    )
+    let grace = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let take = |(buf, done): Drained| {
+        let _ = done.recv_timeout(grace.saturating_duration_since(std::time::Instant::now()));
+        let bytes = buf.lock().map(|b| b.clone()).unwrap_or_default();
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    (take(out), take(err), timed_out)
 }
 
 /// Ceiling for listing one added source (importing its modules).
@@ -679,6 +700,81 @@ pub fn install_staged(source: &str, pin: Option<&str>, staged: &Path) -> Result<
         .ok_or("opencli: cannot resolve home dir")?
         .join(slug(source));
     let _ = std::fs::remove_dir_all(&dest);
+    place_staged(source, pin, staged, &dest)
+}
+
+/// What `site add` replaced, so a failed re-add can put it back.
+pub struct Replaced {
+    source: String,
+    previous: Option<AddedSource>,
+    backup: Option<PathBuf>,
+}
+
+/// Like `install_staged`, but keep the previous copy and configuration of
+/// `source` until `commit` (success) or `rollback` (failure).
+pub fn install_staged_replacing(
+    source: &str,
+    pin: Option<&str>,
+    staged: &Path,
+) -> Result<Replaced, String> {
+    let root = sources_root().ok_or("opencli: cannot resolve home dir")?;
+    let dest = root.join(slug(source));
+    let backup = if dest.exists() {
+        let b = root.join(format!(".previous-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::rename(&dest, &b).map_err(|e| format!("opencli: install {source}: {e}"))?;
+        Some(b)
+    } else {
+        None
+    };
+    let replaced = Replaced {
+        source: source.to_string(),
+        previous: read_sources().into_iter().find(|s| s.source == source),
+        backup,
+    };
+    if let Err(e) = place_staged(source, pin, staged, &dest) {
+        rollback(replaced);
+        return Err(e);
+    }
+    Ok(replaced)
+}
+
+/// Keep the new copy: drop the backup.
+pub fn commit(replaced: Replaced) {
+    if let Some(b) = replaced.backup {
+        let _ = std::fs::remove_dir_all(b);
+    }
+}
+
+/// Put back what `install_staged_replacing` replaced (or remove the source if
+/// it is new) and re-list the sources.
+pub fn rollback(replaced: Replaced) {
+    let Some(root) = sources_root() else {
+        return;
+    };
+    let dest = root.join(slug(&replaced.source));
+    let _ = std::fs::remove_dir_all(&dest);
+    if let Some(b) = &replaced.backup {
+        let _ = std::fs::rename(b, &dest);
+    }
+    let mut list = read_sources();
+    match replaced.previous {
+        Some(prev) => match list.iter_mut().find(|s| s.source == prev.source) {
+            Some(s) => *s = prev,
+            None => list.push(prev),
+        },
+        None => list.retain(|s| s.source != replaced.source),
+    }
+    let _ = write_sources(&list);
+    let _ = index_sources();
+}
+
+fn place_staged(
+    source: &str,
+    pin: Option<&str>,
+    staged: &Path,
+    dest: &Path,
+) -> Result<PathBuf, String> {
+    let dest = dest.to_path_buf();
     std::fs::rename(staged, &dest).map_err(|e| format!("opencli: install {source}: {e}"))?;
     if let Some(p) = pin {
         let _ = std::fs::write(dest.join(".chrome-use-pin"), p);
@@ -1213,5 +1309,58 @@ mod tests {
         );
         assert!(timed_out);
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+        // A process left behind holds the pipe open: what was written is kept
+        // and the wait still ends.
+        let started = std::time::Instant::now();
+        let (out, _, timed_out) = wait_with_deadline(
+            spawn("echo kept; sleep 30 & exit 0"),
+            std::time::Duration::from_secs(10),
+        );
+        assert_eq!((out.trim(), timed_out), ("kept", false));
+        assert!(started.elapsed() < std::time::Duration::from_secs(8));
+    }
+
+    #[test]
+    fn a_failed_re_add_puts_the_working_copy_and_pin_back() {
+        let guard = crate::test_utils::EnvGuard::new(&["HOME"]);
+        let home = std::env::temp_dir().join(format!("cu-oc-rb-{}", uuid::Uuid::new_v4().simple()));
+        guard.set("HOME", home.to_str().unwrap());
+        let root = sources_root().unwrap();
+        let dest = root.join(slug("me/repo"));
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("old.js"), "old").unwrap();
+        set_source("me/repo", Some("aaa")).unwrap();
+
+        let staged = staging_dir().unwrap();
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("new.js"), "new").unwrap();
+        let replaced = install_staged_replacing("me/repo", Some("bbb"), &staged).unwrap();
+        set_source("me/repo", Some("bbb")).unwrap();
+        assert!(dest.join("new.js").exists());
+        rollback(replaced);
+        assert!(dest.join("old.js").exists() && !dest.join("new.js").exists());
+        assert_eq!(read_sources()[0].pin.as_deref(), Some("aaa"));
+
+        // A brand-new source that fails leaves nothing behind.
+        let staged = staging_dir().unwrap();
+        std::fs::create_dir_all(&staged).unwrap();
+        let replaced = install_staged_replacing("me/other", None, &staged).unwrap();
+        set_source("me/other", None).unwrap();
+        rollback(replaced);
+        assert!(!root.join(slug("me/other")).exists());
+        assert_eq!(read_sources().len(), 1);
+
+        // Success drops the backup.
+        let staged = staging_dir().unwrap();
+        std::fs::create_dir_all(&staged).unwrap();
+        commit(install_staged_replacing("me/repo", Some("ccc"), &staged).unwrap());
+        let leftovers = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".previous-"))
+            .count();
+        assert_eq!(leftovers, 0);
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
