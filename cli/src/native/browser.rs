@@ -3933,6 +3933,28 @@ impl BrowserManager {
                 Err(_) => {}
             }
         }
+        // The relay files a tab under its Chrome group's title when it
+        // re-attaches one, and an ended session's tabs left their group
+        // (#692): find the tabs this session records, taken over from it,
+        // in the unscoped list. Only recorded ones; attaching re-files them
+        // under this session's group.
+        if rounds > 1 && self.created_targets.iter().any(|t| !by_id.contains_key(t)) {
+            if let Ok(all) = self
+                .client
+                .send_command_typed::<_, GetTargetsResult>(
+                    "ABRelay.getAllTargets",
+                    &json!({}),
+                    None,
+                )
+                .await
+            {
+                for t in all.target_infos.into_iter().filter(should_track_target) {
+                    if self.created_targets.contains(&t.target_id) {
+                        by_id.entry(t.target_id.clone()).or_insert(t);
+                    }
+                }
+            }
+        }
         let live = self.live_relay_targets(by_id.into_values().collect()).await;
         Ok(self.without_leased_elsewhere(live))
     }
