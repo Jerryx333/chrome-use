@@ -60,6 +60,7 @@ import {
 } from './reload-loop.js';
 import { targetInfoForTab } from './target-info.js';
 import { isMissingTabError, targetPresence } from './tab-presence.js';
+import { ungroupRestoredAgentGroups } from './restored-groups.js';
 import {
   announceVerdict,
   createRemovedTabs,
@@ -2695,6 +2696,10 @@ chrome.webNavigation.onCommitted.addListener((details) => {
 // ---- bootstrap + keepalive ------------------------------------------------
 
 chrome.runtime.onInstalled.addListener((details) => {
+  // Also a browser start: Chrome updated itself, or the extension is loaded
+  // from the command line. Not an extension update, which can land while a
+  // session works in its group.
+  if (details?.reason === 'install' || details?.reason === 'chrome_update') ungroupRestoredGroupsAfterStartup();
   // One-time purge: a prior build persisted ADOPTED user tabs into the owned set,
   // which then re-attached them on every restart and left the debugger banner
   // stuck on the user's pages. Clear the persisted set on install/update — agent
@@ -2734,7 +2739,25 @@ async function settleOwnershipAfterInstall(reason) {
   } catch {}
   ownedTabs.clear();
 }
-chrome.runtime.onStartup.addListener(() => void whenReady(connectHost));
+chrome.runtime.onStartup.addListener(() => {
+  void whenReady(connectHost);
+  ungroupRestoredGroupsAfterStartup();
+});
+
+// A restored session brings agent groups back open, and Chrome saves a group
+// that is open when the browser quits (#692): take their tabs out. Restore
+// finishes after startup, so look again a little later.
+function ungroupRestoredGroupsAfterStartup() {
+  for (const ms of [2000, 10000, 30000]) {
+    setTimeout(() => {
+      void ungroupRestoredAgentGroups({
+        // A tab an agent created in this browser run is owned before it is
+        // grouped; a restored tab is not (tab ids change across a restart).
+        groups: chrome.tabGroups, tabs: chrome.tabs, inUse: tabId => tabs.has(tabId) || ownedTabs.has(tabId),
+      }).catch(() => {});
+    }, ms);
+  }
+}
 
 // ---- self-update ----------------------------------------------------------
 //

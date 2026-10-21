@@ -6592,9 +6592,10 @@ Sessions:
   rest close. Tabs of a session that ended without it are closed once it has
   been idle 30 min (AGENT_BROWSER_GROUP_CLEANUP_MS, 0 disables), except tabs
   the user is looking at or switched to; `tabs cleanup` does it now. Tabs
-  are grouped per project (git repository or working directory): a project's
-  group collapses when its last session idles out, and its next session
-  takes over the ended sessions' tabs. `open` reuses the session's tab
+  are grouped per project (git repository or working directory): when a
+  project's last session idles out its tabs leave the group, so Chrome keeps
+  no saved tab group for it, and the project's next session takes them over
+  and groups them again. `open` reuses the session's tab
   already on a page; `open --new-tab` opens another.
   If a registered daemon loses its socket, the next command stops the unreachable
   process and starts a clean replacement for the same session automatically.

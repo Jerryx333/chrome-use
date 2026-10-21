@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.251
+## 1.5.252
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.81.
+
+### Bug Fixes
+
+- **Agent tab groups no longer pile up in Chrome's saved tab groups.** Chrome keeps every tab group that is still open when its window closes or the browser quits as a saved group (signed in, on every device), and no extension can delete one. chrome-use left a project's `✦` group open after its last session ended, collapsed, waiting for the next session or the sweep, so quitting Chrome in between saved it. Now the tabs leave the group when the last session idles out, and `tabs cleanup` and the automatic sweep do the same for any agent group nobody works in; the tabs stay where they are, the project's next session still takes them over and puts them back in its group, and the sweep still closes them after 30 minutes. When Chrome restores the last session, ab-connect 0.5.81 takes the tabs of restored agent groups out of them, which deletes those saved groups too, without closing a tab. Groups saved before this cannot be removed by chrome-use. A group whose session is still running when Chrome quits is still saved. (#692)
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.251
+
 Works with extension ab-connect 0.5.80.
 
 ### Features
@@ -12,7 +25,6 @@ Works with extension ab-connect 0.5.80.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.250
 

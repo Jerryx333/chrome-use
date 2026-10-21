@@ -588,7 +588,7 @@ pub fn idle_enough(last: Option<SystemTime>, idle: Option<Duration>, now: System
 /// What a sweep did, for `tabs cleanup` and the log.
 #[derive(Debug, Default)]
 pub struct SweepReport {
-    pub collapsed: Vec<Value>,
+    pub ungrouped: Vec<Value>,
     pub closed: Vec<Value>,
     pub left_for_user: Vec<Value>,
     pub skipped: Vec<Value>,
@@ -598,7 +598,7 @@ pub struct SweepReport {
 impl SweepReport {
     pub fn to_json(&self) -> Value {
         json!({
-            "collapsed": self.collapsed,
+            "ungrouped": self.ungrouped,
             "closed": self.closed,
             "leftForUser": self.left_for_user,
             "skipped": self.skipped,
@@ -770,7 +770,7 @@ pub async fn sweep(endpoint: &str, opts: SweepOptions) -> Result<SweepReport, St
         sweep_session(&browser, endpoint, &session, opts, now, &mut report).await;
     }
     sweep_unrecorded_groups(&browser, opts, &mut report).await;
-    collapse_idle_groups(&browser, &mut report).await;
+    ungroup_idle_groups(&browser, &mut report).await;
     Ok(report)
 }
 
@@ -1002,9 +1002,13 @@ async fn sweep_unrecorded_groups(browser: &Browser, opts: SweepOptions, report: 
     }
 }
 
-/// Fold away every agent group nobody is working in: what is left in it
-/// waits for the project's next session, or for the sweep.
-async fn collapse_idle_groups(browser: &Browser, report: &mut SweepReport) {
+/// Take the agent's tabs out of every agent group nobody is working in, so
+/// the group goes away: Chrome keeps a group that is still open when its
+/// window closes or the browser quits as a saved tab group, which no
+/// extension API can delete (#692). The tabs wait, ungrouped, for the
+/// project's next session or for the sweep; a tab no agent created stays,
+/// and keeps its group.
+async fn ungroup_idle_groups(browser: &Browser, report: &mut SweepReport) {
     let live = live_labels();
     for group in &browser.groups {
         let (Some(id), Some(title)) = (
@@ -1019,19 +1023,24 @@ async fn collapse_idle_groups(browser: &Browser, report: &mut SweepReport) {
             }
             None => false,
         };
-        if !idle || group.get("collapsed").and_then(Value::as_bool) == Some(true) {
+        if !idle {
             continue;
         }
-        if chrome(
-            &browser.client,
-            "tabGroups",
-            "update",
-            json!([id, { "collapsed": true }]),
-        )
-        .await
-        .is_ok()
-        {
-            report.collapsed.push(json!({ "group": title }));
+        let members: Vec<i64> = browser
+            .tabs
+            .iter()
+            .filter(|(tab, t)| {
+                t.get("groupId").and_then(Value::as_i64) == Some(id) && browser.owned.contains(tab)
+            })
+            .map(|(tab, _)| *tab)
+            .collect();
+        for tab in &members {
+            browser.ungroup(*tab).await;
+        }
+        if !members.is_empty() {
+            report
+                .ungrouped
+                .push(json!({ "group": title, "tabs": members.len() }));
         }
     }
 }

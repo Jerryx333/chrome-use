@@ -409,12 +409,13 @@ async fn run_socket_server(
                     if mgr.is_cdp_connection()
                         && !crate::group_lifecycle::group_has_other_live_session(&session_id)
                     {
-                        // Nobody works in the project's group any more: fold it
-                        // away now. Its tabs stay for the next session of the
-                        // project, or until the sweep closes them.
+                        // Nobody works in the project's group any more: take its
+                        // tabs out of it, so Chrome keeps no saved group when the
+                        // window closes (#692). They stay for the next session
+                        // of the project, or until the sweep closes them.
                         let _ = tokio::time::timeout(
-                            Duration::from_secs(3),
-                            mgr.collapse_own_group(),
+                            Duration::from_secs(5),
+                            mgr.ungroup_own_group(),
                         )
                         .await;
                     }
