@@ -1206,11 +1206,56 @@ pub async fn update() -> Result<usize, String> {
         Err(e) => eprintln!("site update: opencli: {e}"),
         _ => {}
     }
+    sync_opencli_sources().await;
     write_domain_index(&dir);
     if let Some(p) = last_update_path() {
         let _ = std::fs::write(p, now_secs().to_string());
     }
     Ok(count)
+}
+
+/// Refresh the OpenCLI-format sources added with `site add` and re-list them.
+/// A local dir is copied again (edits show up on the next update); a remote
+/// one is fetched only when its installed copy isn't at the trusted pin, and
+/// never moves off it. Best-effort, like the other extra sources.
+async fn sync_opencli_sources() {
+    use crate::opencli;
+    let sources = opencli::read_sources();
+    if sources.is_empty() || opencli::disabled() || !opencli::installed() {
+        return;
+    }
+    for s in &sources {
+        let local = std::path::Path::new(&s.source).is_dir();
+        if !local && s.pin.is_some() && opencli::installed_pin(&s.source) == s.pin {
+            continue;
+        }
+        let staged = match opencli::staging_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("site update: opencli source `{}` skipped: {e}", s.source);
+                continue;
+            }
+        };
+        let fetched = fetch_pinned(&s.source, s.pin.as_deref(), &staged).await;
+        let installed = fetched.and_then(|pin| {
+            opencli::install_staged(&s.source, pin.as_deref().or(s.pin.as_deref()), &staged)
+        });
+        if let Err(e) = installed {
+            let _ = std::fs::remove_dir_all(&staged);
+            eprintln!("site update: opencli source `{}` skipped: {e}", s.source);
+        }
+    }
+    match tokio::task::spawn_blocking(opencli::index_sources).await {
+        Ok(Ok(reports)) => {
+            for r in reports {
+                for p in r.problems {
+                    eprintln!("site update: opencli source `{}`: {p}", r.source);
+                }
+            }
+        }
+        Ok(Err(e)) => eprintln!("site update: opencli sources: {e}"),
+        Err(e) => eprintln!("site update: opencli sources: {e}"),
+    }
 }
 
 /// A GitHub token for private-repo sources: `CHROME_USE_SITES_TOKEN`, else the
@@ -1291,6 +1336,15 @@ async fn fetch_zip_into(
     dir: &std::path::Path,
     strip_top: bool,
 ) -> Result<Vec<String>, String> {
+    let bytes = download(client, url, token).await?;
+    extract_zip(&bytes, dir, strip_top)
+}
+
+async fn download(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<&str>,
+) -> Result<Vec<u8>, String> {
     let mut req = client.get(url);
     if let Some(tok) = token {
         req = req.header("Authorization", format!("Bearer {tok}"));
@@ -1304,7 +1358,15 @@ async fn fetch_zip_into(
         .bytes()
         .await
         .map_err(|e| format!("read body: {e}"))?;
+    Ok(bytes.to_vec())
+}
 
+/// Extract `bytes` (a zip) into `dir`; returns the runnable adapter specs written.
+fn extract_zip(
+    bytes: &[u8],
+    dir: &std::path::Path,
+    strip_top: bool,
+) -> Result<Vec<String>, String> {
     let cursor = std::io::Cursor::new(bytes);
     let mut zip = zip::ZipArchive::new(cursor).map_err(|e| format!("bad zip: {e}"))?;
     let mut written = Vec::new();
@@ -1341,6 +1403,258 @@ async fn fetch_zip_into(
         }
     }
     Ok(written)
+}
+
+/// The format of the adapters in a fetched source tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceFormat {
+    /// chrome-use adapters: `<name>/<cmd>.js` with a `/* @meta */` header.
+    ChromeUse,
+    /// OpenCLI adapters: JS modules calling `cli({...})` from `@jackwener/opencli`.
+    OpenCli,
+    Unknown,
+}
+
+/// Look at the `.js`/`.ts` files under `root` and tell which kind of adapters
+/// they are. Any `@meta` header makes it ours; otherwise an `@jackwener/opencli`
+/// import makes it OpenCLI's.
+pub fn detect_format(root: &std::path::Path) -> SourceFormat {
+    let mut opencli = false;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(cur) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&cur) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if e.file_name() == "node_modules" || e.file_name() == ".git" {
+                continue;
+            }
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            let ext = p.extension().and_then(|x| x.to_str());
+            if !matches!(ext, Some("js") | Some("ts")) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&p) else {
+                continue;
+            };
+            if ext == Some("js") && text.contains("/* @meta") {
+                return SourceFormat::ChromeUse;
+            }
+            if text.contains("@jackwener/opencli") {
+                opencli = true;
+            }
+        }
+    }
+    if opencli {
+        SourceFormat::OpenCli
+    } else {
+        SourceFormat::Unknown
+    }
+}
+
+/// Whether `root` looks like an OpenCLI plugin made only of YAML adapters,
+/// which OpenCLI itself stopped loading in 1.8.
+pub fn is_yaml_opencli_plugin(root: &std::path::Path) -> bool {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return false;
+    };
+    let names: Vec<String> = rd
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    let yaml = names
+        .iter()
+        .filter(|n| n.ends_with(".yaml") || n.ends_with(".yml"))
+        .any(|n| {
+            std::fs::read_to_string(root.join(n))
+                .is_ok_and(|t| t.lines().any(|l| l.starts_with("site:")))
+        });
+    yaml && !names
+        .iter()
+        .any(|n| n.ends_with(".js") || n.ends_with(".ts"))
+}
+
+/// Fetch `source` (local dir, zip URL or GitHub `owner/repo[@ref]`) into the
+/// empty directory `dest`, at `pin` when given. Returns the pin that was
+/// fetched: the commit SHA for GitHub, the zip's SHA-256 for a URL, None for a
+/// local dir. A URL whose content no longer matches `pin` is refused, so code
+/// the user trusted once can't change under them.
+pub async fn fetch_pinned(
+    source: &str,
+    pin: Option<&str>,
+    dest: &std::path::Path,
+) -> Result<Option<String>, String> {
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let as_path = PathBuf::from(source);
+    if as_path.is_dir() {
+        copy_tree_all(&as_path, dest)?;
+        return Ok(None);
+    }
+    let client = reqwest::Client::builder()
+        .user_agent("chrome-use")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let token = sources_token();
+    if source.starts_with("http://") || source.starts_with("https://") {
+        let bytes = download(&client, source, token.as_deref()).await?;
+        let digest = check_digest(source, &bytes, pin)?;
+        let strip = source.contains("github.com");
+        extract_zip(&bytes, dest, strip)?;
+        return Ok(Some(digest));
+    }
+    let (repo_part, git_ref) = match source.rsplit_once('@') {
+        Some((r, g)) if !g.is_empty() => (r, Some(g)),
+        _ => (source, None),
+    };
+    let (owner, repo) = parse_owner_repo(repo_part)
+        .ok_or("unrecognized source (want `owner/repo[@ref]`, a .zip URL, or a local dir path)")?;
+    // Pinned by content: commit resolution failed when it was added (e.g. the
+    // unauthenticated GitHub API rate limit), so it was fetched as an archive.
+    if pin.is_some_and(|p| p.starts_with(DIGEST_PIN)) || (pin.is_none() && token.is_none()) {
+        let resolved = match pin {
+            Some(_) => None,
+            None => resolve_commit(&client, &owner, &repo, git_ref.unwrap_or("HEAD"), None)
+                .await
+                .ok(),
+        };
+        let Some(sha) = resolved else {
+            let bytes = download_archive(&client, &owner, &repo, git_ref).await?;
+            let digest = check_digest(source, &bytes, pin)?;
+            extract_zip(&bytes, dest, true)?;
+            return Ok(Some(digest));
+        };
+        let url = format!("https://github.com/{owner}/{repo}/archive/{sha}.zip");
+        let bytes = download(&client, &url, None).await?;
+        extract_zip(&bytes, dest, true)?;
+        return Ok(Some(sha));
+    }
+    let sha = match pin {
+        Some(p) => p.to_string(),
+        None => {
+            resolve_commit(
+                &client,
+                &owner,
+                &repo,
+                git_ref.unwrap_or("HEAD"),
+                token.as_deref(),
+            )
+            .await?
+        }
+    };
+    let url = match token.as_deref() {
+        Some(_) => format!("https://api.github.com/repos/{owner}/{repo}/zipball/{sha}"),
+        None => format!("https://github.com/{owner}/{repo}/archive/{sha}.zip"),
+    };
+    let bytes = download(&client, &url, token.as_deref()).await?;
+    extract_zip(&bytes, dest, true)?;
+    Ok(Some(sha))
+}
+
+/// Prefix of a pin that is a SHA-256 of the downloaded zip, not a commit.
+const DIGEST_PIN: &str = "sha256:";
+
+/// The `sha256:` pin of `bytes`, refusing content that no longer matches `pin`.
+fn check_digest(source: &str, bytes: &[u8], pin: Option<&str>) -> Result<String, String> {
+    let digest = format!(
+        "{DIGEST_PIN}{}",
+        hex::encode(<sha2::Sha256 as sha2::Digest>::digest(bytes))
+    );
+    match pin.filter(|p| *p != digest) {
+        Some(p) => Err(format!(
+            "its content changed since it was added ({} → {}); run `chrome-use site add {source}` again to review and trust the new version",
+            short_pin(p),
+            short_pin(&digest)
+        )),
+        None => Ok(digest),
+    }
+}
+
+/// A repo's branch archive without the GitHub API: `git_ref`, else main, then master.
+async fn download_archive(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    git_ref: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let refs: Vec<&str> = match git_ref {
+        Some(r) => vec![r],
+        None => vec!["main", "master"],
+    };
+    let mut last = String::new();
+    for r in refs {
+        let url = format!("https://github.com/{owner}/{repo}/archive/{r}.zip");
+        match download(client, &url, None).await {
+            Ok(b) => return Ok(b),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+async fn resolve_commit(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    git_ref: &str,
+    token: Option<&str>,
+) -> Result<String, String> {
+    let mut req = client
+        .get(format!(
+            "https://api.github.com/repos/{owner}/{repo}/commits/{git_ref}"
+        ))
+        .header("Accept", "application/vnd.github.sha");
+    if let Some(tok) = token {
+        req = req.header("Authorization", format!("Bearer {tok}"));
+    }
+    let sha = req
+        .send()
+        .await
+        .map_err(|e| format!("resolve {owner}/{repo}@{git_ref}: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("resolve {owner}/{repo}@{git_ref}: {e}"))?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+    let sha = sha.trim().to_string();
+    if sha.len() != 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "resolve {owner}/{repo}@{git_ref}: unexpected reply"
+        ));
+    }
+    Ok(sha)
+}
+
+/// A commit SHA or digest pin shortened for messages.
+pub fn short_pin(pin: &str) -> &str {
+    let n = if pin.starts_with(DIGEST_PIN) { 19 } else { 12 };
+    &pin[..pin.len().min(n)]
+}
+
+/// Copy every file under `src` into `dest`, skipping `.git` and `node_modules`.
+fn copy_tree_all(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    let mut stack = vec![src.to_path_buf()];
+    while let Some(cur) = stack.pop() {
+        let rd = std::fs::read_dir(&cur).map_err(|e| format!("{}: {e}", cur.display()))?;
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name();
+            if name == ".git" || name == "node_modules" {
+                continue;
+            }
+            let rel = p.strip_prefix(src).map_err(|e| e.to_string())?;
+            if p.is_dir() {
+                std::fs::create_dir_all(dest.join(rel)).map_err(|e| e.to_string())?;
+                stack.push(p);
+            } else {
+                std::fs::copy(&p, dest.join(rel)).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `<name>/<cmd>.js` (relative to the sites dir) → `name/cmd`, for runnable
@@ -3385,5 +3699,56 @@ async function(args){ return args; }"#;
                 assert!(resp.success && resp.error.is_none());
             }
         }
+    }
+    #[test]
+    fn detect_format_tells_our_packs_from_opencli_sources() {
+        let base = std::env::temp_dir().join(format!("cu-fmt-{}", uuid::Uuid::new_v4().simple()));
+        let ours = base.join("ours/github");
+        std::fs::create_dir_all(&ours).unwrap();
+        std::fs::write(
+            ours.join("issues.js"),
+            "/* @meta\n{}\n*/\nasync function(a){}\n",
+        )
+        .unwrap();
+        assert_eq!(detect_format(&base.join("ours")), SourceFormat::ChromeUse);
+
+        let theirs = base.join("theirs/hn");
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(
+            theirs.join("top.js"),
+            "import { cli } from '@jackwener/opencli/registry';\ncli({});\n",
+        )
+        .unwrap();
+        assert_eq!(detect_format(&base.join("theirs")), SourceFormat::OpenCli);
+
+        let ts = base.join("ts");
+        std::fs::create_dir_all(&ts).unwrap();
+        std::fs::write(
+            ts.join("me.ts"),
+            "import { cli } from '@jackwener/opencli/registry';\n",
+        )
+        .unwrap();
+        assert_eq!(detect_format(&ts), SourceFormat::OpenCli);
+
+        let yaml = base.join("yaml");
+        std::fs::create_dir_all(&yaml).unwrap();
+        std::fs::write(yaml.join("hot.yaml"), "site: juejin\nname: hot\n").unwrap();
+        assert_eq!(detect_format(&yaml), SourceFormat::Unknown);
+        assert!(is_yaml_opencli_plugin(&yaml));
+        assert!(!is_yaml_opencli_plugin(&ts));
+
+        std::fs::create_dir_all(base.join("empty")).unwrap();
+        assert_eq!(detect_format(&base.join("empty")), SourceFormat::Unknown);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+    #[test]
+    fn digest_pins_refuse_changed_content() {
+        let pin = check_digest("x", b"one", None).unwrap();
+        assert!(pin.starts_with("sha256:"));
+        assert_eq!(check_digest("x", b"one", Some(&pin)).unwrap(), pin);
+        let err = check_digest("x", b"two", Some(&pin)).unwrap_err();
+        assert!(err.contains("changed since it was added"), "{err}");
+        assert_eq!(short_pin(&pin).len(), 19);
+        assert_eq!(short_pin("0123456789abcdef0123"), "0123456789ab");
     }
 }

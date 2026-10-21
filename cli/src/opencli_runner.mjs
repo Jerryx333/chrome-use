@@ -5,15 +5,22 @@
 //
 // Invoked by `chrome-use site <site>/<cmd>` when no chrome-use adapter has
 // that name: node opencli_runner.mjs <request.json>
-// request: { pkgDir, chromeUse, session, site, name, modulePath, kwargs }
+// request: { pkgDir, clisDir?, chromeUse, session, site, name, modulePath, kwargs }
 // stdout: one JSON line { success, data | error, hint? }
+//
+// `node opencli_runner.mjs --list <request.json>` with { pkgDir, clisDir }
+// imports every adapter module under clisDir (a source the user added with
+// `site add`) and prints { success, data: [manifest entries] }, shaped like the
+// package's cli-manifest.json with modulePath relative to clisDir.
 import { spawn } from 'node:child_process';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import * as nodeModule from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const req = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const listMode = process.argv[2] === '--list';
+const req = JSON.parse(readFileSync(process.argv[listMode ? 3 : 2], 'utf8'));
 const dist = join(req.pkgDir, 'dist', 'src');
 const mod = (p) => import(pathToFileURL(join(dist, p)).href);
 
@@ -131,8 +138,92 @@ function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + '\n');
 }
 
+// Same test OpenCLI's discovery applies before importing a file.
+const MODULE_PATTERN = /\b(?:cli|registerSiteAuthCommands|onStartup|onBeforeExecute|onAfterExecute)\s*\(/;
+
+function adapterFiles(dir) {
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...adapterFiles(p));
+    else if (e.name.endsWith('.js') && !e.name.endsWith('.test.js') && !e.name.endsWith('.d.js')) out.push(p);
+  }
+  return out.sort();
+}
+
+// TypeScript-only plugins: OpenCLI compiles their .ts with esbuild when it
+// installs a plugin. Node 22.13+ can strip the types itself, so each .ts
+// without a .js beside it gets one, in chrome-use's own copy of the source.
+function compileTypeScript(dir, errors) {
+  const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+    if (e.name.startsWith('.') || e.name === 'node_modules') return [];
+    const p = join(d, e.name);
+    return e.isDirectory() ? walk(p) : [p];
+  });
+  const sources = walk(dir).filter((p) => p.endsWith('.ts') && !p.endsWith('.d.ts') && !p.endsWith('.test.ts'));
+  for (const ts of sources) {
+    const js = ts.slice(0, -3) + '.js';
+    if (existsSync(js)) continue;
+    if (typeof nodeModule.stripTypeScriptTypes !== 'function') {
+      errors.push(`${relative(dir, ts)}: TypeScript needs Node.js 22.13+ (or a compiled .js beside it)`);
+      continue;
+    }
+    const code = readFileSync(ts, 'utf8');
+    // 'strip' everywhere; older Node also has 'transform' (enums, namespaces).
+    let out;
+    let err;
+    for (const opts of [undefined, { mode: 'transform' }]) {
+      try { out = nodeModule.stripTypeScriptTypes(code, opts); break; } catch (e) { err = e; }
+    }
+    if (out === undefined) errors.push(`${relative(dir, ts)}: ${err?.message || err}`);
+    else writeFileSync(js, out);
+  }
+}
+
+async function list() {
+  const registry = getRegistry();
+  const entries = [];
+  const errors = [];
+  process.removeAllListeners('warning');
+  compileTypeScript(req.clisDir, errors);
+  for (const file of adapterFiles(req.clisDir)) {
+    if (!MODULE_PATTERN.test(readFileSync(file, 'utf8'))) continue;
+    const before = new Set(registry.values());
+    try {
+      await import(pathToFileURL(file).href);
+    } catch (e) {
+      errors.push(`${relative(req.clisDir, file)}: ${e?.message || e}`);
+      continue;
+    }
+    const modulePath = relative(req.clisDir, file).split(sep).join('/');
+    for (const cmd of new Set(registry.values())) {
+      if (before.has(cmd)) continue;
+      entries.push({
+        site: cmd.site, name: cmd.name, description: cmd.description, access: cmd.access,
+        domain: cmd.domain, strategy: cmd.strategy, browser: cmd.browser,
+        args: cmd.args ?? [], columns: cmd.columns, type: 'js', modulePath,
+      });
+    }
+  }
+  emit({ success: true, data: entries, errors });
+}
+
+if (listMode) {
+  try {
+    await list();
+  } catch (e) {
+    emit({ success: false, error: e?.message || String(e) });
+    process.exitCode = 1;
+  }
+  // Pipe writes are asynchronous on macOS: exit once the line is flushed.
+  // (The exit itself is needed: an imported module may keep handles open.)
+  process.stdout.write('', () => process.exit());
+  await new Promise(() => {});
+}
+
 try {
-  await import(pathToFileURL(join(req.pkgDir, 'clis', req.modulePath)).href);
+  await import(pathToFileURL(join(req.clisDir ?? join(req.pkgDir, 'clis'), req.modulePath)).href);
   const cmd = getRegistry().get(`${req.site}/${req.name}`);
   if (!cmd) throw new Error(`opencli: ${req.site}/${req.name} is not defined in ${req.modulePath}`);
   // Mirrors OpenCLI's executeCommand/runCommand (execution.js), minus its own

@@ -6093,6 +6093,11 @@ Usage:
   chrome-use site verify <name>/<command> [args] [--write-fixture]
                                        Run it and compare the result's shape with a
                                        recorded fixture (--write-fixture records one)
+  chrome-use site add <owner/repo[@ref] | https://…zip | /local/dir> [--trust-node-code]
+                                       Add an adapter source: a pack of ours, or OpenCLI
+                                       adapters/plugins (detected)
+  chrome-use site remove <source>      Remove an added source
+  chrome-use site sources              List the sources
 
 An adapter extracts structured JSON from a site through its own API/DOM,
 in the site's real logged-in page — so it replaces a snapshot+click scrape
@@ -6107,6 +6112,19 @@ never OpenCLI's. OpenCLI is third-party and not maintained by chrome-use:
 each run prints a stderr note and --json adds maintainedBy: "opencli".
 Use it as a last resort; port account actions into chrome-use-sites.
 AGENT_BROWSER_SITES_NO_OPENCLI=1 turns OpenCLI off.
+
+OpenCLI sources: `site add` also takes OpenCLI-format adapters (an OpenCLI
+plugin repo, a zip, or a local dir such as ~/.opencli/clis); `.js` modules
+calling cli() from @jackwener/opencli, and `.ts` ones on Node 22.13+. They
+run as Node code with your user's permissions, unlike our adapters, which
+run in the page. A local dir is added as is. A remote one is pinned to the
+commit (zip: its SHA-256) you trust: at a terminal `site add` lists its
+modules and asks; otherwise it needs --trust-node-code. Agents: show the
+user the source and ask before passing it. `site update` re-copies local
+dirs and never moves a pin; `site add` again to review a newer version.
+Their commands show as "(opencli: <source>)" in `site list`; ours still win
+a shared name, then added OpenCLI sources, then the OpenCLI package.
+YAML-only plugins aren't supported (OpenCLI dropped YAML in 1.8).
 
 The spec is always `name/command`. `site` alone, or a wrong spec, prints a
 one-line usage and points you at `site list`.
@@ -6529,6 +6547,7 @@ Site adapters:  turn a website into a structured-data CLI (runs as you, in your 
                              Positional args fill declared args in order; --key value overrides
   site sources               List built-in default sources and configured extras
   site add|remove <source>   Manage extra GitHub repo, .zip URL, or local-dir sources
+                             (ours or OpenCLI's; remote OpenCLI code: --trust-node-code)
 
 Auth Vault:
   auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
