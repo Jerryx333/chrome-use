@@ -254,6 +254,18 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         <code>reissue</code>（有 clearance 但页面仍被挡 → IP/UA 漂移了，重新解）。把它当预检，别重复解已经过了的挑战。
       </div>
 
+      <h2>隐身模式开关（扩展设置页）</h2>
+      <p>
+        扩展设置页有一个<strong>隐身模式</strong>开关，<strong>默认开启</strong>。开启时，chrome-use 不往它操作的网页里加任何自己的东西：
+        没有浮层，没有具名的页面全局变量，站点适配器的点击和输入通过 <code>args.ui</code> 用真实的输入事件完成。
+        会画进网页的功能只在关闭隐身模式后可用，目前是 agent 光标（柔和的光标和点击波纹），隐身开着时它的开关是灰的。
+        Inspect &amp; Ask 由你自己触发，不受这个开关影响。
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ 给贡献者</div>
+        新功能只要网页能看到（DOM 节点、全局变量、事件监听、合成事件、固定节奏），隐身模式开着时就必须关闭。PR 和发版都会检查这一点，见 AGENTS.md 的「Stealth first」。
+      </div>
+
       <h2>自检：chrome-use stealth status</h2>
       <p>
         任何时候都能自查当前的隐身状态：<code>chrome-use stealth status</code> 报告当前模式加上一组实时探针
