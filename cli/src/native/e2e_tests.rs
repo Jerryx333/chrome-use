@@ -12917,7 +12917,7 @@ async fn e2e_site_ui_requests_send_trusted_input() {
   window.log = [];
   const rec = (e) => {
     const t = e.target && e.target.id;
-    const r = { type: e.type, trusted: e.isTrusted, id: t };
+    const r = { type: e.type, trusted: e.isTrusted, id: t, shift: e.shiftKey };
     if (e.clientX !== undefined) { r.x = e.clientX; r.y = e.clientY; }
     if (e.key !== undefined) r.key = e.key;
     if (e.type === 'click' && t) { const b = e.target.getBoundingClientRect(); r.box = [b.left, b.top, b.right, b.bottom]; }
@@ -12939,7 +12939,7 @@ async function(args) {
   const before = go.getBoundingClientRect().top;
   const c = await args.ui.click(go);
   const after = go.getBoundingClientRect().top;
-  await args.ui.type('#ed', 'Hi 你好');
+  await args.ui.type('#ed', 'Hi #你好');
   await args.ui.type(document.querySelector('#t'), 'ab', { clear: true });
   await args.ui.typeHere('xyz');
   await args.ui.press('Backspace', { repeat: 2 });
@@ -12992,7 +12992,19 @@ async function(args) {
         y >= b[1].as_f64().unwrap() && y <= b[3].as_f64().unwrap(),
         "{click}"
     );
-    assert_eq!(r["ed"], "Hi 你好", "{r}");
+    assert_eq!(r["ed"], "Hi #你好", "{r}");
+    for k in ["H", "#"] {
+        assert!(
+            log.iter()
+                .any(|e| e["type"] == "keydown" && e["key"] == k && e["shift"] == true),
+            "{k} without Shift: {r}"
+        );
+    }
+    assert!(
+        log.iter()
+            .any(|e| e["type"] == "keydown" && e["key"] == "i" && e["shift"] == false),
+        "{r}"
+    );
     assert_eq!(r["t"], "abx", "{r}");
     // ASCII goes as key presses: a keydown before each of its inputs.
     let ed: Vec<&Value> = log.iter().filter(|e| e["id"] == "ed").collect();

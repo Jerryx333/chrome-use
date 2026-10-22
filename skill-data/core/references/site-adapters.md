@@ -210,8 +210,8 @@ pointer path, press dwell, varied keystroke gaps), whatever the vendor detector 
 ```js
 await args.ui.click(el)                          // an Element, or a CSS selector string
 await args.ui.hover(el)
-await args.ui.type(el, '标题 title', { clear: true })  // clicks to focus; ASCII as key presses,
-                                                 // Chinese/emoji as inserted text, like an IME
+await args.ui.type(el, '标题 title', { clear: true })  // clicks to focus; ASCII as key presses
+                                                 // (Shift for capitals), Chinese/emoji in IME-sized commits
 await args.ui.typeHere('#话题')                    // into what has focus, at its caret (rich editors)
 await args.ui.press('Enter')                     // chords too: 'Mod+a' (Cmd on macOS, else Ctrl)
 await args.ui.press('Backspace', { repeat: 5 })

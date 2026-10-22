@@ -6291,10 +6291,7 @@ async fn serve_ui_request(
     if kind == "type" && !names_element {
         // `typeHere`: into whatever has focus, at its caret.
         let text = req.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        for (run, ascii) in split_ascii_runs(text) {
-            interaction::type_text_into_active_context(client, &session_id, &run, None, ascii)
-                .await?;
-        }
+        ui_type_runs(client, &session_id, text).await?;
         return Ok(json!({ "typed": text.chars().count() }));
     }
     if kind == "scroll" && !names_element {
@@ -6393,13 +6390,60 @@ async fn serve_ui_request(
                 interaction::press_key(client, &session_id, "Backspace").await?;
                 tokio::time::sleep(jitter_ms(80, 180)).await;
             }
-            for (run, ascii) in split_ascii_runs(text) {
-                interaction::type_text_into_active_context(client, &session_id, &run, None, ascii)
-                    .await?;
-            }
+            ui_type_runs(client, &session_id, text).await?;
             Ok(json!({ "typed": text.chars().count() }))
         }
     }
+}
+
+/// Type `text` into whatever has focus: ASCII as key presses, other text the
+/// way an IME commits it, a few characters at a time after a pause that grows
+/// with the chunk (picking the candidate), not one insert per character.
+async fn ui_type_runs(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    for (run, ascii) in split_ascii_runs(text) {
+        if ascii {
+            interaction::type_text_into_active_context(client, session_id, &run, None, true)
+                .await?;
+            continue;
+        }
+        for chunk in ime_chunks(&run, humanize::next_seed()) {
+            let n = chunk.chars().count() as u64;
+            tokio::time::sleep(jitter_ms(180 + 90 * n, 360 + 160 * n)).await;
+            client
+                .send_command(
+                    "Input.insertText",
+                    Some(json!({ "text": chunk })),
+                    Some(session_id),
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Split non-ASCII text into IME-sized commits of 1-4 characters; whitespace
+/// and punctuation end a commit.
+fn ime_chunks(run: &str, seed: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut s = seed;
+    let mut want = 1 + (s % 4) as usize;
+    for ch in run.chars() {
+        cur.push(ch);
+        if !ch.is_alphanumeric() || cur.chars().count() >= want {
+            out.push(std::mem::take(&mut cur));
+            s = s.rotate_left(13) ^ 0x9E37_79B9;
+            want = 1 + (s % 4) as usize;
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 fn f(v: &Value, k: &str) -> f64 {
@@ -18568,7 +18612,9 @@ fn describe_located(t: &Value) -> String {
         s.push_str(&format!(" {name:?}"));
     }
     if let Some(b) = t.get("box") {
-        let n = |k: &str| b.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+        // Boxes come from getBoundingClientRect, so most are fractional:
+        // as_i64 alone read 525.17 as 0.
+        let n = |k: &str| b.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0).round() as i64;
         s.push_str(&format!(
             " at ({},{}) {}x{}",
             n("x"),
@@ -28072,6 +28118,31 @@ mod site_ui_tests {
         assert_eq!(ui_offscreen_dy(&m), 420.0);
         // Above the viewport: negative.
         assert!(ui_offscreen_dy(&json!({ "y": -300, "h": 40, "vh": 800 })) < 0.0);
+    }
+
+    #[test]
+    fn located_elements_report_fractional_boxes() {
+        let t = json!({ "tag": "div", "name": "不适宜公开", "box": { "x": 525.17, "y": 205, "width": 66.31, "height": 18 } });
+        assert_eq!(
+            super::describe_located(&t),
+            "<div> \"不适宜公开\" at (525,205) 66x18"
+        );
+    }
+
+    #[test]
+    fn ime_chunks_keep_the_text_and_stay_small() {
+        for seed in [1_u64, 7, 99, 12345] {
+            let c = super::ime_chunks("你好世界，这是一段中文", seed);
+            assert_eq!(c.concat(), "你好世界，这是一段中文");
+            assert!(
+                c.iter().all(|x| (1..=4).contains(&x.chars().count())),
+                "{c:?}"
+            );
+            assert!(
+                c.iter().any(|x| x.ends_with('，')),
+                "punctuation ends a commit: {c:?}"
+            );
+        }
     }
 
     #[test]
