@@ -48,7 +48,7 @@ fn env_override() -> Option<HumanizeLevel> {
 
 fn session_level() -> &'static Mutex<HumanizeLevel> {
     static LEVEL: OnceLock<Mutex<HumanizeLevel>> = OnceLock::new();
-    LEVEL.get_or_init(|| Mutex::new(HumanizeLevel::Off))
+    LEVEL.get_or_init(|| Mutex::new(HumanizeLevel::Fast))
 }
 
 fn last_cursor_slot() -> &'static Mutex<(f64, f64)> {
@@ -152,7 +152,7 @@ impl HumanizeLevel {
         }
     }
 
-    fn is_off(self) -> bool {
+    pub fn is_off(self) -> bool {
         matches!(self, Self::Off)
     }
 }
@@ -432,6 +432,44 @@ pub fn detected_vendors(signals: &DetectSignals) -> Vec<&'static str> {
         }
     }
     out
+}
+
+/// Sites that run their own bot checks the vendor markers do not reveal
+/// (ByteDance, Xiaohongshu, Bilibili, X...): input there is always `Human`.
+/// Matched on the host and its parent domains.
+pub const HIGH_RISK_HOSTS: &[&str] = &[
+    "douyin.com",
+    "tiktok.com",
+    "xiaohongshu.com",
+    "bilibili.com",
+    "x.com",
+    "twitter.com",
+    "weibo.com",
+    "kuaishou.com",
+    "zhihu.com",
+    "taobao.com",
+    "tmall.com",
+    "jd.com",
+    "pinduoduo.com",
+    "instagram.com",
+    "facebook.com",
+    "linkedin.com",
+    "youtube.com",
+];
+
+/// The level a page starts at before vendor markers are looked at: `Human`
+/// on a [`HIGH_RISK_HOSTS`] site, else `Fast` (stealth by default: curved
+/// pointer paths, landing jitter, key presses, at a small cost in speed).
+pub fn host_baseline(host: &str) -> HumanizeLevel {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if HIGH_RISK_HOSTS
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+    {
+        HumanizeLevel::Human
+    } else {
+        HumanizeLevel::Fast
+    }
 }
 
 /// Decide the level for a page. Returns `Human` if any known anti-bot vendor is

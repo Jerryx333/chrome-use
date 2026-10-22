@@ -5565,8 +5565,8 @@ fn insert_data_field(resp: &mut Value, key: &str, value: Value) {
 
 /// After navigation, probe the page for known anti-bot vendor fingerprints
 /// (cookies / script URLs / `window` globals) and set this session's humanize
-/// level accordingly — `Human` when a vendor is detected, else the `Off`
-/// baseline. Best-effort: any failure leaves the level unchanged. Skipped when
+/// level accordingly — `Human` when a vendor is detected or the host is a
+/// [`humanize::HIGH_RISK_HOSTS`] site, else the `Fast` baseline. Best-effort: any failure leaves the level unchanged. Skipped when
 /// `AGENT_BROWSER_HUMANIZE` is set, since the override always wins and the probe
 /// would be wasted work.
 async fn detect_and_set_humanize(mgr: &BrowserManager) {
@@ -5578,7 +5578,7 @@ async fn detect_and_set_humanize(mgr: &BrowserManager) {
         const scripts = Array.from(document.scripts, s => s.src || '').filter(Boolean);
         const re = /_px|bmak|_abck|datadome|reese84|kpsdk|incap_ses|visid_incap|akam/i;
         const globals = Object.getOwnPropertyNames(window).filter(k => re.test(k));
-        return { cookies, scripts, globals };
+        return { cookies, scripts, globals, host: location.hostname };
     } catch (e) { return {}; } })()"#;
     let Ok(val) = mgr.evaluate(js, None).await else {
         return;
@@ -5597,7 +5597,8 @@ async fn detect_and_set_humanize(mgr: &BrowserManager) {
         script_urls: to_strings(val.get("scripts")),
         window_globals: to_strings(val.get("globals")),
     };
-    let level = humanize::detect_level(&signals, humanize::HumanizeLevel::Off);
+    let host = val.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    let level = humanize::detect_level(&signals, humanize::host_baseline(host));
     humanize::set_detected_level(level);
 }
 
@@ -5987,7 +5988,8 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             "domain": domain,
         }));
     };
-    let run_key = run_key.to_string();
+    // Its value no longer matters: the run object is reached by its handle.
+    let _ = run_key;
     let until_done = cmd
         .get("untilDone")
         .and_then(|v| v.as_bool())
@@ -6022,10 +6024,13 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         // Leave the adapter a margin to report before the daemon gives up.
         let budget = left.saturating_sub(Duration::from_millis(1500)).as_millis();
         let start = script.replace(crate::site::BUDGET_PLACEHOLDER, &budget.to_string());
-        handle_evaluate(&json!({ "script": start }), state).await?;
+        // The run is never put on the page: the start script returns the run
+        // object and every later call goes to it by its CDP handle.
+        let run = start_site_run(&start, state).await?;
 
-        let outcome =
-            poll_site_run(&run_key, &files, started, deadline, &mut progress, state).await?;
+        let outcome = poll_site_run(&run, &files, started, deadline, &mut progress, state).await;
+        release_site_run(&run, state).await;
+        let outcome = outcome?;
         let elapsed = started.elapsed().as_millis() as u64;
         let (result, retry_reason) = match outcome {
             SiteRun::Done(result) => {
@@ -6118,6 +6123,96 @@ async fn ensure_site_domain(domain: &str, state: &mut DaemonState) -> Result<(),
     Ok(())
 }
 
+/// Start a site run (or `eval --background`): evaluate the start script
+/// without serialising its result, and return the CDP handle (objectId) of
+/// the run object it returns.
+async fn start_site_run(script: &str, state: &mut DaemonState) -> Result<String, String> {
+    if let Some(mgr) = state.browser.as_mut() {
+        mgr.resync_targets().await.ok();
+    }
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let out = mgr
+        .client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": script, "returnByValue": false, "awaitPromise": false })),
+            Some(&session_id),
+        )
+        .await?;
+    if let Some(ex) = out.get("exceptionDetails") {
+        let msg = ex
+            .pointer("/exception/description")
+            .and_then(|v| v.as_str())
+            .or_else(|| ex.get("text").and_then(|v| v.as_str()))
+            .unwrap_or("page error");
+        return Err(format!("Evaluation error: {msg}"));
+    }
+    out.pointer("/result/objectId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| "site: the run did not start (the page returned no run object)".to_string())
+}
+
+/// Call `func` with `this` = the run object, on the active tab.
+async fn call_on_run(run: &str, func: &str, state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    call_fn_on(&mgr.client, &session_id, run, func).await
+}
+
+async fn call_fn_on(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    object_id: &str,
+    func: &str,
+) -> Result<Value, String> {
+    let out = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object_id,
+                "functionDeclaration": func,
+                "returnByValue": true,
+                "awaitPromise": false,
+            })),
+            Some(session_id),
+        )
+        .await?;
+    if let Some(ex) = out.get("exceptionDetails") {
+        let msg = ex
+            .pointer("/exception/description")
+            .and_then(|v| v.as_str())
+            .or_else(|| ex.get("text").and_then(|v| v.as_str()))
+            .unwrap_or("page error");
+        return Err(format!("Evaluation error: {msg}"));
+    }
+    Ok(out.pointer("/result/value").cloned().unwrap_or(Value::Null))
+}
+
+/// CDP's answers when a handle's context is gone (navigation, reload).
+fn run_handle_gone(e: &str) -> bool {
+    e.contains("Could not find object with given id")
+        || e.contains("Cannot find context with specified id")
+        || e.contains("Inspected target navigated or closed")
+        || e.contains("Execution context was destroyed")
+}
+
+async fn release_site_run(run: &str, state: &DaemonState) {
+    if let Some(mgr) = state.browser.as_ref() {
+        if let Ok(session_id) = mgr.active_session_id() {
+            let _ = mgr
+                .client
+                .send_command(
+                    "Runtime.releaseObject",
+                    Some(json!({ "objectId": run })),
+                    Some(session_id),
+                )
+                .await;
+        }
+    }
+}
+
 enum SiteRun {
     Done(Value),
     Lost,
@@ -6134,7 +6229,7 @@ async fn poll_site_run(
     progress: &mut Vec<Value>,
     state: &mut DaemonState,
 ) -> Result<SiteRun, String> {
-    let poll = crate::site::poll_script(run_key);
+    let poll = crate::site::poll_script();
     let mut interval = Duration::from_millis(250);
     // A poll that lands mid-navigation fails ("context destroyed"); only a run
     // that stays unreachable counts as lost.
@@ -6145,8 +6240,17 @@ async fn poll_site_run(
         }
         tokio::time::sleep(interval).await;
         interval = (interval * 2).min(Duration::from_secs(1));
-        let snap = match handle_evaluate(&json!({ "script": poll }), state).await {
-            Ok(out) => out.get("result").cloned().unwrap_or(Value::Null),
+        let snap = match call_on_run(run_key, &poll, state).await {
+            Ok(v) => v,
+            // A navigation or reload destroys the run's context, and its
+            // handle with it.
+            Err(e) if run_handle_gone(&e) => {
+                failures += 1;
+                if failures >= 3 {
+                    return Ok(SiteRun::Lost);
+                }
+                continue;
+            }
             Err(e) => {
                 failures += 1;
                 if failures >= 5 {
@@ -6158,13 +6262,6 @@ async fn poll_site_run(
             }
         };
         let state_str = snap.get("state").and_then(|v| v.as_str()).unwrap_or("");
-        if state_str == "lost" {
-            failures += 1;
-            if failures >= 3 {
-                return Ok(SiteRun::Lost);
-            }
-            continue;
-        }
         failures = 0;
         for line in snap
             .get("progress")
@@ -6241,10 +6338,10 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
         other => Err(format!("unknown request kind {other:?}")),
     };
     let settle = match &outcome {
-        Ok(v) => crate::site::settle_script(run_key, id, true, v),
-        Err(e) => crate::site::settle_script(run_key, id, false, &json!(e)),
+        Ok(v) => crate::site::settle_script(id, true, v),
+        Err(e) => crate::site::settle_script(id, false, &json!(e)),
     };
-    let _ = handle_evaluate(&json!({ "script": settle }), state).await;
+    let _ = call_on_run(run_key, &settle, state).await;
 }
 
 /// Wheel steps `args.ui` takes to bring an element into view before it
@@ -6299,7 +6396,7 @@ async fn serve_ui_request(
     if kind == "type" && !names_element {
         // `typeHere`: into whatever has focus, at its caret.
         let text = req.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        ui_type_runs(client, &session_id, text).await?;
+        interaction::type_text_into_active_context(client, &session_id, text, None, true).await?;
         return Ok(json!({ "typed": text.chars().count() }));
     }
     if kind == "scroll" && !names_element {
@@ -6399,60 +6496,11 @@ async fn serve_ui_request(
                 interaction::press_key(client, &session_id, "Backspace").await?;
                 tokio::time::sleep(jitter_ms(80, 180)).await;
             }
-            ui_type_runs(client, &session_id, text).await?;
+            interaction::type_text_into_active_context(client, &session_id, text, None, true)
+                .await?;
             Ok(json!({ "typed": text.chars().count() }))
         }
     }
-}
-
-/// Type `text` into whatever has focus: ASCII as key presses, other text the
-/// way an IME commits it, a few characters at a time after a pause that grows
-/// with the chunk (picking the candidate), not one insert per character.
-async fn ui_type_runs(
-    client: &super::cdp::client::CdpClient,
-    session_id: &str,
-    text: &str,
-) -> Result<(), String> {
-    for (run, ascii) in split_ascii_runs(text) {
-        if ascii {
-            interaction::type_text_into_active_context(client, session_id, &run, None, true)
-                .await?;
-            continue;
-        }
-        for chunk in ime_chunks(&run, humanize::next_seed()) {
-            let n = chunk.chars().count() as u64;
-            tokio::time::sleep(jitter_ms(180 + 90 * n, 360 + 160 * n)).await;
-            client
-                .send_command(
-                    "Input.insertText",
-                    Some(json!({ "text": chunk })),
-                    Some(session_id),
-                )
-                .await?;
-        }
-    }
-    Ok(())
-}
-
-/// Split non-ASCII text into IME-sized commits of 1-4 characters; whitespace
-/// and punctuation end a commit.
-fn ime_chunks(run: &str, seed: u64) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut s = seed;
-    let mut want = 1 + (s % 4) as usize;
-    for ch in run.chars() {
-        cur.push(ch);
-        if !ch.is_alphanumeric() || cur.chars().count() >= want {
-            out.push(std::mem::take(&mut cur));
-            s = s.rotate_left(13) ^ 0x9E37_79B9;
-            want = 1 + (s % 4) as usize;
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
 }
 
 fn f(v: &Value, k: &str) -> f64 {
@@ -6497,19 +6545,6 @@ fn jitter_ms(lo: u64, hi: u64) -> Duration {
     Duration::from_millis(lo + s % (hi - lo + 1))
 }
 
-/// Split text into runs of ASCII and non-ASCII characters, in order.
-fn split_ascii_runs(text: &str) -> Vec<(String, bool)> {
-    let mut out: Vec<(String, bool)> = Vec::new();
-    for ch in text.chars() {
-        let ascii = ch.is_ascii();
-        match out.last_mut() {
-            Some((run, a)) if *a == ascii => run.push(ch),
-            _ => out.push((ch.to_string(), ascii)),
-        }
-    }
-    out
-}
-
 async fn ui_eval(
     client: &super::cdp::client::CdpClient,
     session_id: &str,
@@ -6539,10 +6574,11 @@ async fn ui_measure(
     run_key: &str,
     req: &Value,
 ) -> Result<Value, String> {
-    let m = ui_eval(
+    let m = call_fn_on(
         client,
         session_id,
-        &crate::site::ui_measure_script(run_key, req),
+        run_key,
+        &crate::site::ui_measure_script(req),
     )
     .await?;
     if let Some(e) = m.get("error").and_then(|v| v.as_str()) {
@@ -6558,10 +6594,11 @@ async fn ui_hit(
     req: &Value,
     p: (f64, f64),
 ) -> Result<(bool, Option<String>), String> {
-    let v = ui_eval(
+    let v = call_fn_on(
         client,
         session_id,
-        &crate::site::ui_hit_script(run_key, req, p.0, p.1),
+        run_key,
+        &crate::site::ui_hit_script(req, p.0, p.1),
     )
     .await?;
     Ok((
@@ -9624,10 +9661,19 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     // `--key-events`: dispatch real per-character keyDown/keyUp instead of
     // Input.insertText, so autocomplete/combobox widgets that only react to key
     // events fire (e.g. Google's address postal-code lookup) (issue #4/#36).
+    // Stealth by default: on a web page, with humanize on (the default),
+    // type with key presses like a person even without --key-events; a bare
+    // insertText puts text in with no keydown at all. Pages that are not
+    // http(s) (VS Code / Electron webviews reject repeated printable key
+    // events) and AGENT_BROWSER_HUMANIZE=off keep the bulk insert.
     let key_events = cmd
         .get("keyEvents")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || (!humanize::active_level().is_off() && {
+            let url = mgr.get_url().await.unwrap_or_default();
+            url.starts_with("https://") || url.starts_with("http://")
+        });
 
     // `--enter`: after typing, press Enter to commit the highlighted candidate in
     // an async-autocomplete widget (juejin tag input — issue #50). The parser
@@ -10880,16 +10926,73 @@ async fn scroll_until(cmd: &Value, state: &mut DaemonState, target: &str) -> Res
         if tokio::time::Instant::now() >= deadline {
             break (ScrollUntilStop::Timeout, probe.found);
         }
-        interaction::scroll(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            container.as_deref(),
-            dx,
-            dy,
-            &state.iframe_sessions,
-        )
-        .await?;
+        // With humanize on (the default), scroll with the wheel over what is
+        // scrolled, as a person does; a page sees scrollBy as scrolling with
+        // no input at all. A wheel that moves nothing (some pages, headless
+        // setups) falls back to scrollBy for that step.
+        let mut wheeled = false;
+        if !humanize::active_level().is_off() {
+            let at = match container.as_deref() {
+                Some(c) => super::element::resolve_element_center(
+                    &mgr.client,
+                    &session_id,
+                    &state.ref_map,
+                    c,
+                    &state.iframe_sessions,
+                )
+                .await
+                .ok()
+                .map(|(x, y, w, h, _)| jitter_point(x, y, w / 5.0, h / 5.0)),
+                None => viewport_center(mgr, &session_id)
+                    .await
+                    .ok()
+                    .map(|(x, y)| jitter_point(x, y, x / 4.0, y / 4.0)),
+            };
+            if let Some((x, y)) = at {
+                let before = position(
+                    scroll_position(
+                        mgr,
+                        &session_id,
+                        &state.ref_map,
+                        container.as_deref(),
+                        &state.iframe_sessions,
+                    )
+                    .await,
+                );
+                interaction::move_pointer(&mgr.client, &session_id, x, y)
+                    .await
+                    .ok();
+                if dispatch_wheel(&mgr.client, &session_id, x, y, dx, dy)
+                    .await
+                    .is_ok()
+                {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+                    let after = position(
+                        scroll_position(
+                            mgr,
+                            &session_id,
+                            &state.ref_map,
+                            container.as_deref(),
+                            &state.iframe_sessions,
+                        )
+                        .await,
+                    );
+                    wheeled = matches!((before, after), (Some(b), Some(a)) if (a - b).abs() >= 1.0);
+                }
+            }
+        }
+        if !wheeled {
+            interaction::scroll(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                container.as_deref(),
+                dx,
+                dy,
+                &state.iframe_sessions,
+            )
+            .await?;
+        }
         steps += 1;
         tokio::time::sleep(tokio::time::Duration::from_millis(SCROLL_UNTIL_SETTLE_MS)).await;
         let now = position(
@@ -28099,7 +28202,8 @@ mod bwu_signed_in_tests {
 
 #[cfg(test)]
 mod site_ui_tests {
-    use super::{clip_box, split_ascii_runs, ui_offscreen_dy};
+    use super::super::interaction::split_ascii_runs;
+    use super::{clip_box, ui_offscreen_dy};
     use serde_json::json;
 
     #[test]
@@ -28141,7 +28245,7 @@ mod site_ui_tests {
     #[test]
     fn ime_chunks_keep_the_text_and_stay_small() {
         for seed in [1_u64, 7, 99, 12345] {
-            let c = super::ime_chunks("你好世界，这是一段中文", seed);
+            let c = super::super::interaction::ime_chunks("你好世界，这是一段中文", seed);
             assert_eq!(c.concat(), "你好世界，这是一段中文");
             assert!(
                 c.iter().all(|x| (1..=4).contains(&x.chars().count())),

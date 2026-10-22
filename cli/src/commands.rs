@@ -2321,7 +2321,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "action": "site",
                     // No domain: run on the page as it is, don't navigate.
                     "domain": "",
-                    "script": crate::site::build_expr_start(&script, &run_key),
+                    "script": crate::site::build_expr_start(&script),
                     "runKey": run_key,
                     "files": {},
                     "runTimeoutMs": timeout,
@@ -2426,13 +2426,8 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             let family = spec.split('/').next().unwrap_or("");
             let helper = crate::site::load_family_helper(family);
             let run_key = uuid::Uuid::new_v4().simple().to_string();
-            let script = crate::site::build_start(
-                &adapter,
-                &inv.args,
-                helper.as_deref(),
-                &run_key,
-                &inv.files,
-            );
+            let script =
+                crate::site::build_start(&adapter, &inv.args, helper.as_deref(), &inv.files);
             let run_timeout_ms = inv.options.effective_timeout_ms(&adapter);
             Ok(json!({
                 "id": id,

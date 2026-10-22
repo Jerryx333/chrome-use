@@ -1,8 +1,32 @@
 # Changelog
 
-## 1.5.254
+## 1.5.255
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.82.
+
+### Improvements
+
+- **Stealth by default for the everyday commands.** botcheck (botcheck.leeguoo.com, our own detector for what automation leaves in a page and how its input looks) found that `click`, `type` and `scroll --until` gave themselves away, and they now behave like a person by default:
+  - Input is humanized at the Fast level everywhere (a curved pointer path, landing jitter, varied key gaps), and at the Human level on sites that run their own bot checks the vendor detector cannot see (Douyin, TikTok, Xiaohongshu, Bilibili, X, Weibo, Kuaishou, Zhihu, Taobao, Tmall, JD, Pinduoduo, Instagram, Facebook, LinkedIn, YouTube).
+  - A click by CSS selector no longer lands on the exact centre every time: the selector path now knows the element's size, as the `@ref` path did.
+  - `type` on a web page types with key presses without `--key-events`, and Chinese or emoji go through an IME composition (key presses the page sees as `Process`, compositionstart / compositionupdate, then the commit), a few characters per commit. A bulk insert put text in with no keydown at all. Pages that are not http(s) (VS Code and Electron webviews) keep the bulk insert.
+  - `scroll --until` scrolls with the wheel over what it scrolls, falling back to `scrollBy` for a step the wheel does not move.
+  - Capitals and shifted symbols wait a human-sized moment after Shift (3–7 ms before).
+  - `AGENT_BROWSER_HUMANIZE=off` restores the instant behaviour.
+
+### Bug Fixes
+
+- **A running site adapter leaves nothing on `window`.** botcheck found 1.5.253's `Symbol.for(<id>)` slot through `Object.getOwnPropertySymbols(window)`. The start script now returns the run object and the daemon reaches it by its CDP handle (`Runtime.callFunctionOn`); a navigation still ends the run and is reported as interrupted, and `--until-done` reruns it.
+- **`args.ui.type` writes Chinese through an IME composition**, as `type` now does.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.254
+
 Works with extension ab-connect 0.5.82.
 
 ### Features
@@ -17,7 +41,6 @@ Works with extension ab-connect 0.5.82.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.253
 

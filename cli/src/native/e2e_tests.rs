@@ -12849,7 +12849,7 @@ async function(args) {
         &mut no_stdin,
     )
     .unwrap();
-    let script = crate::site::build_start(&adapter, &inv.args, None, "__cu_site_e2e", &inv.files);
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
     let site_cmd = |id: &str, until_done: bool| {
         json!({
             "id": id,
@@ -12896,6 +12896,57 @@ async function(args) {
     server.abort();
 }
 
+/// A navigation ends a run: its context, and the run's handle with it, are
+/// gone. Without --until-done that is reported as `interrupted`; with it the
+/// adapter is run again on the new page and finishes there.
+#[tokio::test]
+#[ignore]
+async fn e2e_site_run_lost_to_a_navigation_is_reported_and_rerun() {
+    let page =
+        r##"<!doctype html><meta charset="utf-8"><title>nav</title><p>page</p>"##.to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let raw = r##"/* @meta
+{"name": "demo/nav", "domain": "127.0.0.1", "args": {}}
+*/
+async function(args) {
+  const n = Number(sessionStorage.getItem('nav') || 0) + 1;
+  sessionStorage.setItem('nav', String(n));
+  if (n === 1 || n === 2) {
+    setTimeout(() => { location.href = location.pathname + '?n=' + n; }, 50);
+    await new Promise((r) => setTimeout(r, 5000));
+    return { status: 'never' };
+  }
+  return { status: 'done', n };
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/nav").unwrap();
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
+    let cmd = |id: &str, until_done: bool| {
+        json!({
+            "id": id, "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": "nav", "files": inv.files, "untilDone": until_done,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 40_000,
+        })
+    };
+    let resp = execute_command(&cmd("3", false), &mut state).await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"]["status"], "interrupted", "{resp}");
+
+    let resp = execute_command(&cmd("4", true), &mut state).await;
+    assert_success(&resp);
+    let data = get_data(&resp);
+    assert_eq!(data["result"]["status"], "done", "{data}");
+    assert_eq!(data["result"]["n"], 3);
+    assert_eq!(data["attempts"], 2);
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
 /// `args.ui` (site adapters asking the daemon for input): the element is
 /// scrolled into view inside its scroll container by trusted wheel events,
 /// clicked with a trusted press inside its box, and typed into with key
@@ -12923,7 +12974,7 @@ async fn e2e_site_ui_requests_send_trusted_input() {
     if (e.type === 'click' && t) { const b = e.target.getBoundingClientRect(); r.box = [b.left, b.top, b.right, b.bottom]; }
     window.log.push(r);
   };
-  for (const k of ['click','mousedown','mouseup','wheel','keydown','keyup','input']) document.addEventListener(k, rec, true);
+  for (const k of ['click','mousedown','mouseup','wheel','keydown','keyup','input','compositionstart','compositionupdate','compositionend']) document.addEventListener(k, rec, true);
 </script>"##
         .to_string();
     let (port, server) = spawn_html_server(page).await;
@@ -12934,7 +12985,8 @@ async fn e2e_site_ui_requests_send_trusted_input() {
 {"name": "demo/ui", "domain": "127.0.0.1", "args": {}}
 */
 async function(args) {
-  const leaked = Object.getOwnPropertyNames(window).filter((k) => /^__cu|site_/.test(k));
+  const leaked = Object.getOwnPropertyNames(window).filter((k) => /^__cu|site_/.test(k))
+    .concat(Object.getOwnPropertySymbols(window).map(String));
   const go = document.querySelector('#go');
   const before = go.getBoundingClientRect().top;
   const c = await args.ui.click(go);
@@ -12953,7 +13005,7 @@ async function(args) {
     let mut no_stdin = || Err("no stdin".to_string());
     let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
     let key = "0f3c9d1e2a7b4c5d8e9f0a1b2c3d4e5f";
-    let script = crate::site::build_start(&adapter, &inv.args, None, key, &inv.files);
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
     let resp = execute_command(
         &json!({
             "id": "3", "action": "site", "domain": "127.0.0.1", "script": script,
@@ -12973,8 +13025,13 @@ async function(args) {
         "{r}"
     );
     let log = r["log"].as_array().unwrap();
+    // Every commit Chrome takes over CDP (Input.insertText, char, Enter,
+    // replacement) dispatches compositionend with isTrusted false; whether a
+    // real IME's is trusted needs a human baseline, so it is not asserted.
     assert!(
-        log.iter().all(|e| e["trusted"] == true),
+        log.iter()
+            .filter(|e| e["type"] != "compositionend")
+            .all(|e| e["trusted"] == true),
         "untrusted event: {r}"
     );
     assert!(log.iter().any(|e| e["type"] == "wheel"), "no wheel: {r}");
@@ -12993,6 +13050,17 @@ async function(args) {
         "{click}"
     );
     assert_eq!(r["ed"], "Hi #你好", "{r}");
+    // Chinese comes through an IME: a composition, committed, with 229 presses.
+    assert!(
+        log.iter()
+            .any(|e| e["type"] == "compositionend" && e["id"] == "ed"),
+        "no IME commit: {r}"
+    );
+    assert!(
+        log.iter()
+            .any(|e| e["type"] == "keydown" && e["key"] == "Process"),
+        "no 229 key press: {r}"
+    );
     for k in ["H", "#"] {
         assert!(
             log.iter()
@@ -13042,7 +13110,7 @@ async function(args) {
     let adapter = crate::site::parse_adapter(raw, "demo/ui-last").unwrap();
     let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
     let key = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
-    let script = crate::site::build_start(&adapter, &inv.args, None, key, &inv.files);
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
     let resp = execute_command(
         &json!({
             "id": "4", "action": "site", "domain": "127.0.0.1", "script": script,
@@ -15144,10 +15212,16 @@ async fn e2e_creator_center_native_actions() {
 <div id="editor" contenteditable="true"></div>
 <script>
 const ed=document.getElementById('editor');
-ed.addEventListener('input',()=>setTimeout(()=>{
+// Like a real rich editor, it leaves the DOM alone while an IME is composing,
+// re-renders once the text is committed, and puts the caret back (at the end,
+// where this test types) after re-rendering.
+const render=()=>setTimeout(()=>{
   const lines=ed.innerText.replace(/\u200b/g,'').split('\n').filter((l,i,a)=>!(i===a.length-1&&l===''));
   ed.innerHTML=lines.map(l=>'<div><span>'+l.replace(/#([^\s#\u00a0]+)(?=[\s\u00a0])/g,(m,w)=>'<span data-mention="#'+w+'" contenteditable="false">\u00a0#'+w+'\u00a0</span>\u200b')+'</span><span>\u200b</span></div>').join('');
-},0));
+  if(document.activeElement===ed){const r=document.createRange();r.selectNodeContents(ed);r.collapse(false);const sel=getSelection();sel.removeAllRanges();sel.addRange(r);}
+},0);
+ed.addEventListener('input',(e)=>{ if(!e.isComposing) render(); });
+ed.addEventListener('compositionend',render);
 </script>"##
         .to_string();
     let (port, _server) = spawn_html_server(page).await;
