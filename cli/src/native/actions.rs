@@ -5565,8 +5565,8 @@ fn insert_data_field(resp: &mut Value, key: &str, value: Value) {
 
 /// After navigation, probe the page for known anti-bot vendor fingerprints
 /// (cookies / script URLs / `window` globals) and set this session's humanize
-/// level accordingly — `Human` when a vendor is detected, else the `Off`
-/// baseline. Best-effort: any failure leaves the level unchanged. Skipped when
+/// level accordingly — `Human` when a vendor is detected or the host is a
+/// [`humanize::HIGH_RISK_HOSTS`] site, else the `Fast` baseline. Best-effort: any failure leaves the level unchanged. Skipped when
 /// `AGENT_BROWSER_HUMANIZE` is set, since the override always wins and the probe
 /// would be wasted work.
 async fn detect_and_set_humanize(mgr: &BrowserManager) {
@@ -5578,7 +5578,7 @@ async fn detect_and_set_humanize(mgr: &BrowserManager) {
         const scripts = Array.from(document.scripts, s => s.src || '').filter(Boolean);
         const re = /_px|bmak|_abck|datadome|reese84|kpsdk|incap_ses|visid_incap|akam/i;
         const globals = Object.getOwnPropertyNames(window).filter(k => re.test(k));
-        return { cookies, scripts, globals };
+        return { cookies, scripts, globals, host: location.hostname };
     } catch (e) { return {}; } })()"#;
     let Ok(val) = mgr.evaluate(js, None).await else {
         return;
@@ -5597,7 +5597,8 @@ async fn detect_and_set_humanize(mgr: &BrowserManager) {
         script_urls: to_strings(val.get("scripts")),
         window_globals: to_strings(val.get("globals")),
     };
-    let level = humanize::detect_level(&signals, humanize::HumanizeLevel::Off);
+    let host = val.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    let level = humanize::detect_level(&signals, humanize::host_baseline(host));
     humanize::set_detected_level(level);
 }
 
@@ -6395,7 +6396,7 @@ async fn serve_ui_request(
     if kind == "type" && !names_element {
         // `typeHere`: into whatever has focus, at its caret.
         let text = req.get("text").and_then(|v| v.as_str()).unwrap_or("");
-        ui_type_runs(client, &session_id, text).await?;
+        interaction::type_text_into_active_context(client, &session_id, text, None, true).await?;
         return Ok(json!({ "typed": text.chars().count() }));
     }
     if kind == "scroll" && !names_element {
@@ -6495,102 +6496,11 @@ async fn serve_ui_request(
                 interaction::press_key(client, &session_id, "Backspace").await?;
                 tokio::time::sleep(jitter_ms(80, 180)).await;
             }
-            ui_type_runs(client, &session_id, text).await?;
+            interaction::type_text_into_active_context(client, &session_id, text, None, true)
+                .await?;
             Ok(json!({ "typed": text.chars().count() }))
         }
     }
-}
-
-/// Type `text` into whatever has focus: ASCII as key presses, other text the
-/// way an IME commits it, a few characters at a time after a pause that grows
-/// with the chunk (picking the candidate), not one insert per character.
-async fn ui_type_runs(
-    client: &super::cdp::client::CdpClient,
-    session_id: &str,
-    text: &str,
-) -> Result<(), String> {
-    for (run, ascii) in split_ascii_runs(text) {
-        if ascii {
-            interaction::type_text_into_active_context(client, session_id, &run, None, true)
-                .await?;
-            continue;
-        }
-        for chunk in ime_chunks(&run, humanize::next_seed()) {
-            ime_commit(client, session_id, &chunk).await?;
-        }
-    }
-    Ok(())
-}
-
-/// One IME commit the way an input method sends it: a key press the page
-/// sees as `Process` (keyCode 229) per composition step, the composition
-/// growing (compositionstart / compositionupdate), then the commit
-/// (compositionend, insertFromComposition-style input), after a pause that
-/// grows with the chunk while the candidate is picked.
-async fn ime_commit(
-    client: &super::cdp::client::CdpClient,
-    session_id: &str,
-    chunk: &str,
-) -> Result<(), String> {
-    let chars: Vec<char> = chunk.chars().collect();
-    for i in 1..=chars.len() {
-        let partial: String = chars[..i].iter().collect();
-        for kind in ["rawKeyDown", "keyUp"] {
-            client
-                .send_command(
-                    "Input.dispatchKeyEvent",
-                    Some(json!({
-                        "type": kind,
-                        "key": "Process",
-                        "code": "",
-                        "windowsVirtualKeyCode": 229,
-                        "nativeVirtualKeyCode": 229,
-                    })),
-                    Some(session_id),
-                )
-                .await?;
-        }
-        let n = partial.chars().count() as i64;
-        client
-            .send_command(
-                "Input.imeSetComposition",
-                Some(json!({ "text": partial, "selectionStart": n, "selectionEnd": n })),
-                Some(session_id),
-            )
-            .await?;
-        tokio::time::sleep(jitter_ms(90, 220)).await;
-    }
-    let n = chars.len() as u64;
-    tokio::time::sleep(jitter_ms(120 + 60 * n, 260 + 120 * n)).await;
-    client
-        .send_command(
-            "Input.insertText",
-            Some(json!({ "text": chunk })),
-            Some(session_id),
-        )
-        .await?;
-    Ok(())
-}
-
-/// Split non-ASCII text into IME-sized commits of 1-4 characters; whitespace
-/// and punctuation end a commit.
-fn ime_chunks(run: &str, seed: u64) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut s = seed;
-    let mut want = 1 + (s % 4) as usize;
-    for ch in run.chars() {
-        cur.push(ch);
-        if !ch.is_alphanumeric() || cur.chars().count() >= want {
-            out.push(std::mem::take(&mut cur));
-            s = s.rotate_left(13) ^ 0x9E37_79B9;
-            want = 1 + (s % 4) as usize;
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
 }
 
 fn f(v: &Value, k: &str) -> f64 {
@@ -6633,19 +6543,6 @@ fn jitter_point(cx: f64, cy: f64, rx: f64, ry: f64) -> (f64, f64) {
 fn jitter_ms(lo: u64, hi: u64) -> Duration {
     let s = humanize::next_seed();
     Duration::from_millis(lo + s % (hi - lo + 1))
-}
-
-/// Split text into runs of ASCII and non-ASCII characters, in order.
-fn split_ascii_runs(text: &str) -> Vec<(String, bool)> {
-    let mut out: Vec<(String, bool)> = Vec::new();
-    for ch in text.chars() {
-        let ascii = ch.is_ascii();
-        match out.last_mut() {
-            Some((run, a)) if *a == ascii => run.push(ch),
-            _ => out.push((ch.to_string(), ascii)),
-        }
-    }
-    out
 }
 
 async fn ui_eval(
@@ -9764,10 +9661,19 @@ async fn handle_type(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     // `--key-events`: dispatch real per-character keyDown/keyUp instead of
     // Input.insertText, so autocomplete/combobox widgets that only react to key
     // events fire (e.g. Google's address postal-code lookup) (issue #4/#36).
+    // Stealth by default: on a web page, with humanize on (the default),
+    // type with key presses like a person even without --key-events; a bare
+    // insertText puts text in with no keydown at all. Pages that are not
+    // http(s) (VS Code / Electron webviews reject repeated printable key
+    // events) and AGENT_BROWSER_HUMANIZE=off keep the bulk insert.
     let key_events = cmd
         .get("keyEvents")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || (!humanize::active_level().is_off() && {
+            let url = mgr.get_url().await.unwrap_or_default();
+            url.starts_with("https://") || url.starts_with("http://")
+        });
 
     // `--enter`: after typing, press Enter to commit the highlighted candidate in
     // an async-autocomplete widget (juejin tag input — issue #50). The parser
@@ -11020,16 +10926,73 @@ async fn scroll_until(cmd: &Value, state: &mut DaemonState, target: &str) -> Res
         if tokio::time::Instant::now() >= deadline {
             break (ScrollUntilStop::Timeout, probe.found);
         }
-        interaction::scroll(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            container.as_deref(),
-            dx,
-            dy,
-            &state.iframe_sessions,
-        )
-        .await?;
+        // With humanize on (the default), scroll with the wheel over what is
+        // scrolled, as a person does; a page sees scrollBy as scrolling with
+        // no input at all. A wheel that moves nothing (some pages, headless
+        // setups) falls back to scrollBy for that step.
+        let mut wheeled = false;
+        if !humanize::active_level().is_off() {
+            let at = match container.as_deref() {
+                Some(c) => super::element::resolve_element_center(
+                    &mgr.client,
+                    &session_id,
+                    &state.ref_map,
+                    c,
+                    &state.iframe_sessions,
+                )
+                .await
+                .ok()
+                .map(|(x, y, w, h, _)| jitter_point(x, y, w / 5.0, h / 5.0)),
+                None => viewport_center(mgr, &session_id)
+                    .await
+                    .ok()
+                    .map(|(x, y)| jitter_point(x, y, x / 4.0, y / 4.0)),
+            };
+            if let Some((x, y)) = at {
+                let before = position(
+                    scroll_position(
+                        mgr,
+                        &session_id,
+                        &state.ref_map,
+                        container.as_deref(),
+                        &state.iframe_sessions,
+                    )
+                    .await,
+                );
+                interaction::move_pointer(&mgr.client, &session_id, x, y)
+                    .await
+                    .ok();
+                if dispatch_wheel(&mgr.client, &session_id, x, y, dx, dy)
+                    .await
+                    .is_ok()
+                {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+                    let after = position(
+                        scroll_position(
+                            mgr,
+                            &session_id,
+                            &state.ref_map,
+                            container.as_deref(),
+                            &state.iframe_sessions,
+                        )
+                        .await,
+                    );
+                    wheeled = matches!((before, after), (Some(b), Some(a)) if (a - b).abs() >= 1.0);
+                }
+            }
+        }
+        if !wheeled {
+            interaction::scroll(
+                &mgr.client,
+                &session_id,
+                &state.ref_map,
+                container.as_deref(),
+                dx,
+                dy,
+                &state.iframe_sessions,
+            )
+            .await?;
+        }
         steps += 1;
         tokio::time::sleep(tokio::time::Duration::from_millis(SCROLL_UNTIL_SETTLE_MS)).await;
         let now = position(
@@ -28239,7 +28202,8 @@ mod bwu_signed_in_tests {
 
 #[cfg(test)]
 mod site_ui_tests {
-    use super::{clip_box, split_ascii_runs, ui_offscreen_dy};
+    use super::super::interaction::split_ascii_runs;
+    use super::{clip_box, ui_offscreen_dy};
     use serde_json::json;
 
     #[test]
@@ -28281,7 +28245,7 @@ mod site_ui_tests {
     #[test]
     fn ime_chunks_keep_the_text_and_stay_small() {
         for seed in [1_u64, 7, 99, 12345] {
-            let c = super::ime_chunks("你好世界，这是一段中文", seed);
+            let c = super::super::interaction::ime_chunks("你好世界，这是一段中文", seed);
             assert_eq!(c.concat(), "你好世界，这是一段中文");
             assert!(
                 c.iter().all(|x| (1..=4).contains(&x.chars().count())),

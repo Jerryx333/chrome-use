@@ -15212,10 +15212,16 @@ async fn e2e_creator_center_native_actions() {
 <div id="editor" contenteditable="true"></div>
 <script>
 const ed=document.getElementById('editor');
-ed.addEventListener('input',()=>setTimeout(()=>{
+// Like a real rich editor, it leaves the DOM alone while an IME is composing,
+// re-renders once the text is committed, and puts the caret back (at the end,
+// where this test types) after re-rendering.
+const render=()=>setTimeout(()=>{
   const lines=ed.innerText.replace(/\u200b/g,'').split('\n').filter((l,i,a)=>!(i===a.length-1&&l===''));
   ed.innerHTML=lines.map(l=>'<div><span>'+l.replace(/#([^\s#\u00a0]+)(?=[\s\u00a0])/g,(m,w)=>'<span data-mention="#'+w+'" contenteditable="false">\u00a0#'+w+'\u00a0</span>\u200b')+'</span><span>\u200b</span></div>').join('');
-},0));
+  if(document.activeElement===ed){const r=document.createRange();r.selectNodeContents(ed);r.collapse(false);const sel=getSelection();sel.removeAllRanges();sel.addRange(r);}
+},0);
+ed.addEventListener('input',(e)=>{ if(!e.isComposing) render(); });
+ed.addEventListener('compositionend',render);
 </script>"##
         .to_string();
     let (port, _server) = spawn_html_server(page).await;

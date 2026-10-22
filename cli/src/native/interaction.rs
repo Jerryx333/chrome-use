@@ -3431,6 +3431,115 @@ pub async fn type_text_into_active_context(
     delay_ms: Option<u64>,
     key_events: bool,
 ) -> Result<(), String> {
+    // Typing with key events goes the way a person types: ASCII as key
+    // presses, other text (Chinese, emoji) through an IME composition, a few
+    // characters per commit.
+    if key_events && !text.is_ascii() {
+        for (run, ascii) in split_ascii_runs(text) {
+            if ascii {
+                type_chars(client, session_id, &run, delay_ms, true).await?;
+            } else {
+                for chunk in ime_chunks(&run, humanize::next_seed()) {
+                    ime_commit(client, session_id, &chunk).await?;
+                }
+            }
+        }
+        return Ok(());
+    }
+    type_chars(client, session_id, text, delay_ms, key_events).await
+}
+
+/// Split text into runs of ASCII and non-ASCII characters, in order.
+pub fn split_ascii_runs(text: &str) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
+    for ch in text.chars() {
+        let ascii = ch.is_ascii();
+        match out.last_mut() {
+            Some((run, a)) if *a == ascii => run.push(ch),
+            _ => out.push((ch.to_string(), ascii)),
+        }
+    }
+    out
+}
+
+/// One IME commit the way an input method sends it: a key press the page
+/// sees as `Process` (keyCode 229) per composition step, the composition
+/// growing (compositionstart / compositionupdate), then the commit
+/// (compositionend, insertFromComposition-style input), after a pause that
+/// grows with the chunk while the candidate is picked.
+pub async fn ime_commit(client: &CdpClient, session_id: &str, chunk: &str) -> Result<(), String> {
+    let chars: Vec<char> = chunk.chars().collect();
+    for i in 1..=chars.len() {
+        let partial: String = chars[..i].iter().collect();
+        for kind in ["rawKeyDown", "keyUp"] {
+            client
+                .send_command(
+                    "Input.dispatchKeyEvent",
+                    Some(json!({
+                        "type": kind,
+                        "key": "Process",
+                        "code": "",
+                        "windowsVirtualKeyCode": 229,
+                        "nativeVirtualKeyCode": 229,
+                    })),
+                    Some(session_id),
+                )
+                .await?;
+        }
+        let n = partial.chars().count() as i64;
+        client
+            .send_command(
+                "Input.imeSetComposition",
+                Some(json!({ "text": partial, "selectionStart": n, "selectionEnd": n })),
+                Some(session_id),
+            )
+            .await?;
+        tokio::time::sleep(pause_ms(90, 220)).await;
+    }
+    let n = chars.len() as u64;
+    tokio::time::sleep(pause_ms(120 + 60 * n, 260 + 120 * n)).await;
+    client
+        .send_command(
+            "Input.insertText",
+            Some(json!({ "text": chunk })),
+            Some(session_id),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Split non-ASCII text into IME-sized commits of 1-4 characters; whitespace
+/// and punctuation end a commit.
+pub fn ime_chunks(run: &str, seed: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut s = seed;
+    let mut want = 1 + (s % 4) as usize;
+    for ch in run.chars() {
+        cur.push(ch);
+        if !ch.is_alphanumeric() || cur.chars().count() >= want {
+            out.push(std::mem::take(&mut cur));
+            s = s.rotate_left(13) ^ 0x9E37_79B9;
+            want = 1 + (s % 4) as usize;
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn pause_ms(lo: u64, hi: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(lo + humanize::next_seed() % (hi - lo + 1))
+}
+
+async fn type_chars(
+    client: &CdpClient,
+    session_id: &str,
+    text: &str,
+    delay_ms: Option<u64>,
+    key_events: bool,
+) -> Result<(), String> {
     // Per-character timing: an explicit `delay_ms` wins (caller asked for a
     // fixed cadence); otherwise fall back to humanize — variable, human-like
     // inter-keystroke gaps at Fast/Human, all-zero (instant) at Off.
