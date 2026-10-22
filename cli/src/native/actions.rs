@@ -6177,12 +6177,18 @@ async fn poll_site_run(
                 "message": line,
             }));
         }
-        for req in snap
+        let requests = snap
             .get("requests")
             .and_then(|v| v.as_array())
             .cloned()
-            .unwrap_or_default()
-        {
+            .unwrap_or_default();
+        if !requests.is_empty() {
+            // An adapter driving the page with `args.ui` sends its next request
+            // right after this one settles; polling at the backed-off 1s would
+            // add a second to every click.
+            interval = Duration::from_millis(100);
+        }
+        for req in requests {
             serve_site_request(run_key, &req, files, state).await;
         }
         if state_str == "done" {
@@ -6217,6 +6223,13 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
                 None => Err(format!("no file was passed for --{arg}")),
             }
         }
+        Some(kind @ ("click" | "hover" | "type" | "press" | "scroll")) => {
+            // Trusted input at Human pace for the whole request: the sites
+            // adapters write to (Douyin, Bilibili, ...) run their own bot
+            // checks, which the vendor detector does not recognise.
+            let _floor = humanize::floor_level(humanize::HumanizeLevel::Human);
+            serve_ui_request(run_key, kind, req, state).await
+        }
         other => Err(format!("unknown request kind {other:?}")),
     };
     let settle = match &outcome {
@@ -6224,6 +6237,341 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
         Err(e) => crate::site::settle_script(run_key, id, false, &json!(e)),
     };
     let _ = handle_evaluate(&json!({ "script": settle }), state).await;
+}
+
+/// Wheel steps `args.ui` takes to bring an element into view before it
+/// gives up.
+const UI_SCROLL_STEPS: usize = 12;
+
+/// One `args.ui` request from a site adapter, answered with trusted CDP input
+/// (`isTrusted` events, humanized motion and timing) instead of the synthetic
+/// `el.click()` / `dispatchEvent` an adapter can make itself.
+async fn serve_ui_request(
+    run_key: &str,
+    kind: &str,
+    req: &Value,
+    state: &mut DaemonState,
+) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let client = &mgr.client;
+    let names_element = req.get("target").is_some() || req.get("selector").is_some();
+
+    if kind == "press" {
+        let key = req.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        if key.is_empty() {
+            return Err("args.ui.press: no key".to_string());
+        }
+        // `Mod+a`: Cmd on macOS, Control elsewhere.
+        let chord = match key.split_once('+') {
+            Some((m, rest)) if m.eq_ignore_ascii_case("mod") => {
+                let m = if cfg!(target_os = "macos") {
+                    "Meta"
+                } else {
+                    "Control"
+                };
+                format!("{m}+{rest}")
+            }
+            _ => key.to_string(),
+        };
+        let (name, modifiers) = parse_key_chord(&chord);
+        let repeat = req
+            .get("repeat")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1)
+            .clamp(1, 500);
+        for i in 0..repeat {
+            if i > 0 {
+                tokio::time::sleep(jitter_ms(40, 110)).await;
+            }
+            interaction::press_key_with_modifiers(client, &session_id, &name, modifiers).await?;
+        }
+        return Ok(json!({ "pressed": key, "times": repeat }));
+    }
+    if kind == "type" && !names_element {
+        // `typeHere`: into whatever has focus, at its caret.
+        let text = req.get("text").and_then(|v| v.as_str()).unwrap_or("");
+        ui_type_runs(client, &session_id, text).await?;
+        return Ok(json!({ "typed": text.chars().count() }));
+    }
+    if kind == "scroll" && !names_element {
+        let dy = req.get("dy").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let m = ui_viewport(client, &session_id).await?;
+        let (x, y) = jitter_point(m.0 / 2.0, m.1 / 2.0, m.0 / 6.0, m.1 / 6.0);
+        interaction::move_pointer(client, &session_id, x, y).await?;
+        dispatch_wheel(client, &session_id, x, y, 0.0, dy).await?;
+        return Ok(json!({ "scrolled": dy }));
+    }
+
+    // Bring the element into view the way a person would: wheel over the
+    // container it scrolls in, re-measuring after each step.
+    let mut m = ui_measure(client, &session_id, run_key, req).await?;
+    for _ in 0..UI_SCROLL_STEPS {
+        let off = ui_offscreen_dy(&m);
+        if off == 0.0 {
+            break;
+        }
+        let (cx, cy, cw, ch) = m
+            .get("scroller")
+            .filter(|s| s.is_object())
+            .map(|s| (f(s, "x"), f(s, "y"), f(s, "w"), f(s, "h")))
+            .unwrap_or((0.0, 0.0, f(&m, "vw"), f(&m, "vh")));
+        let vw = f(&m, "vw");
+        let vh = f(&m, "vh");
+        let (cx, cy, cw, ch) = clip_box((cx, cy, cw, ch), vw, vh);
+        let (x, y) = jitter_point(cx + cw / 2.0, cy + ch / 2.0, cw / 5.0, ch / 5.0);
+        interaction::move_pointer(client, &session_id, x, y).await?;
+        let step = off.clamp(-(ch * 0.8).max(120.0), (ch * 0.8).max(120.0));
+        dispatch_wheel(client, &session_id, x, y, 0.0, step).await?;
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        m = ui_measure(client, &session_id, run_key, req).await?;
+    }
+    if ui_offscreen_dy(&m) != 0.0 {
+        return Err("args.ui: could not scroll the element into view".to_string());
+    }
+    if kind == "scroll" {
+        return Ok(json!({ "inView": true }));
+    }
+
+    let bbox = (f(&m, "x"), f(&m, "y"), f(&m, "w"), f(&m, "h"));
+    if bbox.2 < 1.0 || bbox.3 < 1.0 {
+        return Err("args.ui: the element has no size (hidden?)".to_string());
+    }
+    let visible = clip_box(bbox, f(&m, "vw"), f(&m, "vh"));
+    // A jittered landing point that is really on the element; the centre if
+    // the jitter lands on something covering part of it.
+    let mut point =
+        humanize::landing_point(visible, humanize::active_level(), humanize::next_seed());
+    let mut hit = ui_hit(client, &session_id, run_key, req, point).await?;
+    if !hit.0 {
+        point = (visible.0 + visible.2 / 2.0, visible.1 + visible.3 / 2.0);
+        hit = ui_hit(client, &session_id, run_key, req, point).await?;
+    }
+    if !hit.0 {
+        return Err(format!(
+            "args.ui.{kind}: the element is covered by {}",
+            hit.1.unwrap_or_else(|| "something else".to_string())
+        ));
+    }
+    let (x, y) = point;
+
+    match kind {
+        "hover" => {
+            interaction::move_pointer(client, &session_id, x, y).await?;
+            Ok(json!({ "hovered": { "x": x.round(), "y": y.round() } }))
+        }
+        "click" => {
+            let count = req
+                .get("count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1)
+                .clamp(1, 3) as i32;
+            let button = req.get("button").and_then(|v| v.as_str()).unwrap_or("left");
+            interaction::click_at_point(client, &session_id, x, y, button, count).await?;
+            Ok(json!({ "clicked": { "x": x.round(), "y": y.round() } }))
+        }
+        _ => {
+            // type: focus with a real click, optionally clear the way a user
+            // does (select all, Backspace), then type. ASCII goes as key
+            // presses; other text (Chinese, emoji) the way an IME commits it,
+            // as inserted text.
+            let text = req.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            interaction::click_at_point(client, &session_id, x, y, "left", 1).await?;
+            tokio::time::sleep(jitter_ms(120, 260)).await;
+            if req.get("clear").and_then(|v| v.as_bool()).unwrap_or(false) {
+                interaction::press_key_with_modifiers(
+                    client,
+                    &session_id,
+                    "a",
+                    Some(interaction::platform_command_modifier()),
+                )
+                .await?;
+                tokio::time::sleep(jitter_ms(60, 140)).await;
+                interaction::press_key(client, &session_id, "Backspace").await?;
+                tokio::time::sleep(jitter_ms(80, 180)).await;
+            }
+            ui_type_runs(client, &session_id, text).await?;
+            Ok(json!({ "typed": text.chars().count() }))
+        }
+    }
+}
+
+/// Type `text` into whatever has focus: ASCII as key presses, other text the
+/// way an IME commits it, a few characters at a time after a pause that grows
+/// with the chunk (picking the candidate), not one insert per character.
+async fn ui_type_runs(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    text: &str,
+) -> Result<(), String> {
+    for (run, ascii) in split_ascii_runs(text) {
+        if ascii {
+            interaction::type_text_into_active_context(client, session_id, &run, None, true)
+                .await?;
+            continue;
+        }
+        for chunk in ime_chunks(&run, humanize::next_seed()) {
+            let n = chunk.chars().count() as u64;
+            tokio::time::sleep(jitter_ms(180 + 90 * n, 360 + 160 * n)).await;
+            client
+                .send_command(
+                    "Input.insertText",
+                    Some(json!({ "text": chunk })),
+                    Some(session_id),
+                )
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Split non-ASCII text into IME-sized commits of 1-4 characters; whitespace
+/// and punctuation end a commit.
+fn ime_chunks(run: &str, seed: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut s = seed;
+    let mut want = 1 + (s % 4) as usize;
+    for ch in run.chars() {
+        cur.push(ch);
+        if !ch.is_alphanumeric() || cur.chars().count() >= want {
+            out.push(std::mem::take(&mut cur));
+            s = s.rotate_left(13) ^ 0x9E37_79B9;
+            want = 1 + (s % 4) as usize;
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn f(v: &Value, k: &str) -> f64 {
+    v.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0)
+}
+
+/// How far (CSS px, signed) an element measured by `ui_measure_script` sits
+/// outside the viewport and its scroll container vertically; 0 when its
+/// centre band is on screen.
+fn ui_offscreen_dy(m: &Value) -> f64 {
+    let (y, h, vh) = (f(m, "y"), f(m, "h"), f(m, "vh"));
+    let (top, bottom) = match m.get("scroller").filter(|s| s.is_object()) {
+        Some(s) => (f(s, "y").max(0.0), (f(s, "y") + f(s, "h")).min(vh)),
+        None => (0.0, vh),
+    };
+    let mid = y + h / 2.0;
+    let margin = (h / 2.0).min(24.0);
+    if mid - margin < top || mid + margin > bottom {
+        mid - (top + bottom) / 2.0
+    } else {
+        0.0
+    }
+}
+
+/// The part of a box inside the viewport.
+fn clip_box(b: (f64, f64, f64, f64), vw: f64, vh: f64) -> (f64, f64, f64, f64) {
+    let x0 = b.0.max(0.0);
+    let y0 = b.1.max(0.0);
+    let x1 = (b.0 + b.2).min(vw);
+    let y1 = (b.1 + b.3).min(vh);
+    (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+}
+
+fn jitter_point(cx: f64, cy: f64, rx: f64, ry: f64) -> (f64, f64) {
+    let s = humanize::next_seed();
+    let u = |k: u32| ((s.rotate_left(k) & 0xffff) as f64 / 65535.0) * 2.0 - 1.0;
+    (cx + u(7) * rx, cy + u(29) * ry)
+}
+
+fn jitter_ms(lo: u64, hi: u64) -> Duration {
+    let s = humanize::next_seed();
+    Duration::from_millis(lo + s % (hi - lo + 1))
+}
+
+/// Split text into runs of ASCII and non-ASCII characters, in order.
+fn split_ascii_runs(text: &str) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = Vec::new();
+    for ch in text.chars() {
+        let ascii = ch.is_ascii();
+        match out.last_mut() {
+            Some((run, a)) if *a == ascii => run.push(ch),
+            _ => out.push((ch.to_string(), ascii)),
+        }
+    }
+    out
+}
+
+async fn ui_eval(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    expr: &str,
+) -> Result<Value, String> {
+    let out = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": expr, "returnByValue": true })),
+            Some(session_id),
+        )
+        .await?;
+    if let Some(ex) = out.get("exceptionDetails") {
+        return Err(format!(
+            "args.ui: {}",
+            ex.get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("page error")
+        ));
+    }
+    Ok(out.pointer("/result/value").cloned().unwrap_or(Value::Null))
+}
+
+async fn ui_measure(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    run_key: &str,
+    req: &Value,
+) -> Result<Value, String> {
+    let m = ui_eval(
+        client,
+        session_id,
+        &crate::site::ui_measure_script(run_key, req),
+    )
+    .await?;
+    if let Some(e) = m.get("error").and_then(|v| v.as_str()) {
+        return Err(format!("args.ui: {e}"));
+    }
+    Ok(m)
+}
+
+async fn ui_hit(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    run_key: &str,
+    req: &Value,
+    p: (f64, f64),
+) -> Result<(bool, Option<String>), String> {
+    let v = ui_eval(
+        client,
+        session_id,
+        &crate::site::ui_hit_script(run_key, req, p.0, p.1),
+    )
+    .await?;
+    Ok((
+        v.get("hit").and_then(|b| b.as_bool()).unwrap_or(false),
+        v.get("top").and_then(|t| t.as_str()).map(String::from),
+    ))
+}
+
+async fn ui_viewport(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+) -> Result<(f64, f64), String> {
+    let v = ui_eval(
+        client,
+        session_id,
+        "({ w: window.innerWidth, h: window.innerHeight })",
+    )
+    .await?;
+    Ok((f(&v, "w"), f(&v, "h")))
 }
 
 /// Local stealth self-check: reports the active mode, live fingerprint probes,
@@ -18264,7 +18612,9 @@ fn describe_located(t: &Value) -> String {
         s.push_str(&format!(" {name:?}"));
     }
     if let Some(b) = t.get("box") {
-        let n = |k: &str| b.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+        // Boxes come from getBoundingClientRect, so most are fractional:
+        // as_i64 alone read 525.17 as 0.
+        let n = |k: &str| b.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0).round() as i64;
         s.push_str(&format!(
             " at ({},{}) {}x{}",
             n("x"),
@@ -27735,5 +28085,71 @@ mod bwu_signed_in_tests {
             "https://appstoreconnect.apple.com/apps"
         ));
         assert!(!auth_url_is_sign_in("not a url"));
+    }
+}
+
+#[cfg(test)]
+mod site_ui_tests {
+    use super::{clip_box, split_ascii_runs, ui_offscreen_dy};
+    use serde_json::json;
+
+    #[test]
+    fn text_splits_into_ascii_and_other_runs() {
+        assert_eq!(
+            split_ascii_runs("Hi 你好, ok"),
+            vec![
+                ("Hi ".to_string(), true),
+                ("你好".to_string(), false),
+                (", ok".to_string(), true)
+            ]
+        );
+        assert!(split_ascii_runs("").is_empty());
+    }
+
+    #[test]
+    fn offscreen_distance_uses_the_scroll_container() {
+        // On screen in the viewport: nothing to do.
+        assert_eq!(
+            ui_offscreen_dy(&json!({ "y": 100, "h": 40, "vh": 800 })),
+            0.0
+        );
+        // Below a 200px container at the top: scroll down to its middle.
+        let m = json!({ "y": 500, "h": 40, "vh": 800, "scroller": { "x": 0, "y": 0, "w": 300, "h": 200 } });
+        assert_eq!(ui_offscreen_dy(&m), 420.0);
+        // Above the viewport: negative.
+        assert!(ui_offscreen_dy(&json!({ "y": -300, "h": 40, "vh": 800 })) < 0.0);
+    }
+
+    #[test]
+    fn located_elements_report_fractional_boxes() {
+        let t = json!({ "tag": "div", "name": "不适宜公开", "box": { "x": 525.17, "y": 205, "width": 66.31, "height": 18 } });
+        assert_eq!(
+            super::describe_located(&t),
+            "<div> \"不适宜公开\" at (525,205) 66x18"
+        );
+    }
+
+    #[test]
+    fn ime_chunks_keep_the_text_and_stay_small() {
+        for seed in [1_u64, 7, 99, 12345] {
+            let c = super::ime_chunks("你好世界，这是一段中文", seed);
+            assert_eq!(c.concat(), "你好世界，这是一段中文");
+            assert!(
+                c.iter().all(|x| (1..=4).contains(&x.chars().count())),
+                "{c:?}"
+            );
+            assert!(
+                c.iter().any(|x| x.ends_with('，')),
+                "punctuation ends a commit: {c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn boxes_clip_to_the_viewport() {
+        assert_eq!(
+            clip_box((-10.0, 790.0, 100.0, 40.0), 1000.0, 800.0),
+            (0.0, 790.0, 90.0, 10.0)
+        );
     }
 }

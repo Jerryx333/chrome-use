@@ -12896,6 +12896,176 @@ async function(args) {
     server.abort();
 }
 
+/// `args.ui` (site adapters asking the daemon for input): the element is
+/// scrolled into view inside its scroll container by trusted wheel events,
+/// clicked with a trusted press inside its box, and typed into with key
+/// presses for ASCII and inserted text for Chinese. The run object is not a
+/// named property of `window` while the adapter runs.
+#[tokio::test]
+#[ignore]
+async fn e2e_site_ui_requests_send_trusted_input() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>ui</title>
+<style>#list{height:200px;overflow:auto;border:1px solid #000} .row{height:60px}</style>
+<div id="list">
+  <div class="row">1</div><div class="row">2</div><div class="row">3</div><div class="row">4</div>
+  <div class="row">5</div><div class="row">6</div><div class="row">7</div><div class="row">8</div>
+  <button id="go" style="height:40px;width:160px">发布</button>
+</div>
+<div id="ed" contenteditable="true" style="width:300px;height:60px;border:1px solid #000"></div>
+<input id="t" value="old">
+<script>
+  window.log = [];
+  const rec = (e) => {
+    const t = e.target && e.target.id;
+    const r = { type: e.type, trusted: e.isTrusted, id: t, shift: e.shiftKey };
+    if (e.clientX !== undefined) { r.x = e.clientX; r.y = e.clientY; }
+    if (e.key !== undefined) r.key = e.key;
+    if (e.type === 'click' && t) { const b = e.target.getBoundingClientRect(); r.box = [b.left, b.top, b.right, b.bottom]; }
+    window.log.push(r);
+  };
+  for (const k of ['click','mousedown','mouseup','wheel','keydown','keyup','input']) document.addEventListener(k, rec, true);
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let raw = r##"/* @meta
+{"name": "demo/ui", "domain": "127.0.0.1", "args": {}}
+*/
+async function(args) {
+  const leaked = Object.getOwnPropertyNames(window).filter((k) => /^__cu|site_/.test(k));
+  const go = document.querySelector('#go');
+  const before = go.getBoundingClientRect().top;
+  const c = await args.ui.click(go);
+  const after = go.getBoundingClientRect().top;
+  await args.ui.type('#ed', 'Hi #你好');
+  await args.ui.type(document.querySelector('#t'), 'ab', { clear: true });
+  await args.ui.typeHere('xyz');
+  await args.ui.press('Backspace', { repeat: 2 });
+  await args.ui.press('Enter');
+  let missing = null;
+  try { await args.ui.click('#nope'); } catch (e) { missing = String(e.message || e); }
+  return { leaked, before, after, clicked: c.clicked, ed: document.querySelector('#ed').textContent,
+           t: document.querySelector('#t').value, missing, log: window.log };
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/ui").unwrap();
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let key = "0f3c9d1e2a7b4c5d8e9f0a1b2c3d4e5f";
+    let script = crate::site::build_start(&adapter, &inv.args, None, key, &inv.files);
+    let resp = execute_command(
+        &json!({
+            "id": "3", "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": key, "files": inv.files, "untilDone": false,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 60_000,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let r = &get_data(&resp)["result"];
+    assert_eq!(r["leaked"], json!([]), "{r}");
+    // The button started below the list's visible area and was wheeled in.
+    assert!(r["before"].as_f64().unwrap() > 200.0, "{r}");
+    assert!(
+        r["after"].as_f64().unwrap() < r["before"].as_f64().unwrap(),
+        "{r}"
+    );
+    let log = r["log"].as_array().unwrap();
+    assert!(
+        log.iter().all(|e| e["trusted"] == true),
+        "untrusted event: {r}"
+    );
+    assert!(log.iter().any(|e| e["type"] == "wheel"), "no wheel: {r}");
+    let click = log
+        .iter()
+        .find(|e| e["type"] == "click" && e["id"] == "go")
+        .expect("click on #go");
+    let b = click["box"].as_array().unwrap();
+    let (x, y) = (click["x"].as_f64().unwrap(), click["y"].as_f64().unwrap());
+    assert!(
+        x >= b[0].as_f64().unwrap() && x <= b[2].as_f64().unwrap(),
+        "{click}"
+    );
+    assert!(
+        y >= b[1].as_f64().unwrap() && y <= b[3].as_f64().unwrap(),
+        "{click}"
+    );
+    assert_eq!(r["ed"], "Hi #你好", "{r}");
+    for k in ["H", "#"] {
+        assert!(
+            log.iter()
+                .any(|e| e["type"] == "keydown" && e["key"] == k && e["shift"] == true),
+            "{k} without Shift: {r}"
+        );
+    }
+    assert!(
+        log.iter()
+            .any(|e| e["type"] == "keydown" && e["key"] == "i" && e["shift"] == false),
+        "{r}"
+    );
+    assert_eq!(r["t"], "abx", "{r}");
+    // ASCII goes as key presses: a keydown before each of its inputs.
+    let ed: Vec<&Value> = log.iter().filter(|e| e["id"] == "ed").collect();
+    let first_input = ed.iter().position(|e| e["type"] == "input").unwrap();
+    assert!(
+        ed[..first_input]
+            .iter()
+            .any(|e| e["type"] == "keydown" && e["key"] == "H"),
+        "{r}"
+    );
+    assert!(
+        log.iter()
+            .any(|e| e["type"] == "keydown" && e["key"] == "Enter"),
+        "{r}"
+    );
+    assert!(
+        r["missing"]
+            .as_str()
+            .unwrap()
+            .contains("no element matches"),
+        "{r}"
+    );
+
+    // A request the adapter does not wait for is still served: the daemon
+    // answers pending requests before it reads the result (twitter/delete
+    // returns right after its confirm click, as X may leave the page).
+    let raw = r##"/* @meta
+{"name": "demo/ui-last", "domain": "127.0.0.1", "args": {}}
+*/
+async function(args) {
+  window.log = [];
+  args.ui.click('#go').catch(() => {});
+  return 'returned';
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/ui-last").unwrap();
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let key = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
+    let script = crate::site::build_start(&adapter, &inv.args, None, key, &inv.files);
+    let resp = execute_command(
+        &json!({
+            "id": "4", "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": key, "files": inv.files, "untilDone": false,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 30_000,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], "returned");
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "evaluate", "script": "window.log.filter(e => e.type === 'click' && e.id === 'go' && e.trusted).length" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], 1);
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
 /// When the last signal cannot separate them either, the refusal stands — but
 /// it has to say that several elements are indistinguishable, not that the
 /// element is gone. The two have different fixes, and the old wording only

@@ -79,13 +79,53 @@ pub fn set_last_cursor(p: (f64, f64)) {
     *last_cursor_slot().lock().unwrap() = p;
 }
 
-/// A fresh seed per action so repeated clicks on the same point still vary,
-/// without touching the wall clock or a global RNG (both would break replay).
+/// A fresh seed per action so repeated clicks on the same point still vary.
+/// The sequence starts from a random point per process: a fixed start gave
+/// every daemon the same first trajectories and keystroke gaps, a pattern
+/// that repeats across runs. The motion maths stay pure and take the seed as
+/// an argument, so tests that need determinism pass their own.
 pub fn next_seed() -> u64 {
-    static COUNTER: AtomicU64 = AtomicU64::new(0x1234_5678);
+    static COUNTER: OnceLock<AtomicU64> = OnceLock::new();
     COUNTER
+        .get_or_init(|| {
+            let mut b = [0u8; 8];
+            let start = match getrandom::getrandom(&mut b) {
+                Ok(()) => u64::from_le_bytes(b),
+                Err(_) => uuid::Uuid::new_v4().as_u64_pair().0,
+            };
+            AtomicU64::new(start)
+        })
         .fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed)
         .rotate_left(17)
+}
+
+/// Raises the level to at least `floor` until dropped, then puts back the
+/// level that was set before. An `AGENT_BROWSER_HUMANIZE` override still wins.
+/// For input a site adapter asks for (`args.ui`), which goes to sites such as
+/// Douyin or Bilibili whose own bot checks the vendor detector does not know.
+pub struct LevelFloor(HumanizeLevel);
+
+pub fn floor_level(floor: HumanizeLevel) -> LevelFloor {
+    let mut slot = session_level().lock().unwrap();
+    let prev = *slot;
+    if rank(floor) > rank(prev) {
+        *slot = floor;
+    }
+    LevelFloor(prev)
+}
+
+impl Drop for LevelFloor {
+    fn drop(&mut self) {
+        *session_level().lock().unwrap() = self.0;
+    }
+}
+
+fn rank(level: HumanizeLevel) -> u8 {
+    match level {
+        HumanizeLevel::Off => 0,
+        HumanizeLevel::Fast => 1,
+        HumanizeLevel::Human => 2,
+    }
 }
 
 /// How human-like input motion should be.

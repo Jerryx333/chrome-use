@@ -3487,6 +3487,13 @@ pub async fn type_text_into_active_context(
             // `text` still inserts the character, so the field also fills.
             let (key, code, key_code) = char_to_key_info(ch);
             let s = ch.to_string();
+            // Capitals and shifted symbols come with Shift held, as from a
+            // keyboard: a "#" keydown with shiftKey false is a tell.
+            let shift = needs_shift(ch);
+            let modifiers = shift.then_some(8);
+            if shift {
+                shift_key(client, session_id, true).await?;
+            }
             client
                 .send_command_typed::<_, Value>(
                     "Input.dispatchKeyEvent",
@@ -3498,7 +3505,7 @@ pub async fn type_text_into_active_context(
                         unmodified_text: Some(s),
                         windows_virtual_key_code: Some(key_code),
                         native_virtual_key_code: Some(key_code),
-                        modifiers: None,
+                        modifiers,
                     },
                     Some(session_id),
                 )
@@ -3514,11 +3521,14 @@ pub async fn type_text_into_active_context(
                         unmodified_text: None,
                         windows_virtual_key_code: Some(key_code),
                         native_virtual_key_code: Some(key_code),
-                        modifiers: None,
+                        modifiers,
                     },
                     Some(session_id),
                 )
                 .await?;
+            if shift {
+                shift_key(client, session_id, false).await?;
+            }
         } else {
             // VS Code/Electron webviews reject repeated dispatchKeyEvent calls
             // carrying printable `text`. Insert printable characters directly
@@ -3559,7 +3569,7 @@ pub async fn commit_with_enter(client: &CdpClient, session_id: &str) -> Result<(
 
 /// The CDP modifier bit for the platform's command key: Meta (Cmd) on macOS,
 /// Control elsewhere.
-fn platform_command_modifier() -> i32 {
+pub fn platform_command_modifier() -> i32 {
     if cfg!(target_os = "macos") {
         4
     } else {
@@ -4994,25 +5004,28 @@ pub async fn click_at_point(
     dispatch_click(client, session_id, x, y, button, click_count).await
 }
 
-async fn dispatch_click(
+/// Move the pointer to a viewport point with trusted `mouseMoved` events,
+/// along the humanize path from where the cursor last landed. No click.
+pub async fn move_pointer(
     client: &CdpClient,
     session_id: &str,
     x: f64,
     y: f64,
-    button: &str,
-    click_count: i32,
 ) -> Result<(), String> {
-    // Move toward the target along a human-like path. At HumanizeLevel::Off this
-    // is a single zero-delay step to (x, y) — identical to the old teleport — so
-    // the default behaviour is unchanged. At Fast/Human it's a curved,
-    // decelerating trajectory starting from where the cursor last landed, which
-    // removes the "instant jump to exact centre, no prior movement" tell that
-    // behavioural anti-bot systems flag.
     restore_rendering_if_hidden(client, session_id).await;
     let level = humanize::active_level();
-    let start = humanize::last_cursor();
-    let seed = humanize::next_seed();
-    for step in humanize::move_path(start, (x, y), level, seed) {
+    move_pointer_with(client, session_id, x, y, level, humanize::next_seed()).await
+}
+
+async fn move_pointer_with(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    level: humanize::HumanizeLevel,
+    seed: u64,
+) -> Result<(), String> {
+    for step in humanize::move_path(humanize::last_cursor(), (x, y), level, seed) {
         client
             .send_command_typed::<_, Value>(
                 "Input.dispatchMouseEvent",
@@ -5035,6 +5048,27 @@ async fn dispatch_click(
         }
     }
     humanize::set_last_cursor((x, y));
+    Ok(())
+}
+
+async fn dispatch_click(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    button: &str,
+    click_count: i32,
+) -> Result<(), String> {
+    // Move toward the target along a human-like path. At HumanizeLevel::Off this
+    // is a single zero-delay step to (x, y) — identical to the old teleport — so
+    // the default behaviour is unchanged. At Fast/Human it's a curved,
+    // decelerating trajectory starting from where the cursor last landed, which
+    // removes the "instant jump to exact centre, no prior movement" tell that
+    // behavioural anti-bot systems flag.
+    restore_rendering_if_hidden(client, session_id).await;
+    let level = humanize::active_level();
+    let seed = humanize::next_seed();
+    move_pointer_with(client, session_id, x, y, level, seed).await?;
 
     let button_value = match button {
         "right" => 2,
@@ -5147,8 +5181,44 @@ fn punctuation_key_info(ch: char) -> (&'static str, i32) {
         ']' | '}' => ("BracketRight", 221),
         // VK_OEM_7 (0xDE = 222) — "'\""" key
         '\'' | '"' => ("Quote", 222),
+        // Shifted digits.
+        ')' => ("Digit0", 48),
+        '!' => ("Digit1", 49),
+        '@' => ("Digit2", 50),
+        '#' => ("Digit3", 51),
+        '$' => ("Digit4", 52),
+        '%' => ("Digit5", 53),
+        '^' => ("Digit6", 54),
+        '&' => ("Digit7", 55),
+        '*' => ("Digit8", 56),
+        '(' => ("Digit9", 57),
         _ => ("", 0),
     }
+}
+
+/// Whether a character is typed with Shift held on a US layout.
+fn needs_shift(ch: char) -> bool {
+    ch.is_ascii_uppercase() || "~!@#$%^&*()_+{}|:\"<>?".contains(ch)
+}
+
+async fn shift_key(client: &CdpClient, session_id: &str, down: bool) -> Result<(), String> {
+    client
+        .send_command_typed::<_, Value>(
+            "Input.dispatchKeyEvent",
+            &DispatchKeyEventParams {
+                event_type: if down { "rawKeyDown" } else { "keyUp" }.to_string(),
+                key: Some("Shift".to_string()),
+                code: Some("ShiftLeft".to_string()),
+                text: None,
+                unmodified_text: None,
+                windows_virtual_key_code: Some(16),
+                native_virtual_key_code: Some(16),
+                modifiers: if down { Some(8) } else { None },
+            },
+            Some(session_id),
+        )
+        .await
+        .map(|_| ())
 }
 
 /// Return the `text` value that CDP `Input.dispatchKeyEvent` needs on the
@@ -6139,11 +6209,27 @@ mod tests {
         assert_eq!(vk, 190);
     }
 
+    /// Shifted digits are the digit keys with Shift (`type_text` sends the
+    /// modifier), as on a US keyboard.
+    #[test]
+    fn test_shifted_digits_map_to_digit_keys() {
+        for (ch, code, vk) in [
+            ('!', "Digit1", 49),
+            ('@', "Digit2", 50),
+            ('#', "Digit3", 51),
+            (')', "Digit0", 48),
+        ] {
+            assert_eq!(char_to_key_info(ch), (ch.to_string(), code.to_string(), vk));
+            assert!(needs_shift(ch));
+        }
+        assert!(needs_shift('H') && !needs_shift('h') && !needs_shift('3'));
+    }
+
     /// Characters outside the US keyboard layout should return (key, "", 0)
     /// so that `type_text` falls back to `Input.insertText`.
     #[test]
     fn test_unmapped_chars_return_zero_keycode() {
-        for ch in ['@', '#', '$', '%', '^', '&', '*', '(', ')', '€', '£', '你'] {
+        for ch in ['€', '£', '你'] {
             let (key, code, vk) = char_to_key_info(ch);
             assert_eq!(
                 code, "",

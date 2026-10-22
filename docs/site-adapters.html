@@ -218,6 +218,7 @@
         <li>适配器在页面后台运行，由 chrome-use 轮询，不受扩展 relay 单条命令约 8 秒的限制。<code>--timeout &lt;300|90s|10m&gt;</code> 设定总时长，默认取适配器 <code>@meta.timeout</code>，没有则 120 秒。</li>
         <li><code>--until-done</code>：适配器返回 <code>status: "incomplete"</code> / <code>"uploading"</code>，或者页面跳转中断了这次运行时，自动重跑，直到完成或超时（默认 600 秒）。不加它就把这个状态原样返回，由你再跑一次同样的命令。</li>
         <li>适配器用 <code>args.progress(...)</code> 报告的进度会打印到 stderr，<code>--json</code> 里在 <code>progress</code> 字段，另有 <code>attempts</code> 和 <code>elapsedMs</code>。</li>
+        <li>写操作的适配器（发布、删除、评论、关注）用 <code>args.ui</code> 让 chrome-use 代为输入（1.5.253 起）：<code>args.ui.click(el)</code>、<code>hover</code>、<code>type(el, text, {clear})</code>、<code>press('Enter')</code>、<code>scroll(el | 像素)</code>。用的是真实的 CDP 输入事件（<code>isTrusted: true</code>），鼠标走曲线、按键间隔有变化，先用滚轮把元素滚进可见区，落点在元素内部；元素不见了、没有尺寸或被别的东西挡住时会报错并说明原因。适配器自己的 <code>el.click()</code> / <code>dispatchEvent</code> 是 <code>isTrusted: false</code>，网站能看出来。</li>
       </ul>
 
       <div class="du-callout note">
