@@ -598,10 +598,10 @@ pub fn build_start(
     let runner = build_runner_fn(adapter, args, helper_src);
     let args_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
     let files_json = serde_json::to_string(files).unwrap_or_else(|_| "{}".to_string());
-    let key_json = serde_json::to_string(run_key).unwrap_or_default();
+    let slot = run_slot(run_key);
     format!(
         "(() => {{\n\
-         const K = {key_json};\n\
+         const K = {slot};\n\
          const run = {{ done: false, result: undefined, error: undefined, progress: [], requests: [], waiters: {{}}, seq: 0 }};\n\
          Object.defineProperty(window, K, {{ value: run, configurable: true, enumerable: false, writable: true }});\n\
          const rpc = (kind, payload) => new Promise((resolve, reject) => {{\n\
@@ -621,6 +621,22 @@ pub fn build_start(
          }}\n\
          hide('budgetMs', {BUDGET_PLACEHOLDER});\n\
          hide('progress', (m) => {{ run.progress.push(String(m)); }});\n\
+         const T = new Map(); let tn = 0;\n\
+         Object.defineProperty(run, 'targets', {{ value: T }});\n\
+         const pick = (t) => {{\n\
+         if (typeof t === 'string' && t) return {{ selector: t }};\n\
+         if (t && typeof t === 'object' && t.nodeType === 1) {{ const id = ++tn; T.set(id, t); return {{ target: id }}; }}\n\
+         throw new TypeError('args.ui: pass an Element or a CSS selector');\n\
+         }};\n\
+         const opts = (o) => (o && typeof o === 'object' ? o : {{}});\n\
+         hide('ui', Object.freeze({{\n\
+         click: (t, o) => rpc('click', Object.assign({{}}, opts(o), pick(t))),\n\
+         hover: (t) => rpc('hover', pick(t)),\n\
+         type: (t, text, o) => rpc('type', Object.assign({{}}, opts(o), pick(t), {{ text: String(text == null ? '' : text) }})),\n\
+         typeHere: (text) => rpc('type', {{ text: String(text == null ? '' : text) }}),\n\
+         press: (key, o) => rpc('press', Object.assign({{}}, opts(o), {{ key: String(key) }})),\n\
+         scroll: (t) => rpc('scroll', typeof t === 'number' ? {{ dy: t }} : pick(t)),\n\
+         }}));\n\
          Promise.resolve().then(() => ({runner})(a)).then(\n\
          (r) => {{ run.result = r; run.done = true; }},\n\
          (e) => {{ run.error = String((e && e.stack) || e); run.done = true; }});\n\
@@ -640,10 +656,10 @@ pub const BUDGET_PLACEHOLDER: &str = "__CU_SITE_BUDGET_MS__";
 /// an adapter (same run object, so `poll_script` and the daemon's site runner
 /// handle it unchanged), without adapter args, files or helpers.
 pub fn build_expr_start(expr: &str, run_key: &str) -> String {
-    let key_json = serde_json::to_string(run_key).unwrap_or_default();
+    let slot = run_slot(run_key);
     format!(
         "(() => {{\n\
-         const K = {key_json};\n\
+         const K = {slot};\n\
          const run = {{ done: false, result: undefined, error: undefined, progress: [], requests: [], waiters: {{}}, seq: 0 }};\n\
          Object.defineProperty(window, K, {{ value: run, configurable: true, enumerable: false, writable: true }});\n\
          Promise.resolve().then(() => ({expr}\n)).then(\n\
@@ -654,22 +670,86 @@ pub fn build_expr_start(expr: &str, run_key: &str) -> String {
     )
 }
 
-pub fn poll_script(run_key: &str) -> String {
+/// Where a run lives on the page: `window[Symbol.for(run_key)]`. A symbol key
+/// stays out of `Object.keys`, `Object.getOwnPropertyNames` and `for...in`,
+/// which is how page scripts scan `window` for automation globals, and the key
+/// is a bare random id with no fixed prefix to match on.
+fn run_slot(run_key: &str) -> String {
     let key_json = serde_json::to_string(run_key).unwrap_or_default();
+    format!("Symbol.for({key_json})")
+}
+
+pub fn poll_script(run_key: &str) -> String {
+    let slot = run_slot(run_key);
     format!(
         "(() => {{\n\
-         const r = window[{key_json}];\n\
+         const r = window[{slot}];\n\
          if (!r) return {{ state: 'lost' }};\n\
          const out = {{ state: r.done ? 'done' : 'running', progress: r.progress.splice(0), requests: r.requests.splice(0) }};\n\
-         if (r.done) {{ out.result = r.result; out.error = r.error; delete window[{key_json}]; }}\n\
+         if (r.done) {{ out.result = r.result; out.error = r.error; delete window[{slot}]; }}\n\
          return out;\n\
+         }})()"
+    )
+}
+
+/// Measure the element an `args.ui` request names: the run's element handle
+/// `target`, else the first match of `selector` in the top document. Returns
+/// its box in top-level viewport CSS pixels (same-origin frames are offset by
+/// their frame element), the viewport size, and the box of the nearest
+/// scrollable ancestor, where a wheel would scroll it into view. Errors are
+/// `{error}`. Nothing is written to the page.
+pub fn ui_measure_script(run_key: &str, req: &Value) -> String {
+    let slot = run_slot(run_key);
+    let target = req.get("target").and_then(|v| v.as_u64()).unwrap_or(0);
+    let selector =
+        serde_json::to_string(req.get("selector").and_then(|v| v.as_str()).unwrap_or(""))
+            .unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        "(() => {{\n\
+         const r = window[{slot}];\n\
+         let el = null;\n\
+         if ({target}) {{ el = r && r.targets && r.targets.get({target}); if (!el) return {{ error: 'element handle is gone (the run ended or the page reloaded)' }}; }}\n\
+         else {{ try {{ el = document.querySelector({selector}); }} catch (e) {{ return {{ error: 'bad selector: ' + e.message }}; }}\n\
+         if (!el) return {{ error: 'no element matches ' + {selector} }}; }}\n\
+         if (!el.isConnected) return {{ error: 'element is no longer in the page' }};\n\
+         let ox = 0, oy = 0;\n\
+         try {{ let w = el.ownerDocument.defaultView; while (w && w !== window && w.frameElement) {{ const f = w.frameElement; const b = f.getBoundingClientRect(); ox += b.left + f.clientLeft; oy += b.top + f.clientTop; w = w.parent; }} }} catch (_) {{}}\n\
+         const b = el.getBoundingClientRect();\n\
+         let sc = null;\n\
+         for (let p = el.parentElement; p; p = p.parentElement) {{\n\
+         const cs = getComputedStyle(p);\n\
+         if (/(auto|scroll)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1) {{ const pb = p.getBoundingClientRect(); sc = {{ x: pb.left + ox, y: pb.top + oy, w: pb.width, h: pb.height }}; break; }}\n\
+         }}\n\
+         return {{ x: b.left + ox, y: b.top + oy, w: b.width, h: b.height, vw: window.innerWidth, vh: window.innerHeight, scroller: sc }};\n\
+         }})()"
+    )
+}
+
+/// Whether a point lands on the element an `args.ui` request names (or
+/// inside it): `{hit, top}` where `top` describes what is there instead.
+pub fn ui_hit_script(run_key: &str, req: &Value, x: f64, y: f64) -> String {
+    let slot = run_slot(run_key);
+    let target = req.get("target").and_then(|v| v.as_u64()).unwrap_or(0);
+    let selector =
+        serde_json::to_string(req.get("selector").and_then(|v| v.as_str()).unwrap_or(""))
+            .unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        "(() => {{\n\
+         const r = window[{slot}];\n\
+         let el = {target} ? (r && r.targets && r.targets.get({target})) : document.querySelector({selector});\n\
+         if (!el) return {{ hit: false, top: null }};\n\
+         let top = document.elementFromPoint({x}, {y});\n\
+         while (top && top.shadowRoot && top !== el) {{ const inner = top.shadowRoot.elementFromPoint({x}, {y}); if (!inner || inner === top) break; top = inner; }}\n\
+         const hit = !!top && (top === el || el.contains(top) || (top.tagName === 'IFRAME' && el.ownerDocument !== document));\n\
+         const d = top ? (top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + (typeof top.className === 'string' && top.className ? '.' + top.className.trim().split(/\\s+/).slice(0, 2).join('.') : '')) : null;\n\
+         return {{ hit, top: d }};\n\
          }})()"
     )
 }
 
 /// Resolve (or reject) the page-side promise of request `id`.
 pub fn settle_script(run_key: &str, id: u64, ok: bool, value: &Value) -> String {
-    let key_json = serde_json::to_string(run_key).unwrap_or_default();
+    let slot = run_slot(run_key);
     let value_json = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
     let how = if ok {
         format!("w.resolve({value_json})")
@@ -677,7 +757,7 @@ pub fn settle_script(run_key: &str, id: u64, ok: bool, value: &Value) -> String 
         format!("w.reject(new Error({value_json}))")
     };
     format!(
-        "(() => {{ const r = window[{key_json}]; const w = r && r.waiters[{id}]; \
+        "(() => {{ const r = window[{slot}]; const w = r && r.waiters[{id}]; \
          if (!w) return false; delete r.waiters[{id}]; {how}; return true; }})()"
     )
 }
@@ -3027,6 +3107,7 @@ async function(args) { return args; }"#;
         let driver = format!(
             "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/');\n\
              const tick = () => new Promise(r => setTimeout(r, 5));\n\
+             const keys0 = Object.keys(window).length;\n\
              (async () => {{\n\
              const started = {start};\n\
              await tick();\n\
@@ -3035,7 +3116,7 @@ async function(args) { return args; }"#;
              await tick();\n\
              const last = {poll};\n\
              const after = {poll};\n\
-             console.log(JSON.stringify({{ started, first, settled, last, after, enumerable: Object.keys(window).includes('__cu_site_t') }}));\n\
+             console.log(JSON.stringify({{ started, first, settled, last, after, enumerable: Object.keys(window).length !== keys0, named: Object.getOwnPropertyNames(window).some(k => k.includes('__cu_site_t')) }}));\n\
              }})();"
         );
         let out = std::process::Command::new(node)
@@ -3051,6 +3132,7 @@ async function(args) { return args; }"#;
         let v: Value = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(v["started"], "started");
         assert_eq!(v["enumerable"], false);
+        assert_eq!(v["named"], false);
         assert_eq!(v["first"]["state"], "running");
         assert_eq!(v["first"]["progress"][0], "starting with 4200ms");
         assert_eq!(v["first"]["requests"][0]["kind"], "upload");
@@ -3750,5 +3832,77 @@ async function(args){ return args; }"#;
         assert!(err.contains("changed since it was added"), "{err}");
         assert_eq!(short_pin(&pin).len(), 19);
         assert_eq!(short_pin("0123456789abcdef0123"), "0123456789ab");
+    }
+}
+
+#[cfg(test)]
+mod ui_rpc_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// `args.ui` calls become requests the daemon serves: a selector as is,
+    /// an element as a handle kept on the run, never written to the page.
+    #[test]
+    fn ui_calls_queue_requests_with_element_handles() {
+        let Some(node) = std::env::var_os("PATH").and_then(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.join("node"))
+                .find(|n| n.is_file())
+        }) else {
+            return;
+        };
+        let raw =
+            "/* @meta\n{\"name\": \"demo/ui\", \"domain\": \"example.com\", \"args\": {}}\n*/\n\
+                   async function(args) {\n\
+                   const el = { nodeType: 1, id: 'x' };\n\
+                   args.ui.click('#go');\n\
+                   args.ui.type(el, 'hi', { clear: true });\n\
+                   args.ui.press('Enter');\n\
+                   args.ui.scroll(300);\n\
+                   let bad = null; try { args.ui.click(42); } catch (e) { bad = e.message; }\n\
+                   return { bad, enumerable: Object.keys(args).includes('ui') };\n\
+                   }";
+        let a = parse_adapter(raw, "demo/ui").unwrap();
+        let key = "k1";
+        let start =
+            build_start(&a, &json!({}), None, key, &json!({})).replace(BUDGET_PLACEHOLDER, "1000");
+        let poll = poll_script(key);
+        let slot = run_slot(key);
+        let driver = format!(
+            "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/');\n\
+             (async () => {{ {start}; await new Promise(r => setTimeout(r, 5));\n\
+             const handle = window[{slot}].targets.get(1);\n\
+             const p = {poll};\n\
+             console.log(JSON.stringify({{ p, handle: handle && handle.id, named: Object.getOwnPropertyNames(window).filter(k => k.includes('k1')) }})); }})();"
+        );
+        let out = std::process::Command::new(node)
+            .arg("-e")
+            .arg(driver)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let reqs = &v["p"]["requests"];
+        assert_eq!(reqs[0]["kind"], "click");
+        assert_eq!(reqs[0]["selector"], "#go");
+        assert_eq!(reqs[1]["kind"], "type");
+        assert_eq!(reqs[1]["target"], 1);
+        assert_eq!(reqs[1]["text"], "hi");
+        assert_eq!(reqs[1]["clear"], true);
+        assert_eq!(reqs[2]["kind"], "press");
+        assert_eq!(reqs[2]["key"], "Enter");
+        assert_eq!(reqs[3]["kind"], "scroll");
+        assert_eq!(reqs[3]["dy"], 300);
+        assert_eq!(v["handle"], "x");
+        assert_eq!(v["named"], json!([]));
+        assert_eq!(
+            v["p"]["result"]["bad"],
+            "args.ui: pass an Element or a CSS selector"
+        );
+        assert_eq!(v["p"]["result"]["enumerable"], false);
     }
 }

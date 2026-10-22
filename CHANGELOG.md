@@ -1,8 +1,27 @@
 # Changelog
 
-## 1.5.252
+## 1.5.253
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.81.
+
+### Features
+
+- **Site adapters can have chrome-use do their input: `args.ui`.** An adapter runs inside the page, so its own `el.click()`, `dispatchEvent` and `execCommand` are `isTrusted: false` events with no pointer movement and no key presses, which a site's bot checks can see. A write adapter can now call `args.ui.click(el)`, `hover`, `type(el, text, {clear})`, `typeHere(text)`, `press(key, {repeat})` (chords such as `Mod+a`) and `scroll(el | pixels)`, with an element or a CSS selector. The daemon wheels the element into view inside its scroll container, picks a point that is really on it, and clicks or types with real CDP input at a human pace: a curved pointer path, press dwell and varied keystroke gaps, whatever the anti-bot detector made of the site. ASCII goes as key presses; Chinese and emoji go in as inserted text, the way an IME commits them. A call fails with a reason when the element is gone, has no size or is covered, and names what covers it. A request the adapter does not wait for is still served before its result is read, so a last click before the page navigates still lands. The douyin, douyin-creator, bilibili-creator, youtube-studio and twitter write adapters in chrome-use-sites use it and keep their old events on older chrome-use.
+
+### Bug Fixes
+
+- **A running adapter no longer shows up as a named `window` property.** The run lived at `window.__cu_site_<id>` (`window.__cu_eval_<id>` for `eval --background`), which any page script listing `Object.getOwnPropertyNames(window)` could match on its fixed prefix. It now lives under `Symbol.for(<random id>)`, which `Object.keys`, `getOwnPropertyNames` and `for…in` do not list.
+- **Humanized input no longer repeats from one daemon start to the next.** The seed for pointer paths, landing jitter and keystroke gaps started from a constant, so every daemon replayed the same sequence; it now starts from a random value.
+- **An adapter that sends input no longer waits up to a second per request.** The page is polled every 100 ms again after a request was served.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.252
+
 Works with extension ab-connect 0.5.81.
 
 ### Bug Fixes
@@ -12,7 +31,6 @@ Works with extension ab-connect 0.5.81.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.251
 

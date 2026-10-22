@@ -2314,7 +2314,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                         usage: "eval --background <js expression>",
                     });
                 }
-                let run_key = format!("__cu_eval_{}", uuid::Uuid::new_v4().simple());
+                let run_key = uuid::Uuid::new_v4().simple().to_string();
                 let timeout = crate::site::DEFAULT_RUN_TIMEOUT_MS;
                 return Ok(json!({
                     "id": id,
@@ -2425,7 +2425,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             // findGraphQLQueryId) so adapters that call it don't ReferenceError (#99).
             let family = spec.split('/').next().unwrap_or("");
             let helper = crate::site::load_family_helper(family);
-            let run_key = format!("__cu_site_{}", uuid::Uuid::new_v4().simple());
+            let run_key = uuid::Uuid::new_v4().simple().to_string();
             let script = crate::site::build_start(
                 &adapter,
                 &inv.args,

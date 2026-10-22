@@ -3559,7 +3559,7 @@ pub async fn commit_with_enter(client: &CdpClient, session_id: &str) -> Result<(
 
 /// The CDP modifier bit for the platform's command key: Meta (Cmd) on macOS,
 /// Control elsewhere.
-fn platform_command_modifier() -> i32 {
+pub fn platform_command_modifier() -> i32 {
     if cfg!(target_os = "macos") {
         4
     } else {
@@ -4994,25 +4994,28 @@ pub async fn click_at_point(
     dispatch_click(client, session_id, x, y, button, click_count).await
 }
 
-async fn dispatch_click(
+/// Move the pointer to a viewport point with trusted `mouseMoved` events,
+/// along the humanize path from where the cursor last landed. No click.
+pub async fn move_pointer(
     client: &CdpClient,
     session_id: &str,
     x: f64,
     y: f64,
-    button: &str,
-    click_count: i32,
 ) -> Result<(), String> {
-    // Move toward the target along a human-like path. At HumanizeLevel::Off this
-    // is a single zero-delay step to (x, y) — identical to the old teleport — so
-    // the default behaviour is unchanged. At Fast/Human it's a curved,
-    // decelerating trajectory starting from where the cursor last landed, which
-    // removes the "instant jump to exact centre, no prior movement" tell that
-    // behavioural anti-bot systems flag.
     restore_rendering_if_hidden(client, session_id).await;
     let level = humanize::active_level();
-    let start = humanize::last_cursor();
-    let seed = humanize::next_seed();
-    for step in humanize::move_path(start, (x, y), level, seed) {
+    move_pointer_with(client, session_id, x, y, level, humanize::next_seed()).await
+}
+
+async fn move_pointer_with(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    level: humanize::HumanizeLevel,
+    seed: u64,
+) -> Result<(), String> {
+    for step in humanize::move_path(humanize::last_cursor(), (x, y), level, seed) {
         client
             .send_command_typed::<_, Value>(
                 "Input.dispatchMouseEvent",
@@ -5035,6 +5038,27 @@ async fn dispatch_click(
         }
     }
     humanize::set_last_cursor((x, y));
+    Ok(())
+}
+
+async fn dispatch_click(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+    button: &str,
+    click_count: i32,
+) -> Result<(), String> {
+    // Move toward the target along a human-like path. At HumanizeLevel::Off this
+    // is a single zero-delay step to (x, y) — identical to the old teleport — so
+    // the default behaviour is unchanged. At Fast/Human it's a curved,
+    // decelerating trajectory starting from where the cursor last landed, which
+    // removes the "instant jump to exact centre, no prior movement" tell that
+    // behavioural anti-bot systems flag.
+    restore_rendering_if_hidden(client, session_id).await;
+    let level = humanize::active_level();
+    let seed = humanize::next_seed();
+    move_pointer_with(client, session_id, x, y, level, seed).await?;
 
     let button_value = match button {
         "right" => 2,
