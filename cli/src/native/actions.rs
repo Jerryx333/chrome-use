@@ -6228,7 +6228,15 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
             // adapters write to (Douyin, Bilibili, ...) run their own bot
             // checks, which the vendor detector does not recognise.
             let _floor = humanize::floor_level(humanize::HumanizeLevel::Human);
-            serve_ui_request(run_key, kind, req, state).await
+            let out = serve_ui_request(run_key, kind, req, state).await;
+            // The pointer is where the request left it: a later
+            // coordinate-less `mouse down` presses there (#698).
+            if kind != "press" {
+                let (x, y) = humanize::last_cursor();
+                state.mouse_state.x = x;
+                state.mouse_state.y = y;
+            }
+            out
         }
         other => Err(format!("unknown request kind {other:?}")),
     };
@@ -6323,7 +6331,8 @@ async fn serve_ui_request(
         interaction::move_pointer(client, &session_id, x, y).await?;
         let step = off.clamp(-(ch * 0.8).max(120.0), (ch * 0.8).max(120.0));
         dispatch_wheel(client, &session_id, x, y, 0.0, step).await?;
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        // Let the scroll land before re-measuring, with a varied pause (#699).
+        tokio::time::sleep(jitter_ms(90, 260)).await;
         m = ui_measure(client, &session_id, run_key, req).await?;
     }
     if ui_offscreen_dy(&m) != 0.0 {

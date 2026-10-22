@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.253
+## 1.5.254
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.82.
+
+### Features
+
+- **Stealth mode switch, on by default.** The extension's options page has a Stealth mode switch (ab-connect 0.5.82). While it is on, chrome-use adds nothing of its own to the pages it drives; features that draw into pages work only with it off. Today that is the agent cursor: its switch is greyed out under stealth mode, and an agent cursor turned on before this stays dark until stealth mode is turned off. Inspect & Ask works either way, since you start it yourself. The extension's status reports `stealthMode`. Contributors, reviewers and releases now check every change for anything a page could see ("Stealth first" in AGENTS.md, and a new pull request template).
+
+### Bug Fixes
+
+- **The daemon's pointer follows `args.ui`.** After a site adapter's click, hover or scroll, a coordinate-less `mouse down` / `mouse up` pressed where the pointer was before the adapter ran (#698).
+- **`args.ui` waits a varied time between scroll steps** while bringing an element into view, instead of a fixed 120 ms (#699).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.253
+
 Works with extension ab-connect 0.5.81.
 
 ### Features
@@ -20,7 +38,6 @@ Works with extension ab-connect 0.5.81.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.252
 

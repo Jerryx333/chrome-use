@@ -291,6 +291,20 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         preflight, don't re-solve a challenge that's already passed.
       </div>
 
+      <h2>Stealth mode switch (extension options)</h2>
+      <p>
+        The extension's options page has a <strong>Stealth mode</strong> switch, <strong>on by default</strong>. While it is on,
+        chrome-use adds nothing of its own to the pages it drives: no overlay, no named page globals, and site adapters'
+        clicks and typing go through <code>args.ui</code> as real input events. Features that draw into pages only work with it
+        off; today that is the agent cursor (a soft cursor and click ripple), whose switch is greyed out until stealth mode
+        is turned off. Inspect &amp; Ask works either way, since you start it yourself.
+      </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">ℹ️ For contributors</div>
+        A new feature that the page could see (a DOM node, a global, a listener, a synthetic event, a fixed timing) must stay
+        off while stealth mode is on. Pull requests and releases are checked for it; see "Stealth first" in AGENTS.md.
+      </div>
+
       <h2>Self-check: chrome-use stealth status</h2>
       <p>
         You can inspect the current stealth state at any time: <code>chrome-use stealth status</code> reports the current

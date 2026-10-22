@@ -13061,6 +13061,10 @@ async function(args) {
     .await;
     assert_success(&resp);
     assert_eq!(get_data(&resp)["result"], 1);
+    // The daemon's pointer is where that click left it (#698).
+    let (hx, hy) = crate::native::humanize::last_cursor();
+    assert_eq!((state.mouse_state.x, state.mouse_state.y), (hx, hy));
+    assert!(hx > 0.0 && hy > 0.0);
 
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
