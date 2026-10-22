@@ -152,7 +152,7 @@ impl HumanizeLevel {
         }
     }
 
-    fn is_off(self) -> bool {
+    pub fn is_off(self) -> bool {
         matches!(self, Self::Off)
     }
 }

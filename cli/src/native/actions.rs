@@ -5987,7 +5987,8 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
             "domain": domain,
         }));
     };
-    let run_key = run_key.to_string();
+    // Its value no longer matters: the run object is reached by its handle.
+    let _ = run_key;
     let until_done = cmd
         .get("untilDone")
         .and_then(|v| v.as_bool())
@@ -6022,10 +6023,13 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         // Leave the adapter a margin to report before the daemon gives up.
         let budget = left.saturating_sub(Duration::from_millis(1500)).as_millis();
         let start = script.replace(crate::site::BUDGET_PLACEHOLDER, &budget.to_string());
-        handle_evaluate(&json!({ "script": start }), state).await?;
+        // The run is never put on the page: the start script returns the run
+        // object and every later call goes to it by its CDP handle.
+        let run = start_site_run(&start, state).await?;
 
-        let outcome =
-            poll_site_run(&run_key, &files, started, deadline, &mut progress, state).await?;
+        let outcome = poll_site_run(&run, &files, started, deadline, &mut progress, state).await;
+        release_site_run(&run, state).await;
+        let outcome = outcome?;
         let elapsed = started.elapsed().as_millis() as u64;
         let (result, retry_reason) = match outcome {
             SiteRun::Done(result) => {
@@ -6118,6 +6122,96 @@ async fn ensure_site_domain(domain: &str, state: &mut DaemonState) -> Result<(),
     Ok(())
 }
 
+/// Start a site run (or `eval --background`): evaluate the start script
+/// without serialising its result, and return the CDP handle (objectId) of
+/// the run object it returns.
+async fn start_site_run(script: &str, state: &mut DaemonState) -> Result<String, String> {
+    if let Some(mgr) = state.browser.as_mut() {
+        mgr.resync_targets().await.ok();
+    }
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let out = mgr
+        .client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({ "expression": script, "returnByValue": false, "awaitPromise": false })),
+            Some(&session_id),
+        )
+        .await?;
+    if let Some(ex) = out.get("exceptionDetails") {
+        let msg = ex
+            .pointer("/exception/description")
+            .and_then(|v| v.as_str())
+            .or_else(|| ex.get("text").and_then(|v| v.as_str()))
+            .unwrap_or("page error");
+        return Err(format!("Evaluation error: {msg}"));
+    }
+    out.pointer("/result/objectId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| "site: the run did not start (the page returned no run object)".to_string())
+}
+
+/// Call `func` with `this` = the run object, on the active tab.
+async fn call_on_run(run: &str, func: &str, state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    call_fn_on(&mgr.client, &session_id, run, func).await
+}
+
+async fn call_fn_on(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    object_id: &str,
+    func: &str,
+) -> Result<Value, String> {
+    let out = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object_id,
+                "functionDeclaration": func,
+                "returnByValue": true,
+                "awaitPromise": false,
+            })),
+            Some(session_id),
+        )
+        .await?;
+    if let Some(ex) = out.get("exceptionDetails") {
+        let msg = ex
+            .pointer("/exception/description")
+            .and_then(|v| v.as_str())
+            .or_else(|| ex.get("text").and_then(|v| v.as_str()))
+            .unwrap_or("page error");
+        return Err(format!("Evaluation error: {msg}"));
+    }
+    Ok(out.pointer("/result/value").cloned().unwrap_or(Value::Null))
+}
+
+/// CDP's answers when a handle's context is gone (navigation, reload).
+fn run_handle_gone(e: &str) -> bool {
+    e.contains("Could not find object with given id")
+        || e.contains("Cannot find context with specified id")
+        || e.contains("Inspected target navigated or closed")
+        || e.contains("Execution context was destroyed")
+}
+
+async fn release_site_run(run: &str, state: &DaemonState) {
+    if let Some(mgr) = state.browser.as_ref() {
+        if let Ok(session_id) = mgr.active_session_id() {
+            let _ = mgr
+                .client
+                .send_command(
+                    "Runtime.releaseObject",
+                    Some(json!({ "objectId": run })),
+                    Some(session_id),
+                )
+                .await;
+        }
+    }
+}
+
 enum SiteRun {
     Done(Value),
     Lost,
@@ -6134,7 +6228,7 @@ async fn poll_site_run(
     progress: &mut Vec<Value>,
     state: &mut DaemonState,
 ) -> Result<SiteRun, String> {
-    let poll = crate::site::poll_script(run_key);
+    let poll = crate::site::poll_script();
     let mut interval = Duration::from_millis(250);
     // A poll that lands mid-navigation fails ("context destroyed"); only a run
     // that stays unreachable counts as lost.
@@ -6145,8 +6239,17 @@ async fn poll_site_run(
         }
         tokio::time::sleep(interval).await;
         interval = (interval * 2).min(Duration::from_secs(1));
-        let snap = match handle_evaluate(&json!({ "script": poll }), state).await {
-            Ok(out) => out.get("result").cloned().unwrap_or(Value::Null),
+        let snap = match call_on_run(run_key, &poll, state).await {
+            Ok(v) => v,
+            // A navigation or reload destroys the run's context, and its
+            // handle with it.
+            Err(e) if run_handle_gone(&e) => {
+                failures += 1;
+                if failures >= 3 {
+                    return Ok(SiteRun::Lost);
+                }
+                continue;
+            }
             Err(e) => {
                 failures += 1;
                 if failures >= 5 {
@@ -6158,13 +6261,6 @@ async fn poll_site_run(
             }
         };
         let state_str = snap.get("state").and_then(|v| v.as_str()).unwrap_or("");
-        if state_str == "lost" {
-            failures += 1;
-            if failures >= 3 {
-                return Ok(SiteRun::Lost);
-            }
-            continue;
-        }
         failures = 0;
         for line in snap
             .get("progress")
@@ -6241,10 +6337,10 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
         other => Err(format!("unknown request kind {other:?}")),
     };
     let settle = match &outcome {
-        Ok(v) => crate::site::settle_script(run_key, id, true, v),
-        Err(e) => crate::site::settle_script(run_key, id, false, &json!(e)),
+        Ok(v) => crate::site::settle_script(id, true, v),
+        Err(e) => crate::site::settle_script(id, false, &json!(e)),
     };
-    let _ = handle_evaluate(&json!({ "script": settle }), state).await;
+    let _ = call_on_run(run_key, &settle, state).await;
 }
 
 /// Wheel steps `args.ui` takes to bring an element into view before it
@@ -6420,17 +6516,59 @@ async fn ui_type_runs(
             continue;
         }
         for chunk in ime_chunks(&run, humanize::next_seed()) {
-            let n = chunk.chars().count() as u64;
-            tokio::time::sleep(jitter_ms(180 + 90 * n, 360 + 160 * n)).await;
+            ime_commit(client, session_id, &chunk).await?;
+        }
+    }
+    Ok(())
+}
+
+/// One IME commit the way an input method sends it: a key press the page
+/// sees as `Process` (keyCode 229) per composition step, the composition
+/// growing (compositionstart / compositionupdate), then the commit
+/// (compositionend, insertFromComposition-style input), after a pause that
+/// grows with the chunk while the candidate is picked.
+async fn ime_commit(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    chunk: &str,
+) -> Result<(), String> {
+    let chars: Vec<char> = chunk.chars().collect();
+    for i in 1..=chars.len() {
+        let partial: String = chars[..i].iter().collect();
+        for kind in ["rawKeyDown", "keyUp"] {
             client
                 .send_command(
-                    "Input.insertText",
-                    Some(json!({ "text": chunk })),
+                    "Input.dispatchKeyEvent",
+                    Some(json!({
+                        "type": kind,
+                        "key": "Process",
+                        "code": "",
+                        "windowsVirtualKeyCode": 229,
+                        "nativeVirtualKeyCode": 229,
+                    })),
                     Some(session_id),
                 )
                 .await?;
         }
+        let n = partial.chars().count() as i64;
+        client
+            .send_command(
+                "Input.imeSetComposition",
+                Some(json!({ "text": partial, "selectionStart": n, "selectionEnd": n })),
+                Some(session_id),
+            )
+            .await?;
+        tokio::time::sleep(jitter_ms(90, 220)).await;
     }
+    let n = chars.len() as u64;
+    tokio::time::sleep(jitter_ms(120 + 60 * n, 260 + 120 * n)).await;
+    client
+        .send_command(
+            "Input.insertText",
+            Some(json!({ "text": chunk })),
+            Some(session_id),
+        )
+        .await?;
     Ok(())
 }
 
@@ -6539,10 +6677,11 @@ async fn ui_measure(
     run_key: &str,
     req: &Value,
 ) -> Result<Value, String> {
-    let m = ui_eval(
+    let m = call_fn_on(
         client,
         session_id,
-        &crate::site::ui_measure_script(run_key, req),
+        run_key,
+        &crate::site::ui_measure_script(req),
     )
     .await?;
     if let Some(e) = m.get("error").and_then(|v| v.as_str()) {
@@ -6558,10 +6697,11 @@ async fn ui_hit(
     req: &Value,
     p: (f64, f64),
 ) -> Result<(bool, Option<String>), String> {
-    let v = ui_eval(
+    let v = call_fn_on(
         client,
         session_id,
-        &crate::site::ui_hit_script(run_key, req, p.0, p.1),
+        run_key,
+        &crate::site::ui_hit_script(req, p.0, p.1),
     )
     .await?;
     Ok((

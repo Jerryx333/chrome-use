@@ -3493,6 +3493,9 @@ pub async fn type_text_into_active_context(
             let modifiers = shift.then_some(8);
             if shift {
                 shift_key(client, session_id, true).await?;
+                // A finger reaches for the key after Shift is down: not 3 ms
+                // later, which is what back-to-back events give.
+                shift_gap(humanize::active_level(), 45, 130).await;
             }
             client
                 .send_command_typed::<_, Value>(
@@ -3527,6 +3530,7 @@ pub async fn type_text_into_active_context(
                 )
                 .await?;
             if shift {
+                shift_gap(humanize::active_level(), 15, 70).await;
                 shift_key(client, session_id, false).await?;
             }
         } else {
@@ -5199,6 +5203,20 @@ fn punctuation_key_info(ch: char) -> (&'static str, i32) {
 /// Whether a character is typed with Shift held on a US layout.
 fn needs_shift(ch: char) -> bool {
     ch.is_ascii_uppercase() || "~!@#$%^&*()_+{}|:\"<>?".contains(ch)
+}
+
+/// A human-sized pause around a Shift press; none at HumanizeLevel::Off.
+async fn shift_gap(level: humanize::HumanizeLevel, lo: u64, hi: u64) {
+    if level.is_off() {
+        return;
+    }
+    let (lo, hi) = if matches!(level, humanize::HumanizeLevel::Fast) {
+        (lo / 3, hi / 3)
+    } else {
+        (lo, hi)
+    };
+    let ms = lo + humanize::next_seed() % (hi - lo + 1);
+    tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
 }
 
 async fn shift_key(client: &CdpClient, session_id: &str, down: bool) -> Result<(), String> {

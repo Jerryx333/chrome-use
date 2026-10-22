@@ -592,18 +592,14 @@ pub fn build_start(
     adapter: &Adapter,
     args: &Value,
     helper_src: Option<&str>,
-    run_key: &str,
     files: &Value,
 ) -> String {
     let runner = build_runner_fn(adapter, args, helper_src);
     let args_json = serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string());
     let files_json = serde_json::to_string(files).unwrap_or_else(|_| "{}".to_string());
-    let slot = run_slot(run_key);
     format!(
         "(() => {{\n\
-         const K = {slot};\n\
          const run = {{ done: false, result: undefined, error: undefined, progress: [], requests: [], waiters: {{}}, seq: 0 }};\n\
-         Object.defineProperty(window, K, {{ value: run, configurable: true, enumerable: false, writable: true }});\n\
          const rpc = (kind, payload) => new Promise((resolve, reject) => {{\n\
          const id = ++run.seq; run.waiters[id] = {{ resolve, reject }};\n\
          run.requests.push(Object.assign({{ id, kind }}, payload));\n\
@@ -640,7 +636,7 @@ pub fn build_start(
          Promise.resolve().then(() => ({runner})(a)).then(\n\
          (r) => {{ run.result = r; run.done = true; }},\n\
          (e) => {{ run.error = String((e && e.stack) || e); run.done = true; }});\n\
-         return 'started';\n\
+         return run;\n\
          }})()"
     )
 }
@@ -649,64 +645,53 @@ pub fn build_start(
 /// the time left for each attempt there.
 pub const BUDGET_PLACEHOLDER: &str = "__CU_SITE_BUDGET_MS__";
 
-/// Read and drain a background run: `{state: running|done|lost, progress,
-/// requests, result?, error?}`. `lost` means the page navigated (or reloaded)
-/// and took the run with it. A finished run is removed from `window`.
 /// `eval --background`: start a plain expression the way `build_start` starts
 /// an adapter (same run object, so `poll_script` and the daemon's site runner
 /// handle it unchanged), without adapter args, files or helpers.
-pub fn build_expr_start(expr: &str, run_key: &str) -> String {
-    let slot = run_slot(run_key);
+pub fn build_expr_start(expr: &str) -> String {
     format!(
         "(() => {{\n\
-         const K = {slot};\n\
          const run = {{ done: false, result: undefined, error: undefined, progress: [], requests: [], waiters: {{}}, seq: 0 }};\n\
-         Object.defineProperty(window, K, {{ value: run, configurable: true, enumerable: false, writable: true }});\n\
          Promise.resolve().then(() => ({expr}\n)).then(\n\
          (r) => {{ run.result = r; run.done = true; }},\n\
          (e) => {{ run.error = String((e && e.stack) || e); run.done = true; }});\n\
-         return 'started';\n\
+         return run;\n\
          }})()"
     )
 }
 
-/// Where a run lives on the page: `window[Symbol.for(run_key)]`. A symbol key
-/// stays out of `Object.keys`, `Object.getOwnPropertyNames` and `for...in`,
-/// which is how page scripts scan `window` for automation globals, and the key
-/// is a bare random id with no fixed prefix to match on.
-fn run_slot(run_key: &str) -> String {
-    let key_json = serde_json::to_string(run_key).unwrap_or_default();
-    format!("Symbol.for({key_json})")
+// A run is never put on the page. The start script returns its run object;
+// the daemon keeps the CDP handle (objectId) of that object and calls the
+// functions below on it with `Runtime.callFunctionOn`, `this` being the run.
+// Nothing is written to `window` (no name, no symbol) for a page to find,
+// and a navigation that ends the run invalidates the handle.
+
+/// Read and drain a background run: `{state: running|done, progress,
+/// requests, result?, error?}`. Called on the run object.
+pub fn poll_script() -> String {
+    "function () {\n\
+     const r = this;\n\
+     const out = { state: r.done ? 'done' : 'running', progress: r.progress.splice(0), requests: r.requests.splice(0) };\n\
+     if (r.done) { out.result = r.result; out.error = r.error; }\n\
+     return out;\n\
+     }"
+    .to_string()
 }
 
-pub fn poll_script(run_key: &str) -> String {
-    let slot = run_slot(run_key);
-    format!(
-        "(() => {{\n\
-         const r = window[{slot}];\n\
-         if (!r) return {{ state: 'lost' }};\n\
-         const out = {{ state: r.done ? 'done' : 'running', progress: r.progress.splice(0), requests: r.requests.splice(0) }};\n\
-         if (r.done) {{ out.result = r.result; out.error = r.error; delete window[{slot}]; }}\n\
-         return out;\n\
-         }})()"
-    )
-}
-
-/// Measure the element an `args.ui` request names: the run's element handle
+/// Measure (called on the run object) the element an `args.ui` request names: the run's element handle
 /// `target`, else the first match of `selector` in the top document. Returns
 /// its box in top-level viewport CSS pixels (same-origin frames are offset by
 /// their frame element), the viewport size, and the box of the nearest
 /// scrollable ancestor, where a wheel would scroll it into view. Errors are
 /// `{error}`. Nothing is written to the page.
-pub fn ui_measure_script(run_key: &str, req: &Value) -> String {
-    let slot = run_slot(run_key);
+pub fn ui_measure_script(req: &Value) -> String {
     let target = req.get("target").and_then(|v| v.as_u64()).unwrap_or(0);
     let selector =
         serde_json::to_string(req.get("selector").and_then(|v| v.as_str()).unwrap_or(""))
             .unwrap_or_else(|_| "\"\"".to_string());
     format!(
-        "(() => {{\n\
-         const r = window[{slot}];\n\
+        "function () {{\n\
+         const r = this;\n\
          let el = null;\n\
          if ({target}) {{ el = r && r.targets && r.targets.get({target}); if (!el) return {{ error: 'element handle is gone (the run ended or the page reloaded)' }}; }}\n\
          else {{ try {{ el = document.querySelector({selector}); }} catch (e) {{ return {{ error: 'bad selector: ' + e.message }}; }}\n\
@@ -721,21 +706,20 @@ pub fn ui_measure_script(run_key: &str, req: &Value) -> String {
          if (/(auto|scroll)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1) {{ const pb = p.getBoundingClientRect(); sc = {{ x: pb.left + ox, y: pb.top + oy, w: pb.width, h: pb.height }}; break; }}\n\
          }}\n\
          return {{ x: b.left + ox, y: b.top + oy, w: b.width, h: b.height, vw: window.innerWidth, vh: window.innerHeight, scroller: sc }};\n\
-         }})()"
+         }}"
     )
 }
 
 /// Whether a point lands on the element an `args.ui` request names (or
 /// inside it): `{hit, top}` where `top` describes what is there instead.
-pub fn ui_hit_script(run_key: &str, req: &Value, x: f64, y: f64) -> String {
-    let slot = run_slot(run_key);
+pub fn ui_hit_script(req: &Value, x: f64, y: f64) -> String {
     let target = req.get("target").and_then(|v| v.as_u64()).unwrap_or(0);
     let selector =
         serde_json::to_string(req.get("selector").and_then(|v| v.as_str()).unwrap_or(""))
             .unwrap_or_else(|_| "\"\"".to_string());
     format!(
-        "(() => {{\n\
-         const r = window[{slot}];\n\
+        "function () {{\n\
+         const r = this;\n\
          let el = {target} ? (r && r.targets && r.targets.get({target})) : document.querySelector({selector});\n\
          if (!el) return {{ hit: false, top: null }};\n\
          let top = document.elementFromPoint({x}, {y});\n\
@@ -743,13 +727,12 @@ pub fn ui_hit_script(run_key: &str, req: &Value, x: f64, y: f64) -> String {
          const hit = !!top && (top === el || el.contains(top) || (top.tagName === 'IFRAME' && el.ownerDocument !== document));\n\
          const d = top ? (top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + (typeof top.className === 'string' && top.className ? '.' + top.className.trim().split(/\\s+/).slice(0, 2).join('.') : '')) : null;\n\
          return {{ hit, top: d }};\n\
-         }})()"
+         }}"
     )
 }
 
 /// Resolve (or reject) the page-side promise of request `id`.
-pub fn settle_script(run_key: &str, id: u64, ok: bool, value: &Value) -> String {
-    let slot = run_slot(run_key);
+pub fn settle_script(id: u64, ok: bool, value: &Value) -> String {
     let value_json = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
     let how = if ok {
         format!("w.resolve({value_json})")
@@ -757,8 +740,8 @@ pub fn settle_script(run_key: &str, id: u64, ok: bool, value: &Value) -> String 
         format!("w.reject(new Error({value_json}))")
     };
     format!(
-        "(() => {{ const r = window[{slot}]; const w = r && r.waiters[{id}]; \
-         if (!w) return false; delete r.waiters[{id}]; {how}; return true; }})()"
+        "function () {{ const r = this; const w = r && r.waiters[{id}]; \
+         if (!w) return false; delete r.waiters[{id}]; {how}; return true; }}"
     )
 }
 
@@ -3100,23 +3083,22 @@ async function(args) { return args; }"#;
         let a = parse_adapter(PUBLISH, "demo/publish").unwrap();
         let args = json!({ "title": "Hi", "video": "/abs/clip.mp4" });
         let files = json!({ "video": { "path": "/abs/clip.mp4", "name": "clip.mp4", "size": 10, "input": "input[type=file]" } });
-        let start =
-            build_start(&a, &args, None, "__cu_site_t", &files).replace(BUDGET_PLACEHOLDER, "4200");
-        let poll = poll_script("__cu_site_t");
-        let settle = settle_script("__cu_site_t", 1, true, &json!({ "attached": 1 }));
+        let start = build_start(&a, &args, None, &files).replace(BUDGET_PLACEHOLDER, "4200");
+        let poll = poll_script();
+        let settle = settle_script(1, true, &json!({ "attached": 1 }));
         let driver = format!(
             "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/');\n\
              const tick = () => new Promise(r => setTimeout(r, 5));\n\
-             const keys0 = Object.keys(window).length;\n\
+             const names0 = Object.getOwnPropertyNames(window).length, syms0 = Object.getOwnPropertySymbols(window).length;\n\
              (async () => {{\n\
-             const started = {start};\n\
+             const run = {start};\n\
+             const started = typeof run === 'object' && run !== null ? 'started' : run;\n\
              await tick();\n\
-             const first = {poll};\n\
-             const settled = {settle};\n\
+             const first = ({poll}).call(run);\n\
+             const settled = ({settle}).call(run);\n\
              await tick();\n\
-             const last = {poll};\n\
-             const after = {poll};\n\
-             console.log(JSON.stringify({{ started, first, settled, last, after, enumerable: Object.keys(window).length !== keys0, named: Object.getOwnPropertyNames(window).some(k => k.includes('__cu_site_t')) }}));\n\
+             const last = ({poll}).call(run);\n\
+             console.log(JSON.stringify({{ started, first, settled, last, enumerable: Object.getOwnPropertyNames(window).length !== names0, named: Object.getOwnPropertySymbols(window).length !== syms0 }}));\n\
              }})();"
         );
         let out = std::process::Command::new(node)
@@ -3146,8 +3128,6 @@ async function(args) { return args; }"#;
         assert_eq!(v["last"]["result"]["attached"], 1);
         // budgetMs / progress are hidden from an adapter that enumerates args.
         assert_eq!(v["last"]["result"]["keys"], "title,video");
-        // A settled run is removed; the next poll reports it gone.
-        assert_eq!(v["after"]["state"], "lost");
     }
 
     #[test]
@@ -3326,14 +3306,14 @@ async function(args){ return args; }"#;
             "/* @meta\n{{\"name\": \"demo/login\", \"domain\": \"example.com\", \"args\": {{}}}}\n*/\n{func}"
         );
         let a = parse_adapter(&raw, "demo/login").unwrap();
-        let start = build_start(&a, &json!({}), None, "__cu_site_l", &json!({}))
-            .replace(BUDGET_PLACEHOLDER, "1000");
-        let poll = poll_script("__cu_site_l");
+        let start =
+            build_start(&a, &json!({}), None, &json!({})).replace(BUDGET_PLACEHOLDER, "1000");
+        let poll = poll_script();
         let driver = format!(
             "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/app/');\n\
              window.fetch = {fetch_stub};\n\
-             (async () => {{ {start}; for (let i = 0; i < 50; i++) {{ await new Promise(r => setTimeout(r, 5));\n\
-             const p = {poll}; if (p.state === 'done') {{ console.log(JSON.stringify(p)); return; }} }} }})();"
+             (async () => {{ const run = {start}; for (let i = 0; i < 50; i++) {{ await new Promise(r => setTimeout(r, 5));\n\
+             const p = ({poll}).call(run); if (p.state === 'done') {{ console.log(JSON.stringify(p)); return; }} }} }})();"
         );
         let out = std::process::Command::new(node)
             .arg("-e")
@@ -3863,17 +3843,16 @@ mod ui_rpc_tests {
                    return { bad, enumerable: Object.keys(args).includes('ui') };\n\
                    }";
         let a = parse_adapter(raw, "demo/ui").unwrap();
-        let key = "k1";
         let start =
-            build_start(&a, &json!({}), None, key, &json!({})).replace(BUDGET_PLACEHOLDER, "1000");
-        let poll = poll_script(key);
-        let slot = run_slot(key);
+            build_start(&a, &json!({}), None, &json!({})).replace(BUDGET_PLACEHOLDER, "1000");
+        let poll = poll_script();
         let driver = format!(
             "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/');\n\
-             (async () => {{ {start}; await new Promise(r => setTimeout(r, 5));\n\
-             const handle = window[{slot}].targets.get(1);\n\
-             const p = {poll};\n\
-             console.log(JSON.stringify({{ p, handle: handle && handle.id, named: Object.getOwnPropertyNames(window).filter(k => k.includes('k1')) }})); }})();"
+             const syms0 = Object.getOwnPropertySymbols(window).length;\n\
+             (async () => {{ const run = {start}; await new Promise(r => setTimeout(r, 5));\n\
+             const handle = run.targets.get(1);\n\
+             const p = ({poll}).call(run);\n\
+             console.log(JSON.stringify({{ p, handle: handle && handle.id, named: Object.getOwnPropertySymbols(window).length - syms0 }})); }})();"
         );
         let out = std::process::Command::new(node)
             .arg("-e")
@@ -3898,7 +3877,7 @@ mod ui_rpc_tests {
         assert_eq!(reqs[3]["kind"], "scroll");
         assert_eq!(reqs[3]["dy"], 300);
         assert_eq!(v["handle"], "x");
-        assert_eq!(v["named"], json!([]));
+        assert_eq!(v["named"], 0);
         assert_eq!(
             v["p"]["result"]["bad"],
             "args.ui: pass an Element or a CSS selector"
