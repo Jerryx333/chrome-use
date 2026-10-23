@@ -278,8 +278,11 @@ pub async fn measure(
 }
 
 /// Whether the point (top-level viewport CSS px) lands on the node or inside
-/// it, by CDP hit testing (no `elementFromPoint` in the page): `(hit, what
-/// is there instead)`.
+/// it: `(hit, what is there instead)`. `elementFromPoint` in the isolated
+/// world, where the page's own copy is never called; it takes viewport
+/// coordinates and passes through `pointer-events: none`, as a real click
+/// does. (`DOM.getNodeForLocation` does not take viewport coordinates: on a
+/// scrolled page it answered for a different spot.)
 pub async fn hit_test(
     client: &CdpClient,
     session_id: &str,
@@ -287,57 +290,22 @@ pub async fn hit_test(
     x: f64,
     y: f64,
 ) -> Result<(bool, Option<String>), String> {
-    let out = client
-        .send_command(
-            "DOM.getNodeForLocation",
-            Some(json!({
-                "x": x.round() as i64,
-                "y": y.round() as i64,
-                "includeUserAgentShadowDOM": false,
-                // false: an element with pointer-events: none (a select's
-                // arrow, an icon over a button) is passed through, as a real
-                // click and elementFromPoint pass through it.
-                "ignorePointerEventsNone": false,
-            })),
-            Some(session_id),
-        )
-        .await;
-    let Some(top) = out
-        .ok()
-        .and_then(|o| o.get("backendNodeId").and_then(|v| v.as_i64()))
-    else {
-        return Ok((false, None));
-    };
-    if top == backend_node_id {
-        return Ok((true, None));
-    }
-    let v = with_world(client, session_id, |ctx| async move {
-        let target = resolve_in(client, session_id, backend_node_id, ctx).await?;
-        let hit = resolve_in(client, session_id, top, ctx).await?;
-        let out = client
-            .send_command(
-                "Runtime.callFunctionOn",
-                Some(json!({
-                    "objectId": target,
-                    "functionDeclaration": "function (h) {\n\
-                        let n = h && h.nodeType === 1 ? h : (h && h.parentElement);\n\
-                        const top = n;\n\
-                        for (let p = n; p; p = p.parentNode || p.host || null) { if (p === this) return { hit: true }; }\n\
-                        if (top && top.tagName === 'IFRAME' && this.ownerDocument !== document) return { hit: true };\n\
-                        const d = top ? (top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + (typeof top.className === 'string' && top.className ? '.' + top.className.trim().split(/\\s+/).slice(0, 2).join('.') : '')) : null;\n\
-                        return { hit: false, top: d };\n\
-                    }",
-                    "arguments": [{ "objectId": hit }],
-                    "returnByValue": true,
-                })),
-                Some(session_id),
-            )
-            .await?;
-        if let Some(e) = exception(&out) {
-            return Err(e);
-        }
-        Ok(out.pointer("/result/value").cloned().unwrap_or(Value::Null))
-    })
+    let v = call_on_node(
+        client,
+        session_id,
+        backend_node_id,
+        "function (x, y) {\n\
+            const el = this;\n\
+            let top = document.elementFromPoint(x, y);\n\
+            while (top && top.shadowRoot && top !== el) { const inner = top.shadowRoot.elementFromPoint(x, y); if (!inner || inner === top) break; top = inner; }\n\
+            let hit = false;\n\
+            for (let p = top; p; p = p.parentNode || p.host || null) { if (p === el) { hit = true; break; } }\n\
+            if (!hit && top && top.tagName === 'IFRAME' && el.ownerDocument !== document) hit = true;\n\
+            const d = top ? (top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + (typeof top.className === 'string' && top.className ? '.' + top.className.trim().split(/\\s+/).slice(0, 2).join('.') : '')) : null;\n\
+            return { hit, top: hit ? null : d };\n\
+        }",
+        vec![json!({ "value": x }), json!({ "value": y })],
+    )
     .await?;
     Ok((
         v.get("hit").and_then(|b| b.as_bool()).unwrap_or(false),

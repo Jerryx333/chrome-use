@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.260
+## 1.5.261
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.82.
+
+### Bug Fixes
+
+- **`args.ui` no longer reports a target on a scrolled page as covered.** The isolated-world hit test used CDP's `DOM.getNodeForLocation`, which does not take viewport coordinates: on a page scrolled down (Douyin's post page) it answered for a different spot, so clicks on the 自主声明 and visibility selects were refused and fell back to synthetic clicks. It now uses `elementFromPoint` in the isolated world, where the page's own copy is never called; it takes viewport coordinates and passes through `pointer-events: none`, as a real click does.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.260
+
 Works with extension ab-connect 0.5.82.
 
 ### Bug Fixes
@@ -17,7 +30,6 @@ Works with extension ab-connect 0.5.82.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.259
 
