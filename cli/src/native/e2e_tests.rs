@@ -12896,6 +12896,48 @@ async function(args) {
     server.abort();
 }
 
+/// With humanize on (the default), `scroll` and `scrollintoview` move the
+/// page with trusted wheel events, as a person does, instead of scrollBy /
+/// scrollIntoView, which scroll with no input at all.
+#[tokio::test]
+#[ignore]
+async fn e2e_scroll_and_scrollintoview_use_the_wheel() {
+    let rows: String = (1..=60)
+        .map(|i| format!("<div class=\"r\" id=\"i{i}\">item {i}</div>"))
+        .collect();
+    let page = format!(
+        r##"<!doctype html><meta charset="utf-8"><title>wheel</title>
+<style>#list{{height:200px;overflow:auto}} .r{{height:40px}}</style>
+<div id="list">{rows}</div>
+<script>window.wheels=0;document.addEventListener('wheel',e=>{{if(e.isTrusted)window.wheels++}},true);</script>"##
+    );
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let resp = execute_command(&json!({ "id": "3", "action": "scroll", "selector": "#list", "direction": "down", "amount": 300 }), &mut state).await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["via"], "wheel", "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "scrollintoview", "selector": "#i55" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["via"], "wheel", "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "evaluate", "script": "JSON.stringify({wheels: window.wheels, top: document.getElementById('list').scrollTop, seen: (()=>{const b=document.getElementById('i55').getBoundingClientRect(), l=document.getElementById('list').getBoundingClientRect(); return b.top < l.bottom && b.bottom > l.top})()})" }),
+        &mut state,
+    )
+    .await;
+    let v: Value = serde_json::from_str(get_data(&resp)["result"].as_str().unwrap()).unwrap();
+    assert!(v["wheels"].as_u64().unwrap() > 0, "{v}");
+    assert_eq!(v["seen"], true, "{v}");
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
 /// A navigation ends a run: its context, and the run's handle with it, are
 /// gone. Without --until-done that is reported as `interrupted`; with it the
 /// adapter is run again on the new page and finishes there.

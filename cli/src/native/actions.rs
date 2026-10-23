@@ -10696,6 +10696,17 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
         }
     }
 
+    // With humanize on (the default) and no explicit point, scroll the way a
+    // person does: the wheel, over the element (or the page). A page sees
+    // scrollBy as scrolling with no input at all. A wheel that moves nothing
+    // falls back to the paths below.
+    if !humanize::active_level().is_off() && cmd.get("at").is_none() && cmd.get("frame").is_none() {
+        if let Some(out) = wheel_scroll(state, selector, dx, dy).await {
+            return Ok(out);
+        }
+    }
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+
     // An explicit `--selector` keeps the precise element-scroll path (scrollBy on
     // the resolved node, same-origin only).
     if let Some(sel) = selector {
@@ -10750,6 +10761,130 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     Ok(
         json!({ "scrolled": moved, "via": "page", "warning": if moved { Value::Null } else { json!("scroll did not move: boundary reached or page cannot scroll") } }),
     )
+}
+
+/// Measure `this` element the way `args.ui` does (box, viewport, nearest
+/// scrollable ancestor), for [`ui_offscreen_dy`].
+const ELEMENT_MEASURE_FN: &str = "function () {\n\
+    const el = this;\n\
+    let ox = 0, oy = 0;\n\
+    try { let w = el.ownerDocument.defaultView; while (w && w !== window && w.frameElement) { const f = w.frameElement; const b = f.getBoundingClientRect(); ox += b.left + f.clientLeft; oy += b.top + f.clientTop; w = w.parent; } } catch (_) {}\n\
+    const b = el.getBoundingClientRect();\n\
+    let sc = null;\n\
+    for (let p = el.parentElement; p; p = p.parentElement) {\n\
+      const cs = getComputedStyle(p);\n\
+      if (/(auto|scroll)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1) { const pb = p.getBoundingClientRect(); sc = { x: pb.left + ox, y: pb.top + oy, w: pb.width, h: pb.height }; break; }\n\
+    }\n\
+    return { x: b.left + ox, y: b.top + oy, w: b.width, h: b.height, vw: window.innerWidth, vh: window.innerHeight, scroller: sc };\n\
+}";
+
+/// Wheel `selector`'s element into view over its scroll container. False
+/// when it could not (not found, the wheel moved nothing): the caller then
+/// scrolls the old way.
+async fn wheel_into_view(state: &DaemonState, selector: &str) -> bool {
+    let Some(mgr) = state.browser.as_ref() else {
+        return false;
+    };
+    let Ok(session_id) = mgr.active_session_id().map(str::to_string) else {
+        return false;
+    };
+    for _ in 0..UI_SCROLL_STEPS {
+        let Ok((object_id, el_session)) = super::element::resolve_element_object_id(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            selector,
+            &state.iframe_sessions,
+        )
+        .await
+        else {
+            return false;
+        };
+        let Ok(m) = call_fn_on(&mgr.client, &el_session, &object_id, ELEMENT_MEASURE_FN).await
+        else {
+            return false;
+        };
+        let off = ui_offscreen_dy(&m);
+        if off == 0.0 {
+            return true;
+        }
+        let (vw, vh) = (f(&m, "vw"), f(&m, "vh"));
+        let (cx, cy, cw, ch) = m
+            .get("scroller")
+            .filter(|s| s.is_object())
+            .map(|s| (f(s, "x"), f(s, "y"), f(s, "w"), f(s, "h")))
+            .unwrap_or((0.0, 0.0, vw, vh));
+        let (cx, cy, cw, ch) = clip_box((cx, cy, cw, ch), vw, vh);
+        let (x, y) = jitter_point(cx + cw / 2.0, cy + ch / 2.0, cw / 5.0, ch / 5.0);
+        if interaction::move_pointer(&mgr.client, &session_id, x, y)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        let step = off.clamp(-(ch * 0.8).max(120.0), (ch * 0.8).max(120.0));
+        if dispatch_wheel(&mgr.client, &session_id, x, y, 0.0, step)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        tokio::time::sleep(jitter_ms(90, 260)).await;
+    }
+    false
+}
+
+/// One wheel scroll by (dx, dy) over `selector`'s element, or the page.
+/// Returns the reply when the wheel moved what it was over, None when it did
+/// not (the caller then scrolls the old way).
+async fn wheel_scroll(
+    state: &DaemonState,
+    selector: Option<&str>,
+    dx: f64,
+    dy: f64,
+) -> Option<Value> {
+    let mgr = state.browser.as_ref()?;
+    let session_id = mgr.active_session_id().ok()?.to_string();
+    let (x, y) = match selector {
+        Some(sel) => super::element::resolve_element_center(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            sel,
+            &state.iframe_sessions,
+        )
+        .await
+        .ok()
+        .map(|(x, y, w, h, _)| jitter_point(x, y, w / 5.0, h / 5.0))?,
+        None => viewport_center(mgr, &session_id)
+            .await
+            .ok()
+            .map(|(x, y)| jitter_point(x, y, x / 4.0, y / 4.0))?,
+    };
+    let pos = || async {
+        scroll_position(
+            mgr,
+            &session_id,
+            &state.ref_map,
+            selector,
+            &state.iframe_sessions,
+        )
+        .await
+    };
+    let before = pos().await;
+    interaction::move_pointer(&mgr.client, &session_id, x, y)
+        .await
+        .ok()?;
+    dispatch_wheel(&mgr.client, &session_id, x, y, dx, dy)
+        .await
+        .ok()?;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let after = pos().await;
+    let moved = match (before, after) {
+        (Some(b), Some(a)) => (a.0 - b.0).abs() >= 1.0 || (a.1 - b.1).abs() >= 1.0,
+        _ => false,
+    };
+    moved.then(|| json!({ "scrolled": true, "via": "wheel", "at": [x.round(), y.round()] }))
 }
 
 /// Step budget for `scroll --until` when `--max-steps` isn't given.
@@ -16074,12 +16209,17 @@ async fn handle_selectall(cmd: &Value, state: &mut DaemonState) -> Result<Value,
 }
 
 async fn handle_scrollintoview(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
-    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
-    let session_id = mgr.active_session_id()?.to_string();
     let selector = cmd
         .get("selector")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'selector' parameter")?;
+    // With humanize on, wheel it into view over the container it scrolls in,
+    // as args.ui does; scrollIntoView moves the page with no input event.
+    if !humanize::active_level().is_off() && wheel_into_view(state, selector).await {
+        return Ok(json!({ "scrolled": selector, "via": "wheel" }));
+    }
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
 
     interaction::scroll_into_view(
         &mgr.client,

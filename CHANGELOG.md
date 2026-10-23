@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.255
+## 1.5.256
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.82.
+
+### Improvements
+
+- **`scroll` and `scrollintoview` use the wheel by default.** 1.5.255 moved `scroll --until` to the wheel; plain `scroll` (direction and amount, with or without `--selector`) and `scrollintoview` still moved the page with `scrollBy` / `scrollIntoView`, which a page sees as scrolling with no input at all (botcheck's scroll-source check, run in a real Chrome through the side panel). With humanize on (the default) they now wheel over the element or the page; `scrollintoview` wheels over the container the element scrolls in, re-measuring after each step, as `args.ui.scroll` does. A wheel that moves nothing falls back to the old way; `AGENT_BROWSER_HUMANIZE=off` keeps it.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.255
+
 Works with extension ab-connect 0.5.82.
 
 ### Improvements
@@ -23,7 +36,6 @@ Works with extension ab-connect 0.5.82.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.254
 
