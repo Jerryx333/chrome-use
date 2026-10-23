@@ -617,11 +617,11 @@ pub fn build_start(
          }}\n\
          hide('budgetMs', {BUDGET_PLACEHOLDER});\n\
          hide('progress', (m) => {{ run.progress.push(String(m)); }});\n\
-         const T = new Map(); let tn = 0;\n\
+         const T = Object.create(null); let tn = 0;\n\
          Object.defineProperty(run, 'targets', {{ value: T }});\n\
          const pick = (t) => {{\n\
          if (typeof t === 'string' && t) return {{ selector: t }};\n\
-         if (t && typeof t === 'object' && t.nodeType === 1) {{ const id = ++tn; T.set(id, t); return {{ target: id }}; }}\n\
+         if (t && typeof t === 'object' && t.nodeType === 1) {{ const id = ++tn; T[id] = t; return {{ target: id }}; }}\n\
          throw new TypeError('args.ui: pass an Element or a CSS selector');\n\
          }};\n\
          const opts = (o) => (o && typeof o === 'object' ? o : {{}});\n\
@@ -676,59 +676,6 @@ pub fn poll_script() -> String {
      return out;\n\
      }"
     .to_string()
-}
-
-/// Measure (called on the run object) the element an `args.ui` request names: the run's element handle
-/// `target`, else the first match of `selector` in the top document. Returns
-/// its box in top-level viewport CSS pixels (same-origin frames are offset by
-/// their frame element), the viewport size, and the box of the nearest
-/// scrollable ancestor, where a wheel would scroll it into view. Errors are
-/// `{error}`. Nothing is written to the page.
-pub fn ui_measure_script(req: &Value) -> String {
-    let target = req.get("target").and_then(|v| v.as_u64()).unwrap_or(0);
-    let selector =
-        serde_json::to_string(req.get("selector").and_then(|v| v.as_str()).unwrap_or(""))
-            .unwrap_or_else(|_| "\"\"".to_string());
-    format!(
-        "function () {{\n\
-         const r = this;\n\
-         let el = null;\n\
-         if ({target}) {{ el = r && r.targets && r.targets.get({target}); if (!el) return {{ error: 'element handle is gone (the run ended or the page reloaded)' }}; }}\n\
-         else {{ try {{ el = document.querySelector({selector}); }} catch (e) {{ return {{ error: 'bad selector: ' + e.message }}; }}\n\
-         if (!el) return {{ error: 'no element matches ' + {selector} }}; }}\n\
-         if (!el.isConnected) return {{ error: 'element is no longer in the page' }};\n\
-         let ox = 0, oy = 0;\n\
-         try {{ let w = el.ownerDocument.defaultView; while (w && w !== window && w.frameElement) {{ const f = w.frameElement; const b = f.getBoundingClientRect(); ox += b.left + f.clientLeft; oy += b.top + f.clientTop; w = w.parent; }} }} catch (_) {{}}\n\
-         const b = el.getBoundingClientRect();\n\
-         let sc = null;\n\
-         for (let p = el.parentElement; p; p = p.parentElement) {{\n\
-         const cs = getComputedStyle(p);\n\
-         if (/(auto|scroll)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1) {{ const pb = p.getBoundingClientRect(); sc = {{ x: pb.left + ox, y: pb.top + oy, w: pb.width, h: pb.height }}; break; }}\n\
-         }}\n\
-         return {{ x: b.left + ox, y: b.top + oy, w: b.width, h: b.height, vw: window.innerWidth, vh: window.innerHeight, scroller: sc }};\n\
-         }}"
-    )
-}
-
-/// Whether a point lands on the element an `args.ui` request names (or
-/// inside it): `{hit, top}` where `top` describes what is there instead.
-pub fn ui_hit_script(req: &Value, x: f64, y: f64) -> String {
-    let target = req.get("target").and_then(|v| v.as_u64()).unwrap_or(0);
-    let selector =
-        serde_json::to_string(req.get("selector").and_then(|v| v.as_str()).unwrap_or(""))
-            .unwrap_or_else(|_| "\"\"".to_string());
-    format!(
-        "function () {{\n\
-         const r = this;\n\
-         let el = {target} ? (r && r.targets && r.targets.get({target})) : document.querySelector({selector});\n\
-         if (!el) return {{ hit: false, top: null }};\n\
-         let top = document.elementFromPoint({x}, {y});\n\
-         while (top && top.shadowRoot && top !== el) {{ const inner = top.shadowRoot.elementFromPoint({x}, {y}); if (!inner || inner === top) break; top = inner; }}\n\
-         const hit = !!top && (top === el || el.contains(top) || (top.tagName === 'IFRAME' && el.ownerDocument !== document));\n\
-         const d = top ? (top.tagName.toLowerCase() + (top.id ? '#' + top.id : '') + (typeof top.className === 'string' && top.className ? '.' + top.className.trim().split(/\\s+/).slice(0, 2).join('.') : '')) : null;\n\
-         return {{ hit, top: d }};\n\
-         }}"
-    )
 }
 
 /// Resolve (or reject) the page-side promise of request `id`.
@@ -3850,7 +3797,7 @@ mod ui_rpc_tests {
             "globalThis.window = globalThis; globalThis.location = new URL('https://example.com/');\n\
              const syms0 = Object.getOwnPropertySymbols(window).length;\n\
              (async () => {{ const run = {start}; await new Promise(r => setTimeout(r, 5));\n\
-             const handle = run.targets.get(1);\n\
+             const handle = run.targets[1];\n\
              const p = ({poll}).call(run);\n\
              console.log(JSON.stringify({{ p, handle: handle && handle.id, named: Object.getOwnPropertySymbols(window).length - syms0 }})); }})();"
         );

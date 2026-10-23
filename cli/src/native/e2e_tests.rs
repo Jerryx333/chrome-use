@@ -12896,6 +12896,79 @@ async function(args) {
     server.abort();
 }
 
+/// `args.ui` and `scrollintoview` find, measure and hit-test elements
+/// without calling the page's own functions: a page that wraps
+/// querySelector / getBoundingClientRect / elementFromPoint /
+/// getComputedStyle in the main world sees none of those calls.
+#[tokio::test]
+#[ignore]
+async fn e2e_ui_reads_the_page_from_an_isolated_world() {
+    let rows: String = (1..=50)
+        .map(|i| format!("<div class=\"r\">row {i}</div>"))
+        .collect();
+    let page = format!(
+        r##"<!doctype html><meta charset="utf-8"><title>quiet</title>
+<style>#list{{height:160px;overflow:auto}} .r{{height:40px}}</style>
+<button id="t">go</button><input id="in">
+<div id="list">{rows}<button id="far">far</button></div>
+<script>
+window.seen = [];
+for (const [o, ns] of [[Document.prototype, ['querySelector','querySelectorAll','getElementById','elementFromPoint','elementsFromPoint']], [Element.prototype, ['querySelector','getBoundingClientRect','getClientRects','closest','getAttribute','matches']], [window, ['getComputedStyle']]]) {{
+  for (const n of ns) {{ const f = o[n]; Object.defineProperty(o, n, {{ value: function (...a) {{ window.seen.push(n); return f.apply(this, a); }}, configurable: true, writable: true }}); }}
+}}
+</script>"##
+    );
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let raw = r##"/* @meta
+{"name": "demo/quiet", "domain": "127.0.0.1", "args": {}}
+*/
+async function(args) {
+  window.seen.length = 0;
+  await args.ui.click('#t');
+  await args.ui.type('#in', 'ab');
+  await args.ui.scroll('#far');
+  await args.ui.click('#far');
+  return window.seen.slice();
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/quiet").unwrap();
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
+    let resp = execute_command(
+        &json!({
+            "id": "3", "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": "q", "files": inv.files, "untilDone": false,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 60_000,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], json!([]), "{resp}");
+
+    // scrollintoview: back to the top, then in again, watched the same way.
+    let _ = execute_command(&json!({ "id": "4", "action": "evaluate", "script": "document.getElementById('list').scrollTop = 0; window.seen.length = 0; true" }), &mut state).await;
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "scrollintoview", "selector": "#far" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["via"], "wheel", "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "JSON.stringify(window.seen)" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["result"], "[]", "{resp}");
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
 /// With humanize on (the default), `scroll` and `scrollintoview` move the
 /// page with trusted wheel events, as a person does, instead of scrollBy /
 /// scrollIntoView, which scroll with no input at all.
