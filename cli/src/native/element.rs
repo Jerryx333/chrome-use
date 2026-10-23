@@ -4458,6 +4458,11 @@ pub async fn get_element_input_value(
         iframe_sessions,
     )
     .await?;
+    // Monaco / CodeMirror keep the value in page JS: read it from the main world.
+    let object_id =
+        super::interaction::rich_editor_main_twin(client, &effective_session_id, &object_id)
+            .await
+            .unwrap_or(object_id);
 
     let result: EvaluateResult = client
         .send_command_typed(

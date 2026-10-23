@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.257
+## 1.5.258
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.82.
+
+### Improvements
+
+- **Every command reads the page from an isolated world.** 1.5.257 did this for `args.ui` and `scrollintoview`; now `snapshot`, `click`, `type`, `fill`, `hover`, `find` / `getby*`, `get text` and the rest do too. chrome-use's own page reads (finding elements, measuring them, checking what covers them, reading values and text) used to run in the page's main world, where a page that wraps `querySelector`, `getBoundingClientRect`, `getComputedStyle`, `innerText` and the like sees an `<anonymous>` caller that is not one of its scripts. Each `Runtime.evaluate` and `DOM.resolveNode` chrome-use sends without naming a context now goes to the tab's isolated world (one per tab, recreated after a navigation; a node in a same-process frame falls back to the main world), so the page's own functions are never called. What has to see the page's JS still runs in the main world: your `eval`, `wait --fn`, `extract`, `addscript`, `pushstate`, site adapters, the React tools, the anti-bot vendor probe, `site analyze`, `stealth status` and the passkey guard, and `fill` / value reads on Monaco and CodeMirror editors (their model lives in page JS). `AGENT_BROWSER_MAIN_WORLD=1` puts everything back in the main world. As a side effect the popup guard no longer leaves `window.__chromeUsePopupGuard` in the page.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.257
+
 Works with extension ab-connect 0.5.82.
 
 ### Improvements
@@ -13,7 +26,6 @@ Works with extension ab-connect 0.5.82.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.256
 

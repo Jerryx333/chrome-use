@@ -8239,7 +8239,8 @@ async fn e2e_auth_login_bwu_create_guard_covers_out_of_process_frames() {
                 .send_command(
                     "Runtime.evaluate",
                     Some(
-                        json!({ "expression": expr, "awaitPromise": true, "returnByValue": true }),
+                        // The page's own navigator: the guard is in the main world.
+                        json!({ "expression": expr, "awaitPromise": true, "returnByValue": true, "__cuMain": true }),
                     ),
                     Some(&oopif),
                 )
@@ -12964,6 +12965,95 @@ async function(args) {
     )
     .await;
     assert_eq!(get_data(&resp)["result"], "[]", "{resp}");
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// The everyday commands read the page from the isolated world too: a page
+/// that wraps its query / measure / text functions sees none of the calls
+/// `snapshot`, `click`, `type`, `fill`, `hover`, `find` and `get text` make.
+#[tokio::test]
+#[ignore]
+async fn e2e_commands_read_the_page_from_an_isolated_world() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>quiet2</title>
+<button id="t">go</button> <input id="in" aria-label="name"> <p id="p">hello there</p>
+<script>
+window.seen = [];
+for (const [o, ns] of [[Document.prototype, ['querySelector','querySelectorAll','getElementById','elementFromPoint','elementsFromPoint']], [Element.prototype, ['querySelector','querySelectorAll','getBoundingClientRect','getClientRects','closest','getAttribute','matches']], [window, ['getComputedStyle']]]) {
+  for (const n of ns) { const f = o[n]; Object.defineProperty(o, n, { value: function (...a) { window.seen.push(n + ' ' + JSON.stringify(a).slice(0, 80)); return f.apply(this, a); }, configurable: true, writable: true }); }
+}
+const d = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerText');
+Object.defineProperty(HTMLElement.prototype, 'innerText', { ...d, get() { window.seen.push('innerText'); return d.get.call(this); } });
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let snap = execute_command(
+        &json!({ "id": "2", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&snap);
+    let tree = get_data(&snap)["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let go_ref = tree
+        .lines()
+        .find(|l| l.contains("button \"go\""))
+        .and_then(|l| l.split("ref=").nth(1))
+        .map(|r| {
+            r.trim_end_matches(']')
+                .split(',')
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .expect("go button ref");
+    let steps: Vec<(&str, Value)> = vec![
+        (
+            "snapshot",
+            json!({ "action": "snapshot", "interactive": true }),
+        ),
+        ("click css", json!({ "action": "click", "selector": "#t" })),
+        (
+            "click ref",
+            json!({ "action": "click", "selector": format!("@{go_ref}") }),
+        ),
+        (
+            "type",
+            json!({ "action": "type", "selector": "#in", "text": "ab" }),
+        ),
+        (
+            "fill",
+            json!({ "action": "fill", "selector": "#in", "value": "cd" }),
+        ),
+        ("hover", json!({ "action": "hover", "selector": "#t" })),
+        (
+            "getbytext click",
+            json!({ "action": "getbytext", "text": "go", "subaction": "click", "exact": true }),
+        ),
+        ("get text", json!({ "action": "gettext", "selector": "#p" })),
+    ];
+    let mut leaks = Vec::new();
+    for (i, (label, mut cmd)) in steps.into_iter().enumerate() {
+        let _ = execute_command(&json!({ "id": format!("r{i}"), "action": "evaluate", "script": "window.seen.length = 0; true" }), &mut state).await;
+        cmd["id"] = json!(format!("c{i}"));
+        let resp = execute_command(&cmd, &mut state).await;
+        assert_success(&resp);
+        let seen = execute_command(&json!({ "id": format!("s{i}"), "action": "evaluate", "script": "JSON.stringify(window.seen)" }), &mut state).await;
+        let v = get_data(&seen)["result"]
+            .as_str()
+            .unwrap_or("[]")
+            .to_string();
+        if v != "[]" {
+            leaks.push(format!("{label}: {v}"));
+        }
+    }
+    assert!(leaks.is_empty(), "main-world calls: {leaks:#?}");
 
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
