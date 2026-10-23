@@ -404,7 +404,23 @@ fn run_install(args: &[String], json: bool) {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        run_install_unix(args, json, host_paths, &custom_dirs);
+        let registered: Vec<_> = custom_dirs
+            .explicit
+            .iter()
+            .chain(&custom_dirs.discovered)
+            .filter(|dir| {
+                HOST_NAMES.iter().all(|host| {
+                    host_paths.contains(
+                        &dir.join("NativeMessagingHosts")
+                            .join(format!("{host}.json"))
+                            .display()
+                            .to_string(),
+                    )
+                })
+            })
+            .cloned()
+            .collect();
+        run_install_unix(args, json, host_paths, &registered);
         // With a real terminal (install.sh wires /dev/tty in), ask once whether
         // chrome-use may auto-restart Chrome to remove the debugging banner and
         // remember the answer for later agent-driven connects (#banner). No-op
@@ -1053,12 +1069,19 @@ fn guide_through_approval(zh: bool) {
     }
 }
 
-/// Parse only recognized browser main processes, never helpers or unrelated commands.
+/// Parse only the current UID's recognized browser main processes, never helpers or unrelated commands.
 /// `ps` loses shell quoting, so a data path extends to the next flag or line end.
 #[cfg(not(target_os = "windows"))]
-fn custom_user_data_dirs(cmdlines: &str, home: Option<&Path>) -> Vec<PathBuf> {
+fn custom_user_data_dirs(cmdlines: &str, current_uid: u32, home: Option<&Path>) -> Vec<PathBuf> {
     let mut result = Vec::new();
     for line in cmdlines.lines() {
+        let Some((uid, line)) = line.trim_start().split_once(char::is_whitespace) else {
+            continue;
+        };
+        if uid.parse::<u32>().ok() != Some(current_uid) {
+            continue;
+        }
+        let line = line.trim_start();
         if line.contains("--type=") {
             continue;
         }
@@ -1175,7 +1198,15 @@ fn explicit_user_data_dirs(args: &[String], home: Option<&Path>) -> Result<Vec<P
 
 /// Collect explicit roots and running custom browsers before writing any manifests.
 /// Explicit roots must exist; discovery never creates a missing browser data root.
-fn install_user_data_dirs(args: &[String]) -> Result<Vec<PathBuf>, String> {
+#[derive(Debug, Default)]
+struct InstallUserDataDirs {
+    #[cfg(not(target_os = "windows"))]
+    explicit: Vec<PathBuf>,
+    #[cfg(not(target_os = "windows"))]
+    discovered: Vec<PathBuf>,
+}
+
+fn install_user_data_dirs(args: &[String]) -> Result<InstallUserDataDirs, String> {
     #[cfg(target_os = "windows")]
     {
         if args
@@ -1184,15 +1215,16 @@ fn install_user_data_dirs(args: &[String]) -> Result<Vec<PathBuf>, String> {
         {
             return Err("extension install --user-data-dir is supported only on macOS/Linux; Windows uses HKCU native-host registration".into());
         }
-        Ok(Vec::new())
+        Ok(InstallUserDataDirs::default())
     }
     #[cfg(not(target_os = "windows"))]
     {
         let home = dirs::home_dir();
-        let mut result = explicit_user_data_dirs(args, home.as_deref())?;
-        match std::process::Command::new("ps").args(["-axww", "-o", "command="]).output() {
+        let explicit = explicit_user_data_dirs(args, home.as_deref())?;
+        let mut result = Vec::new();
+        match std::process::Command::new("ps").args(["-axww", "-o", "uid=,command="]).output() {
             Ok(output) if output.status.success() => {
-                for path in custom_user_data_dirs(&String::from_utf8_lossy(&output.stdout), home.as_deref()) {
+                for path in custom_user_data_dirs(&String::from_utf8_lossy(&output.stdout), unsafe { libc::getuid() }, home.as_deref()) {
                     // Discovery is best-effort: a browser that quit since the scan
                     // must not fail the install for the default directories.
                     if let Ok(path) = std::fs::canonicalize(&path) {
@@ -1206,7 +1238,11 @@ fn install_user_data_dirs(args: &[String]) -> Result<Vec<PathBuf>, String> {
         }
         result.sort();
         result.dedup();
-        Ok(result)
+        result.retain(|path| !explicit.contains(path));
+        Ok(InstallUserDataDirs {
+            explicit,
+            discovered: result,
+        })
     }
 }
 
@@ -1241,7 +1277,7 @@ fn install_native_host() -> Result<Vec<String>, String> {
 }
 
 /// Include custom data roots because these browsers do not read default host directories.
-fn install_native_host_with_dirs(custom_dirs: &[PathBuf]) -> Result<Vec<String>, String> {
+fn install_native_host_with_dirs(custom_dirs: &InstallUserDataDirs) -> Result<Vec<String>, String> {
     let home = dirs::home_dir().ok_or("no home dir")?;
     let ab_dir = home.join(".chrome-use");
     std::fs::create_dir_all(&ab_dir).map_err(|e| e.to_string())?;
@@ -1260,22 +1296,38 @@ fn install_native_host_with_dirs(custom_dirs: &[PathBuf]) -> Result<Vec<String>,
             .collect();
         manifest_dirs.extend(
             custom_dirs
+                .explicit
                 .iter()
                 .map(|dir| dir.join("NativeMessagingHosts")),
         );
         manifest_dirs.sort();
         manifest_dirs.dedup();
-        install_native_host_unix(&ab_dir, &exe, &manifest_dirs)
+        let discovered: Vec<_> = custom_dirs
+            .discovered
+            .iter()
+            .map(|dir| dir.join("NativeMessagingHosts"))
+            .filter(|dir| !manifest_dirs.contains(dir))
+            .collect();
+        let custom_roots: Vec<_> = custom_dirs
+            .explicit
+            .iter()
+            .chain(&custom_dirs.discovered)
+            .cloned()
+            .collect();
+        install_native_host_unix(&ab_dir, &exe, &manifest_dirs, &discovered, &custom_roots)
     }
 }
 
 /// macOS/Linux: write an `nm-host.sh` launcher and drop a host manifest into
-/// each supplied default or custom directory; custom data roots bypass default lookup.
+/// each supplied default or custom directory. Discovered directories are best-effort;
+/// required directories fail installation. Record custom roots for offline uninstall.
 #[cfg(not(target_os = "windows"))]
 fn install_native_host_unix(
     ab_dir: &std::path::Path,
     exe: &std::path::Path,
     manifest_dirs: &[PathBuf],
+    discovered_dirs: &[PathBuf],
+    custom_roots: &[PathBuf],
 ) -> Result<Vec<String>, String> {
     // Chrome execs the manifest `path` directly with the calling extension's
     // origin as argv[1]; a launcher lets us run the binary in __nm-host mode
@@ -1297,31 +1349,52 @@ fn install_native_host_unix(
     // launcher + allowed extensions), so any extension version's
     // `connectNative(<its host name>)` finds a matching host json.
     let mut written = Vec::new();
-    for dir in manifest_dirs {
-        let parent = dir.parent().ok_or("host directory has no parent")?;
-        if !parent.is_dir() {
-            return Err(format!(
-                "browser data directory no longer exists: {}",
-                parent.display()
-            ));
-        }
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        for host in HOST_NAMES {
-            let manifest = serde_json::json!({
-                "name": host,
-                "description": "chrome-use connect — native messaging host",
-                "path": launcher.display().to_string(),
-                "type": "stdio",
-                "allowed_origins": [
-                    format!("chrome-extension://{EXTENSION_ID}/"),
-                    format!("chrome-extension://{STORE_EXTENSION_ID}/"),
-                ],
-            });
-            let body = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
-            let path = dir.join(format!("{host}.json"));
-            std::fs::write(&path, &body).map_err(|e| e.to_string())?;
-            verify_host_manifest(&path, host, &launcher)?;
-            written.push(path.display().to_string());
+    for (dir, optional) in manifest_dirs
+        .iter()
+        .map(|dir| (dir, false))
+        .chain(discovered_dirs.iter().map(|dir| (dir, true)))
+    {
+        let install_dir = || -> Result<Vec<String>, String> {
+            let mut paths = Vec::new();
+            let parent = dir.parent().ok_or("host directory has no parent")?;
+            if !parent.is_dir() {
+                return Err(format!(
+                    "browser data directory no longer exists: {}",
+                    parent.display()
+                ));
+            }
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            for host in HOST_NAMES {
+                let manifest = serde_json::json!({
+                    "name": host,
+                    "description": "chrome-use connect — native messaging host",
+                    "path": launcher.display().to_string(),
+                    "type": "stdio",
+                    "allowed_origins": [
+                        format!("chrome-extension://{EXTENSION_ID}/"),
+                        format!("chrome-extension://{STORE_EXTENSION_ID}/"),
+                    ],
+                });
+                let body = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+                let path = dir.join(format!("{host}.json"));
+                std::fs::write(&path, &body).map_err(|e| e.to_string())?;
+                // Record even a partial registration so uninstall can remove it later.
+                if custom_roots.iter().any(|root| root == parent) {
+                    if let Err(e) =
+                        record_custom_host_dir(&ab_dir.join("custom-host-dirs.json"), parent)
+                    {
+                        eprintln!("Warning: could not record custom data directory {}: {e}; uninstall may leave its host manifests behind.", parent.display());
+                    }
+                }
+                verify_host_manifest(&path, host, &launcher)?;
+                paths.push(path.display().to_string());
+            }
+            Ok(paths)
+        };
+        match install_dir() {
+            Ok(paths) => written.extend(paths),
+            Err(e) if optional => eprintln!("Warning: skipping discovered data directory {}: {e}; retry with extension install --user-data-dir \"{}\".", dir.parent().unwrap_or(dir).display(), dir.parent().unwrap_or(dir).display()),
+            Err(e) => return Err(format!("{}: {e}", dir.display())),
         }
     }
     if written.is_empty() {
@@ -1486,32 +1559,101 @@ fn remove_force_install_profile() -> bool {
         .unwrap_or(false)
 }
 
-fn remove_host_manifests() -> usize {
-    let mut n = 0;
-    // Windows keeps the manifests under ~/.chrome-use (pointed at by registry
-    // keys); Unix keeps them in each browser's NativeMessagingHosts dir.
-    #[cfg(target_os = "windows")]
-    let dirs: Vec<PathBuf> = dirs::home_dir()
-        .map(|h| vec![h.join(".chrome-use")])
-        .unwrap_or_default();
-    #[cfg(not(target_os = "windows"))]
-    let dirs: Vec<PathBuf> = native_messaging_dirs();
-    for dir in dirs {
+/// Persist data roots (not host directories) for status and uninstall without a running browser.
+#[cfg(not(target_os = "windows"))]
+fn read_custom_host_dirs(record: &Path) -> Result<Vec<PathBuf>, String> {
+    match std::fs::read(record) {
+        Ok(body) => serde_json::from_slice(&body).map_err(|e| format!("{}: {e}", record.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(format!("{}: {e}", record.display())),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn record_custom_host_dir(record: &Path, root: &Path) -> Result<(), String> {
+    let mut roots = read_custom_host_dirs(record)?;
+    roots.push(root.to_path_buf());
+    roots.sort();
+    roots.dedup();
+    let body = serde_json::to_vec_pretty(&roots).map_err(|e| e.to_string())?;
+    std::fs::write(record, body).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn custom_host_record() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".chrome-use/custom-host-dirs.json"))
+}
+
+/// Merge recorded roots only for status and removal; auto-install still checks default dirs.
+#[cfg(not(target_os = "windows"))]
+fn host_dirs_with_record(mut defaults: Vec<PathBuf>, record: &Path) -> Vec<PathBuf> {
+    match read_custom_host_dirs(record) {
+        Ok(roots) => defaults.extend(roots.into_iter().map(|root| root.join("NativeMessagingHosts"))),
+        Err(e) => eprintln!("Warning: could not read custom host directories: {e}; custom registrations may be omitted."),
+    }
+    defaults.sort();
+    defaults.dedup();
+    defaults
+}
+
+/// Keep the record on any deletion failure so a subsequent uninstall can retry.
+#[cfg(not(target_os = "windows"))]
+fn remove_host_manifests_in_dirs(defaults: Vec<PathBuf>, record: &Path) -> usize {
+    let record_readable = read_custom_host_dirs(record).is_ok();
+    let mut complete = record_readable;
+    let mut removed = 0;
+    for dir in host_dirs_with_record(defaults, record) {
         for host in HOST_NAMES {
             let path = dir.join(format!("{host}.json"));
-            if path.exists() && std::fs::remove_file(&path).is_ok() {
-                n += 1;
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    complete = false;
+                    eprintln!("Warning: could not remove {}: {e}", path.display());
+                }
             }
         }
     }
-    // Windows: also drop the registry keys that pointed at those manifests.
-    #[cfg(target_os = "windows")]
-    for host in HOST_NAMES {
-        for key in win_browser_nmh_keys(host) {
-            let _ = win_reg_delete(&key);
+    if complete {
+        if let Err(e) = std::fs::remove_file(record) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("Warning: could not remove {}: {e}", record.display());
+            }
         }
     }
-    n
+    removed
+}
+
+fn remove_host_manifests() -> usize {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let record = custom_host_record().unwrap_or_default();
+        remove_host_manifests_in_dirs(native_messaging_dirs(), &record)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let mut n = 0;
+        // Windows keeps the manifests under ~/.chrome-use, pointed at by registry keys.
+        let dirs: Vec<PathBuf> = dirs::home_dir()
+            .map(|h| vec![h.join(".chrome-use")])
+            .unwrap_or_default();
+        for dir in dirs {
+            for host in HOST_NAMES {
+                let path = dir.join(format!("{host}.json"));
+                if path.exists() && std::fs::remove_file(&path).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        // Also drop the registry keys that pointed at those manifests.
+        for host in HOST_NAMES {
+            for key in win_browser_nmh_keys(host) {
+                let _ = win_reg_delete(&key);
+            }
+        }
+        n
+    }
 }
 
 /// Per-OS NativeMessagingHosts directories for Chrome + Chromium-family
@@ -1696,7 +1838,9 @@ fn installed_host_manifests() -> Vec<PathBuf> {
         .map(|h| vec![h.join(".chrome-use")])
         .unwrap_or_default();
     #[cfg(not(target_os = "windows"))]
-    let dirs: Vec<PathBuf> = native_messaging_dirs();
+    let dirs: Vec<PathBuf> = custom_host_record()
+        .map(|record| host_dirs_with_record(native_messaging_dirs(), &record))
+        .unwrap_or_else(native_messaging_dirs);
     for dir in dirs {
         for host in HOST_NAMES {
             let path = dir.join(format!("{host}.json"));
@@ -2918,7 +3062,9 @@ fn print_chrome_extension_status(
 }
 
 /// True if the ab-connect native-messaging host manifest is present — i.e. the
-/// user has set up the extension path. When installed, auto-connect treats the
+/// user has set up the extension path in a default browser directory. Recorded
+/// custom roots are excluded so they cannot suppress default-directory installation.
+/// When installed, auto-connect treats the
 /// dialog-free extension relay as the *intended* transport and refuses to fall
 /// back to a raw debug port (which would pop Chrome 136+'s "Allow remote
 /// debugging?" consent modal). The relay-url file comes and goes with the
@@ -5019,26 +5165,29 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn custom_data_dirs_only_accept_browser_main_processes() {
-        let lines = r#"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir="/tmp/Chrome Data" --remote-debugging-port=9471
-/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta --user-data-dir='/tmp/Beta Data'
-/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev --user-data-dir=/tmp/dev
-/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary --user-data-dir=/tmp/canary
-/usr/bin/chromium --user-data-dir=/tmp/Chrome Data
-/usr/bin/google-chrome --user-data-dir=/tmp/renderer --type=renderer
-/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper --user-data-dir=/tmp/helper
-/usr/bin/python --user-data-dir=/tmp/not-chrome
-/usr/bin/echo /usr/bin/google-chrome --user-data-dir=/tmp/echo
-/usr/bin/google-chrome --remote-debugging-port=9471
-/usr/bin/google-chrome --user-data-dir /tmp/separate-form
-/usr/bin/microsoft-edge --user-data-dir=~/Edge Data
-/usr/bin/brave-browser --user-data-dir=/tmp/Brave Data
-/usr/bin/chromium --user-data-dir=$UNKNOWN/profile
-/usr/bin/chromium --user-data-dir=~other/profile
-/usr/bin/chromium --user-data-dir=relative/profile
-/usr/bin/chromium --user-data-dir=
+        let lines = r#"501 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir="/tmp/Chrome Data" --remote-debugging-port=9471
+501 /Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta --user-data-dir='/tmp/Beta Data'
+501 /Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev --user-data-dir=/tmp/dev
+501 /Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary --user-data-dir=/tmp/canary
+501 /usr/bin/chromium --user-data-dir=/tmp/Chrome Data
+501 /usr/bin/google-chrome --user-data-dir=/tmp/renderer --type=renderer
+501 /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Helper --user-data-dir=/tmp/helper
+501 /usr/bin/python --user-data-dir=/tmp/not-chrome
+501 /usr/bin/echo /usr/bin/google-chrome --user-data-dir=/tmp/echo
+501 /usr/bin/google-chrome --remote-debugging-port=9471
+501 /usr/bin/google-chrome --user-data-dir /tmp/separate-form
+501 /usr/bin/microsoft-edge --user-data-dir=~/Edge Data
+501 /usr/bin/brave-browser --user-data-dir=/tmp/Brave Data
+501 /usr/bin/chromium --user-data-dir=$UNKNOWN/profile
+501 /usr/bin/chromium --user-data-dir=~other/profile
+501 /usr/bin/chromium --user-data-dir=relative/profile
+501 /usr/bin/chromium --user-data-dir=
+
+502 /usr/bin/chromium --user-data-dir=/tmp/other-user
+invalid /usr/bin/chromium --user-data-dir=/tmp/invalid-uid
 "#;
         assert_eq!(
-            super::custom_user_data_dirs(lines, Some(std::path::Path::new("/home/test"))),
+            super::custom_user_data_dirs(lines, 501, Some(std::path::Path::new("/home/test"))),
             [
                 "/tmp/Chrome Data",
                 "/tmp/Beta Data",
@@ -5051,21 +5200,19 @@ mod tests {
             .map(|path| std::path::PathBuf::from(*path))
             .collect::<Vec<_>>()
         );
-        assert!(
-            super::custom_user_data_dirs("/usr/bin/chromium --user-data-dir=~/profile", None)
-                .is_empty()
-        );
+        assert!(super::custom_user_data_dirs(
+            "501 /usr/bin/chromium --user-data-dir=~/profile",
+            501,
+            None
+        )
+        .is_empty());
     }
 
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn native_host_manifests_are_written_and_read_back_in_supplied_dirs() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("chrome-use-host-{}-{unique}", std::process::id()));
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
         let ab_dir = root.join("host");
         let data_dir = root.join("Chrome Data");
         std::fs::create_dir_all(&ab_dir).unwrap();
@@ -5081,9 +5228,19 @@ mod tests {
         );
         let manifest_dir = data_dir.join("NativeMessagingHosts");
         let exe = root.join("chrome-use");
-        let paths =
-            super::install_native_host_unix(&ab_dir, &exe, &[manifest_dir.clone()]).unwrap();
+        let paths = super::install_native_host_unix(
+            &ab_dir,
+            &exe,
+            std::slice::from_ref(&manifest_dir),
+            &[],
+            std::slice::from_ref(&data_dir),
+        )
+        .unwrap();
         assert_eq!(paths.len(), super::HOST_NAMES.len());
+        assert_eq!(
+            super::read_custom_host_dirs(&ab_dir.join("custom-host-dirs.json")).unwrap(),
+            vec![data_dir.clone()]
+        );
         let launcher = ab_dir.join("nm-host.sh");
         for host in super::HOST_NAMES {
             let path = manifest_dir.join(format!("{host}.json"));
@@ -5114,8 +5271,116 @@ mod tests {
             assert!(super::verify_host_manifest(&path, host, &launcher).is_err());
         }
         std::fs::remove_dir_all(&data_dir).unwrap();
-        assert!(super::install_native_host_unix(&ab_dir, &exe, &[manifest_dir]).is_err());
-        std::fs::remove_dir_all(root).unwrap();
+        assert!(super::install_native_host_unix(&ab_dir, &exe, &[manifest_dir], &[], &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovered_host_failures_are_optional_but_explicit_failures_are_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let ab_dir = temp.path().join("host");
+        let default_dir = temp.path().join("NativeMessagingHosts");
+        let blocked = temp.path().join("blocked");
+        std::fs::create_dir(&ab_dir).unwrap();
+        std::fs::create_dir(&blocked).unwrap();
+        let exe = temp.path().join("chrome-use");
+        let blocked_hosts = blocked.join("NativeMessagingHosts");
+        // A file at the host-directory path fails even when the test runs as root.
+        std::fs::write(&blocked_hosts, "blocked").unwrap();
+        let check = || {
+            let written = super::install_native_host_unix(
+                &ab_dir,
+                &exe,
+                std::slice::from_ref(&default_dir),
+                std::slice::from_ref(&blocked_hosts),
+                std::slice::from_ref(&blocked),
+            )
+            .unwrap();
+            assert_eq!(written.len(), super::HOST_NAMES.len());
+            assert!(written
+                .iter()
+                .all(|path| path.starts_with(default_dir.to_str().unwrap())));
+            assert!(!ab_dir.join("custom-host-dirs.json").exists());
+            assert!(super::install_native_host_unix(
+                &ab_dir,
+                &exe,
+                std::slice::from_ref(&blocked_hosts),
+                &[],
+                std::slice::from_ref(&blocked),
+            )
+            .is_err());
+        };
+        check();
+        std::fs::remove_file(&blocked_hosts).unwrap();
+        if unsafe { libc::getuid() } != 0 {
+            std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o555)).unwrap();
+            check();
+            std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn custom_host_records_deduplicate_and_uninstall_without_running_browsers() {
+        let temp = tempfile::tempdir().unwrap();
+        let record = temp.path().join("custom-host-dirs.json");
+        let root = temp.path().join("custom");
+        let absent = temp.path().join("gone");
+        let default_dir = temp.path().join("default/NativeMessagingHosts");
+        let custom_dir = root.join("NativeMessagingHosts");
+        for dir in [&default_dir, &custom_dir] {
+            std::fs::create_dir_all(dir).unwrap();
+            for host in super::HOST_NAMES {
+                std::fs::write(dir.join(format!("{host}.json")), "{}").unwrap();
+            }
+            std::fs::write(dir.join("unrelated.json"), "{}").unwrap();
+        }
+        for dir in [&root, &root, &absent] {
+            super::record_custom_host_dir(&record, dir).unwrap();
+        }
+        let roots = super::read_custom_host_dirs(&record).unwrap();
+        assert_eq!(roots.len(), 2);
+        assert!(roots.contains(&root));
+        assert!(roots.contains(&absent));
+        let dirs =
+            super::host_dirs_with_record(vec![default_dir.clone(), custom_dir.clone()], &record);
+        assert_eq!(dirs.len(), 3);
+        assert!(dirs.contains(&custom_dir));
+        assert_eq!(
+            super::remove_host_manifests_in_dirs(vec![default_dir.clone()], &record),
+            2 * super::HOST_NAMES.len()
+        );
+        assert!(!record.exists());
+        for dir in [&default_dir, &custom_dir] {
+            assert!(dir.join("unrelated.json").exists());
+            for host in super::HOST_NAMES {
+                assert!(!dir.join(format!("{host}.json")).exists());
+            }
+        }
+        assert_eq!(
+            super::remove_host_manifests_in_dirs(vec![default_dir], &record),
+            0
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn incomplete_uninstall_preserves_custom_host_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let record = temp.path().join("custom-host-dirs.json");
+        let root = temp.path().join("custom");
+        let hosts = root.join("NativeMessagingHosts");
+        std::fs::create_dir_all(&hosts).unwrap();
+        // remove_file must fail on a directory; no permissions or real HOME needed.
+        std::fs::create_dir(hosts.join(format!("{}.json", super::HOST_NAMES[0]))).unwrap();
+        super::record_custom_host_dir(&record, &root).unwrap();
+        assert_eq!(super::remove_host_manifests_in_dirs(vec![], &record), 0);
+        assert!(record.exists());
+        std::fs::write(&record, "invalid json").unwrap();
+        assert!(super::record_custom_host_dir(&record, &root).is_err());
+        assert_eq!(super::remove_host_manifests_in_dirs(vec![], &record), 0);
+        assert!(record.exists());
     }
 
     #[test]

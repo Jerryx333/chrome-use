@@ -230,7 +230,7 @@ chrome-use open https://x.com/home
 chrome-use status                 # 中继、profile、扩展与会话健康总览
 ```
 
-在 macOS/Linux 上，`chrome-use extension install` 还会为正在运行、以 `--user-data-dir=<path>` 单独启动的 Chromium 系浏览器注册本地 host，扫描到的自定义目录必须已经存在。如果浏览器尚未运行或无法被扫描到，可执行 `chrome-use extension install --user-data-dir "/path/Chrome Data"`；也接受 `--user-data-dir=<path>`，可重复指定多个目录。显式指定的目录不存在时会报错。命令会列出写入的清单，并回读校验 host 名称和启动器路径。这只确认注册完成；之后请在该 Chrome 里重新打开侧栏，或等扩展自动重连。Windows 使用 HKCU 注册表注册，不支持此选项。
+在 macOS/Linux 上，`chrome-use extension install` 还会为正在运行、以 `--user-data-dir=<path>` 单独启动的 Chromium 系浏览器注册本地 host，扫描到的自定义目录必须已经存在。如果浏览器尚未运行或无法被扫描到，可执行 `chrome-use extension install --user-data-dir "/path/Chrome Data"`；也接受 `--user-data-dir=<path>`，可重复指定多个目录。显式指定的目录不存在时会报错。命令会列出写入的清单，并回读校验 host 名称和启动器路径。这只确认注册完成；之后请在该 Chrome 里重新打开侧栏，或等扩展自动重连。Windows 使用 HKCU 注册表注册，不支持此选项。 自动扫描仅限当前用户的进程；发现目录写入或校验失败时警告并跳过，可用 `--user-data-dir` 重试，默认或显式目录失败仍报错。成功写入的自定义数据目录记录在 `~/.chrome-use/custom-host-dirs.json`，供状态查询和浏览器停止后的卸载清理使用；记录失败会警告卸载可能残留清单。
 
 之后 `chrome-use open` 就通过**原生消息**驱动你真实、已登录的 Chrome：无调试端口、无 token、**永远不弹 "Allow remote debugging?"**。裸 remote-debugging 端口的备选方案（会弹同意框）见[真实 Chrome 指南](https://chrome-use.leeguoo.com/real-chrome.html)。
 
