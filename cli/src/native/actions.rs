@@ -6346,7 +6346,11 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
 
 /// Wheel steps `args.ui` takes to bring an element into view before it
 /// gives up.
-const UI_SCROLL_STEPS: usize = 12;
+const UI_SCROLL_STEPS: usize = 60;
+
+/// Wheel steps in a row that leave the element where it was before
+/// `args.ui` / `scrollintoview` give up (the container cannot scroll further).
+const UI_SCROLL_STUCK: u32 = 2;
 
 /// One `args.ui` request from a site adapter, answered with trusted CDP input
 /// (`isTrusted` events, humanized motion and timing) instead of the synthetic
@@ -6411,11 +6415,22 @@ async fn serve_ui_request(
     // Bring the element into view the way a person would: wheel over the
     // container it scrolls in, re-measuring after each step.
     let mut m = ui_measure(client, &session_id, run_key, req).await?;
+    let mut last_off = f64::NAN;
+    let mut stuck = 0;
     for _ in 0..UI_SCROLL_STEPS {
         let off = ui_offscreen_dy(&m);
         if off == 0.0 {
             break;
         }
+        if (off - last_off).abs() < 1.0 {
+            stuck += 1;
+            if stuck >= UI_SCROLL_STUCK {
+                break;
+            }
+        } else {
+            stuck = 0;
+        }
+        last_off = off;
         let (cx, cy, cw, ch) = m
             .get("scroller")
             .filter(|s| s.is_object())
@@ -6507,7 +6522,7 @@ fn f(v: &Value, k: &str) -> f64 {
     v.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0)
 }
 
-/// How far (CSS px, signed) an element measured by `ui_measure_script` sits
+/// How far (CSS px, signed) an element measured by `quiet_dom::measure` sits
 /// outside the viewport and its scroll container vertically; 0 when its
 /// centre band is on screen.
 fn ui_offscreen_dy(m: &Value) -> f64 {
@@ -6574,13 +6589,8 @@ async fn ui_measure(
     run_key: &str,
     req: &Value,
 ) -> Result<Value, String> {
-    let m = call_fn_on(
-        client,
-        session_id,
-        run_key,
-        &crate::site::ui_measure_script(req),
-    )
-    .await?;
+    let node = ui_target_node(client, session_id, run_key, req).await?;
+    let m = super::quiet_dom::measure(client, session_id, node).await?;
     if let Some(e) = m.get("error").and_then(|v| v.as_str()) {
         return Err(format!("args.ui: {e}"));
     }
@@ -6594,17 +6604,50 @@ async fn ui_hit(
     req: &Value,
     p: (f64, f64),
 ) -> Result<(bool, Option<String>), String> {
-    let v = call_fn_on(
-        client,
-        session_id,
-        run_key,
-        &crate::site::ui_hit_script(req, p.0, p.1),
-    )
-    .await?;
-    Ok((
-        v.get("hit").and_then(|b| b.as_bool()).unwrap_or(false),
-        v.get("top").and_then(|t| t.as_str()).map(String::from),
-    ))
+    let node = ui_target_node(client, session_id, run_key, req).await?;
+    super::quiet_dom::hit_test(client, session_id, node, p.0, p.1).await
+}
+
+/// The node an `args.ui` request names: the element handle the adapter
+/// passed (read off the run object by property, nothing called), else the
+/// first match of its selector, found in an isolated world.
+async fn ui_target_node(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    run_key: &str,
+    req: &Value,
+) -> Result<i64, String> {
+    if let Some(id) = req.get("target").and_then(|v| v.as_u64()) {
+        return super::quiet_dom::backend_of_property(
+            client,
+            session_id,
+            run_key,
+            &format!("targets[{id}]"),
+        )
+        .await?
+        .ok_or_else(|| {
+            "args.ui: element handle is gone (the run ended or the page reloaded)".to_string()
+        });
+    }
+    let sel = req.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+    super::quiet_dom::query_selector(client, session_id, sel)
+        .await
+        .map_err(|e| format!("args.ui: {e}"))?
+        .ok_or_else(|| format!("args.ui: no element matches {sel}"))
+}
+
+/// The node a command's `@ref` or CSS selector names, found without running
+/// anything in the page's main world: a ref's backend node, or the
+/// selector's first match in an isolated world.
+async fn quiet_node(state: &DaemonState, session_id: &str, selector: &str) -> Option<i64> {
+    let mgr = state.browser.as_ref()?;
+    if let Some(r) = super::element::parse_ref(selector) {
+        return state.ref_map.get(&r).and_then(|e| e.backend_node_id);
+    }
+    super::quiet_dom::query_selector(&mgr.client, session_id, selector)
+        .await
+        .ok()
+        .flatten()
 }
 
 async fn ui_viewport(
@@ -10763,21 +10806,6 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     )
 }
 
-/// Measure `this` element the way `args.ui` does (box, viewport, nearest
-/// scrollable ancestor), for [`ui_offscreen_dy`].
-const ELEMENT_MEASURE_FN: &str = "function () {\n\
-    const el = this;\n\
-    let ox = 0, oy = 0;\n\
-    try { let w = el.ownerDocument.defaultView; while (w && w !== window && w.frameElement) { const f = w.frameElement; const b = f.getBoundingClientRect(); ox += b.left + f.clientLeft; oy += b.top + f.clientTop; w = w.parent; } } catch (_) {}\n\
-    const b = el.getBoundingClientRect();\n\
-    let sc = null;\n\
-    for (let p = el.parentElement; p; p = p.parentElement) {\n\
-      const cs = getComputedStyle(p);\n\
-      if (/(auto|scroll)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1) { const pb = p.getBoundingClientRect(); sc = { x: pb.left + ox, y: pb.top + oy, w: pb.width, h: pb.height }; break; }\n\
-    }\n\
-    return { x: b.left + ox, y: b.top + oy, w: b.width, h: b.height, vw: window.innerWidth, vh: window.innerHeight, scroller: sc };\n\
-}";
-
 /// Wheel `selector`'s element into view over its scroll container. False
 /// when it could not (not found, the wheel moved nothing): the caller then
 /// scrolls the old way.
@@ -10788,26 +10816,30 @@ async fn wheel_into_view(state: &DaemonState, selector: &str) -> bool {
     let Ok(session_id) = mgr.active_session_id().map(str::to_string) else {
         return false;
     };
+    let mut last_off = f64::NAN;
+    let mut stuck = 0;
     for _ in 0..UI_SCROLL_STEPS {
-        let Ok((object_id, el_session)) = super::element::resolve_element_object_id(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            selector,
-            &state.iframe_sessions,
-        )
-        .await
-        else {
+        // Found and measured without the page's querySelector /
+        // getBoundingClientRect / getComputedStyle being called.
+        let Some(node) = quiet_node(state, &session_id, selector).await else {
             return false;
         };
-        let Ok(m) = call_fn_on(&mgr.client, &el_session, &object_id, ELEMENT_MEASURE_FN).await
-        else {
+        let Ok(m) = super::quiet_dom::measure(&mgr.client, &session_id, node).await else {
             return false;
         };
         let off = ui_offscreen_dy(&m);
         if off == 0.0 {
             return true;
         }
+        if (off - last_off).abs() < 1.0 {
+            stuck += 1;
+            if stuck >= UI_SCROLL_STUCK {
+                return false;
+            }
+        } else {
+            stuck = 0;
+        }
+        last_off = off;
         let (vw, vh) = (f(&m, "vw"), f(&m, "vh"));
         let (cx, cy, cw, ch) = m
             .get("scroller")

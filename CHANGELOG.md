@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.256
+## 1.5.257
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.82.
+
+### Improvements
+
+- **`args.ui` and `scrollintoview` read the page without the page seeing it.** botcheck 0.2 wraps the page's `querySelector`, `getBoundingClientRect`, `elementFromPoint`, `getComputedStyle` and friends and looks at who calls them; rebrowser's `mainWorldExecution` test does the same for one function. chrome-use called them from the page's main world to find, measure and hit-test elements, and the caller showed up as `<anonymous>`, not one of the page's scripts. `args.ui` (the input site adapters such as `douyin-creator/video-publish` use) and `scrollintoview` now find elements in an isolated world, read an adapter's element handle off the run object by property, measure in the isolated world and hit-test with CDP's `DOM.getNodeForLocation`, so the page's own functions are never called. An adapter's own page reads are still the adapter's: this covers what chrome-use does on its behalf. Other commands (`click`, `type`, `fill`, `hover`, `snapshot`, `find`, `get text`) follow in later releases.
+- **Scrolling an element into view no longer gives up after 12 wheel steps.** `args.ui.scroll` and `scrollintoview` keep wheeling until the element is in view, up to 60 steps, and stop early only when two steps in a row leave it where it was.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.256
+
 Works with extension ab-connect 0.5.82.
 
 ### Improvements
@@ -12,7 +26,6 @@ Works with extension ab-connect 0.5.82.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.255
 
