@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.259
+## 1.5.260
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.82.
+
+### Bug Fixes
+
+- **`args.ui` clicks through overlays with `pointer-events: none`.** The isolated-world hit test (1.5.257) counted an element the pointer passes through (a select's arrow, an icon laid over a button) as covering the target, so `args.ui.click` refused it and the adapter fell back to a synthetic click; seen twice on Douyin's post page. It now passes through them, as a real click and `elementFromPoint` do.
+- **The `--launch` stealth script no longer replaces natives a page can check.** Its `Error.prepareStackTrace` / `Error.captureStackTrace` wrappers, which hid evaluated frames from stack traces, are gone (chrome-use's own code runs in an isolated world since 1.5.258, so its frames are not in the page's stacks), and the `querySelector` wrapper for sites using the disable-devtool library is off unless `AGENT_BROWSER_DISABLE_DEVTOOL_SHIM=1`. botcheck's patched-natives check passes in `--launch` mode, and `scripts/stealth-bench.sh --launch` passes everything it did before (#703).
+
+### Improvements
+
+- **`setOn` takes an element.** A site adapter can hand the file input itself to `args.<file>.setOn(el)`, also one that is not in the page, and chrome-use sets the file on that node; adapters no longer have to mark an input with an attribute or id to name it by selector.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.259
+
 Works with extension ab-connect 0.5.82.
 
 ### Features
@@ -12,7 +30,6 @@ Works with extension ab-connect 0.5.82.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.258
 

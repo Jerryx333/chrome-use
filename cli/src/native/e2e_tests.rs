@@ -12831,14 +12831,21 @@ async function(args) {
   sessionStorage.setItem('n', String(n));
   args.progress('attempt ' + n);
   if (n === 1) {
-    const up = await args.video.setOn();
+    // By element handle: no marker attribute on the input.
+    const up = await args.video.setOn(document.querySelector('#f'));
     sessionStorage.setItem('attached', String(up.attached));
     await sleep(1200);
     return { status: 'incomplete', retryAfterMs: 100 };
   }
   const file = document.querySelector('#f').files[0];
+  // A detached input: the file goes on it by handle, nothing is added to the page.
+  const loose = document.createElement('input');
+  loose.type = 'file';
+  await args.video.setOn(loose);
+  const looseFile = loose.files[0];
   return { status: 'submitted', title: args.title, name: file && file.name, size: file && file.size,
-           attached: sessionStorage.getItem('attached'), budget: args.budgetMs > 0 };
+           attached: sessionStorage.getItem('attached'), budget: args.budgetMs > 0,
+           loose: looseFile && looseFile.size, inPage: document.querySelectorAll('input[type=file]').length };
 }"##;
     let adapter = crate::site::parse_adapter(raw, "demo/publish").unwrap();
     let mut no_stdin = || Err("no stdin".to_string());
@@ -12890,6 +12897,11 @@ async function(args) {
     assert_eq!(data["result"]["size"], 4096);
     assert_eq!(data["result"]["attached"], "1");
     assert_eq!(data["result"]["budget"], true);
+    assert_eq!(
+        data["result"]["loose"], 4096,
+        "a detached input takes the file: {data}"
+    );
+    assert_eq!(data["result"]["inPage"], 1, "{data}");
     assert_eq!(data["attempts"], 2);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -12966,6 +12978,54 @@ async function(args) {
     .await;
     assert_eq!(get_data(&resp)["result"], "[]", "{resp}");
 
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// An overlay with pointer-events: none (a select's arrow, an icon over a
+/// button) does not cover what is under it: args.ui clicks through it, as a
+/// real click does.
+#[tokio::test]
+#[ignore]
+async fn e2e_ui_clicks_through_pointer_events_none() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>arrow</title>
+<div style="position:relative;width:200px;height:40px">
+  <button id="box" style="width:200px;height:40px">pick</button>
+  <div id="arrow" style="position:absolute;inset:0;pointer-events:none"></div>
+</div>
+<script>window.hits = 0; document.getElementById('box').addEventListener('click', e => { if (e.isTrusted) window.hits++; });</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let raw = r##"/* @meta
+{"name": "demo/arrow", "domain": "127.0.0.1", "world": "isolated", "args": {}}
+*/
+async function(args) {
+  await args.ui.click(document.querySelector('#box'));
+  return 'ok';
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/arrow").unwrap();
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
+    let resp = execute_command(
+        &json!({
+            "id": "3", "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": "a", "files": inv.files, "untilDone": false, "isolated": true,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 30_000,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], "ok", "{resp}");
+    let hits = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "window.hits" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&hits)["result"], 1, "{hits}");
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
 }

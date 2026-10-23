@@ -294,7 +294,10 @@ pub async fn hit_test(
                 "x": x.round() as i64,
                 "y": y.round() as i64,
                 "includeUserAgentShadowDOM": false,
-                "ignorePointerEventsNone": true,
+                // false: an element with pointer-events: none (a select's
+                // arrow, an icon over a button) is passed through, as a real
+                // click and elementFromPoint pass through it.
+                "ignorePointerEventsNone": false,
             })),
             Some(session_id),
         )

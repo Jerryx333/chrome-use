@@ -615,9 +615,17 @@ pub fn build_start(
          }});\n\
          const a = {args_json};\n\
          const hide = (name, value) => Object.defineProperty(a, name, {{ value, configurable: true, enumerable: false, writable: true }});\n\
+         const T = Object.create(null); let tn = 0;\n\
+         Object.defineProperty(run, 'targets', {{ value: T }});\n\
+         const pick = (t) => {{\n\
+         if (typeof t === 'string' && t) return {{ selector: t }};\n\
+         if (t && typeof t === 'object' && t.nodeType === 1) {{ const id = ++tn; T[id] = t; return {{ target: id }}; }}\n\
+         throw new TypeError('args.ui: pass an Element or a CSS selector');\n\
+         }};\n\
          for (const [k, f] of Object.entries({files_json})) {{\n\
          a[k] = {{ path: f.path, name: f.name, size: f.size,\n\
          setOn: (selector) => {{\n\
+         if (selector && typeof selector === 'object' && selector.nodeType === 1) return rpc('upload', Object.assign({{ arg: k }}, pick(selector)));\n\
          const sel = selector || f.input;\n\
          if (!sel) return Promise.reject(new Error('setOn: no selector, and @meta.args.' + k + ' declares no \"input\"'));\n\
          return rpc('upload', {{ arg: k, selector: sel }});\n\
@@ -630,13 +638,6 @@ pub fn build_start(
          if (typeof fn !== 'function') return Promise.reject(new TypeError('args.page: pass a function'));\n\
          return rpc('page', {{ src: String(fn), args: JSON.parse(JSON.stringify(rest)) }});\n\
          }});\n\
-         const T = Object.create(null); let tn = 0;\n\
-         Object.defineProperty(run, 'targets', {{ value: T }});\n\
-         const pick = (t) => {{\n\
-         if (typeof t === 'string' && t) return {{ selector: t }};\n\
-         if (t && typeof t === 'object' && t.nodeType === 1) {{ const id = ++tn; T[id] = t; return {{ target: id }}; }}\n\
-         throw new TypeError('args.ui: pass an Element or a CSS selector');\n\
-         }};\n\
          const opts = (o) => (o && typeof o === 'object' ? o : {{}});\n\
          hide('ui', Object.freeze({{\n\
          click: (t, o) => rpc('click', Object.assign({{}}, opts(o), pick(t))),\n\

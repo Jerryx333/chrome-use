@@ -6322,6 +6322,11 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
             {
                 // Only a file the caller passed as a `"type": "file"` arg; the
                 // page chooses the selector, never the path.
+                // An element handle (`setOn(el)`): put the file on that node
+                // by CDP, so the adapter need not mark the input to find it.
+                Some(path) if req.get("target").is_some() => {
+                    upload_to_target(run_key, req, path, state).await
+                }
                 Some(path) => {
                     handle_upload(&json!({ "selector": selector, "files": [path] }), state).await
                 }
@@ -6351,6 +6356,35 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
         Err(e) => crate::site::settle_script(id, false, &json!(e)),
     };
     let _ = call_on_run(run_key, &settle, state).await;
+}
+
+/// `setOn(el)` with an element handle: `DOM.setFileInputFiles` on that node,
+/// which fires the input's own (trusted) input and change events.
+async fn upload_to_target(
+    run_key: &str,
+    req: &Value,
+    path: &str,
+    state: &DaemonState,
+) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let id = req.get("target").and_then(|v| v.as_u64()).unwrap_or(0);
+    let node = super::quiet_dom::backend_of_property(
+        &mgr.client,
+        &session_id,
+        run_key,
+        &format!("targets[{id}]"),
+    )
+    .await?
+    .ok_or("setOn: the element handle is gone")?;
+    mgr.client
+        .send_command(
+            "DOM.setFileInputFiles",
+            Some(json!({ "files": [path], "backendNodeId": node })),
+            Some(&session_id),
+        )
+        .await?;
+    Ok(json!({ "attached": 1 }))
 }
 
 /// `args.page(fn, ...args)` from an isolated-world adapter: call `fn` with
