@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.258
+## 1.5.259
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.82.
+
+### Features
+
+- **Site adapters can run where the page cannot see them: `"world": "isolated"`.** chrome-use's own reads moved to an isolated world in 1.5.258, but an adapter's own code still ran in the page's main world, so its `querySelector`, `fetch` and the like went through any wrapper the page installed. An adapter that declares `"world": "isolated"` in `@meta` now runs in the tab's isolated world: same DOM, cookies and storage, its own JS. What only page JS has (a React fiber or other element expando, an app store, the page's own signed `fetch`) comes through the new `args.page(fn, ...args)`: `fn` is sent by its source, run in the main world with the JSON `args`, and its JSON result comes back. Adapters without the key run as before. A `fetch` from the isolated world sends the page's cookies but skips the page's own fetch wrapper, so a site that signs its requests there needs `args.page` for them. The douyin, bilibili-creator, youtube-studio and twitter write adapters in chrome-use-sites move to it.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.258
+
 Works with extension ab-connect 0.5.82.
 
 ### Improvements
@@ -12,7 +25,6 @@ Works with extension ab-connect 0.5.82.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.257
 

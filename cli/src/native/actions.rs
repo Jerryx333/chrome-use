@@ -5990,6 +5990,10 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     };
     // Its value no longer matters: the run object is reached by its handle.
     let _ = run_key;
+    let isolated = cmd
+        .get("isolated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let until_done = cmd
         .get("untilDone")
         .and_then(|v| v.as_bool())
@@ -6026,7 +6030,7 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         let start = script.replace(crate::site::BUDGET_PLACEHOLDER, &budget.to_string());
         // The run is never put on the page: the start script returns the run
         // object and every later call goes to it by its CDP handle.
-        let run = start_site_run(&start, state).await?;
+        let run = start_site_run(&start, state, !isolated).await?;
 
         let outcome = poll_site_run(&run, &files, started, deadline, &mut progress, state).await;
         release_site_run(&run, state).await;
@@ -6126,7 +6130,11 @@ async fn ensure_site_domain(domain: &str, state: &mut DaemonState) -> Result<(),
 /// Start a site run (or `eval --background`): evaluate the start script
 /// without serialising its result, and return the CDP handle (objectId) of
 /// the run object it returns.
-async fn start_site_run(script: &str, state: &mut DaemonState) -> Result<String, String> {
+async fn start_site_run(
+    script: &str,
+    state: &mut DaemonState,
+    main_world: bool,
+) -> Result<String, String> {
     if let Some(mgr) = state.browser.as_mut() {
         mgr.resync_targets().await.ok();
     }
@@ -6136,7 +6144,7 @@ async fn start_site_run(script: &str, state: &mut DaemonState) -> Result<String,
         .client
         .send_command(
             "Runtime.evaluate",
-            Some(json!({ "expression": script, "returnByValue": false, "awaitPromise": false, "__cuMain": true })),
+            Some(json!({ "expression": script, "returnByValue": false, "awaitPromise": false, "__cuMain": main_world })),
             Some(&session_id),
         )
         .await?;
@@ -6320,6 +6328,7 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
                 None => Err(format!("no file was passed for --{arg}")),
             }
         }
+        Some("page") => serve_page_request(req, state).await,
         Some(kind @ ("click" | "hover" | "type" | "press" | "scroll")) => {
             // Trusted input at Human pace for the whole request: the sites
             // adapters write to (Douyin, Bilibili, ...) run their own bot
@@ -6342,6 +6351,45 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
         Err(e) => crate::site::settle_script(id, false, &json!(e)),
     };
     let _ = call_on_run(run_key, &settle, state).await;
+}
+
+/// `args.page(fn, ...args)` from an isolated-world adapter: call `fn` with
+/// the JSON `args` in the page's main world, for what only page JS has (a
+/// React fiber, the page's own signed fetch, an app store). `fn` is the
+/// adapter's own source, taken in the isolated world where the page cannot
+/// change it; the result comes back by value (JSON), never as a handle.
+async fn serve_page_request(req: &Value, state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let src = req.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    if src.is_empty() {
+        return Err("args.page: no function".to_string());
+    }
+    let args = req.get("args").cloned().unwrap_or_else(|| json!([]));
+    let args_json = serde_json::to_string(&args).unwrap_or_else(|_| "[]".to_string());
+    let expression = format!("(async () => ({src})(...{args_json}))()");
+    let out = mgr
+        .client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({
+                "expression": expression,
+                "awaitPromise": true,
+                "returnByValue": true,
+                "__cuMain": true,
+            })),
+            Some(&session_id),
+        )
+        .await?;
+    if let Some(ex) = out.get("exceptionDetails") {
+        let msg = ex
+            .pointer("/exception/description")
+            .and_then(|v| v.as_str())
+            .or_else(|| ex.get("text").and_then(|v| v.as_str()))
+            .unwrap_or("page error");
+        return Err(format!("args.page: {msg}"));
+    }
+    Ok(out.pointer("/result/value").cloned().unwrap_or(Value::Null))
 }
 
 /// Wheel steps `args.ui` takes to bring an element into view before it
