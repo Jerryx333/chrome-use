@@ -162,6 +162,15 @@ impl Adapter {
     pub fn domain(&self) -> Option<&str> {
         self.meta.get("domain").and_then(|v| v.as_str())
     }
+
+    /// `"world": "isolated"` in `@meta`: the adapter runs in the tab's
+    /// isolated world, where the page cannot see what it calls (its
+    /// querySelector, fetch, ...), and reaches the page's own JS only through
+    /// `args.page(fn, ...args)`. Anything else: the page's main world, as
+    /// adapters always ran.
+    pub fn isolated(&self) -> bool {
+        self.meta.get("world").and_then(|v| v.as_str()) == Some("isolated")
+    }
 }
 
 /// Load `<sites>/<name>/<cmd>.js`, splitting the `/* @meta {...} */` header from
@@ -617,6 +626,10 @@ pub fn build_start(
          }}\n\
          hide('budgetMs', {BUDGET_PLACEHOLDER});\n\
          hide('progress', (m) => {{ run.progress.push(String(m)); }});\n\
+         hide('page', (fn, ...rest) => {{\n\
+         if (typeof fn !== 'function') return Promise.reject(new TypeError('args.page: pass a function'));\n\
+         return rpc('page', {{ src: String(fn), args: JSON.parse(JSON.stringify(rest)) }});\n\
+         }});\n\
          const T = Object.create(null); let tn = 0;\n\
          Object.defineProperty(run, 'targets', {{ value: T }});\n\
          const pick = (t) => {{\n\

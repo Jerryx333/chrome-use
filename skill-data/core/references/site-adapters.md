@@ -219,6 +219,18 @@ await args.ui.scroll(el)                         // wheel it into view in its sc
 await args.ui.scroll(600)                        // or wheel the page by a distance
 ```
 
+**Run where the page cannot see you: `"world": "isolated"` (chrome-use 1.5.259+).** An adapter
+normally runs in the page's main world, so its `querySelector`, `fetch` and the like go through
+any wrapper the page installed. With `"world": "isolated"` in `@meta` it runs in the tab's
+isolated world: same DOM, cookies and storage, its own JS, nothing the page wrapped is called.
+What only page JS has (a React fiber or other element expando, an app store, the page's own
+signed `fetch`) comes through `args.page(fn, ...args)`: `fn` is sent by its source and run in
+the main world with the JSON `args`, and its JSON result comes back. It cannot see the
+adapter's variables, and it takes a selector, not an element. Older chrome-use ignores the key
+and runs in the main world: `const page = args.page || ((fn, ...a) => fn(...a))`. A `fetch`
+from the isolated world sends cookies but skips the page's own wrapper, so sites that sign
+their requests in a fetch wrapper (Douyin's `/janus`, Xiaohongshu's client) need `args.page`.
+
 Each call wheels the element into view first, lands on a point inside it, and rejects with a
 message when the element is gone, has no size, or is covered by something else (it names what).
 Each call costs a round trip to the daemon (~0.1-0.3s plus the human pacing), so keep pure reads
