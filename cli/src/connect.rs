@@ -466,6 +466,38 @@ fn run_install_windows(json: bool, host_paths: &[String]) {
 
 /// macOS/Linux `extension install`: native host written, then force-install
 /// policy (macOS) or per-profile Web Store opens are guided.
+/// List every manifest written and name the custom data directories, so a
+/// Chrome started with --user-data-dir can be seen to have been covered.
+#[cfg(not(target_os = "windows"))]
+fn print_host_registrations(host_paths: &[String], custom_dirs: &[PathBuf], zh: bool) {
+    for path in host_paths {
+        println!("    {path}");
+    }
+    for dir in custom_dirs {
+        if zh {
+            println!(
+                "  ✓ 已为以 --user-data-dir 运行的 Chrome 注册：{}",
+                dir.display()
+            );
+        } else {
+            println!(
+                "  ✓ registered for Chrome running with --user-data-dir: {}",
+                dir.display()
+            );
+        }
+    }
+    if !custom_dirs.is_empty() {
+        println!(
+            "{}",
+            if zh {
+                "    清单已校验；请在该 Chrome 里重新打开侧栏，或等扩展自动重连。"
+            } else {
+                "    Manifests verified; reopen the side panel in that Chrome or wait for automatic reconnection."
+            }
+        );
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>, custom_dirs: &[PathBuf]) {
     let no_open = args.iter().any(|a| a == "--no-open");
@@ -536,39 +568,13 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>, custom
         return;
     }
 
-    for path in &host_paths {
-        println!("  {path}");
-    }
-    for dir in custom_dirs {
-        if ui_zh() {
-            println!(
-                "  已为以 --user-data-dir 运行的 Chrome 注册：{}",
-                dir.display()
-            );
-        } else {
-            println!(
-                "  Registered for Chrome running with --user-data-dir: {}",
-                dir.display()
-            );
-        }
-    }
-    if !custom_dirs.is_empty() {
-        println!(
-            "{}",
-            if ui_zh() {
-                "  清单已校验；请在该 Chrome 里重新打开侧栏，或等扩展自动重连。"
-            } else {
-                "  Manifests verified; reopen the side panel in that Chrome or wait for automatic reconnection."
-            }
-        );
-    }
-
     // -- The human-facing guide (localized to the user's locale). ------------
     let zh = ui_zh();
     if zh {
         println!("chrome-use 安装向导 — 连接你的 Chrome\n");
         println!("[1/3] native messaging host（所有 profile 共享）");
         println!("  ✓ 已自动装好（{} 个 manifest）", host_paths.len());
+        print_host_registrations(&host_paths, custom_dirs, zh);
         println!(
             "\n[2/3] 你的 Chrome profile（找到 {} 个，{} 个已装扩展）",
             profiles.len(),
@@ -578,6 +584,7 @@ fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>, custom
         println!("chrome-use setup — connect your real Chrome\n");
         println!("[1/3] native-messaging host (shared by every profile)");
         println!("  ✓ installed ({} manifest(s))", host_paths.len());
+        print_host_registrations(&host_paths, custom_dirs, zh);
         println!(
             "\n[2/3] your Chrome profiles ({} found, {} with the extension)",
             profiles.len(),
