@@ -467,12 +467,7 @@ fn run_install_windows(json: bool, host_paths: &[String]) {
 /// macOS/Linux `extension install`: native host written, then force-install
 /// policy (macOS) or per-profile Web Store opens are guided.
 #[cfg(not(target_os = "windows"))]
-fn run_install_unix(
-    args: &[String],
-    json: bool,
-    host_paths: Vec<String>,
-    custom_dirs: &[PathBuf],
-) {
+fn run_install_unix(args: &[String], json: bool, host_paths: Vec<String>, custom_dirs: &[PathBuf]) {
     let no_open = args.iter().any(|a| a == "--no-open");
     let all_profiles = args.iter().any(|a| a == "--all-profiles");
     // Opting out of the managed-policy route entirely (#187): approving it puts
@@ -546,17 +541,26 @@ fn run_install_unix(
     }
     for dir in custom_dirs {
         if ui_zh() {
-            println!("  已为以 --user-data-dir 运行的 Chrome 注册：{}", dir.display());
+            println!(
+                "  已为以 --user-data-dir 运行的 Chrome 注册：{}",
+                dir.display()
+            );
         } else {
-            println!("  Registered for Chrome running with --user-data-dir: {}", dir.display());
+            println!(
+                "  Registered for Chrome running with --user-data-dir: {}",
+                dir.display()
+            );
         }
     }
     if !custom_dirs.is_empty() {
-        println!("{}", if ui_zh() {
-            "  清单已校验；请在该 Chrome 里重新打开侧栏，或等扩展自动重连。"
-        } else {
-            "  Manifests verified; reopen the side panel in that Chrome or wait for automatic reconnection."
-        });
+        println!(
+            "{}",
+            if ui_zh() {
+                "  清单已校验；请在该 Chrome 里重新打开侧栏，或等扩展自动重连。"
+            } else {
+                "  Manifests verified; reopen the side panel in that Chrome or wait for automatic reconnection."
+            }
+        );
     }
 
     // -- The human-facing guide (localized to the user's locale). ------------
@@ -1063,14 +1067,31 @@ fn custom_user_data_dirs(cmdlines: &str, home: Option<&Path>) -> Vec<PathBuf> {
             continue;
         }
         let name = executable.rsplit('/').next().unwrap_or("");
-        if !matches!(name,
-            "Google Chrome" | "Google Chrome Beta" | "Google Chrome Dev" |
-            "Google Chrome Canary" | "Chromium" | "Microsoft Edge" |
-            "Microsoft Edge Beta" | "Microsoft Edge Dev" | "Microsoft Edge Canary" |
-            "Brave Browser" | "chrome" | "google-chrome" | "google-chrome-stable" |
-            "google-chrome-beta" | "google-chrome-unstable" | "chromium" |
-            "chromium-browser" | "microsoft-edge" | "microsoft-edge-stable" |
-            "microsoft-edge-beta" | "microsoft-edge-dev" | "brave" | "brave-browser"
+        if !matches!(
+            name,
+            "Google Chrome"
+                | "Google Chrome Beta"
+                | "Google Chrome Dev"
+                | "Google Chrome Canary"
+                | "Chromium"
+                | "Microsoft Edge"
+                | "Microsoft Edge Beta"
+                | "Microsoft Edge Dev"
+                | "Microsoft Edge Canary"
+                | "Brave Browser"
+                | "chrome"
+                | "google-chrome"
+                | "google-chrome-stable"
+                | "google-chrome-beta"
+                | "google-chrome-unstable"
+                | "chromium"
+                | "chromium-browser"
+                | "microsoft-edge"
+                | "microsoft-edge-stable"
+                | "microsoft-edge-beta"
+                | "microsoft-edge-dev"
+                | "brave"
+                | "brave-browser"
         ) {
             continue;
         }
@@ -1117,7 +1138,9 @@ fn explicit_user_data_dirs(args: &[String], home: Option<&Path>) -> Result<Vec<P
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let value = if arg == "--user-data-dir" {
-            args.next().ok_or("--user-data-dir requires a path")?.as_str()
+            args.next()
+                .ok_or("--user-data-dir requires a path")?
+                .as_str()
         } else if let Some(value) = arg.strip_prefix("--user-data-dir=") {
             value
         } else {
@@ -1131,7 +1154,10 @@ fn explicit_user_data_dirs(args: &[String], home: Option<&Path>) -> Result<Vec<P
         let path = std::fs::canonicalize(&path)
             .map_err(|e| format!("invalid --user-data-dir {}: {e}", path.display()))?;
         if !path.is_dir() {
-            return Err(format!("--user-data-dir is not a directory: {}", path.display()));
+            return Err(format!(
+                "--user-data-dir is not a directory: {}",
+                path.display()
+            ));
         }
         result.push(path);
     }
@@ -1145,7 +1171,10 @@ fn explicit_user_data_dirs(args: &[String], home: Option<&Path>) -> Result<Vec<P
 fn install_user_data_dirs(args: &[String]) -> Result<Vec<PathBuf>, String> {
     #[cfg(target_os = "windows")]
     {
-        if args.iter().any(|arg| arg == "--user-data-dir" || arg.starts_with("--user-data-dir=")) {
+        if args
+            .iter()
+            .any(|arg| arg == "--user-data-dir" || arg.starts_with("--user-data-dir="))
+        {
             return Err("extension install --user-data-dir is supported only on macOS/Linux; Windows uses HKCU native-host registration".into());
         }
         Ok(Vec::new())
@@ -1179,7 +1208,8 @@ fn install_user_data_dirs(args: &[String]) -> Result<Vec<PathBuf>, String> {
 fn verify_host_manifest(path: &Path, host: &str, launcher: &Path) -> Result<(), String> {
     let check = || -> Result<(), String> {
         let body = std::fs::read(path).map_err(|e| e.to_string())?;
-        let manifest: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|e| e.to_string())?;
         let expected_path = launcher.to_str().ok_or("launcher path is not UTF-8")?;
         if manifest["name"].as_str() != Some(host)
             || manifest["path"].as_str() != Some(expected_path)
@@ -1188,7 +1218,12 @@ fn verify_host_manifest(path: &Path, host: &str, launcher: &Path) -> Result<(), 
         }
         Ok(())
     };
-    check().map_err(|e| format!("native-host manifest verification failed at {}: {e}", path.display()))
+    check().map_err(|e| {
+        format!(
+            "native-host manifest verification failed at {}: {e}",
+            path.display()
+        )
+    })
 }
 
 /// Write the launcher script + native-messaging host manifest(s) (macOS/Linux),
@@ -1216,7 +1251,11 @@ fn install_native_host_with_dirs(custom_dirs: &[PathBuf]) -> Result<Vec<String>,
             .into_iter()
             .filter(|dir| dir.parent().is_some_and(Path::is_dir))
             .collect();
-        manifest_dirs.extend(custom_dirs.iter().map(|dir| dir.join("NativeMessagingHosts")));
+        manifest_dirs.extend(
+            custom_dirs
+                .iter()
+                .map(|dir| dir.join("NativeMessagingHosts")),
+        );
         manifest_dirs.sort();
         manifest_dirs.dedup();
         install_native_host_unix(&ab_dir, &exe, &manifest_dirs)
@@ -1254,7 +1293,10 @@ fn install_native_host_unix(
     for dir in manifest_dirs {
         let parent = dir.parent().ok_or("host directory has no parent")?;
         if !parent.is_dir() {
-            return Err(format!("browser data directory no longer exists: {}", parent.display()));
+            return Err(format!(
+                "browser data directory no longer exists: {}",
+                parent.display()
+            ));
         }
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         for host in HOST_NAMES {
@@ -4990,20 +5032,33 @@ mod tests {
 "#;
         assert_eq!(
             super::custom_user_data_dirs(lines, Some(std::path::Path::new("/home/test"))),
-            ["/tmp/Chrome Data", "/tmp/Beta Data", "/tmp/dev", "/tmp/canary", "/home/test/Edge Data", "/tmp/Brave Data"]
-                .iter().map(|path| std::path::PathBuf::from(*path)).collect::<Vec<_>>()
+            [
+                "/tmp/Chrome Data",
+                "/tmp/Beta Data",
+                "/tmp/dev",
+                "/tmp/canary",
+                "/home/test/Edge Data",
+                "/tmp/Brave Data"
+            ]
+            .iter()
+            .map(|path| std::path::PathBuf::from(*path))
+            .collect::<Vec<_>>()
         );
-        assert!(super::custom_user_data_dirs(
-            "/usr/bin/chromium --user-data-dir=~/profile", None
-        ).is_empty());
+        assert!(
+            super::custom_user_data_dirs("/usr/bin/chromium --user-data-dir=~/profile", None)
+                .is_empty()
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn native_host_manifests_are_written_and_read_back_in_supplied_dirs() {
         let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("chrome-use-host-{}-{unique}", std::process::id()));
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("chrome-use-host-{}-{unique}", std::process::id()));
         let ab_dir = root.join("host");
         let data_dir = root.join("Chrome Data");
         std::fs::create_dir_all(&ab_dir).unwrap();
@@ -5019,19 +5074,24 @@ mod tests {
         );
         let manifest_dir = data_dir.join("NativeMessagingHosts");
         let exe = root.join("chrome-use");
-        let paths = super::install_native_host_unix(&ab_dir, &exe, &[manifest_dir.clone()]).unwrap();
+        let paths =
+            super::install_native_host_unix(&ab_dir, &exe, &[manifest_dir.clone()]).unwrap();
         assert_eq!(paths.len(), super::HOST_NAMES.len());
         let launcher = ab_dir.join("nm-host.sh");
         for host in super::HOST_NAMES {
             let path = manifest_dir.join(format!("{host}.json"));
-            let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(manifest["name"].as_str(), Some(*host));
             assert_eq!(manifest["path"].as_str(), launcher.to_str());
             assert_eq!(manifest["type"], "stdio");
-            assert_eq!(manifest["allowed_origins"], serde_json::json!([
-                format!("chrome-extension://{}/", super::EXTENSION_ID),
-                format!("chrome-extension://{}/", super::STORE_EXTENSION_ID),
-            ]));
+            assert_eq!(
+                manifest["allowed_origins"],
+                serde_json::json!([
+                    format!("chrome-extension://{}/", super::EXTENSION_ID),
+                    format!("chrome-extension://{}/", super::STORE_EXTENSION_ID),
+                ])
+            );
             super::verify_host_manifest(&path, host, &launcher).unwrap();
             let mut wrong = manifest.clone();
             wrong["name"] = serde_json::json!("wrong.host");
@@ -5055,9 +5115,12 @@ mod tests {
     fn explicit_user_data_dir_errors_are_reported_without_process_discovery() {
         #[cfg(not(target_os = "windows"))]
         {
-            for args in [vec!["--user-data-dir"], vec!["--user-data-dir="],
+            for args in [
+                vec!["--user-data-dir"],
+                vec!["--user-data-dir="],
                 vec!["--user-data-dir", "--no-open"],
-                vec!["--user-data-dir=/nonexistent/chrome-use-test/profile"]] {
+                vec!["--user-data-dir=/nonexistent/chrome-use-test/profile"],
+            ] {
                 let args = args.into_iter().map(String::from).collect::<Vec<_>>();
                 assert!(super::explicit_user_data_dirs(&args, None).is_err());
             }
