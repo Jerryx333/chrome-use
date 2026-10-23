@@ -19,8 +19,11 @@ use serde_json::{json, Value};
 
 use super::cdp::client::CdpClient;
 
-fn worlds() -> &'static Mutex<HashMap<String, i64>> {
-    static W: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+/// Per tab session: its isolated world's context, or None when one could
+/// not be made there (not a page, or the target refused), so a tab that has
+/// none is not asked again on every read.
+fn worlds() -> &'static Mutex<HashMap<String, Option<i64>>> {
+    static W: OnceLock<Mutex<HashMap<String, Option<i64>>>> = OnceLock::new();
     W.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -30,6 +33,15 @@ fn world_name() -> &'static str {
 }
 
 async fn create_world(client: &CdpClient, session_id: &str) -> Result<i64, String> {
+    let made = try_create_world(client, session_id).await;
+    worlds()
+        .lock()
+        .unwrap()
+        .insert(session_id.to_string(), made.as_ref().ok().copied());
+    made
+}
+
+async fn try_create_world(client: &CdpClient, session_id: &str) -> Result<i64, String> {
     let tree = client
         .send_command("Page.getFrameTree", None, Some(session_id))
         .await?;
@@ -45,12 +57,26 @@ async fn create_world(client: &CdpClient, session_id: &str) -> Result<i64, Strin
             Some(session_id),
         )
         .await?;
-    let ctx = out
-        .get("executionContextId")
+    out.get("executionContextId")
         .and_then(|v| v.as_i64())
-        .ok_or("no isolated world context")?;
-    worlds().lock().unwrap().insert(session_id.to_string(), ctx);
-    Ok(ctx)
+        .ok_or_else(|| "no isolated world context".to_string())
+}
+
+/// The world's context is gone (a navigation or reload).
+pub fn context_gone(e: &str) -> bool {
+    e.contains("Cannot find context with specified id")
+        || e.contains("Execution context was destroyed")
+        || e.contains("Cannot find default execution context")
+}
+
+/// The node lives in a frame the main frame's isolated world cannot reach.
+pub fn other_frame(e: &str) -> bool {
+    e.contains("does not belong to") || e.contains("Node is not in the target") || context_gone(e)
+}
+
+/// Make the tab's isolated world again (after its context went away).
+pub async fn recreate(client: &CdpClient, session_id: &str) -> Result<i64, String> {
+    create_world(client, session_id).await
 }
 
 fn gone(e: &str) -> bool {
@@ -65,7 +91,8 @@ fn gone(e: &str) -> bool {
 pub async fn world(client: &CdpClient, session_id: &str) -> Result<i64, String> {
     let cached = worlds().lock().unwrap().get(session_id).copied();
     match cached {
-        Some(ctx) => Ok(ctx),
+        Some(Some(ctx)) => Ok(ctx),
+        Some(None) => Err("no isolated world on this target".to_string()),
         None => create_world(client, session_id).await,
     }
 }
