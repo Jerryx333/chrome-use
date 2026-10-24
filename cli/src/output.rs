@@ -6685,6 +6685,10 @@ Setup:
                              The extension toolbar opens its agent side panel when
                              Chrome confirms support; otherwise it keeps the setup
                              popup. Settings remain accessible in the side panel.
+                             Panel replies preserve fenced code; use longer outer
+                             fences around examples containing shorter fences.
+                             Closing fences use the same character, at least the
+                             opening length, with only trailing whitespace.
                              The panel supports /skill selection, profile skill imports,
                              up to five image attachments, conversation tool/effort/tier
                              overrides and scheduled prompts. Schedules use host-local

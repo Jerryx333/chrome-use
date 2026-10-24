@@ -34,7 +34,13 @@ function inline(document, parent, text) {
   if (last < text.length) parent.append(document.createTextNode(text.slice(last)));
 }
 
-const isFence = line => /^\s*(```|~~~)/.test(line);
+const openingFence = line => line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+// A closing fence uses the same character, is at least as long as the opener,
+// and has no trailing content. Shorter fences inside examples stay literal.
+function isClosingFence(line, marker) {
+  const closing = line.match(/^\s*(`{3,}|~{3,})[ \t]*$/);
+  return !!closing && closing[1][0] === marker[0] && closing[1].length >= marker.length;
+}
 const listItem = line => line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
 const isTableRow = line => /^\s*\|.*\|\s*$/.test(line);
 const isTableRule = line => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
@@ -51,11 +57,12 @@ export function renderMarkdown(document, container, source) {
   while (index < lines.length) {
     const line = lines[index];
     if (!line.trim()) { index++; continue; }
-    if (isFence(line)) {
-      const fence = line.trim().slice(0, 3), language = line.trim().slice(3).trim();
+    const fence = openingFence(line);
+    if (fence) {
+      const marker = fence[1], language = fence[2].trim();
       const body = []; index++;
-      while (index < lines.length && !lines[index].trim().startsWith(fence)) body.push(lines[index++]);
-      index++;
+      while (index < lines.length && !isClosingFence(lines[index], marker)) body.push(lines[index++]);
+      if (index < lines.length) index++;
       const pre = el('pre', 'md-code'), code = el('code'); code.textContent = body.join('\n');
       if (language) pre.setAttribute('data-language', language.slice(0, 32));
       pre.append(code); container.append(pre); continue;
@@ -101,7 +108,7 @@ export function renderMarkdown(document, container, source) {
       container.append(list); continue;
     }
     const paragraph = el('p'), body = [];
-    while (index < lines.length && lines[index].trim() && !isFence(lines[index]) && !/^(#{1,6})\s/.test(lines[index]) && !listItem(lines[index]) && !/^\s*>/.test(lines[index]) && !(isTableRow(lines[index]) && isTableRule(lines[index + 1] || ''))) body.push(lines[index++]);
+    while (index < lines.length && lines[index].trim() && !openingFence(lines[index]) && !/^(#{1,6})\s/.test(lines[index]) && !listItem(lines[index]) && !/^\s*>/.test(lines[index]) && !(isTableRow(lines[index]) && isTableRule(lines[index + 1] || ''))) body.push(lines[index++]);
     body.forEach((text, n) => { if (n) paragraph.append(el('br')); inline(document, paragraph, text); });
     container.append(paragraph);
   }
