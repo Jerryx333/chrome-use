@@ -152,9 +152,32 @@ struct PairingView: View {
 /// and a note where there is no camera (the simulator).
 struct QRScannerView: View {
     let found: (String) -> Void
+    @Environment(\.scenePhase) private var phase
+    @State private var authorization = AVCaptureDevice.authorizationStatus(for: .video)
 
     var body: some View {
-        if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
+        if authorization == .denied || authorization == .restricted {
+            ContentUnavailableView {
+                Label("Camera access is off", systemImage: "camera")
+            } description: {
+                Text("Paste a pairing link below, or allow camera access in Settings to scan a QR code.")
+            } actions: {
+                if authorization == .denied {
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                }
+            }
+            .onChange(of: phase) { _, phase in
+                if phase == .active { authorization = AVCaptureDevice.authorizationStatus(for: .video) }
+            }
+        } else if authorization == .notDetermined && AVCaptureDevice.default(for: .video) != nil {
+            ProgressView()
+                .task {
+                    _ = await AVCaptureDevice.requestAccess(for: .video)
+                    authorization = AVCaptureDevice.authorizationStatus(for: .video)
+                }
+        } else if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
             DataScanner(found: found)
         } else if AVCaptureDevice.default(for: .video) != nil {
             CaptureScanner(found: found)
@@ -180,15 +203,21 @@ private struct DataScanner: UIViewControllerRepresentable {
 
     func updateUIViewController(_ controller: DataScannerViewController, context: Context) {}
 
+    static func dismantleUIViewController(_ controller: DataScannerViewController, coordinator: Coordinator) {
+        controller.stopScanning()
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(found: found) }
 
     final class Coordinator: NSObject, DataScannerViewControllerDelegate {
         let found: (String) -> Void
+        private var delivered = false
         init(found: @escaping (String) -> Void) { self.found = found }
 
         func dataScanner(_ scanner: DataScannerViewController, didAdd items: [RecognizedItem], allItems: [RecognizedItem]) {
             for item in items {
-                if case .barcode(let code) = item, let text = code.payloadStringValue, text.hasPrefix("chromeuse:") {
+                if !delivered, case .barcode(let code) = item, let text = code.payloadStringValue, text.hasPrefix("chromeuse:") {
+                    delivered = true
                     scanner.stopScanning()
                     found(text)
                     return
@@ -212,6 +241,7 @@ private struct CaptureScanner: UIViewControllerRepresentable {
     final class CaptureController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
         var found: ((String) -> Void)?
         private let session = AVCaptureSession()
+        private let sessionQueue = DispatchQueue(label: "com.leeguoo.chromeuse.camera")
         private var preview: AVCaptureVideoPreviewLayer?
 
         override func viewDidLoad() {
@@ -230,8 +260,12 @@ private struct CaptureScanner: UIViewControllerRepresentable {
             layer.videoGravity = .resizeAspectFill
             view.layer.addSublayer(layer)
             preview = layer
+        }
+
+        override func viewWillAppear(_ animated: Bool) {
+            super.viewWillAppear(animated)
             let session = self.session
-            DispatchQueue.global(qos: .userInitiated).async { session.startRunning() }
+            sessionQueue.async { if !session.isRunning { session.startRunning() } }
         }
 
         override func viewDidLayoutSubviews() {
@@ -241,14 +275,21 @@ private struct CaptureScanner: UIViewControllerRepresentable {
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            session.stopRunning()
+            stopScanning()
+        }
+
+        private func stopScanning() {
+            let session = self.session
+            sessionQueue.async { if session.isRunning { session.stopRunning() } }
         }
 
         func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject], from connection: AVCaptureConnection) {
             for object in objects {
                 if let code = object as? AVMetadataMachineReadableCodeObject, let text = code.stringValue, text.hasPrefix("chromeuse:") {
-                    session.stopRunning()
-                    found?(text)
+                    stopScanning()
+                    let deliver = found
+                    found = nil
+                    deliver?(text)
                     return
                 }
             }
