@@ -3017,6 +3017,19 @@ pub(crate) fn relay_popup_candidate<'a>(
     })
 }
 
+/// The color the extension gives an agent group titled `title`
+/// (`colorForName` in ab-connect's background.js), so a group this side
+/// creates looks like one the extension made.
+fn group_color(title: &str) -> &'static str {
+    const COLORS: [&str; 9] = [
+        "blue", "cyan", "green", "yellow", "orange", "red", "pink", "purple", "grey",
+    ];
+    let hash = title.encode_utf16().fold(0u32, |h, unit| {
+        h.wrapping_mul(31).wrapping_add(u32::from(unit))
+    });
+    COLORS[hash as usize % COLORS.len()]
+}
+
 /// Whether the extension can attach a tab showing `url` (it refuses blank and
 /// privileged pages, so a pop-up still on about:blank is waited for).
 fn relay_url_is_attachable(url: &str) -> bool {
@@ -3918,6 +3931,28 @@ impl BrowserManager {
                 }
                 Err(e) if i == rounds - 1 && !any_ok => return Err(e),
                 Err(_) => {}
+            }
+        }
+        // The relay files a tab under its Chrome group's title when it
+        // re-attaches one, and an ended session's tabs left their group
+        // (#692): find the tabs this session records, taken over from it,
+        // in the unscoped list. Only recorded ones; attaching re-files them
+        // under this session's group.
+        if rounds > 1 && self.created_targets.iter().any(|t| !by_id.contains_key(t)) {
+            if let Ok(all) = self
+                .client
+                .send_command_typed::<_, GetTargetsResult>(
+                    "ABRelay.getAllTargets",
+                    &json!({}),
+                    None,
+                )
+                .await
+            {
+                for t in all.target_infos.into_iter().filter(should_track_target) {
+                    if self.created_targets.contains(&t.target_id) {
+                        by_id.entry(t.target_id.clone()).or_insert(t);
+                    }
+                }
             }
         }
         let live = self.live_relay_targets(by_id.into_values().collect()).await;
@@ -4991,6 +5026,9 @@ impl BrowserManager {
                     target_type: target.target_type.clone(),
                 });
             }
+            if scoped {
+                self.regroup_own_tabs().await;
+            }
             // Foreign direct-CDP targets are metadata until explicitly adopted.
             // Probing/initializing one here can block the very command that will
             // activate it, and the session is not allowed to drive it yet.
@@ -5835,9 +5873,18 @@ impl BrowserManager {
         Ok(result.as_str().unwrap_or("").to_string())
     }
 
+    /// chrome-use's own reads: run in the tab's isolated world, where the
+    /// page cannot see them (see `quiet_dom`).
     pub async fn evaluate(&self, script: &str, _args: Option<Value>) -> Result<Value, String> {
         let session_id = self.active_session_id()?.to_string();
-        self.eval_in_context(script, &session_id, None).await
+        self.eval_in_context(script, &session_id, None, false).await
+    }
+
+    /// Code that has to run with the page's own JS: the user's `eval`,
+    /// React tools, the vendor probe. The page can see it.
+    pub async fn evaluate_main(&self, script: &str) -> Result<Value, String> {
+        let session_id = self.active_session_id()?.to_string();
+        self.eval_in_context(script, &session_id, None, true).await
     }
 
     /// Evaluate `script` in a specific frame's context (issue #58 `eval --frame`).
@@ -5858,7 +5905,9 @@ impl BrowserManager {
         iframe_sessions: &HashMap<String, String>,
     ) -> Result<Value, String> {
         if let Some(oopif_session) = iframe_sessions.get(frame_id) {
-            return self.eval_in_context(script, oopif_session, None).await;
+            return self
+                .eval_in_context(script, oopif_session, None, true)
+                .await;
         }
 
         let session_id = self.active_session_id()?.to_string();
@@ -5876,7 +5925,7 @@ impl BrowserManager {
             .ok_or_else(|| {
                 format!("Could not resolve an execution context for frame {frame_id}")
             })?;
-        self.eval_in_context(script, &session_id, Some(ctx_id))
+        self.eval_in_context(script, &session_id, Some(ctx_id), false)
             .await
     }
 
@@ -5887,6 +5936,7 @@ impl BrowserManager {
         script: &str,
         session_id: &str,
         context_id: Option<i64>,
+        main_world: bool,
     ) -> Result<Value, String> {
         // `replMode: true` lets successive `eval`s re-declare top-level
         // `let`/`const` instead of throwing "Identifier 'x' has already been
@@ -5899,13 +5949,28 @@ impl BrowserManager {
         // `awaitPromise` (no replMode) — exactly the pre-#38 behaviour.
         let mentions_async = script_may_return_promise(script);
         let declares = script.contains("let ") || script.contains("const ");
-        let repl_mode = declares && !mentions_async;
+        // chrome-use's own reads go to the isolated world, where replMode is
+        // not allowed (it needs the default context): a block keeps their
+        // top-level `let`/`const` from colliding between calls, and its last
+        // expression is still the result.
+        let quiet_block = !main_world && context_id.is_none() && declares && !mentions_async;
+        let repl_mode = declares && !mentions_async && !quiet_block;
+        let wrapped;
+        let script = if quiet_block {
+            wrapped = format!("{{\n{script}\n}}");
+            wrapped.as_str()
+        } else {
+            script
+        };
         let mut params = json!({
             "expression": script,
             "returnByValue": true,
             "awaitPromise": !repl_mode,
             "replMode": repl_mode,
         });
+        if main_world {
+            params["__cuMain"] = json!(true);
+        }
         if let Some(cid) = context_id {
             // `contextId` and `replMode` are mutually exclusive in Chrome; when we
             // pin a frame context, drop replMode (a fresh isolated world per call
@@ -8378,10 +8443,14 @@ impl BrowserManager {
         self.close_leftover_blank_scratch("").await;
     }
 
-    /// Fold this session's tab group away in the user's window (relay only).
-    /// Best effort: the extension refuses it when the group holds a tab no
-    /// agent created.
-    pub async fn collapse_own_group(&self) {
+    /// Take the agent's tabs out of this session's tab group (relay only), so
+    /// the group goes away. Chrome keeps a group that is still open when its
+    /// window closes or the browser quits as a saved tab group, and no
+    /// extension API can delete one (#692). The tabs stay recorded: the
+    /// project's next session takes them over and regroups them, or the sweep
+    /// closes them. Best effort: the extension refuses a tab no agent created,
+    /// which keeps the group.
+    pub async fn ungroup_own_group(&self) {
         let Some(title) = self.agent_group() else {
             return;
         };
@@ -8397,9 +8466,96 @@ impl BrowserManager {
             .flatten()
             .filter_map(|g| g.get("id").and_then(Value::as_i64))
         {
-            let _ = self
-                .chrome_call("tabGroups", "update", json!([id, { "collapsed": true }]))
-                .await;
+            let Ok(tabs) = self
+                .chrome_call("tabs", "query", json!([{ "groupId": id }]))
+                .await
+            else {
+                continue;
+            };
+            for tab in tabs
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.get("id").and_then(Value::as_i64))
+            {
+                let _ = self.chrome_call("tabs", "ungroup", json!([tab])).await;
+            }
+        }
+    }
+
+    /// Put this session's own ungrouped tabs back in its group (relay only):
+    /// the tabs it took over from an ended session of the project, which
+    /// ungrouped them on its way out. A tab in some other group stays there.
+    /// Best effort.
+    async fn regroup_own_tabs(&self) {
+        let Some(title) = self.agent_group() else {
+            return;
+        };
+        for page in &self.pages {
+            if !self.created_targets.contains(&page.target_id) {
+                continue;
+            }
+            let Ok(info) = self
+                .client
+                .send_command_typed::<_, Value>(
+                    "ABExt.inspectTab",
+                    &json!({ "targetId": page.target_id }),
+                    None,
+                )
+                .await
+            else {
+                continue;
+            };
+            let Some(tab) = info.get("chromeTabId").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Ok(current) = self.chrome_call("tabs", "get", json!([tab])).await else {
+                continue;
+            };
+            let (Some(window), Some(-1)) = (
+                current.get("windowId").and_then(Value::as_i64),
+                current.get("groupId").and_then(Value::as_i64),
+            ) else {
+                continue;
+            };
+            let existing = self
+                .chrome_call(
+                    "tabGroups",
+                    "query",
+                    json!([{ "windowId": window, "title": title }]),
+                )
+                .await
+                .ok()
+                .and_then(|groups| groups.as_array()?.first()?.get("id")?.as_i64());
+            match existing {
+                Some(group) => {
+                    let _ = self
+                        .chrome_call(
+                            "tabs",
+                            "group",
+                            json!([{ "groupId": group, "tabIds": [tab] }]),
+                        )
+                        .await;
+                }
+                None => {
+                    let created = self
+                        .chrome_call(
+                            "tabs",
+                            "group",
+                            json!([{ "tabIds": [tab], "createProperties": { "windowId": window } }]),
+                        )
+                        .await;
+                    if let Some(group) = created.ok().and_then(|g| g.as_i64()) {
+                        let _ = self
+                            .chrome_call(
+                                "tabGroups",
+                                "update",
+                                json!([group, { "title": title, "color": group_color(&title) }]),
+                            )
+                            .await;
+                    }
+                }
+            }
         }
     }
 
@@ -11225,6 +11381,18 @@ mod tests {
         assert_eq!(live_group(&Ok(json!({ "groupId": 7 }))), Some(7));
         assert_eq!(live_group(&Ok(json!({ "groupId": -1 }))), None);
         assert_eq!(live_group(&Err("x".to_string())), None);
+    }
+
+    #[test]
+    fn group_color_matches_the_extension() {
+        // Values from ab-connect's colorForName.
+        assert_eq!(group_color("✦ piggo"), "pink");
+        assert_eq!(group_color("✦ chrome-use"), "orange");
+        assert_eq!(
+            group_color("✦ a-really-long-project-name-1234567890"),
+            "blue"
+        );
+        assert_eq!(group_color("✦ 中文项目"), "red");
     }
 
     #[test]

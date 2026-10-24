@@ -24,6 +24,7 @@ import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
 import { cliSwitchPending, compareVersions } from './version-notice.js';
 import { t } from './i18n.js';
+import { STEALTH_DEFAULT, cursorAllowed } from './stealth-mode.js';
 import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import {
@@ -60,6 +61,7 @@ import {
 } from './reload-loop.js';
 import { targetInfoForTab } from './target-info.js';
 import { isMissingTabError, targetPresence } from './tab-presence.js';
+import { ungroupRestoredAgentGroups } from './restored-groups.js';
 import {
   announceVerdict,
   createRemovedTabs,
@@ -834,6 +836,9 @@ async function handleTabGrantMessage(msg) {
 // ---- settings + UX (cursor overlay, connection notifications) -------------
 
 let cursorEnabled = false;
+// Settings the cursor depends on; cursorEnabled is derived from both, so the
+// overlay stays dark under stealth mode whatever ab_cursor says.
+const cursorSettings = { ab_cursor: false, ab_stealth: STEALTH_DEFAULT };
 let notifyEnabled = false;
 let lastConnected = null;
 // Idle auto-detach (issue #201): release chrome.debugger from a tab after this
@@ -847,9 +852,11 @@ let idleDetachMs = IDLE_DETACH_DEFAULT_SECS * 1000;
 function loadUxSettings() {
   try {
     chrome.storage.sync.get(
-      { ab_cursor: false, ab_notify: false, ab_idle_detach_secs: IDLE_DETACH_DEFAULT_SECS },
+      { ab_cursor: false, ab_stealth: STEALTH_DEFAULT, ab_notify: false, ab_idle_detach_secs: IDLE_DETACH_DEFAULT_SECS },
       (s) => {
-        cursorEnabled = !!s.ab_cursor;
+        cursorSettings.ab_cursor = !!s.ab_cursor;
+        cursorSettings.ab_stealth = s.ab_stealth;
+        cursorEnabled = cursorAllowed(cursorSettings);
         notifyEnabled = !!s.ab_notify;
         idleDetachMs = idleDetachMsFrom(s.ab_idle_detach_secs);
       }
@@ -860,7 +867,9 @@ loadUxSettings();
 try {
   chrome.storage.onChanged.addListener((ch, area) => {
     if (area !== 'sync') return;
-    if ('ab_cursor' in ch) cursorEnabled = !!ch.ab_cursor.newValue;
+    if ('ab_cursor' in ch) cursorSettings.ab_cursor = !!ch.ab_cursor.newValue;
+    if ('ab_stealth' in ch) cursorSettings.ab_stealth = ch.ab_stealth.newValue;
+    if ('ab_cursor' in ch || 'ab_stealth' in ch) cursorEnabled = cursorAllowed(cursorSettings);
     if ('ab_notify' in ch) notifyEnabled = !!ch.ab_notify.newValue;
     if ('ab_idle_detach_secs' in ch)
       idleDetachMs = idleDetachMsFrom(ch.ab_idle_detach_secs.newValue);
@@ -1838,6 +1847,7 @@ async function handleForwardCdpCommand(msg) {
       agentWindowRejected,
       tabGrants: (await tabGrants.load(), tabGrants.list().map(({ tabId, conversationId }) => ({ tabId, conversationId }))),
       cursorEnabled,
+      stealthMode: cursorSettings.ab_stealth !== false,
       notifyEnabled,
       idleDetachMs,
     };
@@ -2695,6 +2705,10 @@ chrome.webNavigation.onCommitted.addListener((details) => {
 // ---- bootstrap + keepalive ------------------------------------------------
 
 chrome.runtime.onInstalled.addListener((details) => {
+  // Also a browser start: Chrome updated itself, or the extension is loaded
+  // from the command line. Not an extension update, which can land while a
+  // session works in its group.
+  if (details?.reason === 'install' || details?.reason === 'chrome_update') ungroupRestoredGroupsAfterStartup();
   // One-time purge: a prior build persisted ADOPTED user tabs into the owned set,
   // which then re-attached them on every restart and left the debugger banner
   // stuck on the user's pages. Clear the persisted set on install/update — agent
@@ -2734,7 +2748,25 @@ async function settleOwnershipAfterInstall(reason) {
   } catch {}
   ownedTabs.clear();
 }
-chrome.runtime.onStartup.addListener(() => void whenReady(connectHost));
+chrome.runtime.onStartup.addListener(() => {
+  void whenReady(connectHost);
+  ungroupRestoredGroupsAfterStartup();
+});
+
+// A restored session brings agent groups back open, and Chrome saves a group
+// that is open when the browser quits (#692): take their tabs out. Restore
+// finishes after startup, so look again a little later.
+function ungroupRestoredGroupsAfterStartup() {
+  for (const ms of [2000, 10000, 30000]) {
+    setTimeout(() => {
+      void ungroupRestoredAgentGroups({
+        // A tab an agent created in this browser run is owned before it is
+        // grouped; a restored tab is not (tab ids change across a restart).
+        groups: chrome.tabGroups, tabs: chrome.tabs, inUse: tabId => tabs.has(tabId) || ownedTabs.has(tabId),
+      }).catch(() => {});
+    }, ms);
+  }
+}
 
 // ---- self-update ----------------------------------------------------------
 //

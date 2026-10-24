@@ -10,10 +10,11 @@
 //      `open` of a page the first one has open opens its own tab;
 //   3. one session's `open` of a page it already has switches to that tab;
 //   4. `done` in one session closes only its own tabs;
-//   5. once the last session of the project idles out (30 s here), the
-//      group collapses;
-//   6. the project's next session takes the ended session's tabs over and
-//      reuses its tab for the same page instead of opening another;
+//   5. once the last session of the project idles out (30 s here), its
+//      tabs leave the group, so Chrome keeps no saved group (#692);
+//   6. the project's next session takes the ended session's tabs over,
+//      groups them again and reuses its tab for the same page instead of
+//      opening another;
 //   7. a session with a per-session group from an older build moves its tab
 //      under its project's group;
 //   7b. sessions that only read, did nothing, or were killed leave no blank
@@ -107,12 +108,23 @@ try {
   check(byUrl(t4, '/c').length === 0 && byUrl(t4, '/e').length === 0, 'B\'s tabs closed');
   check(byUrl(t4, '/b').length === 1 && byUrl(t4, '/d').length === 1, 'A\'s tabs untouched');
 
-  // 5. A idles out: nobody works in the group any more; it collapses.
+  // 5. A idles out: nobody works in the group any more. Its tabs leave the
+  //    group, so Chrome keeps no saved group when the window closes (#692).
   await daemonGone(A.name);
-  const g5 = await waitFor(async () => { const g = await agentGroups(); return g.length === 1 && g[0].collapsed && g; }, { timeout: 15000, label: 'group collapsed' });
-  step('last session idled out', { group: g5[0] });
+  await waitFor(async () => (await agentGroups()).length === 0, { timeout: 15000, label: 'group gone' });
+  const t5 = await tabs();
+  step('last session idled out', { tabs: t5.map(t => `${t.groupId} ${t.url}`) });
+  check(byUrl(t5, '/b').length === 1 && byUrl(t5, '/d').length === 1, 'A\'s tabs stay open');
+  check([...byUrl(t5, '/b'), ...byUrl(t5, '/d')].every(t => t.groupId === -1), 'outside any group');
 
   // 6. The project's next session takes A's tabs over and reuses A's tab.
+  //    A ran a command moments ago, so it holds its lease for LEASE_GRACE
+  //    (#687): age its activity stamps past it.
+  const aged = new Date(Date.now() - 5 * 60 * 1000);
+  for (const f of [`${A.name}.activity`, `${A.name}.created-targets.json`]) {
+    const p = path.join(socketDir, f);
+    if (fs.existsSync(p)) fs.utimesSync(p, aged, aged);
+  }
   ok(cu(3001, '%83', ['open', rig.site + '/b']), 'C open the page A left');
   const C = sessionOf(3001, '%83');
   const t6 = await tabs();
@@ -120,6 +132,8 @@ try {
   step('next session of the project', { C: C.name, group: C.tabGroup, bTabs: byUrl(t6, '/b').length, listC: listC.slice(0, 300) });
   check(byUrl(t6, '/b').length === 1, 'C reused A\'s tab for the same page');
   check(listC.includes('/d'), 'C took over A\'s other tab too');
+  const g6 = await agentGroups();
+  check(g6.length === 1 && g6[0].title === '✦ repo' && [...byUrl(t6, '/b'), ...byUrl(t6, '/d')].every(t => t.groupId === g6[0].id), 'C put the tabs it took over back in the project group');
   check(fs.existsSync(path.join(socketDir, `${A.name}.moved-to`)) || !fs.existsSync(path.join(socketDir, `${A.name}.created-targets.json`)), 'A\'s record moved to C');
   ok(cu(3001, '%83', ['done']), 'C done');
 
@@ -128,8 +142,9 @@ try {
   const L = sessionOf(4001, '%84', { cwd: other });
   await daemonGone(L.name);
   fs.rmSync(path.join(socketDir, `${L.name}.group`));
-  const gid = (await agentGroups()).find(g => g.title === '✦ older')?.id;
-  await rig.ev(`chrome.tabGroups.update(${gid}, { title: ${JSON.stringify('✦ ' + L.name)} })`);
+  // An older build left its tab in a group titled after the session.
+  const legacyTab = byUrl(await tabs(), '/a?old')[0];
+  await rig.ev(`chrome.tabs.group({ tabIds: ${legacyTab.id} }).then(g => chrome.tabGroups.update(g, { title: ${JSON.stringify('✦ ' + L.name)} }))`);
   const listL = JSON.stringify(ok(cu(4001, '%84', ['tab', 'list'], { cwd: other }), 'L tab list after upgrade').data);
   const g7 = await agentGroups();
   const oldTab = byUrl(await tabs(), '/a?old')[0];
