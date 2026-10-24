@@ -14580,6 +14580,15 @@ mod background_activation {
                             }
                             json!({"body":"{\"accepted\":false}", "base64Encoded":false})
                         }
+                        // Page reads now create an isolated world before evaluating.
+                        // Model that protocol rather than treating it as a surprise.
+                        "Page.getFrameTree" => json!({
+                            "frameTree":{"frame":{
+                                "id":format!("frame-{target}"),
+                                "url":targets.iter().find(|item| item["targetId"] == target).unwrap()["url"]
+                            }}
+                        }),
+                        "Page.createIsolatedWorld" => json!({"executionContextId":1}),
                         "Browser.getVersion" => json!({"product":"Chrome/fixture"}),
                         "Target.setDiscoverTargets"
                         | "Page.enable"
