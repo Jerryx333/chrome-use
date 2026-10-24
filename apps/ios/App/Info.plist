@@ -52,6 +52,8 @@
 	<string>$(TRIAL_PRODUCT_ID)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<!-- Plain ws:// only to the user's own network: IP addresses,
