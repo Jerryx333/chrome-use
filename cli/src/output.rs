@@ -6637,6 +6637,20 @@ Setup:
                              Store route instead); --all-profiles opens the Store page
                              in each profile; --no-open writes the policy without
                              queueing it.
+                             On macOS/Linux, also registers running Chromium-family
+                             browsers of the current user with existing --user-data-dir=<path>
+                             directories. Discovered-directory failures warn and skip;
+                             default and explicit directory failures remain errors.
+  extension install --user-data-dir <path>
+                             Add an existing custom data directory explicitly (repeatable;
+                             also accepts --user-data-dir=<path>). Missing directories
+                             fail. macOS/Linux only; Windows uses HKCU registration.
+                             Lists verified registrations. Custom roots are recorded in
+                             ~/.chrome-use/custom-host-dirs.json for status and uninstall,
+                             even with Chrome stopped. Recording failures warn that
+                             uninstall may leave manifests behind.
+                             Registration is not a connection: reopen the side panel in
+                             that Chrome or wait for automatic extension reconnection.
   extension status           Host/relay/extension versions, driving profile, per-profile
                              coverage, and what the install policy currently costs
                              The extension toolbar opens its agent side panel when

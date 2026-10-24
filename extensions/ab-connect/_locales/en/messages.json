@@ -2947,7 +2947,7 @@
     "message": "Check the local CLI, then reopen this popup to reconnect:"
   },
   "popup_hint_install_host": {
-    "message": "Install the local host, then reopen this popup:"
+    "message": "The local chrome-use CLI has not registered a native host for this Chrome. If it was started separately with --user-data-dir (for example by a script), run the command below: it also registers running Chrome instances with custom data directories on macOS/Linux. Then reopen the side panel."
   },
   "popup_inspect": {
     "message": "Inspect element"

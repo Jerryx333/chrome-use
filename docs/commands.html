@@ -857,7 +857,8 @@ JS</code></pre>
 
 <span class="du-cmt"># macOS：跳过那个会让 Chrome 进入受管理状态的策略描述文件</span>
 <span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--no-profile</span>
-<span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--all-profiles</span>   <span class="du-cmt"># 在每个缺失的 profile 里打开商店页</span></code></pre>
+<span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--all-profiles</span>   <span class="du-cmt"># 在每个缺失的 profile 里打开商店页</span>
+<span class="du-prompt">$</span> chrome-use extension install <span class="du-flag">--user-data-dir</span> &lt;path&gt;   <span class="du-cmt"># 为用 --user-data-dir 启动的 Chrome 注册 host（macOS/Linux；运行中的会自动扫描）</span></code></pre>
       </div>
       <p>
         扩展 0.5.48 增加 Thermo 使用的原生标签组操作：只接受已经预览确认的清单，逐页重查，

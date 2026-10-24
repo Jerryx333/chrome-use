@@ -2947,7 +2947,7 @@
     "message": "检查本机 CLI，然后重新打开这个弹窗来重连："
   },
   "popup_hint_install_host": {
-    "message": "先安装本地 host，再重新打开这个弹窗："
+    "message": "本机的 chrome-use CLI 尚未为这个 Chrome 注册本地 host。如果这个 Chrome 是用 --user-data-dir 单独启动的（例如由脚本拉起），也请运行下方命令：在 macOS/Linux 上，它会一并为正在运行的这类 Chrome 注册。之后重新打开侧栏。"
   },
   "popup_inspect": {
     "message": "点选元素"

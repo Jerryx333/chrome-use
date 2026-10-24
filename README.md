@@ -242,6 +242,8 @@ chrome-use open https://x.com/home
 chrome-use status                 # relay, profile, extension, and session health
 ```
 
+On macOS/Linux, `chrome-use extension install` also registers the native host in existing custom data directories of running Chromium-family browsers started with `--user-data-dir=<path>`. For a browser that is not running or cannot be discovered, use `chrome-use extension install --user-data-dir "/path/Chrome Data"`; `--user-data-dir=<path>` is also accepted and the option may be repeated. Every explicit directory must already exist. The command lists written manifests and reads back their name and launcher path. This confirms registration only: reopen the side panel in that Chrome or wait for automatic reconnection. Windows uses HKCU registration and rejects this option. Discovery scans only the current user’s processes. Failures in discovered directories warn and skip that registration; default and explicit directory failures remain errors (retry with `--user-data-dir`). Successful custom registrations are recorded in `~/.chrome-use/custom-host-dirs.json` for status and uninstall even when the browser is stopped. Recording failures warn that uninstall may leave manifests behind.
+
 `chrome-use open` then drives your real, logged-in Chrome over **native messaging**: no debug port, no token, and **no "Allow remote debugging?" dialog, ever**. The raw remote-debugging-port alternative (which pops a consent dialog) is described in the [real Chrome guide](https://chrome-use.leeguoo.com/en/real-chrome.html).
 
 `extension install` is the one-time setup. `chrome-use extension connect` (alias `chrome-use reconnect`) re-attaches to an already-installed extension's relay without reinstalling anything. Chrome still shows its "chrome-use started debugging this browser" bar on attached agent tabs; `chrome-use extension connect --silent` removes it by restarting Chrome once with `--silent-debugger-extension-api` (tabs and logins are restored; it refuses when several Chrome instances are running). `--keep-banner` leaves Chrome alone, and without either flag it asks first in an interactive terminal.
@@ -334,6 +336,7 @@ For an authorized task, the bundled skill tells the agent to inspect and attempt
 
 | Command | Purpose |
 |---|---|
+| `chrome-use extension install --user-data-dir <path>` | macOS/Linux: register an existing custom Chrome data directory (repeatable; equals form accepted). Running custom directories are also discovered automatically. Windows uses HKCU and rejects this option. |
 | `--window user` (default) / `--window dedicated` | Extension relay: AI tabs open in your current window, each session in its own tab group starting with ✦; `dedicated` moves all AI sessions into one shared background window per profile |
 | `chrome-use open <url>` | Connect to your Chrome and navigate. If `load` has not arrived after 25s but the tab's page is clearly usable, it succeeds with a ⚠ warning; when that page can't be tied to this request (always over the extension relay) the reply carries `commit: "unverified"` and the tab's real URL. A page that isn't usable fails with `navigation_incomplete:`, saying what is known (commit, readyState, candidate resources) |
 | `chrome-use snapshot -i` | Read the page; the start of every interaction (`-u` adds each link's absolute URL) |

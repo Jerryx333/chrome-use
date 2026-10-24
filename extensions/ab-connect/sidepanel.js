@@ -1,3 +1,4 @@
+import { missingHostHint } from './native-host-hint.js';
 import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages, notStarted } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
@@ -68,7 +69,7 @@ function sizeText(bytes) { return !Number.isFinite(bytes) ? '' : bytes < 1024 ? 
 function base64Bytes(data) { const text = atob(data); const bytes = new Uint8Array(text.length); for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i); return bytes; }
 
 export function createPanel({ document, runtime, storage, tabs, windows, permissions, scripting, mode = 'panel', initialConversation = '', panelTab = null, setLocation = () => {}, schedule = setTimeout, cancel = clearTimeout, encodeImage = prepareImage, objectUrls = { create: blob => URL.createObjectURL(blob), revoke: url => URL.revokeObjectURL(url) }, subtle = globalThis.crypto?.subtle }) {
-  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'inspectChips', 'chipActions', 'copyElements', 'copyInput', 'pickElement', 'pickHint', 'pickCancel', 'chipCard', 'chipLive', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
+  const ids = ['agentsSettingsTab', 'skillsSettingsTab', 'schedulesSettingsTab', 'localAgents', 'scheduleSettings', 'reloadSchedules', 'scheduleEntries', 'scheduleId', 'scheduleName', 'scheduleAgent', 'scheduleModel', 'scheduleEffort', 'scheduleTier', 'scheduleAccess', 'scheduleAutomatic', 'scheduleKind', 'scheduleTiming', 'scheduleSkill', 'schedulePrompt', 'scheduleEnabled', 'saveSchedule', 'newSchedule', 'skillPicker', 'skillLibrary', 'reloadSkills', 'skillEntries', 'skillName', 'skillContent', 'saveSkill', 'skillImportKind', 'skillImportSource', 'importSkill', 'attachmentDrafts', 'inspectChips', 'chipActions', 'copyElements', 'copyInput', 'pickElement', 'pickHint', 'pickCancel', 'chipCard', 'chipLive', 'imageFiles', 'attachImages', 'turnAccess', 'turnEffortLabel', 'turnOptions', 'turnEffort', 'turnTier', 'turnTierLabel', 'saveTurnOptions', 'pendingRecovery', 'retryPending', 'clearPending', 'connection', 'hostHint', 'notice', 'refresh', 'deleteChat', 'deleteConfirm', 'confirmDelete', 'cancelDelete', 'settings', 'chatTab', 'agentsTab', 'chatView', 'agentsView', 'conversation', 'conversationButton', 'conversationTitle', 'conversationMenu', 'scopeSite', 'scopeAll', 'conversationItems', 'newChat', 'pageChip', 'pageTitle', 'pageDetach', 'newOptions', 'access', 'accessLabel', 'modelChip', 'agent', 'model', 'customModel', 'modelStatus', 'inspectAgent', 'executable', 'status', 'phase', 'control', 'effectiveModel', 'transcript', 'empty', 'latest', 'requests', 'composer', 'message', 'queue', 'queuedMessages', 'resume', 'stop', 'sendDirect', 'send', 'recordTask', 'recordTaskLabel', 'discover', 'agentList', 'configuration', 'configTitle', 'configPath', 'configWarnings', 'configForm', 'configFields', 'configPreview', 'configDiff', 'applyConfig', 'discardConfig', 'restoreConfig', 'configResult', 'closeConfig', 'settingsTabs', 'skillEditor', 'scheduleEditor', 'scheduleEditorTitle', 'cancelSchedule'];
   const nodes = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
   let selected = '', selectionEpoch = 0, connectionEpoch = 0, connected = false, closed = false, panelSupport = null;
   let timeline = new PanelTimeline(), conversations = [], conversation = null, timer = null, polling = false;
@@ -264,6 +265,20 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     nodes.connection.classList.toggle('disconnected', !connected);
     nodes.connection.classList.toggle('ok', connected && panelSupport?.mode === 'full');
     nodes.connection.textContent = connected ? t('panel_connection_connected') : state?.connectionState === 'connecting' ? t('panel_connection_waiting') : state?.connectionError || t('panel_connection_unavailable');
+    const hostHint = !connected && state?.connectionState !== 'connecting' ? missingHostHint(state?.connectionError) : null;
+    nodes.hostHint.hidden = !hostHint;
+    nodes.hostHint.replaceChildren();
+    if (hostHint) {
+      const copy = button(t('panel_copy_command'), async () => {
+        try {
+          await navigator.clipboard.writeText(hostHint.command);
+          copy.textContent = t('panel_copied');
+        } catch {
+          copy.textContent = t('panel_copy_failed');
+        }
+      });
+      nodes.hostHint.append(element('p', t(hostHint.messageKey)), element('code', hostHint.command), copy);
+    }
     if (connected && !panelSupport) nodes.connection.textContent = t('panel_connection_update_cli');
     if (connected && panelSupport?.mode === 'readOnly') nodes.connection.textContent = t('panel_connection_read_only');
     const previousAgent = nodes.agent.value || preferredAgent;
