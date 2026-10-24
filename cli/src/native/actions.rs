@@ -5506,7 +5506,7 @@ async fn annotate_login_wall(
 /// same hint as the response's `warning`, on every successful command while
 /// it is pending, reads included, so an agent that reads only the sign-in box
 /// still learns about the dialog before it reloads. Only on sites in
-/// `login_wall::VERIFICATION_SITES` (the URL check is free), with one
+/// `login_wall::VERIFICATION_SITES`, selected from a live URL, with one
 /// read-only evaluate there.
 async fn annotate_login_verification(action: &str, resp: &mut Value, state: &mut DaemonState) {
     use super::login_wall;
@@ -5516,7 +5516,19 @@ async fn annotate_login_verification(action: &str, resp: &mut Value, state: &mut
     let Some(mgr) = state.browser.as_ref() else {
         return;
     };
-    let current = mgr.cached_active_url();
+    // Prefer the URL the command just verified; otherwise refresh browser state.
+    let reported = (action == "url")
+        .then(|| resp.pointer("/data/url").and_then(Value::as_str))
+        .flatten();
+    let current = if let Some(url) = reported {
+        url.to_string()
+    } else {
+        tokio::time::timeout(Duration::from_millis(1500), mgr.get_url())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+    };
     let Some(site) = login_wall::verification_site(&current) else {
         return;
     };
@@ -6019,6 +6031,16 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .and_then(|v| v.as_str())
         .ok_or("site: missing 'script'")?
         .to_string();
+
+    // Guard before domain navigation or adapter execution can discard the QR.
+    let mut verification = json!({});
+    annotate_login_verification("site", &mut verification, state).await;
+    if let Some(hint) = verification
+        .pointer("/data/loginVerification/hint")
+        .and_then(Value::as_str)
+    {
+        return Err(hint.to_string());
+    }
 
     // `eval --background` sends no domain: run on the page as it is.
     if !domain.is_empty() {

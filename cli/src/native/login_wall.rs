@@ -331,8 +331,7 @@ pub fn verification_probe_js(s: &VerificationSite) -> String {
                 const body = doc.body;
                 if (!body || !TITLES.some((t) => (body.textContent || '').includes(t))) continue;
                 for (const el of body.querySelectorAll('*')) {{
-                    if (el.children.length) continue;
-                    const t = (el.textContent || '').trim();
+                    const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
                     // The title itself, not a sentence that mentions the words.
                     if (!TITLES.some((x) => t.includes(x) && t.length <= x.length + 12) || ignored(el) || !visible(el)) continue;
                     let box = el;
@@ -633,9 +632,23 @@ mod tests {
     fn run_probe(page: &str, entries: &str) -> Option<Value> {
         let node = std::env::var_os("PATH").and_then(|p| {
             std::env::split_paths(&p)
-                .map(|d| d.join("node"))
+                .map(|d| {
+                    d.join(if cfg!(target_os = "windows") {
+                        "node.exe"
+                    } else {
+                        "node"
+                    })
+                })
                 .find(|n| n.is_file())
-        })?;
+        });
+        let Some(node) = node else {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "Node is required for verification probe tests in CI"
+            );
+            eprintln!("Skipping verification probe: Node is unavailable outside CI");
+            return None;
+        };
         let probe = verification_probe_js(xhs());
         let driver = format!(
             r#"'use strict';
@@ -713,6 +726,16 @@ console.log(JSON.stringify({probe}));
         );
         let p = run_probe(&page_zh, "[]").unwrap();
         assert_eq!(p["qr"]["src"], "https://example.invalid/qr.png");
+    }
+
+    #[test]
+    fn probe_matches_a_title_split_across_descendants() {
+        let page = "h('body', {}, [h('div', {}, [h('div', {}, [h('span', {text: 'Security'}), h('span', {text: 'Verification'})]), h('img', {src: 'data:image/png;base64,SPLIT', rect: {width: 150, height: 150}})])])";
+        let Some(probe) = run_probe(page, "[]") else {
+            return;
+        };
+        assert_eq!(probe["title"], "Security Verification");
+        assert_eq!(probe["qr"]["src"], "data:image/png;base64,SPLIT");
     }
 
     #[test]

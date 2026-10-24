@@ -4560,7 +4560,7 @@ fn main() {
             // half-run.
             // Not behind a login wall: OpenCLI would run as the same signed-out
             // user.
-            if is_site && !site_wall && !resp.success {
+            if is_site && !site_wall && !site::login_verification_refusal(&resp) && !resp.success {
                 let spec = cmd.get("spec").and_then(|v| v.as_str()).unwrap_or("");
                 let entry = opencli::lookup(spec)
                     .filter(|e| e.get("access").and_then(|v| v.as_str()) == Some("read"));
