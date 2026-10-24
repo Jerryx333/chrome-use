@@ -3641,5 +3641,8 @@
   },
   "options_cursor_locked": {
     "message": "Turn off stealth mode above to use it."
+  },
+  "options_cursor_cleanup_pending": {
+    "message": "Cursor cleanup is not yet confirmed for all tabs. Reload affected pages before relying on stealth. Cleanup retries when the agent next attaches."
   }
 }

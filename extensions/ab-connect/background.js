@@ -25,6 +25,7 @@ import { configureAgentPanel } from './sidepanel-entry.js';
 import { cliSwitchPending, compareVersions } from './version-notice.js';
 import { t } from './i18n.js';
 import { STEALTH_DEFAULT, cursorAllowed } from './stealth-mode.js';
+import { createCursorOverlay } from './cursor-overlay.js';
 import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
 import {
@@ -836,9 +837,25 @@ async function handleTabGrantMessage(msg) {
 // ---- settings + UX (cursor overlay, connection notifications) -------------
 
 let cursorEnabled = false;
+const cursorOverlay = createCursorOverlay({
+  // Never call sendCdpToTab here: its recovery may attach a tab the user detached.
+  evaluate: (tabId, expression) => withRelayTimeout(
+    chrome.debugger.sendCommand({ tabId }, 'Runtime.evaluate', {
+      expression, returnByValue: true, awaitPromise: false,
+    }),
+    'cursor overlay',
+  ),
+});
+function updateCursorEnabled() {
+  cursorEnabled = cursorAllowed(cursorSettings);
+  void cursorOverlay.setEnabled(cursorEnabled,
+    [...tabs].filter(([, entry]) => entry.attached).map(([id]) => id));
+}
 // Settings the cursor depends on; cursorEnabled is derived from both, so the
 // overlay stays dark under stealth mode whatever ab_cursor says.
 const cursorSettings = { ab_cursor: false, ab_stealth: STEALTH_DEFAULT };
+// A delayed startup read must not overwrite a newer storage change.
+const changedCursorSettings = new Set();
 let notifyEnabled = false;
 let lastConnected = null;
 // Idle auto-detach (issue #201): release chrome.debugger from a tab after this
@@ -854,9 +871,9 @@ function loadUxSettings() {
     chrome.storage.sync.get(
       { ab_cursor: false, ab_stealth: STEALTH_DEFAULT, ab_notify: false, ab_idle_detach_secs: IDLE_DETACH_DEFAULT_SECS },
       (s) => {
-        cursorSettings.ab_cursor = !!s.ab_cursor;
-        cursorSettings.ab_stealth = s.ab_stealth;
-        cursorEnabled = cursorAllowed(cursorSettings);
+        if (!changedCursorSettings.has('ab_cursor')) cursorSettings.ab_cursor = !!s.ab_cursor;
+        if (!changedCursorSettings.has('ab_stealth')) cursorSettings.ab_stealth = s.ab_stealth;
+        updateCursorEnabled();
         notifyEnabled = !!s.ab_notify;
         idleDetachMs = idleDetachMsFrom(s.ab_idle_detach_secs);
       }
@@ -867,9 +884,10 @@ loadUxSettings();
 try {
   chrome.storage.onChanged.addListener((ch, area) => {
     if (area !== 'sync') return;
+    for (const key of ['ab_cursor', 'ab_stealth']) if (key in ch) changedCursorSettings.add(key);
     if ('ab_cursor' in ch) cursorSettings.ab_cursor = !!ch.ab_cursor.newValue;
     if ('ab_stealth' in ch) cursorSettings.ab_stealth = ch.ab_stealth.newValue;
-    if ('ab_cursor' in ch || 'ab_stealth' in ch) cursorEnabled = cursorAllowed(cursorSettings);
+    if ('ab_cursor' in ch || 'ab_stealth' in ch) updateCursorEnabled();
     if ('ab_notify' in ch) notifyEnabled = !!ch.ab_notify.newValue;
     if ('ab_idle_detach_secs' in ch)
       idleDetachMs = idleDetachMsFrom(ch.ab_idle_detach_secs.newValue);
@@ -905,43 +923,7 @@ function maybeDriveCursor(tabId, method, params) {
   const y = params && params.y;
   if (typeof x !== 'number' || typeof y !== 'number') return;
   const click = params.type === 'mousePressed';
-  const expr = cursorOverlayExpression(x, y, click);
-  sendCdpToTab(tabId, 'Runtime.evaluate', {
-    expression: expr,
-    returnByValue: false,
-    awaitPromise: false,
-  }).catch(() => {});
-}
-
-function cursorOverlayExpression(x, y, click) {
-  return (
-    '(function(){try{' +
-    'var X=' +
-    x +
-    ',Y=' +
-    y +
-    ',CLICK=' +
-    (click ? 'true' : 'false') +
-    ';' +
-    'var d=document,w=window,c=w.__abCursor;' +
-    'if(!c||!c.host||!c.host.isConnected){' +
-    'var host=d.createElement("div");host.style.cssText="position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none";' +
-    '(d.documentElement||d.body).appendChild(host);' +
-    'var sr=host.attachShadow?host.attachShadow({mode:"open"}):host;' +
-    'var glow=d.createElement("div");glow.style.cssText="position:fixed;left:0;top:0;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;pointer-events:none;opacity:0;background:radial-gradient(circle,rgba(247,168,35,.55),rgba(247,168,35,0) 70%);transition:transform .13s cubic-bezier(.2,.7,.3,1),opacity .3s";' +
-    'var cur=d.createElement("div");cur.style.cssText="position:fixed;left:0;top:0;width:24px;height:24px;margin:-2px 0 0 -4px;pointer-events:none;opacity:0;transition:transform .13s cubic-bezier(.2,.7,.3,1),opacity .3s";' +
-    'cur.innerHTML=\'<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M4 2 L4 19 L9 14.5 L12 21 L14.6 19.8 L11.6 13.4 L18 13 Z" fill="#fff" stroke="#1bb6c9" stroke-width="1.6" stroke-linejoin="round"/></svg>\';' +
-    // A new cursor starts where it is drawn: placed at (X,Y) with its
-    // transition off, so it does not slide in from the corner of the page.
-    'cur.style.transform=glow.style.transform="translate("+X+"px,"+Y+"px)";var tr=cur.style.transition,gt=glow.style.transition;cur.style.transition=glow.style.transition="opacity .3s";' +
-    'sr.appendChild(glow);sr.appendChild(cur);cur.getBoundingClientRect();cur.style.transition=tr;glow.style.transition=gt;c=w.__abCursor={host:host,sr:sr,cur:cur,glow:glow,t:0};' +
-    '}' +
-    'var el=c.cur,gl=c.glow;el.style.opacity="1";gl.style.opacity="1";' +
-    'el.style.transform="translate("+X+"px,"+Y+"px)";gl.style.transform="translate("+X+"px,"+Y+"px)";' +
-    'if(CLICK){var r=d.createElement("div");r.style.cssText="position:fixed;left:"+X+"px;top:"+Y+"px;width:10px;height:10px;margin:-5px 0 0 -5px;border:2px solid #f7a823;border-radius:50%;pointer-events:none;opacity:.9;transition:transform .5s ease-out,opacity .5s ease-out";c.sr.appendChild(r);requestAnimationFrame(function(){r.style.transform="scale(4)";r.style.opacity="0"});setTimeout(function(){r.remove()},520);}' +
-    'clearTimeout(c.t);c.t=setTimeout(function(){el.style.opacity="0";gl.style.opacity="0"},2200);' +
-    '}catch(e){}})()'
-  );
+  void cursorOverlay.draw(tabId, x, y, click);
 }
 
 // ---- native messaging transport ------------------------------------------
@@ -1548,17 +1530,8 @@ async function handleForwardCdpCommand(msg) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) {
       return { drawn: false, reason: 'bad-coords' };
     }
-    await sendCdpToTab(tabId, 'Runtime.evaluate', {
-      // Clear `display` first: a screenshot whose restore round-trip failed would
-      // otherwise leave the overlay hidden forever (the draw path only touches
-      // opacity/transform), so drawing self-heals it.
-      expression:
-        '(function(){try{var c=window.__abCursor;if(c&&c.host)c.host.style.display="";}catch(e){}})();' +
-        cursorOverlayExpression(x, y, !!params?.click),
-      returnByValue: false,
-      awaitPromise: false,
-    }).catch(() => {});
-    return { drawn: true };
+    const drawn = await cursorOverlay.draw(tabId, x, y, !!params?.click);
+    return drawn ? { drawn: true } : { drawn: false, reason: 'unconfirmed' };
   }
 
   // Hide/show the overlay around a capture so the cursor doesn't end up baked
@@ -1566,17 +1539,7 @@ async function handleForwardCdpCommand(msg) {
   if (method === 'ABExt.setCursorVisible') {
     const tabId = resolveSessionTab(sessionId, sessionToTab, childSessionToTab);
     if (!cursorEnabled || tabId == null) return { applied: false };
-    const show = !!params?.visible;
-    await sendCdpToTab(tabId, 'Runtime.evaluate', {
-      expression:
-        '(function(){try{var c=window.__abCursor;if(!c||!c.host)return;' +
-        'c.host.style.display=' +
-        (show ? '""' : '"none"') +
-        ';}catch(e){}})()',
-      returnByValue: false,
-      awaitPromise: false,
-    }).catch(() => {});
-    return { applied: true };
+    return { applied: await cursorOverlay.visible(tabId, !!params?.visible) };
   }
 
   // On-demand adopt of a PRE-EXISTING tab (the user's own, or another session's).
@@ -1857,6 +1820,7 @@ async function handleForwardCdpCommand(msg) {
       agentWindowRejected,
       tabGrants: (await tabGrants.load(), tabGrants.list().map(({ tabId, conversationId }) => ({ tabId, conversationId }))),
       cursorEnabled,
+      cursorCleanupPending: cursorOverlay.pendingTabs(),
       stealthMode: cursorSettings.ab_stealth !== false,
       notifyEnabled,
       idleDetachMs,
@@ -2168,6 +2132,7 @@ async function attachTabOnce(tabId, transactionIsActive) {
   const sessionId = `cb-tab-${tabId}`;
   const entry = newTabEntry(tabId, sessionId, targetId, true);
   tabs.set(tabId, entry);
+  void cursorOverlay.attached(tabId);
   sessionToTab.set(sessionId, tabId);
   rememberSessionTarget(sessionId, targetId);
   setBadge(tabId, port ? 'on' : 'connecting');
@@ -2227,6 +2192,7 @@ async function reattachTab(tabId, entry) {
       if (!/already attached|already being debugged/i.test(msg)) throw e;
     }
     entry.attached = true;
+    void cursorOverlay.attached(tabId);
     entry.userDetached = false;
     entry.lastActivity = Date.now();
     setBadge(tabId, port ? 'on' : 'connecting');
@@ -2361,6 +2327,7 @@ async function announceOwnedTabLazily(tabId) {
   const sessionId = `cb-tab-${tabId}`;
   const entry = newTabEntry(tabId, sessionId, String(info.targetId), false);
   tabs.set(tabId, entry);
+  void cursorOverlay.attached(tabId);
   sessionToTab.set(sessionId, tabId);
   rememberSessionTarget(sessionId, entry.targetId);
   setBadge(tabId, port ? 'on' : 'connecting');
@@ -2393,6 +2360,7 @@ async function announceAttachedTab(tabId, entry, targetInfo, scopeHints) {
     // has already told the host; otherwise this read is the first to know.
     if (!removedTabs.has(tabId)) {
       removedTabs.add(tabId);
+      cursorOverlay.forget(tabId);
       forgetTab(tabId);
     }
     return verdict;
@@ -2655,6 +2623,7 @@ chrome.tabs.onReplaced.addListener(
       // its target. Drop its record here and at the host; a session still
       // naming it follows replacedTabs to the new tab on its next command.
       removedTabs.add(removedTabId);
+      cursorOverlay.forget(removedTabId);
       forgetTab(removedTabId);
     })
 );
@@ -2666,6 +2635,7 @@ chrome.tabs.onRemoved.addListener(
       // checks this before it registers or announces the tab (#519).
       removedTabs.add(tabId);
       nativeDuplicateTabs.delete(tabId);
+      cursorOverlay.forget(tabId);
       void forgetAgentPopup(tabId);
       // Keep a short tombstone for stable-target recovery after onRemoved.
       // Genuine closed tabs expire, while a replacement can transfer the state.
@@ -3091,7 +3061,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         connectHost();
       } catch (e) {}
     }
-    sendResponse({ ...hostStatusForUi(), tabCount: tabs.size, host: HOST_NAME, agentPanelEntry, ...versionState() });
+    sendResponse({ ...hostStatusForUi(), tabCount: tabs.size, host: HOST_NAME, agentPanelEntry,
+      cursorCleanupPending: cursorOverlay.pendingTabs(), ...versionState() });
   }
   return false;
 });

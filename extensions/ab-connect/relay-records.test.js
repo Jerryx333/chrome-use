@@ -145,6 +145,7 @@ function workerFixture() {
     recentlyRemovedOwned: new Set(),
     removedTabs: createRemovedTabs(),
     attachmentHealth: { clear() {} },
+    cursorOverlay: { forget() {}, attached: async () => true },
     port: {},
     RELOAD_LOOP_WINDOW_MS: 1000,
     isMissingTabError,

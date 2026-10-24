@@ -16,6 +16,14 @@ verbatim. With an older host that does not answer the initial ping, the first
 real CLI command can confirm the connection. This status confirms the host link,
 not that every page or frame is drivable.
 
+Enabling **Stealth mode** or disabling **Agent cursor** in extension settings
+queues removal of existing cursor hosts (including ripples) and `window.__abCursor`
+after any in-flight draw. Cleanup uses existing debugger connections and checks
+that the host and global are gone. Detached or unreachable tabs remain pending,
+with a warning in settings and tab IDs in the relay's `ABExt.state.cursorCleanupPending`.
+Reload affected pages before relying on stealth. Cleanup retries on normal
+reattachment; changing the setting does not force a debugger attachment.
+
 A restricted or detached child-frame command returns its error without detaching
 the parent tab. Top-level recovery retries against the recovered tab ID, rather
 than reusing an obsolete target. Re-read the page before retrying a failed frame action.

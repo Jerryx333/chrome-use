@@ -25,6 +25,7 @@ function worker({ cli, connected = true, legacyCli = false, plan = { apply: true
   const context = {
     Date, JSON, Number,
     t, cliSwitchPending, compareVersions,
+    cursorOverlay: { pendingTabs: () => [] },
     setTimeout: (fn, ms) => { const timer = { fn, ms }; timers.push(timer); return timer },
     clearTimeout: timer => { const i = timers.indexOf(timer); if (i >= 0) timers.splice(i, 1) },
     port,

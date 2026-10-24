@@ -302,6 +302,12 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         off; today that is the agent cursor (a soft cursor and click ripple), whose switch is greyed out until stealth mode
         is turned off. Inspect &amp; Ask works either way, since you start it yourself.
       </p>
+      <p>
+        Turning stealth mode on or the agent cursor off also removes existing cursor overlays, click ripples and
+        <code>window.__abCursor</code>, after any in-flight draw. Cleanup uses current debugger connections and verifies
+        removal. If a tab is detached or unreachable, settings warns that cleanup is unconfirmed: reload affected pages
+        before relying on stealth. Cleanup retries on normal reattachment; changing the setting does not force a connection.
+      </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ For contributors</div>
         A new feature that the page could see (a DOM node, a global, a listener, a synthetic event, a fixed timing) must stay

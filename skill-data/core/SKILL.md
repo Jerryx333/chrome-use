@@ -20,6 +20,10 @@ Read and act on Chrome's live accessibility state through short `@eN` refs.
 This page holds the rules and the routing; load one reference from the table
 at the end only when the task or a symptom needs it.
 
+Enabling extension stealth mode or disabling its cursor also removes existing
+cursor artifacts. If settings warns that cleanup is unconfirmed, reload affected
+pages before relying on stealth; see [connection](references/connection.md).
+
 Native agent-panel configuration planning, apply and restore are separate from
 browser actions. Saved configuration proves file readback, not a model change
 in an existing session. Inspect current values after an unconfirmed write;

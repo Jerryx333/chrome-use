@@ -24,7 +24,9 @@ test('real attach workflow shares target discovery and announcement without repl
   const tabs = new Map()
   let attaches = 0
   let announcements = 0
+  const cursorAttachments = []
   const context = {
+    cursorOverlay: { attached: async id => { cursorAttachments.push(id); return true } },
     tabGrants: { load: async () => {}, isRefused: () => false, removed: async () => null, get: () => null },    console, tabs, createTabAttachmentQueue,
     chrome: {
       debugger: {
@@ -64,6 +66,7 @@ test('real attach workflow shares target discovery and announcement without repl
   assert.equal(tabs.get(1), a)
   assert.equal(attaches, 1)
   assert.equal(announcements, 1)
+  assert.deepEqual(cursorAttachments, [1])
   assert.equal(a.inflight, 1)
   assert.ok(a.replay.has('Network.enable'))
   assert.equal(await context.attachTab(1), a)

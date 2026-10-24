@@ -160,13 +160,15 @@ test('zh_CN: the options page renders in Chinese', async () => {
     createElement: () => ({ style: {}, classList: { add() {} }, append() {}, addEventListener() {} }),
   };
   const saved = { document: globalThis.document, chrome: globalThis.chrome, setTimeout: globalThis.setTimeout };
+  const status = { connected: true, tabCount: 2, cursorCleanupPending: [1] };
+  const timers = [];
   const target = { chrome: {
     storage: { sync: { get(defaults, callback) { callback(defaults); }, set() {} }, local: { get(_key, callback) { callback({}); }, set() {} } },
-    runtime: { getManifest: () => ({ version: '0.5.59' }), sendMessage(request, callback) { callback(request.type === 'ab-status' ? { connected: true, tabCount: 2 } : { success: true, result: { claims: [], bindings: [] } }); } },
+    runtime: { getManifest: () => ({ version: '0.5.59' }), sendMessage(request, callback) { callback(target.chrome.runtime.lastError ? undefined : request.type === 'ab-status' ? status : { success: true, result: { claims: [], bindings: [] } }); } },
     commands: { getAll(callback) { callback([{ name: 'inspect-element', shortcut: 'Alt+Shift+C' }]); } },
   } };
   installI18n('zh_CN', target);
-  Object.assign(globalThis, { document, chrome: target.chrome, setTimeout: () => 0 });
+  Object.assign(globalThis, { document, chrome: target.chrome, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return 0; } });
   try {
     await import('./options.js');
     await settle();
@@ -183,6 +185,25 @@ test('zh_CN: the options page renders in Chinese', async () => {
     assert.match(byId.get('tabPill').textContent, /2/);
     assert.ok(cjk.test(byId.get('tabPill').textContent));
     assert.equal(document.documentElement.lang, 'zh-CN');
+    assert.equal(byId.get('cursorCleanupWarning').hidden, false);
+    assert.equal(byId.get('cursorCleanupWarning').textContent, zh.options_cursor_cleanup_pending.message);
+    const retry = timers.find(timer => timer.ms === 2000);
+    assert.ok(retry, 'pending cleanup is rechecked');
+    target.chrome.runtime.lastError = { message: 'worker unavailable' };
+    const beforeFailure = timers.length;
+    retry.fn();
+    assert.ok(timers.slice(beforeFailure).some(timer => timer.ms === 2000), 'a failed query schedules recovery');
+    assert.equal(byId.get('cursorCleanupWarning').hidden, false, 'a failed query does not clear the warning');
+    delete target.chrome.runtime.lastError;
+    status.cursorCleanupPending = [];
+    retry.fn();
+    assert.equal(byId.get('cursorCleanupWarning').hidden, true);
+    const beforePropagation = timers.length;
+    timers.at(-1).fn();
+    assert.ok(timers.slice(beforePropagation).some(timer => timer.ms === 2000), 'empty early status keeps polling');
+    status.cursorCleanupPending = [1];
+    timers.at(-1).fn();
+    assert.equal(byId.get('cursorCleanupWarning').hidden, false, 'late cleanup failure becomes visible');
   } finally {
     Object.assign(globalThis, saved);
   }

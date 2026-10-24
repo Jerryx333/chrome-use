@@ -263,6 +263,12 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         会画进网页的功能只在关闭隐身模式后可用，目前是 agent 光标（柔和的光标和点击波纹），隐身开着时它的开关是灰的。
         Inspect &amp; Ask 由你自己触发，不受这个开关影响。
       </p>
+      <p>
+        开启隐身模式或关闭 agent 光标时，扩展还会在进行中的绘制结束后移除已有的光标浮层、点击波纹和
+        <code>window.__abCursor</code>。清理通过现有调试连接执行，并确认节点和全局变量已移除。
+        如果标签页已断开或无法访问，设置页会提示清理尚未确认；依赖隐身模式前请重新加载相关页面。
+        正常重新连接标签页时会重试清理，切换设置不会强制建立连接。
+      </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 给贡献者</div>
         新功能只要网页能看到（DOM 节点、全局变量、事件监听、合成事件、固定节奏），隐身模式开着时就必须关闭。PR 和发版都会检查这一点，见 AGENTS.md 的「Stealth first」。

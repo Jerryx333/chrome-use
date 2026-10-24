@@ -495,6 +495,8 @@ anything already typed into the form, so treat the file as sensitive. The run re
 
 ## Anti-detection
 
+In extension settings, enabling **Stealth mode** or disabling **Agent cursor** removes existing cursor overlays and their page global through current debugger connections. Detached or unreachable tabs show an unconfirmed-cleanup warning in settings; reload affected pages before relying on stealth. Cleanup retries when the agent normally reattaches, without forcing a new connection.
+
 <img src="assets/shield.webp" alt="stealth shield" width="320" align="right" />
 
 When connected to your real Chrome, we inject **zero** JavaScript patches. Your browser's fingerprint is completely genuine. The guiding rule is **native CDP/Chrome overrides over JS lies**: a re-defined getter is itself detectable; a native override isn't.

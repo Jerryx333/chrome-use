@@ -16,6 +16,9 @@ use crate::test_utils::EnvGuard;
 
 use super::actions::{execute_command, DaemonState};
 
+#[path = "cursor_cleanup_e2e_tests.rs"]
+mod cursor_cleanup;
+
 fn assert_success(resp: &Value) {
     assert_eq!(
         resp.get("success").and_then(|v| v.as_bool()),

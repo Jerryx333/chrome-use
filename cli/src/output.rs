@@ -6403,6 +6403,9 @@ Check State:  chrome-use is <what> <selector>
 Anti-bot:  chrome-use stealth | cf-status
   stealth         stealth self-check (webdriver/UA/plugins + overrides)
   cf-status       Cloudflare challenge + cf_clearance preflight (skip re-solving)
+  Extension settings: enabling stealth or disabling the cursor removes existing
+  cursor overlays through current connections. If cleanup is unconfirmed, settings
+  shows a warning: reload affected pages; cleanup retries on normal reattachment.
 
 Find Elements:
   chrome-use find "<description>"                  # ranked, no action

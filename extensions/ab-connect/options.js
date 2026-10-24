@@ -25,6 +25,7 @@ function loadSettings(cb) {
 }
 function save(patch) {
   if (hasChrome) chrome.storage.sync.set(patch)
+  if ('ab_cursor' in patch || 'ab_stealth' in patch) queryStatus()
   flashSaved()
 }
 let savedTimer
@@ -37,6 +38,10 @@ function flashSaved() {
 
 // ---- connection status ----
 function renderStatus(state) {
+  // Keep an unconfirmed warning if the worker cannot answer the next query.
+  if (Array.isArray(state?.cursorCleanupPending)) {
+    el('cursorCleanupWarning').hidden = state.cursorCleanupPending.length === 0
+  }
   const connected = !!(state && state.connected)
   dot.classList.remove('on', 'off')
   if (connected) {
@@ -53,13 +58,21 @@ function renderStatus(state) {
     tabPill.style.display = 'none'
   }
 }
+let statusTimer
+function scheduleStatus() {
+  clearTimeout(statusTimer)
+  statusTimer = setTimeout(queryStatus, 2000)
+}
 function queryStatus() {
   if (!(hasChrome && chrome.runtime && chrome.runtime.sendMessage)) { renderStatus({ connected: true, tabCount: 13 }); return }
   try {
     chrome.runtime.sendMessage({ type: 'ab-status' }, (resp) => {
       renderStatus(chrome.runtime.lastError ? { connected: false } : resp)
+      // Poll while this settings page is open, including before storage has
+      // propagated and after worker failures. An empty early reply is not final.
+      scheduleStatus()
     })
-  } catch { renderStatus({ connected: false }) }
+  } catch { renderStatus({ connected: false }); scheduleStatus() }
 }
 
 // ---- wire up ----

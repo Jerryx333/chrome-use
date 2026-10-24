@@ -3641,5 +3641,8 @@
   },
   "options_cursor_locked": {
     "message": "在上面关闭隐身模式后才能使用。"
+  },
+  "options_cursor_cleanup_pending": {
+    "message": "部分标签页的光标清理尚未确认。依赖隐身模式前请重新加载相关页面。Agent 下次正常连接标签页时会重试清理。"
   }
 }
