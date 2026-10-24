@@ -418,6 +418,7 @@ chrome-use --session passkey-demo --launch snapshot -i
 
 命令落到登录页，或者 `site` 适配器发现站点没登录（返回 `loginRequired: true`，或运行失败且请求拿到过 HTTP 401）时，会输出 `login wall: …`，`--json` 里带 `loginWall`。
 某个站点第一次遇到登录墙时，chrome-use 会问要不要用密码库登录：这次登录、以后这个站点都自动登录、不登录也不再问（终端里直接提问；agent 调用时 `loginWall.ask` 里给出问题和每个选项对应的命令，由 agent 转问你）。选了「以后都自动登录」后会自己登录，并把没登录的适配器命令重跑一次。`chrome-use auth autologin status` 查看，`auth autologin off <host>` 撤销。
+扫码登录在手机确认后又要求一次「安全验证」扫码时（小红书会在登录框上叠一个 Security Verification / 安全验证弹窗和新二维码，底下的登录框仍显示「请在手机上确认」），每条命令都会提示 `login verification: …`（`--json` 里是 `loginVerification`，二维码在 `qrSrc`）：把这个二维码交给用户扫，扫完之前不要 reload 或打开别的页面。这期间自动登录和 `site` 的登录墙也不会跳转。
 
 登录后检查是否到达已认证的目标页面。passkey assertion 只说明 Chrome 签了请求，
 不能证明网站接受了它。详见[登录与凭证](https://chrome-use.leeguoo.com/login-auth.html)。

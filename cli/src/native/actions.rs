@@ -3309,6 +3309,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
         annotate_site_change(action, cmd, &mut resp, state).await;
         suggest_site_adapter(&mut resp, state);
         annotate_login_wall(action, cmd, &mut resp, state, url_before.as_deref()).await;
+        annotate_login_verification(action, &mut resp, state).await;
     }
     if let Some(sugg) = report_suggestion {
         insert_data_field(&mut resp, "reportSuggestion", sugg);
@@ -5500,6 +5501,64 @@ async fn annotate_login_wall(
     );
 }
 
+/// Say when a QR sign-in is waiting on a second, security-verification scan
+/// (`login_wall::VerificationSite`): `loginVerification` in the data and the
+/// same hint as the response's `warning`, on every successful command while
+/// it is pending, reads included, so an agent that reads only the sign-in box
+/// still learns about the dialog before it reloads. Only on sites in
+/// `login_wall::VERIFICATION_SITES`, selected from a live URL, with one
+/// read-only evaluate there.
+async fn annotate_login_verification(action: &str, resp: &mut Value, state: &mut DaemonState) {
+    use super::login_wall;
+    if LOGIN_WALL_SKIP_ACTIONS.contains(&action) || state.pending_dialog.is_some() {
+        return;
+    }
+    let Some(mgr) = state.browser.as_ref() else {
+        return;
+    };
+    // Prefer the URL the command just verified; otherwise refresh browser state.
+    let reported = (action == "url")
+        .then(|| resp.pointer("/data/url").and_then(Value::as_str))
+        .flatten();
+    let current = if let Some(url) = reported {
+        url.to_string()
+    } else {
+        tokio::time::timeout(Duration::from_millis(1500), mgr.get_url())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default()
+    };
+    let Some(site) = login_wall::verification_site(&current) else {
+        return;
+    };
+    let js = login_wall::verification_probe_js(site);
+    let probe = tokio::time::timeout(
+        Duration::from_millis(1500),
+        Box::pin(mgr.evaluate(&js, None)),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .unwrap_or(Value::Null);
+    let host = url::Url::parse(&current)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default();
+    let Some(report) = login_wall::verification_report(&host, site, &probe) else {
+        return;
+    };
+    let hint = report["hint"].as_str().unwrap_or("").to_string();
+    insert_data_field(resp, "loginVerification", report);
+    if let Some(obj) = resp.as_object_mut() {
+        let warning = match obj.get("warning").and_then(|v| v.as_str()) {
+            Some(w) if !w.is_empty() => format!("{hint}\n{w}"),
+            _ => hint,
+        };
+        obj.insert("warning".into(), json!(warning));
+    }
+}
+
 /// The other half of the auto-trigger: a site the agent keeps driving that has
 /// NO adapter. Count successful actions per host; once it is clearly a regular
 /// (many actions this session, or several days of use), attach
@@ -5972,6 +6031,16 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .and_then(|v| v.as_str())
         .ok_or("site: missing 'script'")?
         .to_string();
+
+    // Guard before domain navigation or adapter execution can discard the QR.
+    let mut verification = json!({});
+    annotate_login_verification("site", &mut verification, state).await;
+    if let Some(hint) = verification
+        .pointer("/data/loginVerification/hint")
+        .and_then(Value::as_str)
+    {
+        return Err(hint.to_string());
+    }
 
     // `eval --background` sends no domain: run on the page as it is.
     if !domain.is_empty() {

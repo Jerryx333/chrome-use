@@ -4560,7 +4560,7 @@ fn main() {
             // half-run.
             // Not behind a login wall: OpenCLI would run as the same signed-out
             // user.
-            if is_site && !site_wall && !resp.success {
+            if is_site && !site_wall && !site::login_verification_refusal(&resp) && !resp.success {
                 let spec = cmd.get("spec").and_then(|v| v.as_str()).unwrap_or("");
                 let entry = opencli::lookup(spec)
                     .filter(|e| e.get("access").and_then(|v| v.as_str()) == Some("read"));
@@ -4647,7 +4647,15 @@ fn main() {
                 .and_then(|d| d.get("loginWall"))
                 .filter(|w| w.get("source").and_then(|v| v.as_str()) != Some("site"))
                 .cloned();
-            if let Some(wall) = wall.filter(|_| !site_wall) {
+            // A sign-in waiting on a security-verification QR scan
+            // (`loginVerification`, said in the warning) must not be
+            // interrupted by auto-login navigating away.
+            let verifying = resp
+                .data
+                .as_ref()
+                .and_then(|d| d.get("loginVerification"))
+                .is_some_and(|v| v.is_object());
+            if let Some(wall) = wall.filter(|_| !site_wall && !verifying) {
                 let host = wall["host"].as_str().unwrap_or("").to_string();
                 // #481: sign in, skip, or ask, from the user's decision for
                 // this host. The tab is on the sign-in page already.

@@ -454,6 +454,12 @@ it asks whether to sign in from the vault: this time, always for that site, or
 never (a prompt in a terminal; `loginWall.ask` with one command per answer for
 an agent, which relays the question to you). `chrome-use auth autologin status`
 shows the decisions and `auth autologin off <host>` forgets one.
+A QR sign-in that stops at a second, security-verification scan (Xiaohongshu
+shows a "Security Verification" dialog with a new QR code over the sign-in box,
+which still says to confirm on the phone) is reported on every command as
+`login verification: …` (`loginVerification` in `--json`, with the QR code as
+`qrSrc`): give that code to the user and do not reload or navigate until they
+have scanned it. Auto-login and `site` login walls wait for it too.
 See [Login & Credentials](https://chrome-use.leeguoo.com/en/login-auth.html).
 
 ## Agent loop (experimental)

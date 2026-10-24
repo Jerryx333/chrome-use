@@ -15866,3 +15866,57 @@ async fn e2e_background_form_instant_scroll_and_trusted_pick() {
     .await;
     server.abort();
 }
+
+/// A pending verification must survive site dispatch to another domain.
+/// All fixture URLs are fulfilled locally; this does not contact Xiaohongshu.
+#[tokio::test]
+#[ignore]
+async fn e2e_site_verification_refuses_before_navigation_or_adapter_execution() {
+    let mut state = DaemonState::new();
+    launch_headless(&mut state, json!({})).await;
+    let url = "https://www.xiaohongshu.com/verification-fixture";
+    let fixture = r##"<!doctype html><title>pending verification</title>
+<div><h2><span>Security</span> <span>Verification</span></h2>
+<img width="150" height="150" src="data:image/png;base64,iVBORw0KGgo="></div>"##;
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({
+                "id": "verification-route", "action": "route", "url": "*",
+                "response": {"status": 200, "contentType": "text/html", "body": fixture}
+            }),
+        )
+        .await,
+    );
+    assert_success(
+        &run_cmd(
+            &mut state,
+            json!({
+                "id": "verification-open", "action": "navigate", "url": url
+            }),
+        )
+        .await,
+    );
+    let response = run_cmd(
+        &mut state,
+        json!({
+            "id": "verification-site", "action": "site", "domain": "example.com",
+            "script": "(() => { document.title = 'adapter ran'; return true; })()"
+        }),
+    )
+    .await;
+    assert_eq!(response["success"], false, "{response}");
+    assert!(
+        response["error"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("login verification:"),
+        "{response}"
+    );
+    assert_eq!(eval_in(&mut state, "location.href").await, url);
+    assert_eq!(
+        eval_in(&mut state, "document.title").await,
+        "pending verification"
+    );
+    close_state(&mut state).await;
+}
