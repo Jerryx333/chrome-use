@@ -8239,7 +8239,8 @@ async fn e2e_auth_login_bwu_create_guard_covers_out_of_process_frames() {
                 .send_command(
                     "Runtime.evaluate",
                     Some(
-                        json!({ "expression": expr, "awaitPromise": true, "returnByValue": true }),
+                        // The page's own navigator: the guard is in the main world.
+                        json!({ "expression": expr, "awaitPromise": true, "returnByValue": true, "__cuMain": true }),
                     ),
                     Some(&oopif),
                 )
@@ -12830,14 +12831,21 @@ async function(args) {
   sessionStorage.setItem('n', String(n));
   args.progress('attempt ' + n);
   if (n === 1) {
-    const up = await args.video.setOn();
+    // By element handle: no marker attribute on the input.
+    const up = await args.video.setOn(document.querySelector('#f'));
     sessionStorage.setItem('attached', String(up.attached));
     await sleep(1200);
     return { status: 'incomplete', retryAfterMs: 100 };
   }
   const file = document.querySelector('#f').files[0];
+  // A detached input: the file goes on it by handle, nothing is added to the page.
+  const loose = document.createElement('input');
+  loose.type = 'file';
+  await args.video.setOn(loose);
+  const looseFile = loose.files[0];
   return { status: 'submitted', title: args.title, name: file && file.name, size: file && file.size,
-           attached: sessionStorage.getItem('attached'), budget: args.budgetMs > 0 };
+           attached: sessionStorage.getItem('attached'), budget: args.budgetMs > 0,
+           loose: looseFile && looseFile.size, inPage: document.querySelectorAll('input[type=file]').length };
 }"##;
     let adapter = crate::site::parse_adapter(raw, "demo/publish").unwrap();
     let mut no_stdin = || Err("no stdin".to_string());
@@ -12889,9 +12897,362 @@ async function(args) {
     assert_eq!(data["result"]["size"], 4096);
     assert_eq!(data["result"]["attached"], "1");
     assert_eq!(data["result"]["budget"], true);
+    assert_eq!(
+        data["result"]["loose"], 4096,
+        "a detached input takes the file: {data}"
+    );
+    assert_eq!(data["result"]["inPage"], 1, "{data}");
     assert_eq!(data["attempts"], 2);
 
     let _ = std::fs::remove_dir_all(&dir);
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// `args.ui` and `scrollintoview` find, measure and hit-test elements
+/// without calling the page's own functions: a page that wraps
+/// querySelector / getBoundingClientRect / elementFromPoint /
+/// getComputedStyle in the main world sees none of those calls.
+#[tokio::test]
+#[ignore]
+async fn e2e_ui_reads_the_page_from_an_isolated_world() {
+    let rows: String = (1..=50)
+        .map(|i| format!("<div class=\"r\">row {i}</div>"))
+        .collect();
+    let page = format!(
+        r##"<!doctype html><meta charset="utf-8"><title>quiet</title>
+<style>#list{{height:160px;overflow:auto}} .r{{height:40px}}</style>
+<button id="t">go</button><input id="in">
+<div id="list">{rows}<button id="far">far</button></div>
+<script>
+window.seen = [];
+for (const [o, ns] of [[Document.prototype, ['querySelector','querySelectorAll','getElementById','elementFromPoint','elementsFromPoint']], [Element.prototype, ['querySelector','getBoundingClientRect','getClientRects','closest','getAttribute','matches']], [window, ['getComputedStyle']]]) {{
+  for (const n of ns) {{ const f = o[n]; Object.defineProperty(o, n, {{ value: function (...a) {{ window.seen.push(n); return f.apply(this, a); }}, configurable: true, writable: true }}); }}
+}}
+</script>"##
+    );
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let raw = r##"/* @meta
+{"name": "demo/quiet", "domain": "127.0.0.1", "args": {}}
+*/
+async function(args) {
+  window.seen.length = 0;
+  await args.ui.click('#t');
+  await args.ui.type('#in', 'ab');
+  await args.ui.scroll('#far');
+  await args.ui.click('#far');
+  return window.seen.slice();
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/quiet").unwrap();
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
+    let resp = execute_command(
+        &json!({
+            "id": "3", "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": "q", "files": inv.files, "untilDone": false,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 60_000,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], json!([]), "{resp}");
+
+    // scrollintoview: back to the top, then in again, watched the same way.
+    let _ = execute_command(&json!({ "id": "4", "action": "evaluate", "script": "document.getElementById('list').scrollTop = 0; window.seen.length = 0; true" }), &mut state).await;
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "scrollintoview", "selector": "#far" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["via"], "wheel", "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "JSON.stringify(window.seen)" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["result"], "[]", "{resp}");
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// The hit test runs in viewport coordinates on a scrolled page: a target
+/// far down a long page, wheeled into view, is not reported as covered by
+/// whatever sits at the same point of the unscrolled page.
+#[tokio::test]
+#[ignore]
+async fn e2e_ui_hit_test_on_a_scrolled_page() {
+    let filler: String = (0..60)
+        .map(|i| format!("<div class=\"sel\" style=\"height:40px\">row {i}</div>"))
+        .collect();
+    let page = format!(
+        r##"<!doctype html><meta charset="utf-8"><title>long</title>
+{filler}
+<button id="far" style="width:200px;height:40px">far</button>
+<div style="height:600px"></div>
+<script>window.hits = 0; document.getElementById('far').addEventListener('click', e => {{ if (e.isTrusted) window.hits++; }});</script>"##
+    );
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let raw = r##"/* @meta
+{"name": "demo/long", "domain": "127.0.0.1", "world": "isolated", "args": {}}
+*/
+async function(args) {
+  const el = document.querySelector('#far');
+  await args.ui.click(el);
+  return { scrollY: window.scrollY };
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/long").unwrap();
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
+    let resp = execute_command(
+        &json!({
+            "id": "3", "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": "l", "files": inv.files, "untilDone": false, "isolated": true,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 60_000,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp)["result"]["scrollY"].as_f64().unwrap_or(0.0) > 1000.0,
+        "{resp}"
+    );
+    let hits = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "window.hits" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&hits)["result"], 1, "{hits}");
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// An overlay with pointer-events: none (a select's arrow, an icon over a
+/// button) does not cover what is under it: args.ui clicks through it, as a
+/// real click does.
+#[tokio::test]
+#[ignore]
+async fn e2e_ui_clicks_through_pointer_events_none() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>arrow</title>
+<div style="position:relative;width:200px;height:40px">
+  <button id="box" style="width:200px;height:40px">pick</button>
+  <div id="arrow" style="position:absolute;inset:0;pointer-events:none"></div>
+</div>
+<script>window.hits = 0; document.getElementById('box').addEventListener('click', e => { if (e.isTrusted) window.hits++; });</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+    let raw = r##"/* @meta
+{"name": "demo/arrow", "domain": "127.0.0.1", "world": "isolated", "args": {}}
+*/
+async function(args) {
+  await args.ui.click(document.querySelector('#box'));
+  return 'ok';
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/arrow").unwrap();
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
+    let resp = execute_command(
+        &json!({
+            "id": "3", "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": "a", "files": inv.files, "untilDone": false, "isolated": true,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 30_000,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], "ok", "{resp}");
+    let hits = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "window.hits" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&hits)["result"], 1, "{hits}");
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// An adapter with `"world": "isolated"` runs where the page cannot see it:
+/// its own querySelector and fetch never reach the page's wrapped functions,
+/// and page-only state (a global, an element expando) comes through
+/// `args.page(fn, ...args)`.
+#[tokio::test]
+#[ignore]
+async fn e2e_isolated_adapter_is_invisible_and_reaches_the_page_through_args_page() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>iso adapter</title>
+<button id="t">go</button>
+<script>
+window.seen = [];
+window.appState = { user: 'leo' };
+document.getElementById('t').__reactFiber$x = { memoizedProps: { uploadStatus: 2 } };
+for (const [o, ns] of [[Document.prototype, ['querySelector','querySelectorAll','getElementById']], [Element.prototype, ['getBoundingClientRect','closest']], [window, ['getComputedStyle','fetch']]]) {
+  for (const n of ns) { const f = o[n]; Object.defineProperty(o, n, { value: function (...a) { window.seen.push(n); return f.apply(this, a); }, configurable: true, writable: true }); }
+}
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let raw = r##"/* @meta
+{"name": "demo/iso", "domain": "127.0.0.1", "world": "isolated", "args": {}}
+*/
+async function(args) {
+  const btn = document.querySelector('#t');
+  const status = (await fetch('/')).status;
+  await args.ui.click(btn);
+  const user = await args.page(() => window.appState.user);
+  const upload = await args.page((sel) => {
+    const el = document.querySelector(sel);
+    const k = Object.keys(el).find((k) => k.startsWith('__reactFiber'));
+    return el[k].memoizedProps.uploadStatus;
+  }, '#t');
+  const ownFiber = Object.keys(btn).filter((k) => k.startsWith('__react'));
+  let bad = null;
+  try { await args.page(() => { throw new Error('boom'); }); } catch (e) { bad = String(e.message || e); }
+  return { status, user, upload, ownFiber, bad, seenBeforePage: window.seen ? window.seen.length : 'no page global here' };
+}"##;
+    let adapter = crate::site::parse_adapter(raw, "demo/iso").unwrap();
+    assert!(adapter.isolated());
+    let mut no_stdin = || Err("no stdin".to_string());
+    let inv = crate::site::prepare_invocation(&adapter, &[], &[], true, &mut no_stdin).unwrap();
+    let script = crate::site::build_start(&adapter, &inv.args, None, &inv.files);
+    let _ = execute_command(
+        &json!({ "id": "2", "action": "evaluate", "script": "window.seen.length = 0; true" }),
+        &mut state,
+    )
+    .await;
+    let resp = execute_command(
+        &json!({
+            "id": "3", "action": "site", "domain": "127.0.0.1", "script": script,
+            "runKey": "iso", "files": inv.files, "untilDone": false, "isolated": true,
+            "retryStatuses": crate::site::retry_statuses(&adapter), "runTimeoutMs": 60_000,
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let r = &get_data(&resp)["result"];
+    assert_eq!(r["status"], 200, "{r}");
+    assert_eq!(r["user"], "leo", "{r}");
+    assert_eq!(r["upload"], 2, "{r}");
+    assert_eq!(
+        r["ownFiber"],
+        json!([]),
+        "the isolated world sees no page expandos: {r}"
+    );
+    assert_eq!(r["seenBeforePage"], "no page global here", "{r}");
+    assert!(r["bad"].as_str().unwrap_or("").contains("boom"), "{r}");
+    // The page saw only what args.page ran in its world: one querySelector.
+    let seen = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "JSON.stringify(window.seen)" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&seen)["result"], "[\"querySelector\"]", "{seen}");
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
+/// The everyday commands read the page from the isolated world too: a page
+/// that wraps its query / measure / text functions sees none of the calls
+/// `snapshot`, `click`, `type`, `fill`, `hover`, `find` and `get text` make.
+#[tokio::test]
+#[ignore]
+async fn e2e_commands_read_the_page_from_an_isolated_world() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>quiet2</title>
+<button id="t">go</button> <input id="in" aria-label="name"> <p id="p">hello there</p>
+<script>
+window.seen = [];
+for (const [o, ns] of [[Document.prototype, ['querySelector','querySelectorAll','getElementById','elementFromPoint','elementsFromPoint']], [Element.prototype, ['querySelector','querySelectorAll','getBoundingClientRect','getClientRects','closest','getAttribute','matches']], [window, ['getComputedStyle']]]) {
+  for (const n of ns) { const f = o[n]; Object.defineProperty(o, n, { value: function (...a) { window.seen.push(n + ' ' + JSON.stringify(a).slice(0, 80)); return f.apply(this, a); }, configurable: true, writable: true }); }
+}
+const d = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerText');
+Object.defineProperty(HTMLElement.prototype, 'innerText', { ...d, get() { window.seen.push('innerText'); return d.get.call(this); } });
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let snap = execute_command(
+        &json!({ "id": "2", "action": "snapshot", "interactive": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&snap);
+    let tree = get_data(&snap)["snapshot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let go_ref = tree
+        .lines()
+        .find(|l| l.contains("button \"go\""))
+        .and_then(|l| l.split("ref=").nth(1))
+        .map(|r| {
+            r.trim_end_matches(']')
+                .split(',')
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .expect("go button ref");
+    let steps: Vec<(&str, Value)> = vec![
+        (
+            "snapshot",
+            json!({ "action": "snapshot", "interactive": true }),
+        ),
+        ("click css", json!({ "action": "click", "selector": "#t" })),
+        (
+            "click ref",
+            json!({ "action": "click", "selector": format!("@{go_ref}") }),
+        ),
+        (
+            "type",
+            json!({ "action": "type", "selector": "#in", "text": "ab" }),
+        ),
+        (
+            "fill",
+            json!({ "action": "fill", "selector": "#in", "value": "cd" }),
+        ),
+        ("hover", json!({ "action": "hover", "selector": "#t" })),
+        (
+            "getbytext click",
+            json!({ "action": "getbytext", "text": "go", "subaction": "click", "exact": true }),
+        ),
+        ("get text", json!({ "action": "gettext", "selector": "#p" })),
+    ];
+    let mut leaks = Vec::new();
+    for (i, (label, mut cmd)) in steps.into_iter().enumerate() {
+        let _ = execute_command(&json!({ "id": format!("r{i}"), "action": "evaluate", "script": "window.seen.length = 0; true" }), &mut state).await;
+        cmd["id"] = json!(format!("c{i}"));
+        let resp = execute_command(&cmd, &mut state).await;
+        assert_success(&resp);
+        let seen = execute_command(&json!({ "id": format!("s{i}"), "action": "evaluate", "script": "JSON.stringify(window.seen)" }), &mut state).await;
+        let v = get_data(&seen)["result"]
+            .as_str()
+            .unwrap_or("[]")
+            .to_string();
+        if v != "[]" {
+            leaks.push(format!("{label}: {v}"));
+        }
+    }
+    assert!(leaks.is_empty(), "main-world calls: {leaks:#?}");
+
     let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     server.abort();
 }

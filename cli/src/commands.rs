@@ -2438,6 +2438,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                 "files": inv.files,
                 "untilDone": inv.options.until_done,
                 "retryStatuses": crate::site::retry_statuses(&adapter),
+                "isolated": adapter.isolated(),
                 "runTimeoutMs": run_timeout_ms,
                 // The CLI's socket read waits timeout_ms + a margin, so a long run
                 // is not cut off client-side before the daemon answers.

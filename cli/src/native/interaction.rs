@@ -1846,6 +1846,55 @@ pub async fn fill_reporting(
     }
 }
 
+/// Elements are resolved in the isolated world (`quiet_dom`), where the
+/// page's own JS is out of reach. Monaco and CodeMirror keep their model in
+/// page JS (`window.monaco`, the `CodeMirror` instance), so `fill` has to
+/// reach them from the main world: the same element's main-world handle, or
+/// None to keep the one we have.
+pub(crate) async fn rich_editor_main_twin(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+) -> Option<String> {
+    let probe = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(json!({
+                "objectId": object_id,
+                "functionDeclaration": "function () { const s = '.monaco-editor, .CodeMirror, .cm-editor'; return !!((this.closest && this.closest(s)) || (this.querySelector && this.querySelector(s))); }",
+                "returnByValue": true,
+            })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    if probe.pointer("/result/value").and_then(|v| v.as_bool()) != Some(true) {
+        return None;
+    }
+    let node = client
+        .send_command(
+            "DOM.describeNode",
+            Some(json!({ "objectId": object_id })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    let backend = node
+        .pointer("/node/backendNodeId")
+        .and_then(|v| v.as_i64())?;
+    let main = client
+        .send_command(
+            "DOM.resolveNode",
+            Some(json!({ "backendNodeId": backend, "__cuMain": true })),
+            Some(session_id),
+        )
+        .await
+        .ok()?;
+    main.pointer("/object/objectId")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
 /// A CDP error meaning a remote object id we hold is no longer valid: the
 /// inspector session or execution context that minted it is gone. The element
 /// itself may well still be there under a fresh handle.
@@ -1862,7 +1911,9 @@ pub async fn fill_object(
     object_id: &str,
     value: &str,
 ) -> Result<FillOutcome, String> {
-    let object_id = object_id.to_string();
+    let object_id = rich_editor_main_twin(client, session_id, object_id)
+        .await
+        .unwrap_or_else(|| object_id.to_string());
     let effective_session_id = session_id.to_string();
     let result: EvaluateResult = client
         .send_command_typed(
@@ -2029,6 +2080,8 @@ async fn call_on(
 }
 
 async fn read_value_of(client: &CdpClient, session_id: &str, object_id: &str) -> Option<String> {
+    let twin = rich_editor_main_twin(client, session_id, object_id).await;
+    let object_id = twin.as_deref().unwrap_or(object_id);
     let result = call_on(
         client,
         session_id,
@@ -2952,6 +3005,8 @@ async fn verify_fill_value(
     // Let framework-controlled inputs and editor models finish their synchronous
     // update plus the next paint before reading the authoritative value back.
     wait_for_paint_settled(client, session_id).await;
+    let twin = rich_editor_main_twin(client, session_id, object_id).await;
+    let object_id = twin.as_deref().unwrap_or(object_id);
 
     let result: EvaluateResult = client
         .send_command_typed(
@@ -3275,6 +3330,9 @@ pub async fn read_editable_value(
     .await
     .ok()?;
     wait_for_paint_settled(client, &effective_session_id).await;
+    let object_id = rich_editor_main_twin(client, &effective_session_id, &object_id)
+        .await
+        .unwrap_or(object_id);
     let result: EvaluateResult = client
         .send_command_typed(
             "Runtime.callFunctionOn",
@@ -6558,6 +6616,11 @@ mod hidden_page_tests {
         let (client, seen) = fake_page("hidden").await;
         assert!(restore_rendering_if_hidden(&client, "S1").await);
         let seen = seen.lock().unwrap().clone();
+        // The isolated world chrome-use reads from is set up first (quiet_dom).
+        let seen: Vec<_> = seen
+            .into_iter()
+            .filter(|(m, _)| !m.starts_with("Page."))
+            .collect();
         let methods: Vec<&str> = seen.iter().map(|(m, _)| m.as_str()).collect();
         assert_eq!(
             methods,
@@ -6578,7 +6641,11 @@ mod hidden_page_tests {
         let (client, seen) = fake_page("visible").await;
         assert!(!restore_rendering_if_hidden(&client, "S1").await);
         let seen = seen.lock().unwrap().clone();
-        let methods: Vec<&str> = seen.iter().map(|(m, _)| m.as_str()).collect();
+        let methods: Vec<&str> = seen
+            .iter()
+            .map(|(m, _)| m.as_str())
+            .filter(|m| !m.starts_with("Page."))
+            .collect();
         assert_eq!(methods, ["Runtime.evaluate"]);
     }
 }

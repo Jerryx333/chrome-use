@@ -5580,7 +5580,7 @@ async fn detect_and_set_humanize(mgr: &BrowserManager) {
         const globals = Object.getOwnPropertyNames(window).filter(k => re.test(k));
         return { cookies, scripts, globals, host: location.hostname };
     } catch (e) { return {}; } })()"#;
-    let Ok(val) = mgr.evaluate(js, None).await else {
+    let Ok(val) = mgr.evaluate_main(js).await else {
         return;
     };
     let to_strings = |v: Option<&Value>| -> Vec<String> {
@@ -5766,7 +5766,7 @@ async fn handle_evaluate(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
             mgr.evaluate_in_frame(script, &frame_id, &state.iframe_sessions)
                 .await?
         }
-        None => mgr.evaluate(script, None).await?,
+        None => mgr.evaluate_main(script).await?,
     };
     let url = mgr.get_url().await.unwrap_or_default();
     Ok(json!({ "result": result, "origin": url }))
@@ -5938,7 +5938,7 @@ async fn handle_site_analyze(cmd: &Value, state: &mut DaemonState) -> Result<Val
         handle_navigate(cmd, state).await?;
     }
     let mgr = state.browser.as_ref().ok_or("site analyze: no browser")?;
-    let raw = mgr.evaluate(crate::site::ANALYZE_JS, None).await?;
+    let raw = mgr.evaluate_main(crate::site::ANALYZE_JS).await?;
     let strings = |key: &str| -> Vec<String> {
         raw.get("signals")
             .and_then(|s| s.get(key))
@@ -5990,6 +5990,10 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     };
     // Its value no longer matters: the run object is reached by its handle.
     let _ = run_key;
+    let isolated = cmd
+        .get("isolated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let until_done = cmd
         .get("untilDone")
         .and_then(|v| v.as_bool())
@@ -6026,7 +6030,7 @@ async fn handle_site(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         let start = script.replace(crate::site::BUDGET_PLACEHOLDER, &budget.to_string());
         // The run is never put on the page: the start script returns the run
         // object and every later call goes to it by its CDP handle.
-        let run = start_site_run(&start, state).await?;
+        let run = start_site_run(&start, state, !isolated).await?;
 
         let outcome = poll_site_run(&run, &files, started, deadline, &mut progress, state).await;
         release_site_run(&run, state).await;
@@ -6126,7 +6130,11 @@ async fn ensure_site_domain(domain: &str, state: &mut DaemonState) -> Result<(),
 /// Start a site run (or `eval --background`): evaluate the start script
 /// without serialising its result, and return the CDP handle (objectId) of
 /// the run object it returns.
-async fn start_site_run(script: &str, state: &mut DaemonState) -> Result<String, String> {
+async fn start_site_run(
+    script: &str,
+    state: &mut DaemonState,
+    main_world: bool,
+) -> Result<String, String> {
     if let Some(mgr) = state.browser.as_mut() {
         mgr.resync_targets().await.ok();
     }
@@ -6136,7 +6144,7 @@ async fn start_site_run(script: &str, state: &mut DaemonState) -> Result<String,
         .client
         .send_command(
             "Runtime.evaluate",
-            Some(json!({ "expression": script, "returnByValue": false, "awaitPromise": false })),
+            Some(json!({ "expression": script, "returnByValue": false, "awaitPromise": false, "__cuMain": main_world })),
             Some(&session_id),
         )
         .await?;
@@ -6314,12 +6322,18 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
             {
                 // Only a file the caller passed as a `"type": "file"` arg; the
                 // page chooses the selector, never the path.
+                // An element handle (`setOn(el)`): put the file on that node
+                // by CDP, so the adapter need not mark the input to find it.
+                Some(path) if req.get("target").is_some() => {
+                    upload_to_target(run_key, req, path, state).await
+                }
                 Some(path) => {
                     handle_upload(&json!({ "selector": selector, "files": [path] }), state).await
                 }
                 None => Err(format!("no file was passed for --{arg}")),
             }
         }
+        Some("page") => serve_page_request(req, state).await,
         Some(kind @ ("click" | "hover" | "type" | "press" | "scroll")) => {
             // Trusted input at Human pace for the whole request: the sites
             // adapters write to (Douyin, Bilibili, ...) run their own bot
@@ -6344,9 +6358,81 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
     let _ = call_on_run(run_key, &settle, state).await;
 }
 
+/// `setOn(el)` with an element handle: `DOM.setFileInputFiles` on that node,
+/// which fires the input's own (trusted) input and change events.
+async fn upload_to_target(
+    run_key: &str,
+    req: &Value,
+    path: &str,
+    state: &DaemonState,
+) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let id = req.get("target").and_then(|v| v.as_u64()).unwrap_or(0);
+    let node = super::quiet_dom::backend_of_property(
+        &mgr.client,
+        &session_id,
+        run_key,
+        &format!("targets[{id}]"),
+    )
+    .await?
+    .ok_or("setOn: the element handle is gone")?;
+    mgr.client
+        .send_command(
+            "DOM.setFileInputFiles",
+            Some(json!({ "files": [path], "backendNodeId": node })),
+            Some(&session_id),
+        )
+        .await?;
+    Ok(json!({ "attached": 1 }))
+}
+
+/// `args.page(fn, ...args)` from an isolated-world adapter: call `fn` with
+/// the JSON `args` in the page's main world, for what only page JS has (a
+/// React fiber, the page's own signed fetch, an app store). `fn` is the
+/// adapter's own source, taken in the isolated world where the page cannot
+/// change it; the result comes back by value (JSON), never as a handle.
+async fn serve_page_request(req: &Value, state: &DaemonState) -> Result<Value, String> {
+    let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
+    let session_id = mgr.active_session_id()?.to_string();
+    let src = req.get("src").and_then(|v| v.as_str()).unwrap_or("");
+    if src.is_empty() {
+        return Err("args.page: no function".to_string());
+    }
+    let args = req.get("args").cloned().unwrap_or_else(|| json!([]));
+    let args_json = serde_json::to_string(&args).unwrap_or_else(|_| "[]".to_string());
+    let expression = format!("(async () => ({src})(...{args_json}))()");
+    let out = mgr
+        .client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({
+                "expression": expression,
+                "awaitPromise": true,
+                "returnByValue": true,
+                "__cuMain": true,
+            })),
+            Some(&session_id),
+        )
+        .await?;
+    if let Some(ex) = out.get("exceptionDetails") {
+        let msg = ex
+            .pointer("/exception/description")
+            .and_then(|v| v.as_str())
+            .or_else(|| ex.get("text").and_then(|v| v.as_str()))
+            .unwrap_or("page error");
+        return Err(format!("args.page: {msg}"));
+    }
+    Ok(out.pointer("/result/value").cloned().unwrap_or(Value::Null))
+}
+
 /// Wheel steps `args.ui` takes to bring an element into view before it
 /// gives up.
-const UI_SCROLL_STEPS: usize = 12;
+const UI_SCROLL_STEPS: usize = 60;
+
+/// Wheel steps in a row that leave the element where it was before
+/// `args.ui` / `scrollintoview` give up (the container cannot scroll further).
+const UI_SCROLL_STUCK: u32 = 2;
 
 /// One `args.ui` request from a site adapter, answered with trusted CDP input
 /// (`isTrusted` events, humanized motion and timing) instead of the synthetic
@@ -6411,11 +6497,22 @@ async fn serve_ui_request(
     // Bring the element into view the way a person would: wheel over the
     // container it scrolls in, re-measuring after each step.
     let mut m = ui_measure(client, &session_id, run_key, req).await?;
+    let mut last_off = f64::NAN;
+    let mut stuck = 0;
     for _ in 0..UI_SCROLL_STEPS {
         let off = ui_offscreen_dy(&m);
         if off == 0.0 {
             break;
         }
+        if (off - last_off).abs() < 1.0 {
+            stuck += 1;
+            if stuck >= UI_SCROLL_STUCK {
+                break;
+            }
+        } else {
+            stuck = 0;
+        }
+        last_off = off;
         let (cx, cy, cw, ch) = m
             .get("scroller")
             .filter(|s| s.is_object())
@@ -6507,7 +6604,7 @@ fn f(v: &Value, k: &str) -> f64 {
     v.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0)
 }
 
-/// How far (CSS px, signed) an element measured by `ui_measure_script` sits
+/// How far (CSS px, signed) an element measured by `quiet_dom::measure` sits
 /// outside the viewport and its scroll container vertically; 0 when its
 /// centre band is on screen.
 fn ui_offscreen_dy(m: &Value) -> f64 {
@@ -6574,13 +6671,8 @@ async fn ui_measure(
     run_key: &str,
     req: &Value,
 ) -> Result<Value, String> {
-    let m = call_fn_on(
-        client,
-        session_id,
-        run_key,
-        &crate::site::ui_measure_script(req),
-    )
-    .await?;
+    let node = ui_target_node(client, session_id, run_key, req).await?;
+    let m = super::quiet_dom::measure(client, session_id, node).await?;
     if let Some(e) = m.get("error").and_then(|v| v.as_str()) {
         return Err(format!("args.ui: {e}"));
     }
@@ -6594,17 +6686,50 @@ async fn ui_hit(
     req: &Value,
     p: (f64, f64),
 ) -> Result<(bool, Option<String>), String> {
-    let v = call_fn_on(
-        client,
-        session_id,
-        run_key,
-        &crate::site::ui_hit_script(req, p.0, p.1),
-    )
-    .await?;
-    Ok((
-        v.get("hit").and_then(|b| b.as_bool()).unwrap_or(false),
-        v.get("top").and_then(|t| t.as_str()).map(String::from),
-    ))
+    let node = ui_target_node(client, session_id, run_key, req).await?;
+    super::quiet_dom::hit_test(client, session_id, node, p.0, p.1).await
+}
+
+/// The node an `args.ui` request names: the element handle the adapter
+/// passed (read off the run object by property, nothing called), else the
+/// first match of its selector, found in an isolated world.
+async fn ui_target_node(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    run_key: &str,
+    req: &Value,
+) -> Result<i64, String> {
+    if let Some(id) = req.get("target").and_then(|v| v.as_u64()) {
+        return super::quiet_dom::backend_of_property(
+            client,
+            session_id,
+            run_key,
+            &format!("targets[{id}]"),
+        )
+        .await?
+        .ok_or_else(|| {
+            "args.ui: element handle is gone (the run ended or the page reloaded)".to_string()
+        });
+    }
+    let sel = req.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+    super::quiet_dom::query_selector(client, session_id, sel)
+        .await
+        .map_err(|e| format!("args.ui: {e}"))?
+        .ok_or_else(|| format!("args.ui: no element matches {sel}"))
+}
+
+/// The node a command's `@ref` or CSS selector names, found without running
+/// anything in the page's main world: a ref's backend node, or the
+/// selector's first match in an isolated world.
+async fn quiet_node(state: &DaemonState, session_id: &str, selector: &str) -> Option<i64> {
+    let mgr = state.browser.as_ref()?;
+    if let Some(r) = super::element::parse_ref(selector) {
+        return state.ref_map.get(&r).and_then(|e| e.backend_node_id);
+    }
+    super::quiet_dom::query_selector(&mgr.client, session_id, selector)
+        .await
+        .ok()
+        .flatten()
 }
 
 async fn ui_viewport(
@@ -6639,7 +6764,7 @@ async fn handle_stealth_status(state: &DaemonState) -> Result<Value, String> {
             headlessUA: /Headless/i.test(ua),
         };
     })()"#;
-    let p = mgr.evaluate(probe_js, None).await.unwrap_or(Value::Null);
+    let p = mgr.evaluate_main(probe_js).await.unwrap_or(Value::Null);
     let webdriver = p.get("webdriver").and_then(|v| v.as_bool()).unwrap_or(true);
     let has_chrome = p
         .get("hasWindowChrome")
@@ -10763,21 +10888,6 @@ async fn handle_scroll(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     )
 }
 
-/// Measure `this` element the way `args.ui` does (box, viewport, nearest
-/// scrollable ancestor), for [`ui_offscreen_dy`].
-const ELEMENT_MEASURE_FN: &str = "function () {\n\
-    const el = this;\n\
-    let ox = 0, oy = 0;\n\
-    try { let w = el.ownerDocument.defaultView; while (w && w !== window && w.frameElement) { const f = w.frameElement; const b = f.getBoundingClientRect(); ox += b.left + f.clientLeft; oy += b.top + f.clientTop; w = w.parent; } } catch (_) {}\n\
-    const b = el.getBoundingClientRect();\n\
-    let sc = null;\n\
-    for (let p = el.parentElement; p; p = p.parentElement) {\n\
-      const cs = getComputedStyle(p);\n\
-      if (/(auto|scroll)/.test(cs.overflowY) && p.scrollHeight > p.clientHeight + 1) { const pb = p.getBoundingClientRect(); sc = { x: pb.left + ox, y: pb.top + oy, w: pb.width, h: pb.height }; break; }\n\
-    }\n\
-    return { x: b.left + ox, y: b.top + oy, w: b.width, h: b.height, vw: window.innerWidth, vh: window.innerHeight, scroller: sc };\n\
-}";
-
 /// Wheel `selector`'s element into view over its scroll container. False
 /// when it could not (not found, the wheel moved nothing): the caller then
 /// scrolls the old way.
@@ -10788,26 +10898,30 @@ async fn wheel_into_view(state: &DaemonState, selector: &str) -> bool {
     let Ok(session_id) = mgr.active_session_id().map(str::to_string) else {
         return false;
     };
+    let mut last_off = f64::NAN;
+    let mut stuck = 0;
     for _ in 0..UI_SCROLL_STEPS {
-        let Ok((object_id, el_session)) = super::element::resolve_element_object_id(
-            &mgr.client,
-            &session_id,
-            &state.ref_map,
-            selector,
-            &state.iframe_sessions,
-        )
-        .await
-        else {
+        // Found and measured without the page's querySelector /
+        // getBoundingClientRect / getComputedStyle being called.
+        let Some(node) = quiet_node(state, &session_id, selector).await else {
             return false;
         };
-        let Ok(m) = call_fn_on(&mgr.client, &el_session, &object_id, ELEMENT_MEASURE_FN).await
-        else {
+        let Ok(m) = super::quiet_dom::measure(&mgr.client, &session_id, node).await else {
             return false;
         };
         let off = ui_offscreen_dy(&m);
         if off == 0.0 {
             return true;
         }
+        if (off - last_off).abs() < 1.0 {
+            stuck += 1;
+            if stuck >= UI_SCROLL_STUCK {
+                return false;
+            }
+        } else {
+            stuck = 0;
+        }
+        last_off = off;
         let (vw, vh) = (f(&m, "vw"), f(&m, "vh"));
         let (cx, cy, cw, ch) = m
             .get("scroller")
@@ -11915,7 +12029,8 @@ async fn wait_for_function(
     timeout_ms: u64,
 ) -> Result<(), String> {
     let check_fn = format!("!!({})", fn_str);
-    poll_until_true(client, session_id, &check_fn, timeout_ms).await
+    // The user's condition can name page globals: run it with the page's JS.
+    poll_until_true_in(client, session_id, &check_fn, timeout_ms, true).await
 }
 
 async fn poll_until_true(
@@ -11923,6 +12038,16 @@ async fn poll_until_true(
     session_id: &str,
     expression: &str,
     timeout_ms: u64,
+) -> Result<(), String> {
+    poll_until_true_in(client, session_id, expression, timeout_ms, false).await
+}
+
+async fn poll_until_true_in(
+    client: &super::cdp::client::CdpClient,
+    session_id: &str,
+    expression: &str,
+    timeout_ms: u64,
+    main_world: bool,
 ) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
 
@@ -11941,11 +12066,12 @@ async fn poll_until_true(
             probe_cap,
             client.send_command_typed::<_, super::cdp::types::EvaluateResult>(
                 "Runtime.evaluate",
-                &super::cdp::types::EvaluateParams {
-                    expression: expression.to_string(),
-                    return_by_value: Some(true),
-                    await_promise: Some(true),
-                },
+                &json!({
+                    "expression": expression,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                    "__cuMain": main_world,
+                }),
                 Some(session_id),
             ),
         )
@@ -13854,7 +13980,7 @@ async fn handle_extract(cmd: &Value, state: &DaemonState) -> Result<Value, Strin
             mgr.evaluate_in_frame(&script, &frame_id, &state.iframe_sessions)
                 .await?
         }
-        None => mgr.evaluate(&script, None).await?,
+        None => mgr.evaluate_main(&script).await?,
     };
 
     if let Some(invalid) = result.get("invalidFields").and_then(|v| v.as_object()) {
@@ -17540,7 +17666,7 @@ async fn handle_addscript(cmd: &Value, state: &DaemonState) -> Result<Value, Str
             }})"#,
             serde_json::to_string(src_url).unwrap_or_default()
         );
-        mgr.evaluate(&js, None).await?;
+        mgr.evaluate_main(&js).await?;
     } else if let Some(source) = content {
         let js = format!(
             r#"(() => {{
@@ -17550,7 +17676,7 @@ async fn handle_addscript(cmd: &Value, state: &DaemonState) -> Result<Value, Str
             }})()"#,
             serde_json::to_string(source).unwrap_or_default()
         );
-        mgr.evaluate(&js, None).await?;
+        mgr.evaluate_main(&js).await?;
     }
 
     Ok(json!({ "added": true }))
@@ -17652,7 +17778,7 @@ async fn handle_react_tree(cmd: &Value, state: &DaemonState) -> Result<Value, St
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let script =
         react::scripts::TREE_SNAPSHOT.replace("{{PICK_RI}}", react::scripts::PICK_REACT_RENDERER);
-    let result = mgr.evaluate(&script, None).await?;
+    let result = mgr.evaluate_main(&script).await?;
     let nodes_json = parse_json_string(result, "react tree")?;
     let nodes: Vec<react::TreeNode> = serde_json::from_value(nodes_json)
         .map_err(|e| format!("Failed to parse tree nodes: {}", e))?;
@@ -17687,7 +17813,7 @@ async fn handle_react_inspect(cmd: &Value, state: &DaemonState) -> Result<Value,
     let script = react::scripts::TREE_INSPECT
         .replace("{{ID}}", &fiber_id.to_string())
         .replace("{{PICK_RI}}", react::scripts::PICK_REACT_RENDERER);
-    let result = mgr.evaluate(&script, None).await?;
+    let result = mgr.evaluate_main(&script).await?;
     let parsed = parse_json_string(result, "react inspect")?;
     Ok(parsed)
 }
@@ -17699,7 +17825,7 @@ async fn handle_react_renders_start(cmd: &Value, state: &DaemonState) -> Result<
     let identifier = mgr
         .add_script_to_evaluate(react::scripts::RENDERS_INIT)
         .await?;
-    mgr.evaluate(react::scripts::RENDERS_INIT, None).await?;
+    mgr.evaluate_main(react::scripts::RENDERS_INIT).await?;
     let _ = cmd;
     Ok(json!({
         "recording": true,
@@ -17710,7 +17836,7 @@ async fn handle_react_renders_start(cmd: &Value, state: &DaemonState) -> Result<
 
 async fn handle_react_renders_stop(cmd: &Value, state: &DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
-    let result = mgr.evaluate(react::scripts::RENDERS_STOP, None).await?;
+    let result = mgr.evaluate_main(react::scripts::RENDERS_STOP).await?;
     let data_json = parse_json_string(result, "react renders stop")?;
     let data: react::RendersData = serde_json::from_value(data_json.clone())
         .map_err(|e| format!("Failed to parse renders data: {}", e))?;
@@ -17727,7 +17853,7 @@ async fn handle_react_suspense(cmd: &Value, state: &DaemonState) -> Result<Value
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let script =
         react::scripts::SUSPENSE_WALK.replace("{{PICK_RI}}", react::scripts::PICK_REACT_RENDERER);
-    let result = mgr.evaluate(&script, None).await?;
+    let result = mgr.evaluate_main(&script).await?;
     let boundaries_json = parse_json_string(result, "react suspense")?;
     let boundaries: Vec<react::Boundary> = serde_json::from_value(boundaries_json.clone())
         .map_err(|e| format!("Failed to parse suspense boundaries: {}", e))?;
@@ -17764,7 +17890,7 @@ async fn handle_vitals(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
     // The script is idempotent — a no-op if already installed on the current page.
     {
         let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
-        let _ = mgr.evaluate(react::scripts::VITALS_INIT, None).await?;
+        let _ = mgr.evaluate_main(react::scripts::VITALS_INIT).await?;
     }
 
     // Register as an init script too, so navigations done via `vitals --url`
@@ -17791,7 +17917,7 @@ async fn handle_vitals(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
 
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let url = mgr.get_url().await.unwrap_or_default();
-    let result = mgr.evaluate(react::scripts::VITALS_READ, None).await?;
+    let result = mgr.evaluate_main(react::scripts::VITALS_READ).await?;
     let raw = parse_json_string(result, "vitals")?;
 
     // The raw payload has { cwv, timing, ttfb }. Merge with URL and process
@@ -17930,7 +18056,7 @@ async fn handle_pushstate(cmd: &Value, state: &DaemonState) -> Result<Value, Str
         "{{URL}}",
         &serde_json::to_string(url).unwrap_or_else(|_| "\"\"".to_string()),
     );
-    let result = mgr.evaluate(&script, None).await?;
+    let result = mgr.evaluate_main(&script).await?;
     let after = result.as_str().map(String::from).unwrap_or_default();
     Ok(json!({ "url": after }))
 }
@@ -19445,15 +19571,17 @@ async fn handle_eval(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         .and_then(|v| v.as_str())
         .ok_or("Missing 'expression' parameter")?;
 
+    // The caller's expression: it runs with the page's own JS.
     let result: super::cdp::types::EvaluateResult = mgr
         .client
         .send_command_typed(
             "Runtime.evaluate",
-            &super::cdp::types::EvaluateParams {
-                expression: expression.to_string(),
-                return_by_value: Some(true),
-                await_promise: Some(true),
-            },
+            &json!({
+                "expression": expression,
+                "returnByValue": true,
+                "awaitPromise": true,
+                "__cuMain": true,
+            }),
             Some(&session_id),
         )
         .await?;

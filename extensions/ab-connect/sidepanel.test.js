@@ -1400,3 +1400,23 @@ test('missing-host guidance appears below the error and clears for other failure
   assert.equal(f.nodes.get('hostHint').children.length, 0);
   f.panel.close();
 });
+for (const phase of ['failed', 'interrupted', 'idle']) {
+  test(`sending after a ${phase} paused turn starts the new message in the same conversation`, async () => {
+    const paused = { ...chat('a', phase), agentId: 'codex', model: 'gpt-6.1-sol', queuePaused: true, queued: 1,
+      lastError: phase === 'failed' ? 'Selected model is at capacity. Please try a different model.' : null };
+    const f = await fixture({
+      conversationList: () => ({ success: true, result: { conversations: [paused] } }),
+      conversationRead: () => ({ success: true, result: { conversation: paused, journal: { events: [], cursor: 0, more: false } } }),
+      conversationSend: () => ({ success: true, result: { conversation: { ...paused, phase: 'running' } } }),
+    }, { ab_panel_conversation: 'a' });
+    f.nodes.get('message').value = 'continue';
+    f.nodes.get('composer').fire('submit'); await settle(); await settle();
+    const sends = f.calls.filter(call => ['conversationSend', 'conversationSendDirect'].includes(call.operation));
+    assert.equal(sends.length, 1);
+    assert.equal(sends[0].operation, 'conversationSend');
+    assert.equal(sends[0].params.conversationId, 'a');
+    assert.equal(sends[0].params.text, 'continue');
+    assert.ok(!f.calls.some(call => ['conversationCreate', 'conversationResume'].includes(call.operation)));
+    f.panel.close();
+  });
+}
