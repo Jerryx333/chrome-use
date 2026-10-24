@@ -15865,7 +15865,7 @@ async fn e2e_background_form_instant_scroll_and_trusted_pick() {
 async fn e2e_site_verification_refuses_before_navigation_or_adapter_execution() {
     let mut state = DaemonState::new();
     launch_headless(&mut state, json!({})).await;
-    let url = "http://www.xiaohongshu.com/verification-fixture";
+    let url = "https://www.xiaohongshu.com/verification-fixture";
     let fixture = r##"<!doctype html><title>pending verification</title>
 <div><h2><span>Security</span> <span>Verification</span></h2>
 <img width="150" height="150" src="data:image/png;base64,iVBORw0KGgo="></div>"##;
