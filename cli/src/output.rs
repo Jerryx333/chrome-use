@@ -6911,6 +6911,11 @@ Environment:
   AI_GATEWAY_API_KEY             API key for the AI Gateway (enables chat command and dashboard AI chat)
   AI_GATEWAY_MODEL               Default AI model (default: anthropic/claude-sonnet-4.6, or --model flag)
 
+Source checkout Git hook (not CLI settings):
+  CHROME_USE_CLAWHUB_SYNC=1      Opt in to ClawHub sync during git push (default: off)
+  SKIP_CLAWHUB_SYNC=1            Skip sync even when opted in; failures never block push
+  Example: CHROME_USE_CLAWHUB_SYNC=1 git push
+
 Install:
   npm install -g chrome-use           # npm
   brew install chrome-use             # Homebrew

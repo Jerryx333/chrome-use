@@ -283,7 +283,7 @@ Run `chrome-use skills get <name>` with one name below.
 
 | Need or symptom | Name |
 |---|---|
-| Install, runner discovery, `--full` | `core/installation` |
+| Install, runner discovery, `--full`, contributor Git hooks | `core/installation` |
 | Repeated steps, output reading, verification, site notes | `core/behaviour` |
 | Click/fill/type verbs, `eval` alternatives, uploads, widgets, canvas | `core/interacting` |
 | Scoped reads, frames, shadow roots, screenshots | `core/reading` |

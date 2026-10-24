@@ -1,5 +1,11 @@
+# Publishing is a maintainer opt-in, never a prerequisite for contributing.
+# Keep the existing skip override authoritative, even when opt-in is set.
 if [ "${SKIP_CLAWHUB_SYNC:-0}" = "1" ]; then
   echo "Skipping ClawHub sync (SKIP_CLAWHUB_SYNC=1)"
+  exit 0
+fi
+
+if [ "${CHROME_USE_CLAWHUB_SYNC:-0}" != "1" ]; then
   exit 0
 fi
 

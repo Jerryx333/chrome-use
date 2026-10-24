@@ -376,6 +376,9 @@ Do not use the built-in Chrome plugin for browser work here.</code></pre>
       </div>
 
     <p>The local agent side panel supports /skill selection, image attachments, conversation tool/model options and scheduled prompts in independent background sessions. See <a href="/en/agent-panel.html">the side panel guide</a>.</p>
+      <h2 id="contributor-hooks">Source checkout: contributor hooks</h2>
+      <p>The Git pre-push hook does not sync to ClawHub by default. Ordinary pushes do not require pnpm or ClawHub. Maintainers can opt in for one push with <code>CHROME_USE_CLAWHUB_SYNC=1 git push</code>. Only <code>1</code> enables sync; <code>SKIP_CLAWHUB_SYNC=1</code> always takes precedence. Sync failures warn without blocking the push. Explicit <code>pnpm run clawhub:sync</code> publishing is unchanged. These variables control the source checkout's hook, not the installed CLI.</p>
+      <p>On Linux with Docker and a cached <code>node:24-bookworm</code> image, run <code>sh scripts/test-pre-push-sandbox.sh</code> to test the hook. The runner never pulls images or installs dependencies. It checks isolation before testing local Git pushes with a fake publisher in an unprivileged container with no network or host mounts, a read-only root, temporary storage and resource limits.</p>
 </main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 

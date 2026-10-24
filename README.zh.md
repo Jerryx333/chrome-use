@@ -533,6 +533,18 @@ CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不�
 规矩：绝不发出假成功、怎么诚实地做性能测量。进行中的工作在
 [issues](https://github.com/leeguooooo/chrome-use/issues) 里追踪。
 
+Git pre-push hook 默认不会同步到 ClawHub，普通推送不需要 pnpm 或 ClawHub。
+维护者可用 `CHROME_USE_CLAWHUB_SYNC=1 git push` 为单次推送启用同步；只有值 `1`
+才会启用，`SKIP_CLAWHUB_SYNC=1` 始终优先跳过。同步失败只发出警告，不阻止 Git
+推送。手动执行 `pnpm run clawhub:sync` 的行为不变。这些变量仅控制源码仓库的
+hook，不影响已安装的 CLI。
+
+在 Linux 上安装了 Docker 且本地已有 `node:24-bookworm` 镜像时，可运行
+`sh scripts/test-pre-push-sandbox.sh` 测试 hook。脚本不会拉取镜像或安装依赖，
+只将 hook 和测试文件复制到无网络、无宿主目录挂载、非特权用户运行的容器中，
+使用只读根文件系统、临时存储和资源限制。测试先检查隔离条件，再使用模拟发布器
+验证临时本地仓库之间的实际推送。
+
 感谢每一位为 chrome-use 做出贡献的人！
 
 <a href="https://github.com/leeguooooo/chrome-use/graphs/contributors">

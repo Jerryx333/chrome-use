@@ -71,3 +71,18 @@ guidance, and omits macOS-only ChooseBrowser checks on other platforms. Missing
 optional provider keys are informational; an encryption key is generated on
 first auth save. Windows still needs the user to install the Chrome Web Store
 extension once. Registration and CLI installation do not verify that connection.
+
+## Contributing from a source checkout
+
+The Git pre-push hook does not sync to ClawHub by default. Ordinary pushes do
+not require pnpm or ClawHub. Maintainers may opt in for one push with
+`CHROME_USE_CLAWHUB_SYNC=1 git push`; only `1` enables sync, and
+`SKIP_CLAWHUB_SYNC=1` takes precedence. A sync failure warns but does not block
+the push. Explicit `pnpm run clawhub:sync` publishing is unchanged. These are
+Git-hook variables, not installed-CLI settings. Do not enable publishing merely
+to contribute a patch.
+
+On Linux with Docker and a cached `node:24-bookworm` image, run
+`sh scripts/test-pre-push-sandbox.sh` for isolated hook acceptance tests. It
+never downloads an image or dependencies, uses no network or host mounts, and
+tests temporary local Git pushes with a fake publisher as an unprivileged user.

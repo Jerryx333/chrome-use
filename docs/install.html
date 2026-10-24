@@ -369,6 +369,9 @@ Do not use the built-in Chrome plugin for browser work here.</code></pre>
       </div>
 
     <p>本机 agent 侧栏支持输入 / 选择技能、图片附件、会话工具与模型参数，以及独立后台 session 的定时提示。完整流程见 <a href="/agent-panel.html">本机 agent 侧栏</a>。</p>
+      <h2 id="contributor-hooks">源码仓库：贡献者 hook</h2>
+      <p>Git pre-push hook 默认不会同步到 ClawHub，普通推送不需要 pnpm 或 ClawHub。维护者可用 <code>CHROME_USE_CLAWHUB_SYNC=1 git push</code> 为单次推送启用同步。只有值 <code>1</code> 才会启用；<code>SKIP_CLAWHUB_SYNC=1</code> 始终优先跳过。同步失败只发出警告，不阻止推送。手动执行 <code>pnpm run clawhub:sync</code> 的行为不变。这些变量仅控制源码仓库的 hook，不影响已安装的 CLI。</p>
+      <p>在 Linux 上安装了 Docker 且本地已有 <code>node:24-bookworm</code> 镜像时，可运行 <code>sh scripts/test-pre-push-sandbox.sh</code> 测试 hook。脚本不会拉取镜像或安装依赖，先检查隔离条件，再使用模拟发布器验证临时本地 Git 推送。容器以非特权用户运行，无网络或宿主目录挂载，使用只读根文件系统、临时存储和资源限制。</p>
 </main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 

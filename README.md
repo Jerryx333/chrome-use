@@ -574,6 +574,20 @@ build and test, and two hard-won rules about never shipping a silent success and
 about measuring performance honestly. Open work is tracked in
 [issues](https://github.com/leeguooooo/chrome-use/issues).
 
+The Git pre-push hook does not sync to ClawHub by default and does not require
+pnpm or ClawHub for ordinary pushes. Maintainers can opt in for a single push
+with `CHROME_USE_CLAWHUB_SYNC=1 git push`. Only the value `1` enables the sync;
+`SKIP_CLAWHUB_SYNC=1` always overrides it. Sync failures warn without blocking
+the Git push. Explicit publishing with `pnpm run clawhub:sync` is unchanged.
+These variables control the source checkout's hook, not the installed CLI.
+
+Test the hook with `sh scripts/test-pre-push-sandbox.sh` on Linux with Docker
+and an already available `node:24-bookworm` image. The runner never pulls an
+image or installs packages. It copies only the hook and tests into an
+unprivileged container with no network or host mounts, a read-only root,
+temporary storage and resource limits. Tests use a fake publisher and verify
+actual pushes between temporary local repositories, after checking isolation.
+
 Thanks to everyone who has contributed to chrome-use!
 
 <a href="https://github.com/leeguooooo/chrome-use/graphs/contributors">
