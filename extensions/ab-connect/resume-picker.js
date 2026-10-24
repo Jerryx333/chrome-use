@@ -105,7 +105,12 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
   const collapsed = new Set(), expanded = new Set();
   let options = [], active = -1;
 
-  function close() { container.hidden = true; confirm.hidden = true; epoch++; if (timer) cancel(timer); timer = null; }
+  /** Clear visible and keyboard choices together, and invalidate older listings. */
+  function resetResults() {
+    items.replaceChildren(); rows = []; options = []; active = -1;
+    return ++epoch;
+  }
+  function close() { container.hidden = true; confirm.hidden = true; resetResults(); if (timer !== null) cancel(timer); timer = null; }
   function open(query = '', agentId = '') {
     const list = agents();
     agent.replaceChildren(...list.map(({ id, name }) => { const option = element('option', name); option.value = id; return option; }));
@@ -117,8 +122,9 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
   }
   function nameOf(id) { return agents().find(a => a.id === id)?.name || id; }
   async function load() {
-    const current = ++epoch, agentId = agent.value, query = search.value.trim();
-    status.textContent = RESUME_TEXT.loading; status.hidden = false; items.replaceChildren(); rows = [];
+    if (timer !== null) cancel(timer); timer = null;
+    const current = resetResults(), agentId = agent.value, query = search.value.trim();
+    status.textContent = RESUME_TEXT.loading; status.hidden = false;
     const params = { agentId, limit: 100 };
     if (query) params.query = query;
     const path = executable(agentId); if (path) params.executable = path;
@@ -216,7 +222,12 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
     confirm.append(actions); confirm.hidden = false;
   }
   agent.addEventListener('change', () => void load());
-  search.addEventListener('input', () => { if (timer) cancel(timer); timer = schedule(() => { timer = null; void load(); }, 250); });
+  search.addEventListener('input', () => {
+    // Invalidate immediately: an earlier request may finish before debounce fires.
+    resetResults(); status.textContent = RESUME_TEXT.loading; status.hidden = false;
+    if (timer !== null) cancel(timer);
+    timer = schedule(() => { timer = null; void load(); }, 250);
+  });
   // The search box keeps the focus: arrows move through the sessions on
   // screen, Enter continues the highlighted one (or the first).
   search.addEventListener('keydown', event => {

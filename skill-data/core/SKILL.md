@@ -68,6 +68,10 @@ Reconnect reads persisted events without resending a turn. Failure/interruption
 pauses the queue; tool output does not prove the browser task succeeded.
 Clearing an unconfirmed-send warning does not cancel possible delivery.
 
+The `/resume` picker clears old choices when the agent or search changes.
+Enter selects only a currently listed session; loading, unavailable or empty
+results cannot open or resume an old selection.
+
 Queued messages can be edited or removed only while still queued and matching
 the original text. Edits use a new ID; superseded IDs stay deduplicated. Long
 previews need a full-message read before changes. Queue operations preserve

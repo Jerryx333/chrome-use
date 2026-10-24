@@ -155,3 +155,99 @@ test('projects with the same folder name show their parents', async () => {
   assert.deepEqual(all(picker.container, n => n.className === 'resume-project').map(h => text(h)), ['▾ .protocol · runs/r1 1', '▾ .protocol · runs/r2 1']);
   assert.match(text(picker.container), /x Active elsewhere/);
 });
+
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function selectionFixture(conversationId = null) {
+  const requests = [], resumes = [], opened = [], errors = [];
+  let scheduled = null;
+  const picker = createResumePicker({
+    document,
+    api: async (operation, params) => {
+      if (operation === 'conversationResume') {
+        resumes.push(params);
+        return { conversation: { id: 'resumed' } };
+      }
+      const request = { params, ...deferred() }; requests.push(request);
+      return request.promise;
+    },
+    agents: () => [{ id: 'codex', name: 'Codex' }, { id: 'pi', name: 'Pi' }],
+    preferredAgent: () => 'codex',
+    onResumed: async conversation => opened.push(conversation.id),
+    onError: error => errors.push(error),
+    schedule: callback => { scheduled = callback; return 1; },
+    cancel: () => { scheduled = null; },
+  });
+  const search = all(picker.container, node => node.tag === 'input')[0];
+  const agent = all(picker.container, node => node.tag === 'select')[0];
+  const row = (sessionId = 'old', agentId = 'codex') => ({ sessionId, agentId, title: sessionId, cwd: '/project', lastActive: 1, conversationId });
+  return { picker, requests, resumes, opened, errors, search, agent, row,
+    async start() { const loading = picker.open(); requests[0].resolve({ supported: true, sessions: [row()] }); await loading; },
+    runSearch() { assert.ok(scheduled); const callback = scheduled; scheduled = null; callback(); },
+    visible() { return all(picker.container, node => node.className?.split(' ').includes('resume-item')); },
+  };
+}
+
+for (const conversationId of [null, 'existing-conversation']) {
+  for (const outcome of ['pending', 'failed', 'unsupported']) {
+    test(`agent change cannot select an old ${conversationId ? 'continued' : 'CLI'} session while ${outcome}`, async () => {
+      const f = selectionFixture(conversationId); await f.start();
+      f.search.fire('keydown', { key: 'ArrowDown' });
+      f.agent.value = 'pi'; f.agent.fire('change');
+      if (outcome === 'failed') f.requests[1].reject(new Error('Session listing unavailable'));
+      if (outcome === 'unsupported') f.requests[1].resolve({ supported: false, sessions: [] });
+      await settle();
+      assert.equal(f.visible().length, 0);
+      f.search.fire('keydown', { key: 'ArrowDown' });
+      f.search.fire('keydown', { key: 'Enter' }); await settle();
+      assert.deepEqual(f.resumes, []);
+      assert.deepEqual(f.opened, []);
+      assert.deepEqual(f.errors, []);
+      assert.equal(f.picker.isOpen, true);
+      if (outcome === 'pending') { f.requests[1].resolve({ supported: true, sessions: [] }); await settle(); }
+    });
+  }
+}
+
+test('editing a search invalidates selection and in-flight results before debounce fires', async () => {
+  const f = selectionFixture(); await f.start();
+  f.search.value = 'first'; f.search.fire('input');
+  f.search.fire('keydown', { key: 'Enter' }); await settle();
+  assert.deepEqual(f.resumes, []);
+  assert.equal(f.visible().length, 0);
+  f.runSearch();
+  f.search.value = 'second'; f.search.fire('input');
+  // The previous request finishes during the new query's debounce delay.
+  f.requests[1].resolve({ supported: true, sessions: [f.row('first-result')] }); await settle();
+  assert.equal(f.visible().length, 0);
+  f.search.fire('keydown', { key: 'Enter' }); await settle();
+  assert.deepEqual(f.resumes, []);
+  f.runSearch();
+  assert.equal(f.requests[2].params.query, 'second');
+  f.requests[2].resolve({ supported: true, sessions: [f.row('second-result')] }); await settle();
+  assert.equal(f.visible().length, 1);
+  f.search.fire('keydown', { key: 'ArrowDown' });
+  f.search.fire('keydown', { key: 'Enter' }); await settle();
+  assert.deepEqual(f.resumes, [{ agentId: 'codex', sessionId: 'second-result' }]);
+  assert.deepEqual(f.opened, ['resumed']);
+  assert.deepEqual(f.errors, []);
+});
+
+test('a reopened picker ignores the old listing and resumes the newly loaded agent', async () => {
+  const f = selectionFixture(); await f.start();
+  const oldLoad = f.picker.open('old');
+  f.picker.close();
+  const newLoad = f.picker.open('', 'pi');
+  f.search.fire('keydown', { key: 'Enter' }); await settle();
+  assert.deepEqual(f.resumes, []);
+  f.requests[2].resolve({ supported: true, sessions: [f.row('pi-session', 'pi')] }); await newLoad;
+  f.requests[1].resolve({ supported: true, sessions: [f.row('stale-result')] }); await oldLoad;
+  assert.equal(f.visible()[0].children[0].textContent, 'pi-session');
+  f.search.fire('keydown', { key: 'Enter' }); await settle();
+  assert.deepEqual(f.resumes, [{ agentId: 'pi', sessionId: 'pi-session' }]);
+  assert.deepEqual(f.errors, []);
+});

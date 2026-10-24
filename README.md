@@ -208,6 +208,8 @@ History streams replies, expandable tool rows and requests. Tool output does not
 
 To delete a conversation, stop its response, click the header's delete button and confirm. Deletion removes panel history and that conversation's browser session, plus Codex rollout files, Claude session files/directories, OpenCode history through `session/delete`, or Pi session files inside the conversation folder. Codex's SQLite cache is left untouched. The panel reports cleanup failures or unconfirmed tab closure.
 
+In the /resume picker, changing the agent or search clears the previous selection immediately. Enter only selects a currently listed session; it does nothing while results are loading, unavailable or empty.
+
 `/resume` continues a Claude Code, Codex, OpenCode or Pi session you started in a terminal, and a new conversation can work in a project folder that a site can remember. See [Continue a terminal session](https://chrome-use.leeguoo.com/en/agent-panel.html#resume) and [Project folder](https://chrome-use.leeguoo.com/en/agent-panel.html#project).
 
 Each conversation row offers **Initial page**, **Final page**, and **Delete conversation**. Initial page opens the first recorded HTTP(S) URL; Final page opens the most recently recorded URL, including while a task is running. A matching recorded tab is focused, otherwise the saved URL opens in a new tab. Opening the initial page preserves the final address. Older conversations without an initial address report it as unavailable. The title switches chats; opening a page does not send messages, rerun tasks or restore unsaved input. Addresses stay in local extension storage. Deletion requires confirmation and reports cleanup failures; stop a running reply before deleting.
