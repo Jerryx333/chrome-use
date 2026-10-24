@@ -1935,8 +1935,111 @@ pub(crate) fn inline_menu_manager_installed() -> bool {
     *INSTALLED.get_or_init(|| !installed_inline_menu_extensions().is_empty())
 }
 
+/// Extension ids the relay listed in a `debugger_access_denied` error, in
+/// order, as `chrome://extensions/?id=<id>` links.
+fn listed_frame_extensions(error: &str) -> Vec<&str> {
+    static ID: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
+    let re =
+        ID.get_or_init(|| regex_lite::Regex::new(r"chrome://extensions/\?id=([a-p]{32})").unwrap());
+    let mut ids: Vec<&str> = Vec::new();
+    for c in re.captures_iter(error) {
+        let id = c.get(1).unwrap().as_str();
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// An extension's name from its manifest in `<profile>/Extensions/<id>/<version>`,
+/// with a `__MSG_key__` name resolved through the default locale. The relay
+/// cannot ask Chrome for it: `chrome.management` would need a new permission.
+fn extension_name_in(ext_dir: &std::path::Path) -> Option<String> {
+    let mut versions: Vec<_> = std::fs::read_dir(ext_dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    // Chrome versions are numeric components; the suffix distinguishes installs.
+    versions.sort_by_key(|path| {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let (version, install) = name.split_once('_').unwrap_or((&name, "0"));
+        let mut parts: Vec<u64> = version.split('.').map(|p| p.parse().unwrap_or(0)).collect();
+        parts.resize(4, 0);
+        (parts, install.parse::<u64>().unwrap_or(0))
+    });
+    let dir = versions
+        .into_iter()
+        .rev()
+        .find(|p| p.join("manifest.json").is_file())?;
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).ok()?).ok()?;
+    let name = manifest.get("name")?.as_str()?;
+    let Some(key) = name
+        .strip_prefix("__MSG_")
+        .and_then(|n| n.strip_suffix("__"))
+    else {
+        return Some(name.to_string());
+    };
+    let locale = manifest
+        .get("default_locale")
+        .and_then(Value::as_str)
+        .unwrap_or("en");
+    let messages: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("_locales").join(locale).join("messages.json")).ok()?,
+    )
+    .ok()?;
+    // Message keys are case-insensitive in Chrome.
+    messages
+        .as_object()?
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))?
+        .1
+        .get("message")?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn installed_extension_name(id: &str) -> Option<String> {
+    for root in chrome_user_data_dirs() {
+        let Ok(profiles) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for profile in profiles.flatten() {
+            if let Some(name) = extension_name_in(&profile.path().join("Extensions").join(id)) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
 /// What to tell the reader about a tab blocked by another extension's frame.
-pub(crate) fn foreign_frame_hint() -> String {
+/// `error` is the relay's error; the extensions it lists are named from the
+/// local profiles, and replace the password-manager guess.
+pub(crate) fn foreign_frame_hint(error: &str) -> String {
+    foreign_frame_hint_with(error, installed_extension_name)
+}
+
+fn foreign_frame_hint_with(error: &str, name_of: impl Fn(&str) -> Option<String>) -> String {
+    let listed: Vec<String> = listed_frame_extensions(error)
+        .into_iter()
+        .map(|id| match name_of(id) {
+            Some(name) => format!("{name} ({id})"),
+            None => id.to_string(),
+        })
+        .collect();
+    if !listed.is_empty() {
+        let candidates = match listed.as_slice() {
+            [one] => one.clone(),
+            many => many.join(", "),
+        };
+        return format!(
+            "\nPossible blocking extensions: {candidates}. These frames are listed browser-wide, \
+             not attributed to this tab. Check which extension injects a frame into the blocked \
+             tab before disabling it for this site or moving its UI out of the page."
+        );
+    }
     let installed = installed_inline_menu_extensions();
     let culprit = if installed.is_empty() {
         "another extension's frame (a password manager's inline autofill menu is the usual one)"
@@ -11371,9 +11474,76 @@ mod tests {
     /// (they abandoned the user's logged-in Chrome over it).
     #[test]
     fn foreign_frame_hint_does_not_suggest_relaunching() {
-        let hint = foreign_frame_hint();
+        let hint = foreign_frame_hint("");
         assert!(!hint.contains("--launch"), "{hint}");
         assert!(hint.contains("chrome-use does that itself"), "{hint}");
+    }
+
+    #[test]
+    fn foreign_frame_hint_names_the_extensions_the_relay_listed() {
+        let ajax = "nhpjggchkhnlbgdfcbgpdpkifemomkpg";
+        let other = "bpoadfkcbjbfhfodiogcnhhhpibjhbnh";
+        let error = format!(
+            "debugger_access_denied: ... Frames of other extensions open in this browser: \
+             {ajax} (chrome://extensions/?id={ajax}), {other} (chrome://extensions/?id={other}); ..."
+        );
+        let names = |id: &str| (id == ajax).then(|| "Ajax Modifier".to_string());
+        let hint = foreign_frame_hint_with(&error, names);
+        assert!(
+            hint.contains(&format!(
+                "Possible blocking extensions: Ajax Modifier ({ajax}), {other}."
+            )),
+            "{hint}"
+        );
+        assert!(!hint.contains("password manager"), "{hint}");
+        assert!(!hint.contains("Cause:"), "{hint}");
+        assert!(hint.contains("not attributed to this tab"), "{hint}");
+
+        let one = format!("x (chrome://extensions/?id={ajax}) y chrome://extensions/?id={ajax}");
+        let hint = foreign_frame_hint_with(&one, names);
+        assert!(
+            hint.contains(&format!(
+                "Possible blocking extensions: Ajax Modifier ({ajax})."
+            )),
+            "{hint}"
+        );
+    }
+
+    #[test]
+    fn extension_name_uses_numeric_versions() {
+        let root = tempfile::tempdir().unwrap();
+        for (version, name) in [
+            ("9.0.0_0", "Old"),
+            ("10.0.0_0", "New"),
+            ("10.0.0_1", "Newest"),
+        ] {
+            let dir = root.path().join(version);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("manifest.json"), json!({"name": name}).to_string()).unwrap();
+        }
+        assert_eq!(extension_name_in(root.path()).as_deref(), Some("Newest"));
+    }
+
+    #[test]
+    fn extension_name_resolves_a_localized_manifest_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let version = dir.path().join("1.2.3_0");
+        std::fs::create_dir_all(version.join("_locales/en")).unwrap();
+        std::fs::write(
+            version.join("manifest.json"),
+            r#"{"name":"__MSG_brandName__","default_locale":"en"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            version.join("_locales/en/messages.json"),
+            r#"{"brandname":{"message":"Immersive Translate"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            extension_name_in(dir.path()).as_deref(),
+            Some("Immersive Translate")
+        );
+        assert_eq!(extension_name_in(&dir.path().join("missing")), None);
     }
 
     #[test]
