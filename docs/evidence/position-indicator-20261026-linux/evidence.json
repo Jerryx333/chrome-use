@@ -1,0 +1,157 @@
+{
+  "date": "2026-10-26",
+  "issue": 721,
+  "run": "https://github.com/leeguooooo/chrome-use/actions/runs/40235362527",
+  "sourceCommit": "82c73470046052b093db9c058472c58c51ecb6c4",
+  "browser": {
+    "Browser": "Chrome/155.0.8059.39",
+    "Protocol-Version": "1.3",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+    "V8-Version": "15.5.35.20"
+  },
+  "platform": "isolated GitHub-hosted Linux Xvfb desktop",
+  "method": "Overlay.setShowHinge without Overlay.enable",
+  "checks": {
+    "noInjection": true,
+    "noExtraFixtureRequests": true,
+    "viewportUnchanged": true,
+    "focusUnchanged": true,
+    "visibilityUnchanged": true,
+    "eventsBeforeInputUnchanged": true,
+    "trustedClickDelivered": true
+  },
+  "pagePixels": {
+    "baseline": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "visible": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 676,
+      "bounds": [
+        99,
+        99,
+        124,
+        124
+      ]
+    },
+    "hidden": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "navigation": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "navigation-hidden": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "detach-before": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 576,
+      "bounds": [
+        100,
+        100,
+        123,
+        123
+      ]
+    },
+    "detached": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    }
+  },
+  "independentDesktopPixels": {
+    "baseline": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "visible": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 676,
+      "bounds": [
+        99,
+        99,
+        124,
+        124
+      ]
+    },
+    "hidden": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "navigation": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "navigation-hidden": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "detach-before": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 576,
+      "bounds": [
+        100,
+        100,
+        123,
+        123
+      ]
+    },
+    "detached": {
+      "width": 900,
+      "height": 557,
+      "magentaPixels": 0,
+      "bounds": null
+    }
+  },
+  "desktopCapture": "FFmpeg x11grab, viewport crop; all seven captures exited 0",
+  "limits": [
+    "Extension relay not exercised",
+    "Continuous desktop video recording not exercised",
+    "Only the tested 1x Linux and 2x macOS cases are covered, not all zoom/display configurations",
+    "Explicit debugger detach tested; arbitrary network loss and hung-renderer cleanup remain unmeasured",
+    "Input timing and resource overhead not measured",
+    "Page screenshots capture the marker; production capture paths must suppress it",
+    "No product feature or enable flag shipped"
+  ],
+  "imageSha256": {
+    "baseline-desktop.png": "ef5e9e83e73a0f3ee8ec186438fcc5b51072a27f182ee2d74f20e61700eadef4",
+    "baseline-page.png": "68fc822e5171c27cbf7051c405e11db2ff729c2b94c797e9b0ef5645045cd2df",
+    "detach-before-desktop.png": "5865da461bba6308e693b30d260d5e53278f4e6bbc4829f6e8433102ec3ac29a",
+    "detach-before-page.png": "412392ae39b6aea3d75a93afe285aeb6563685cff03584ec1ea151fcbbfb61c1",
+    "detached-desktop.png": "ef5e9e83e73a0f3ee8ec186438fcc5b51072a27f182ee2d74f20e61700eadef4",
+    "detached-page.png": "68fc822e5171c27cbf7051c405e11db2ff729c2b94c797e9b0ef5645045cd2df",
+    "hidden-desktop.png": "ef5e9e83e73a0f3ee8ec186438fcc5b51072a27f182ee2d74f20e61700eadef4",
+    "hidden-page.png": "68fc822e5171c27cbf7051c405e11db2ff729c2b94c797e9b0ef5645045cd2df",
+    "navigation-desktop.png": "ef5e9e83e73a0f3ee8ec186438fcc5b51072a27f182ee2d74f20e61700eadef4",
+    "navigation-hidden-desktop.png": "ef5e9e83e73a0f3ee8ec186438fcc5b51072a27f182ee2d74f20e61700eadef4",
+    "navigation-hidden-page.png": "68fc822e5171c27cbf7051c405e11db2ff729c2b94c797e9b0ef5645045cd2df",
+    "navigation-page.png": "68fc822e5171c27cbf7051c405e11db2ff729c2b94c797e9b0ef5645045cd2df",
+    "visible-desktop.png": "ed1414cb1741c03221388f4e503fe60166f12e1df1f9b44ebad4fcf09926584a",
+    "visible-page.png": "e707a9a719f6c7728ed1fcca759c100aa8ed3d619a149c1e6b0796eeb8cde6f2"
+  }
+}
