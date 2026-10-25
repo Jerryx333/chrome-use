@@ -2697,7 +2697,9 @@ async fn reapply_value_without_focus_change(
     Ok(())
 }
 
-/// Clipboard backups live only in a private remote-object closure. Normal
+/// Independent Blob-backed clipboard items live in a private remote-object
+/// closure; browser-backed items may expire after staging. Restore success is
+/// verified by reading the saved formats back. Normal
 /// returns finish/release it; a page-side lease handles abandoned commands while
 /// the document survives. Context loss can prevent restoration. The Clipboard
 /// API has no atomic compare/write: concurrent writes remain a documented limit.

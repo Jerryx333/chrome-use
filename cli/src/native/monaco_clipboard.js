@@ -7,15 +7,17 @@ function () {
     const input = root && root.querySelector('textarea.inputarea');
     const doc = input && input.ownerDocument;
     const clipboard = doc && doc.defaultView.navigator.clipboard;
-    let backup = null, expected = null, dirty = false, closed = false;
+    let backup = null, backupBytes = null, expected = null, dirty = false, closed = false;
     let startup = null, completion = null;
     const state = { paste: null, copy: null };
     const failure = error => ({ ok: false, error: String(error && error.message || error) });
     const onPaste = event => {
         if (!event.isTrusted || closed || !event.composedPath().includes(input)) return;
-        queueMicrotask(() => {
-            if (!closed) state.paste = { trusted: true, prevented: event.defaultPrevented };
-        });
+        // Monaco's paste controller can stopImmediatePropagation at the input.
+        // Retain the event from capture, then inspect defaultPrevented only
+        // when Rust asks after dispatch. A capture-listener microtask can run
+        // before the editor's target listener has handled the event.
+        state.paste = event;
     };
     const onCopy = event => {
         if (!event.isTrusted || closed || !event.composedPath().includes(input)) return;
@@ -51,7 +53,7 @@ function () {
     function stopListeners() {
         clearTimeout(timer);
         if (input) {
-            doc.removeEventListener('paste', onPaste);
+            doc.removeEventListener('paste', onPaste, true);
             doc.removeEventListener('copy', onCopy);
         }
     }
@@ -69,11 +71,15 @@ function () {
                 // No text-only fallback: it would discard non-text formats and
                 // could overwrite a newer clipboard write after a denied restore.
                 await clipboard.write(backup);
+                if (!matches(await bytes(await clipboard.read()), backupBytes)) {
+                    return failure('clipboard restore returned without restoring the saved contents');
+                }
                 return { ok: true };
             } catch (error) {
                 return failure('original clipboard could not be restored: ' + String(error && error.message || error));
             } finally {
                 backup = null;
+                backupBytes = null;
                 expected = null;
                 state.paste = null;
                 state.copy = null;
@@ -91,12 +97,16 @@ function () {
                     if (!clipboard || !clipboard.read || !clipboard.write || !clipboard.writeText) {
                         throw new Error('browser clipboard read/write APIs are unavailable');
                     }
-                    backup = await clipboard.read();
-                    // Materialize the backup before making any changes; deferred
-                    // ClipboardItem failures must not be discovered after staging.
-                    await bytes(backup);
+                    backupBytes = await bytes(await clipboard.read());
+                    if (!backupBytes.length) throw new Error('clipboard has no restorable items');
+                    // Browser-backed ClipboardItems can become invalid after a
+                    // clipboard change, even after getType has resolved. Keep
+                    // independent Blob-backed items before staging anything.
+                    backup = backupBytes.map(formats => new doc.defaultView.ClipboardItem(
+                        Object.fromEntries(formats.map(([type, data]) =>
+                            [type, new doc.defaultView.Blob([data], { type })]))));
                     if (closed) throw new Error('clipboard transaction expired during backup');
-                    doc.addEventListener('paste', onPaste);
+                    doc.addEventListener('paste', onPaste, true);
                     doc.addEventListener('copy', onCopy);
                     if (value !== null) {
                         expected = [[['text/plain', new TextEncoder().encode(value)]]];
@@ -124,6 +134,7 @@ function () {
         },
         check(kind) {
             if (closed) return { ok: false, error: 'clipboard transaction expired or closed' };
+            if (kind === 'paste' && state.paste) return { trusted: true, prevented: state.paste.defaultPrevented };
             return state[kind];
         },
         finish,

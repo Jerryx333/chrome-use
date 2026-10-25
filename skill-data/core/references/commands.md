@@ -111,7 +111,7 @@ read `confirmed: null` as success.
 
 ## Interactions (use @refs from snapshot)
 
-Monaco clipboard fallback keeps transaction state in a private closure and removes temporary listeners on completion, setup errors, or a 60-second lease expiry while the document survives. Restoration compares all observed clipboard formats and refuses when contents differ or ownership is uncertain. A restore failure is an error, even if the editor changed. Context loss can prevent restoration, and clipboard comparison/write is not atomic; avoid concurrent clipboard use.
+Monaco clipboard fallback keeps transaction state in a private closure and removes temporary listeners on completion, setup errors, or a 60-second lease expiry while the document survives. The backup uses independent Blob-backed items because browser-backed ClipboardItems may expire after a write. An empty or unreadable backup is refused before staging. Restoration is read back and verified, and compares all observed clipboard formats and refuses when contents differ or ownership is uncertain. A restore failure is an error, even if the editor changed. Context loss can prevent restoration, and clipboard comparison/write is not atomic; avoid concurrent clipboard use.
 
 
 ```bash

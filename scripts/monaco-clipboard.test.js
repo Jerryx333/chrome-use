@@ -5,14 +5,22 @@ import vm from 'node:vm'
 
 const source = readFileSync(new URL('../cli/src/native/monaco_clipboard.js', import.meta.url), 'utf8')
 const item = values => ({ types: Object.keys(values), async getType(type) { return new Blob([values[type]]) } })
-function fixture({ denyRead = false, denyStage = false, denyRestore = false, throwFocus = false, deferredStage = false } = {}) {
+function fixture({ denyRead = false, denyStage = false, denyRestore = false, throwFocus = false, deferredStage = false, staleItems = false, silentRestore = false } = {}) {
   let contents = [item({ 'text/plain': 'before', 'text/html': '<b>before</b>' })]
   let restores = 0, stages = 0, releaseStage
-  const listeners = new Map(), timers = new Map()
+  const listeners = new Map(), captures = new Map(), timers = new Map()
   let nextTimer = 0
   const clipboard = {
-    async read() { if (denyRead) throw Error('read denied'); return contents },
-    async write(items) { restores++; if (denyRestore) throw Error('restore denied'); contents = items },
+    async read() {
+      if (denyRead) throw Error('read denied')
+      if (!staleItems) return contents
+      const saved = contents
+      return saved.map(entry => ({types: entry.types, async getType(type) {
+        if (contents !== saved) throw Error('Clipboard data has changed')
+        return entry.getType(type)
+      }}))
+    },
+    async write(items) { restores++; if (denyRestore) throw Error('restore denied'); if (!silentRestore) contents = items },
     async writeText(text) {
       stages++
       if (denyStage) throw Error('stage denied')
@@ -21,9 +29,9 @@ function fixture({ denyRead = false, denyStage = false, denyRestore = false, thr
     },
   }
   const doc = {
-    defaultView: { navigator: { clipboard } },
-    addEventListener(type, fn) { listeners.set(type, fn) },
-    removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type) },
+    defaultView: { navigator: { clipboard }, Blob, ClipboardItem: class { constructor(values) { this.values = values; this.types = Object.keys(values) } async getType(type) { return this.values[type] } } },
+    addEventListener(type, fn, capture = false) { listeners.set(type, fn); captures.set(type, capture) },
+    removeEventListener(type, fn, capture = false) { if (listeners.get(type) === fn && captures.get(type) === capture) { listeners.delete(type); captures.delete(type) } },
   }
   const input = { ownerDocument: doc, focus() { if (throwFocus) throw Error('focus failed') } }
   const root = { querySelector() { return input } }
@@ -35,7 +43,7 @@ function fixture({ denyRead = false, denyStage = false, denyRestore = false, thr
     clearTimeout(id) { timers.delete(id) },
   }).call(anchor)
   return {
-    tx, listeners, timers, anchor, beforeKeys,
+    tx, listeners, captures, timers, anchor, beforeKeys,
     get restores() { return restores }, get stages() { return stages },
     async contents() { return Promise.all(contents.map(async entry => Object.fromEntries(await Promise.all(entry.types.map(async type => [type, await (await entry.getType(type)).text()]))))) },
     change(values) { contents = [item(values)] },
@@ -139,4 +147,36 @@ test('active input renews the lease and expired transactions refuse renewal', as
   timer.fn()
   assert.equal(f.tx.active().ok, false)
   assert.equal((await f.tx.finish()).ok, true)
+})
+
+test('paste capture survives stopped bubbling and observes cancellation after dispatch', async () => {
+  const f = fixture()
+  await f.tx.start('staged')
+  assert.equal(f.captures.get('paste'), true)
+  // Use the existing helper to provide the real fixture input as target.
+  const observed = { isTrusted: true, defaultPrevented: false }
+  const original = f.listeners.get('paste')
+  f.listeners.set('paste', e => { Object.assign(observed, e); original(observed) })
+  await f.event('paste', {}, { prevented: false })
+  assert.equal(f.tx.check('paste').prevented, false)
+  // The editor's later target handler cancels the event and stops bubbling.
+  observed.defaultPrevented = true
+  f.listeners.set('paste', original)
+  assert.equal(f.tx.check('paste').prevented, true)
+  await f.tx.finish()
+  assert.equal(f.listeners.size, 0)
+})
+
+test('backup remains restorable when browser-backed items become invalid after staging', async () => {
+  const f = fixture({ staleItems: true })
+  assert.equal((await f.tx.start('replacement')).ok, true)
+  assert.equal((await f.tx.finish()).ok, true)
+  assert.deepEqual(await f.contents(), [{ 'text/plain': 'before', 'text/html': '<b>before</b>' }])
+})
+test('a resolved write is not success when the saved clipboard was not restored', async () => {
+  const f = fixture({ silentRestore: true })
+  await f.tx.start('replacement')
+  assert.match((await f.tx.finish()).error, /without restoring/)
+  assert.deepEqual(await f.contents(), [{ 'text/plain': 'replacement' }])
+  assert.equal(f.listeners.size, 0)
 })

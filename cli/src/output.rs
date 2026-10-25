@@ -2995,7 +2995,9 @@ not a raw `.value` write — and the response echoes which `engine` was used.
 The written value is read back from the control or editor model and compared
 exactly before success is reported. If Monaco hides its model API, fill uses
 one trusted editor paste, reads the selected model back through the editor's
-copy handler, and attempts clipboard restoration. Restoration checks all observed
+copy handler, and attempts clipboard restoration from an independent Blob backup.
+An empty or unreadable backup is refused before staging; restoration is read back
+and verified. Restoration checks all observed
 formats and fails if contents changed or ownership is uncertain. Private transaction
 state expires after 60 seconds in a surviving document. Context loss can prevent
 restoration; comparison/write is not atomic. Avoid concurrent clipboard use.
