@@ -39,11 +39,15 @@ impl Projection {
     fn rect(self, quad: &Value) -> Result<Rect, String> {
         let quad = quad_points(quad)?;
         let xs: Vec<_> = quad
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| self.x + p[0] * self.sx)
             .collect();
         let ys: Vec<_> = quad
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| self.y + p[1] * self.sy)
             .collect();
         let x = xs.iter().copied().fold(f64::INFINITY, f64::min);

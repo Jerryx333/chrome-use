@@ -217,6 +217,10 @@ async fn capture_screenshot_base64(
 
     if let Some((x, y, width, height)) = options.clip {
         // Explicit pixel region wins over selector/full_page (issue #34).
+        // Annotated captures supply a document-space clip even for selectors.
+        // Permit off-viewport pixels instead of depending on the compositor's
+        // currently visible surface (relay captures can otherwise time out).
+        params.capture_beyond_viewport = Some(true);
         params.clip = Some(Viewport {
             x,
             y,
