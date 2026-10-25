@@ -206,6 +206,8 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 
 面板历史按 Chrome profile 保存在本机 `~/.chrome-use/agent-panel`。所选 CLI 可能把任务和网页内容发送给它配置的模型服务，该服务的隐私政策适用。侧栏没有新增网页 content script，打开时仍可能改变页面视口。下面的点选改代码只在你按快捷键或按钮时才注入页面。自定义程序需填写绝对路径。
 
+点击任务通知会激活对应会话的标签页，并聚焦该标签页所在的窗口，即使之前使用的是另一个 Chrome 窗口，或当前窗口尚未确定。已绑定的会话标签优先于最后聚焦的窗口。
+
 侧栏还支持以下功能：
 
 - **技能：**输入 `/` 选择内置技能、用户技能或当前 Chrome profile 的技能库条目。在 **Agents & models → Skill library** 编辑、启停库内技能，或从本机绝对路径目录、ZIP/.skill 压缩包、HTTPS Git 仓库导入。用户和 CLI 原有技能目录在这里只读。发送前会保存所选技能及文件的副本，排队和明确重试使用同一份内容。面板中的 agent 可通过 `chrome_use_skills` 列出、读取技能或当前所选技能的相对路径文本文件，并在用户要求时保存库内说明。

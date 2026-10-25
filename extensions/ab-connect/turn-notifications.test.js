@@ -217,7 +217,7 @@ test('with one panel per tab, a finished turn opens its conversation\'s own tab,
   const calls = [];
   const chrome = { storage: { local: { set: async value => calls.push(['store', Object.keys(value)]) } }, windows: { update: async (id, value) => calls.push(['focus', id, value]) }, notifications: { clear: async id => calls.push(['clear', id]) }, sidePanel: { open: async value => calls.push(['global-open', value]) } };
   const bound = new Map([[21, ID]]);
-  const tabs = { tabFor: id => [...bound].find(([, c]) => c === id)?.[0] ?? null, activeTab: () => 30, bind: (tabId, id) => { calls.push(['bind', tabId, id]); bound.set(tabId, id); }, open: tabId => calls.push(['open', tabId]), show: tabId => calls.push(['show', tabId]) };
+  const tabs = { tabFor: id => [...bound].find(([, c]) => c === id)?.[0] ?? null, activeTab: () => 30, bind: (tabId, id) => { calls.push(['bind', tabId, id]); bound.set(tabId, id); }, open: tabId => calls.push(['open', tabId]), show: tabId => { calls.push(['show', tabId]); return { id: tabId, windowId: 4 }; } };
   const there = { posted: [], postMessage(m) { this.posted.push(m); } }, other = { posted: [], postMessage(m) { this.posted.push(m); } };
   const panels = new Map([[there, { windowId: 4, tabId: 21 }], [other, { windowId: 4, tabId: 30 }]]);
   assert.equal(openFromNotification(`panel-turn:${ID}`, { windowId: 4, chrome, panels, tabs }), true);
@@ -237,6 +237,103 @@ test('with one panel per tab, a finished turn opens its conversation\'s own tab,
   openFromNotification('inspect-reply:dm-a#4', { windowId: 4, chrome, panels, tabs });
   assert.deepEqual(calls.slice(0, 2), [['store', ['ab_panel_show_replies']], ['open', 30]]);
 });
+
+// Use the shipped background wiring so activation must return Chrome's Tab.
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+const backgroundSource = readFileSync(new URL('./background.js', import.meta.url), 'utf8');
+function notificationActivation(update) {
+  const start = backgroundSource.indexOf('const notificationPanels = {');
+  const end = backgroundSource.indexOf('async function panelShowing', start);
+  assert.ok(start >= 0 && end > start);
+  return vm.runInNewContext(`${backgroundSource.slice(start, end)}; notificationPanels`, {
+    chrome: { tabs: { update } },
+  }).show;
+}
+
+for (const kind of ['panel-turn', 'schedule-run']) {
+  test(`${kind} click focuses the activated tab's current window without delaying panel open`, async () => {
+    const calls = [];
+    let activated;
+    const chrome = {
+      windows: { update: async (id, options) => calls.push(['focus', id, options]) },
+      notifications: { clear: async () => {} },
+    };
+    const tabs = {
+      tabFor: () => 21,
+      open: id => calls.push(['open', id]),
+      show: notificationActivation((id, options) => {
+        calls.push(['activate', id, options]);
+        return new Promise(resolve => { activated = resolve; });
+      }),
+    };
+    // Stored panel presence can be stale if the tab moved to a different window.
+    const panels = new Map([[{ postMessage() {} }, { tabId: 21, windowId: 7 }]]);
+    assert.equal(openFromNotification(`${kind}:${ID}`, { windowId: 4, chrome, panels, tabs }), true);
+    assert.equal(calls[0][0], 'activate');
+    assert.deepEqual(calls[1], ['open', 21], 'open is synchronous with the notification gesture');
+    assert.deepEqual(calls.filter(([type]) => type === 'focus'), []);
+    activated({ id: 21, windowId: 9, active: true });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls.filter(([type]) => type === 'focus'), [['focus', 9, { focused: true }]]);
+  });
+}
+
+for (const failure of ['rejected', 'missing tab']) {
+  test(`a ${failure} activation never focuses the unrelated last active window`, async t => {
+    const focused = [], warnings = [], opened = [];
+    t.mock.method(console, 'warn', (...args) => warnings.push(args));
+    const chrome = { windows: { update: async id => focused.push(id) }, notifications: { clear: async () => {} } };
+    const tabs = { tabFor: () => 21, open: id => opened.push(id), show: notificationActivation(async () => {
+      if (failure === 'rejected') throw new Error('No tab with id: 21');
+      return undefined;
+    }) };
+    openFromNotification(`panel-turn:${ID}`, { windowId: 4, chrome, panels: new Map(), tabs });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(opened, [21]);
+    assert.deepEqual(focused, []);
+    assert.equal(warnings.length, 1, 'activation uncertainty is reported');
+  });
+}
+
+for (const kind of ['panel-turn', 'schedule-run']) {
+  for (const windowId of [null, undefined]) {
+    test(`${kind} routes to its bound tab before the current window is known (${windowId})`, async () => {
+      const calls = [];
+      const chrome = {
+        storage: { local: { set: async value => calls.push(['store', value]) } },
+        windows: { getLastFocused: async () => { calls.push(['last-focused']); return { id: 99 }; }, update: async id => calls.push(['focus', id]) },
+        sidePanel: { open: async value => calls.push(['global-open', value]) },
+        notifications: { clear: async () => {} },
+      };
+      const tabs = {
+        tabFor: () => 21,
+        activeTab: () => { throw new Error('A bound tab must not use the current-window fallback'); },
+        show: notificationActivation(async id => { calls.push(['show', id]); return { id, windowId: 7 }; }),
+        open: id => calls.push(['open', id]),
+      };
+      assert.equal(openFromNotification(`${kind}:${ID}`, { windowId, chrome, panels: new Map(), tabs }), true);
+      assert.deepEqual(calls.slice(0, 2), [['show', 21], ['open', 21]], 'side panel opens synchronously in the notification gesture');
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(calls, [['show', 21], ['open', 21], ['focus', 7]]);
+    });
+  }
+}
+
+for (const id of [`panel-turn:${ID}`, 'inspect-reply:dm-a#4']) {
+  test(`an unbound ${id.split(':')[0]} keeps its last-window fallback when no current window is known`, async () => {
+    const calls = [];
+    const chrome = {
+      storage: { local: { set: async () => {} } },
+      windows: { getLastFocused: async () => ({ id: 99 }), update: async id => calls.push(['focus', id]) },
+      sidePanel: { open: async value => calls.push(['open', value]) }, notifications: { clear: async () => {} },
+    };
+    const tabs = { tabFor: () => null, activeTab: () => { throw new Error('No current window is available'); } };
+    assert.equal(openFromNotification(id, { windowId: null, chrome, panels: new Map(), tabs }), true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, [['open', { windowId: 99 }], ['focus', 99]]);
+  });
+}
 
 for (const failure of ['create', 'showing']) {
   test(`a transient ${failure} failure leaves the turn eligible for notification`, async () => {
