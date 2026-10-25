@@ -51,6 +51,9 @@ execution access. Panel history stays local, but the selected CLI may send tasks
 and page content to its configured model service. Deletion removes the panel
 history, the agent session history and the conversation's browser session;
 Codex's SQLite cache is untouched. Details: [connection](references/connection.md).
+Panel replies render fenced code literally. Use a longer outer fence for examples
+containing shorter fences; a closing fence must use the same character, be at
+least as long as the opener, and have only whitespace after it.
 Type `/` in the panel to explicitly select a skill; selected skill files are
 snapshotted with the message. Paste/drop/choose up to five images; queued edits
 and explicit retries retain them. Conversation options override tool scope,
