@@ -70,7 +70,9 @@ Clearing an unconfirmed-send warning does not cancel possible delivery.
 
 The `/resume` picker clears old choices when the agent or search changes.
 Enter selects only a currently listed session; loading, unavailable or empty
-results cannot open or resume an old selection.
+results cannot open or resume an old selection. Changing agent/search or closing
+the picker dismisses old confirmations and ignores earlier resume responses.
+An already-issued host request may still finish.
 
 Queued messages can be edited or removed only while still queued and matching
 the original text. Edits use a new ID; superseded IDs stay deduplicated. Long

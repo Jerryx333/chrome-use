@@ -107,7 +107,7 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
 
   /** Clear visible and keyboard choices together, and invalidate older listings. */
   function resetResults() {
-    items.replaceChildren(); rows = []; options = []; active = -1;
+    items.replaceChildren(); rows = []; options = []; active = -1; confirm.hidden = true;
     return ++epoch;
   }
   function close() { container.hidden = true; confirm.hidden = true; resetResults(); if (timer !== null) cancel(timer); timer = null; }
@@ -201,24 +201,30 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
   }
   async function choose(row, confirmRunning = false) {
     if (busy) return;
+    const current = epoch;
     if (row.conversationId) { close(); await onResumed({ id: row.conversationId }, true); return; }
     busy = true; status.textContent = RESUME_TEXT.resuming; status.hidden = false;
     try {
       const params = { agentId: row.agentId, sessionId: row.sessionId };
       if (confirmRunning) params.confirmRunning = true;
       const path = executable(row.agentId); if (path) params.executable = path;
-      const result = await api('conversationResume', params);
+      let result;
+      try { result = await api('conversationResume', params); }
+      catch (error) { if (current !== epoch) return; throw error; }
+      // The host request may finish, but an old result must not change a new picker.
+      if (current !== epoch) return;
       if (result.confirmRequired === 'running') { askRunning(row); return; }
       close();
       await onResumed(result.conversation, result.existing === true, result.projectRefused || null);
-    } finally { busy = false; if (!container.hidden && status.textContent === RESUME_TEXT.resuming) { status.textContent = ''; status.hidden = true; } }
+    } finally { busy = false; if (current === epoch && !container.hidden && status.textContent === RESUME_TEXT.resuming) { status.textContent = ''; status.hidden = true; } }
   }
   // A session another terminal may still be writing is never attached
   // silently: the user confirms, and the host checks again.
   function askRunning(row) {
+    const current = epoch;
     confirm.replaceChildren(element('p', RESUME_TEXT.unsafe), element('p', RESUME_TEXT.unsafeHint, 'hint'));
     const actions = element('div', undefined, 'actions');
-    actions.append(button(RESUME_TEXT.confirm, () => { confirm.hidden = true; return choose(row, true); }, 'danger'), button(RESUME_TEXT.cancel, () => { confirm.hidden = true; }));
+    actions.append(button(RESUME_TEXT.confirm, () => { if (current !== epoch) return; confirm.hidden = true; return choose(row, true); }, 'danger'), button(RESUME_TEXT.cancel, () => { confirm.hidden = true; }));
     confirm.append(actions); confirm.hidden = false;
   }
   agent.addEventListener('change', () => void load());

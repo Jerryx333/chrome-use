@@ -208,7 +208,7 @@ History streams replies, expandable tool rows and requests. Tool output does not
 
 To delete a conversation, stop its response, click the header's delete button and confirm. Deletion removes panel history and that conversation's browser session, plus Codex rollout files, Claude session files/directories, OpenCode history through `session/delete`, or Pi session files inside the conversation folder. Codex's SQLite cache is left untouched. The panel reports cleanup failures or unconfirmed tab closure.
 
-In the /resume picker, changing the agent or search clears the previous selection immediately. Enter only selects a currently listed session; it does nothing while results are loading, unavailable or empty.
+In the /resume picker, changing the agent or search clears the previous selection immediately. Enter only selects a currently listed session; it does nothing while results are loading, unavailable or empty. Changing the agent/search or closing the picker also dismisses old confirmations and prevents earlier resume responses from opening the old conversation. Requests already sent to the host may still finish.
 
 `/resume` continues a Claude Code, Codex, OpenCode or Pi session you started in a terminal, and a new conversation can work in a project folder that a site can remember. See [Continue a terminal session](https://chrome-use.leeguoo.com/en/agent-panel.html#resume) and [Project folder](https://chrome-use.leeguoo.com/en/agent-panel.html#project).
 

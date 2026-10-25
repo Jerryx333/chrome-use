@@ -251,3 +251,105 @@ test('a reopened picker ignores the old listing and resumes the newly loaded age
   assert.deepEqual(f.resumes, [{ agentId: 'pi', sessionId: 'pi-session' }]);
   assert.deepEqual(f.errors, []);
 });
+
+for (const outcome of ['success', 'running', 'failure']) {
+  test(`changing agent ignores an outstanding resume ${outcome}`, async () => {
+    const pending = deferred(), opened = [], errors = [];
+    const picker = createResumePicker({ document,
+      api: async operation => operation === 'conversationResume' ? pending.promise : { supported: true, sessions: [] },
+      agents: () => [{ id: 'codex', name: 'Codex' }, { id: 'pi', name: 'Pi' }], preferredAgent: () => 'codex',
+      onResumed: async conversation => opened.push(conversation.id), onError: error => errors.push(error),
+    });
+    await picker.open();
+    const choosing = picker.choose({ agentId: 'codex', sessionId: 'old' });
+    const agent = all(picker.container, node => node.tag === 'select')[0];
+    agent.value = 'pi'; agent.fire('change'); await settle();
+    if (outcome === 'failure') pending.reject(new Error('Old request failed'));
+    else pending.resolve(outcome === 'running' ? { confirmRequired: 'running' } : { conversation: { id: 'old-conversation' } });
+    await choosing;
+    assert.deepEqual(opened, []);
+    assert.deepEqual(errors, []);
+    assert.equal(picker.isOpen, true);
+    assert.equal(all(picker.container, node => node.className === 'delete-confirm')[0].hidden, true);
+  });
+}
+
+for (const change of ['agent', 'search', 'close']) {
+  test(`${change} invalidates the previous running-session confirmation`, async () => {
+    const calls = [], opened = [];
+    const picker = createResumePicker({ document,
+      api: async (operation, params) => {
+        calls.push([operation, params]);
+        return operation === 'conversationResume' ? { confirmRequired: 'running' } : { supported: true, sessions: [] };
+      },
+      agents: () => [{ id: 'codex', name: 'Codex' }, { id: 'pi', name: 'Pi' }], preferredAgent: () => 'codex',
+      onResumed: async conversation => opened.push(conversation.id), onError: error => { throw error; },
+      schedule: () => 1, cancel: () => {},
+    });
+    await picker.open(); await picker.choose({ agentId: 'codex', sessionId: 'old' });
+    const confirm = all(picker.container, node => node.className === 'delete-confirm')[0];
+    assert.equal(confirm.hidden, false);
+    // Button actions run in a microtask. Invalidate even an already queued confirmation.
+    all(confirm, node => node.className === 'danger')[0].fire('click');
+    if (change === 'close') picker.close();
+    else {
+      const control = all(picker.container, node => node.tag === (change === 'agent' ? 'select' : 'input'))[0];
+      control.value = change === 'agent' ? 'pi' : 'new'; control.fire(change === 'agent' ? 'change' : 'input');
+    }
+    await settle();
+    assert.equal(confirm.hidden, true);
+    assert.equal(calls.filter(([operation]) => operation === 'conversationResume').length, 1);
+    assert.deepEqual(opened, []);
+  });
+}
+
+test('closing and reopening ignores the previous resume completion and permits a fresh choice', async () => {
+  const pending = deferred(), opened = [];
+  let resumes = 0;
+  const picker = createResumePicker({ document,
+    api: async operation => operation === 'conversationResume'
+      ? ++resumes === 1 ? pending.promise : { conversation: { id: 'new-conversation' } }
+      : { supported: true, sessions: [] },
+    agents: () => [{ id: 'codex', name: 'Codex' }], preferredAgent: () => 'codex',
+    onResumed: async conversation => opened.push(conversation.id), onError: error => { throw error; },
+  });
+  await picker.open(); const choosing = picker.choose({ agentId: 'codex', sessionId: 'old' });
+  picker.close(); await picker.open();
+  pending.resolve({ conversation: { id: 'old-conversation' } }); await choosing;
+  assert.deepEqual(opened, []); assert.equal(picker.isOpen, true);
+  await picker.choose({ agentId: 'codex', sessionId: 'new' });
+  assert.deepEqual(opened, ['new-conversation']); assert.equal(picker.isOpen, false);
+});
+
+for (const failure of ['resume', 'open']) {
+  test(`a current ${failure} failure is still reported`, async () => {
+    const picker = createResumePicker({ document,
+      api: async operation => {
+        if (operation !== 'conversationResume') return { supported: true, sessions: [] };
+        if (failure === 'resume') throw new Error('Current resume failed');
+        return { conversation: { id: 'current' } };
+      },
+      agents: () => [{ id: 'codex', name: 'Codex' }], preferredAgent: () => 'codex',
+      onResumed: async () => { throw new Error('Current open failed'); }, onError: error => { throw error; },
+    });
+    await picker.open();
+    await assert.rejects(picker.choose({ agentId: 'codex', sessionId: 'current' }), new RegExp(`Current ${failure} failed`));
+  });
+}
+
+test('the current running-session confirmation still resumes the chosen session', async () => {
+  const calls = [], opened = [];
+  const picker = createResumePicker({ document,
+    api: async (operation, params) => {
+      if (operation !== 'conversationResume') return { supported: true, sessions: [] };
+      calls.push(params);
+      return params.confirmRunning ? { conversation: { id: 'current' } } : { confirmRequired: 'running' };
+    },
+    agents: () => [{ id: 'codex', name: 'Codex' }], preferredAgent: () => 'codex',
+    onResumed: async conversation => opened.push(conversation.id), onError: error => { throw error; },
+  });
+  await picker.open(); await picker.choose({ agentId: 'codex', sessionId: 'current' });
+  all(picker.container, node => node.className === 'danger')[0].fire('click'); await settle();
+  assert.deepEqual(calls, [{ agentId: 'codex', sessionId: 'current' }, { agentId: 'codex', sessionId: 'current', confirmRunning: true }]);
+  assert.deepEqual(opened, ['current']); assert.equal(picker.isOpen, false);
+});
