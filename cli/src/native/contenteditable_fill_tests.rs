@@ -26,13 +26,13 @@ async fn fill_with_readback(actual: &str) -> (Result<Option<String>, String>, Ve
                     assert_eq!(request["params"]["text"], "hello world");
                     json!({})
                 }
-                "Runtime.evaluate" => json!({"result":{"value":true}}),
+                "Runtime.evaluate" => json!({"result":{"type":"boolean","value":true}}),
                 "Runtime.callFunctionOn" => {
                     let script = request["params"]["functionDeclaration"].as_str().unwrap();
                     if script.contains("const s = '.monaco-editor") {
-                        json!({"result":{"value":false}})
+                        json!({"result":{"type":"boolean","value":false}})
                     } else {
-                        json!({"result":{"value":{"ok":true,"value":actual}}})
+                        json!({"result":{"type":"object","value":{"ok":true,"value":actual}}})
                     }
                 }
                 other => panic!("unexpected CDP method: {other}"),
