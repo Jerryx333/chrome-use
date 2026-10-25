@@ -25,14 +25,16 @@ pub(super) fn render(
     encoded: &str,
     annotations: &[ScreenshotAnnotation],
     region: &Rect,
+    raster_region: &Rect,
     options: &ScreenshotOptions,
 ) -> Result<String, String> {
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|e| format!("Failed to decode screenshot for annotations: {e}"))?;
-    let mut image = image::load_from_memory(&bytes)
+    let image = image::load_from_memory(&bytes)
         .map_err(|e| format!("Failed to read screenshot for annotations: {e}"))?
         .to_rgba8();
+    let mut image = crop(image, region, raster_region)?;
     draw(&mut image, annotations, region)?;
     let image = DynamicImage::ImageRgba8(image);
     let mut out = Cursor::new(Vec::new());
@@ -47,6 +49,43 @@ pub(super) fn render(
             .map_err(|e| format!("Failed to encode annotated PNG: {e}"))?;
     }
     Ok(STANDARD.encode(out.into_inner()))
+}
+
+/// Crop the requested document region from a viewport/full-page raster before
+/// drawing labels. This avoids asking Chrome to resize to a small selector clip.
+fn crop(image: RgbaImage, region: &Rect, raster_region: &Rect) -> Result<RgbaImage, String> {
+    if raster_region.width <= 0.0 || raster_region.height <= 0.0 {
+        return Err("Annotated screenshot: invalid capture geometry".into());
+    }
+    let sx = f64::from(image.width()) / raster_region.width;
+    let sy = f64::from(image.height()) / raster_region.height;
+    let x = ((region.x - raster_region.x) * sx).round();
+    let y = ((region.y - raster_region.y) * sy).round();
+    let width = (region.width * sx).round();
+    let height = (region.height * sy).round();
+    if ![x, y, width, height].iter().all(|v| v.is_finite())
+        || x < 0.0
+        || y < 0.0
+        || width < 1.0
+        || height < 1.0
+        || x + width > f64::from(image.width())
+        || y + height > f64::from(image.height())
+    {
+        return Err(
+            "Annotated screenshot: requested region extends outside captured pixels".into(),
+        );
+    }
+    if x == 0.0
+        && y == 0.0
+        && width == f64::from(image.width())
+        && height == f64::from(image.height())
+    {
+        return Ok(image);
+    }
+    Ok(
+        image::imageops::crop_imm(&image, x as u32, y as u32, width as u32, height as u32)
+            .to_image(),
+    )
 }
 
 fn fill(image: &mut RgbaImage, x: i64, y: i64, width: i64, height: i64, color: Rgba<u8>) {
@@ -141,6 +180,30 @@ mod tests {
     use super::*;
     use crate::native::screenshot::AnnotationBox;
 
+    #[test]
+    fn crop_projects_document_offsets_at_device_scale_and_refuses_missing_pixels() {
+        let raster = Rect {
+            x: 100.0,
+            y: 500.0,
+            width: 100.0,
+            height: 80.0,
+        };
+        let region = Rect {
+            x: 130.0,
+            y: 550.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        let mut image = RgbaImage::from_pixel(200, 160, WHITE);
+        image.put_pixel(60, 100, RED);
+        let cropped = crop(image, &region, &raster).unwrap();
+        assert_eq!((cropped.width(), cropped.height()), (40, 20));
+        assert_eq!(*cropped.get_pixel(0, 0), RED);
+        assert_eq!(*cropped.get_pixel(39, 19), WHITE);
+        let outside = Rect { x: 90.0, ..region };
+        assert!(crop(RgbaImage::new(200, 160), &outside, &raster).is_err());
+    }
+
     fn annotation() -> ScreenshotAnnotation {
         ScreenshotAnnotation {
             ref_id: "e12".into(),
@@ -211,6 +274,12 @@ mod tests {
             let encoded = render(
                 &raw,
                 &[annotation()],
+                &Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 80.0,
+                },
                 &Rect {
                     x: 0.0,
                     y: 0.0,

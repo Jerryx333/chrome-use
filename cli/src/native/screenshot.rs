@@ -112,7 +112,7 @@ pub async fn take_screenshot(
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<ScreenshotResult, String> {
     let mut capture_options = options.clone();
-    let (annotations, region) = if options.annotate {
+    let (annotations, region, raster_region) = if options.annotate {
         let metrics = client
             .send_command_no_params("Page.getLayoutMetrics", Some(session_id))
             .await?;
@@ -137,13 +137,68 @@ pub async fn take_screenshot(
         let raw = collect_annotations(client, session_id, ref_map, iframe_sessions).await?;
         let raw = filter_annotations(raw, Some(&projection));
         let annotations = project_annotations(&raw, Some(&projection), None);
-        capture_options.clip = Some((region.x, region.y, region.width, region.height));
+        let viewport = annotation_region(&ScreenshotOptions::default(), &metrics, None)?.0;
+        let raster_region = if contains(&viewport, &region) {
+            // Keep the normal viewport surface. Passing a tiny selector clip
+            // makes Chrome resize the compositor during capture; relay at 2x
+            // can hang on off-screen clips. Crop pixels in the CLI instead.
+            capture_options.clip = None;
+            capture_options.full_page = false;
+            // Unclipped screenshots include classic scrollbars, unlike the
+            // visual viewport client width. Measure that raw surface in the
+            // isolated world so its pixel scale does not stretch the labels.
+            let surface = client.send_command(
+                "Runtime.evaluate",
+                Some(serde_json::json!({
+                    "expression":"({width:innerWidth/(visualViewport?.scale||1),height:innerHeight/(visualViewport?.scale||1)})",
+                    "returnByValue":true
+                })),
+                Some(session_id),
+            ).await?;
+            let width = surface["result"]["value"]["width"]
+                .as_f64()
+                .ok_or("Annotated screenshot: raw viewport width unavailable")?;
+            let height = surface["result"]["value"]["height"]
+                .as_f64()
+                .ok_or("Annotated screenshot: raw viewport height unavailable")?;
+            if !width.is_finite()
+                || !height.is_finite()
+                || width < viewport.width
+                || height < viewport.height
+            {
+                return Err("Annotated screenshot: invalid raw viewport geometry".into());
+            }
+            Rect {
+                width,
+                height,
+                ..viewport
+            }
+        } else {
+            let full = annotation_region(
+                &ScreenshotOptions {
+                    full_page: true,
+                    ..Default::default()
+                },
+                &metrics,
+                None,
+            )?
+            .0;
+            if !contains(&full, &region) {
+                return Err(
+                    "Annotated screenshot: requested region extends outside the page".into(),
+                );
+            }
+            capture_options.full_page = true;
+            capture_options.clip = Some((full.x, full.y, full.width, full.height));
+            full
+        };
+        capture_options.selector = None;
         // Decode lossless pixels for rendering; encode JPEG only once at the
         // requested quality after labels have been drawn.
         capture_options.format = "png".to_string();
-        (annotations, Some(region))
+        (annotations, Some(region), Some(raster_region))
     } else {
-        (Vec::new(), None)
+        (Vec::new(), None, None)
     };
 
     // Hide the non-stealth cursor around the raw capture as before.
@@ -158,8 +213,8 @@ pub async fn take_screenshot(
     .await;
     set_cursor_visible(client, session_id, true).await;
     let mut base64 = captured?;
-    if let Some(region) = region {
-        base64 = annotation_image::render(&base64, &annotations, &region, options)?;
+    if let (Some(region), Some(raster_region)) = (region, raster_region) {
+        base64 = annotation_image::render(&base64, &annotations, &region, &raster_region, options)?;
     }
 
     let ext = if options.format == "jpeg" {
@@ -217,10 +272,6 @@ async fn capture_screenshot_base64(
 
     if let Some((x, y, width, height)) = options.clip {
         // Explicit pixel region wins over selector/full_page (issue #34).
-        // Annotated captures supply a document-space clip even for selectors.
-        // Permit off-viewport pixels instead of depending on the compositor's
-        // currently visible surface (relay captures can otherwise time out).
-        params.capture_beyond_viewport = Some(true);
         params.clip = Some(Viewport {
             x,
             y,
@@ -426,6 +477,13 @@ fn overlaps(left: &Rect, right: &Rect) -> bool {
     let right_y2 = right.y + right.height;
 
     left.x < right_x2 && left_x2 > right.x && left.y < right_y2 && left_y2 > right.y
+}
+
+fn contains(outer: &Rect, inner: &Rect) -> bool {
+    inner.x >= outer.x
+        && inner.y >= outer.y
+        && inner.x + inner.width <= outer.x + outer.width
+        && inner.y + inner.height <= outer.y + outer.height
 }
 
 /// The document-space capture region and the same region relative to the

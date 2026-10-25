@@ -3882,6 +3882,8 @@ Options:
                        to the image resolution. --clip wins over --full/selector.
                        Frame labels use their owning renderer. Unsupported frame
                        transforms or unavailable geometry report an error.
+                       Crops happen in the CLI; off-viewport crops capture the full
+                       page first. Regions outside the page are refused.
                        Each label [N] corresponds to ref @eN from snapshot.
                        Prints a legend mapping labels to element roles/names.
                        With --json, annotations are included in the response.

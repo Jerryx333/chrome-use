@@ -78,7 +78,7 @@
 
       <!-- ============ Screenshot ======= -->
       <h2>Screenshots</h2>
-      <p><code>screenshot --annotate</code> draws numbered labels into the captured image in the CLI, without inserting page nodes or styles. JSON annotation boxes remain capture-relative CSS pixels; labels scale to the image resolution. Explicit clips take precedence over full-page and selector captures. Frame references use their owning renderer and top-viewport geometry. Unsupported out-of-process iframe transforms or missing frame geometry are reported as errors instead of guessed positions.</p>
+      <p><code>screenshot --annotate</code> draws numbered labels into the captured image in the CLI, without inserting page nodes or styles. JSON annotation boxes remain capture-relative CSS pixels; labels scale to the image resolution. Explicit clips take precedence over full-page and selector captures. Frame references use their owning renderer and top-viewport geometry. Unsupported out-of-process iframe transforms or missing frame geometry are reported as errors instead of guessed positions. Cropping also happens in the CLI; an off-viewport region is cropped from a full-page capture. Regions outside the page are refused.</p>
       <p>
         <code>screenshot</code> renders the current page to PNG. With no path, it saves to a temp file and prints the path to
         stdout; with a path, it writes to the location you give.
