@@ -291,3 +291,33 @@ test('acknowledging a turn during notification creation does not restore its unr
   assert.equal(notifier.state.unseen[ID], undefined);
   assert.equal(f.badges.at(-1), '');
 });
+
+for (const previousUnread of [false, true]) {
+  test(`an acknowledged failed notification stays consumed${previousUnread ? ' after an earlier unread turn' : ''}`, async () => {
+    const f = fixture(), notifier = new TurnNotifications(f.options);
+    const c = chat({ phase: 'idle', lastTurn: { messageId: 'first', outcome: 'completed', ended: 120 } });
+    const read = async () => ({ conversations: [c] });
+    if (previousUnread) {
+      await notifier.poll(read);
+      c.lastTurn = { messageId: 'second', outcome: 'completed', ended: 130 };
+    }
+    let rejectCreation;
+    f.options.notifications.create = () => new Promise((resolve, reject) => { rejectCreation = reject; });
+    const polling = notifier.poll(read);
+    await new Promise(resolve => setImmediate(resolve));
+    await notifier.seen(ID);
+    rejectCreation(new Error('Creation failed after acknowledgement'));
+    await assert.rejects(polling, /Creation failed/);
+    assert.equal(notifier.state.seen[ID], previousUnread ? 't:second' : 't:first');
+    assert.equal(notifier.state.unseen[ID], undefined);
+    assert.equal(f.badges.at(-1), '');
+    let retries = 0;
+    f.options.notifications.create = async () => { retries++; };
+    await notifier.poll(read);
+    await new TurnNotifications(f.options).poll(read);
+    assert.equal(retries, 0, 'the acknowledged turn stays consumed across polls and restarts');
+    c.lastTurn = { messageId: 'next', outcome: 'completed', ended: 140 };
+    await notifier.poll(read);
+    assert.equal(retries, 1, 'a later turn can still notify');
+  });
+}

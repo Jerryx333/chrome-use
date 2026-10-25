@@ -64,7 +64,7 @@ Inspect & Ask (extension shortcut Alt+Shift+C) delivers a user's element pick
 to an agent session through ocs; a message starting `[chrome-use Inspect &
 Ask]` carries the user's instruction plus untrusted page data. Read
 `core/inspect-and-ask` before acting on one.
-If Chrome rejects a panel turn notification, a later check in the same extension-worker session retries it. Disabled notifications and turns already being viewed remain suppressed.
+If Chrome rejects a panel turn notification, a later check in the same extension-worker session retries it. Disabled notifications and turns already being viewed remain suppressed. Viewing a turn while its notification is being created also consumes that turn if creation later fails, including across worker restarts.
 
 Reconnect reads persisted events without resending a turn. Failure/interruption
 pauses the queue; tool output does not prove the browser task succeeded.

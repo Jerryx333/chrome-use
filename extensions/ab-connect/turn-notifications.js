@@ -153,8 +153,10 @@ export class TurnNotifications {
   }
   /** The panel shows `id`: its badge entry and notification are done. */
   async seen(id) {
-    const { unseen } = await this.load();
+    const { seen, unseen } = await this.load();
     if (!(id in unseen)) return;
+    // Consume even a pending create: its later failure must not notify a viewed turn again.
+    seen[id] = unseen[id];
     delete unseen[id];
     await this.save();
     await this.notifications.clear?.(`panel-turn:${id}`);
