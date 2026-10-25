@@ -311,7 +311,14 @@ async fn collect_annotations(
     // require their own session and a projection through their owner element.
     // A backendNodeId is renderer-local: resolving it in the top session may
     // silently select an unrelated node with the same numeric id.
-    let geometry = geometry::FrameGeometry::load(client, session_id, iframe_sessions).await?;
+    let target_frames: Vec<_> = entries
+        .iter()
+        .filter(|(_, entry)| entry.backend_node_id.is_some())
+        .map(|(_, entry)| entry.frame_id.as_deref())
+        .collect();
+    let geometry =
+        geometry::FrameGeometry::load(client, session_id, iframe_sessions, &target_frames, None)
+            .await?;
     let mut requests = Vec::new();
     let mut refs = Vec::new();
     for (ref_id, entry) in entries {
@@ -367,7 +374,14 @@ async fn get_rect_for_selector(
         iframe_sessions,
     )
     .await?;
-    let geometry = geometry::FrameGeometry::load(client, session_id, iframe_sessions).await?;
+    let geometry = geometry::FrameGeometry::load(
+        client,
+        session_id,
+        iframe_sessions,
+        &[],
+        Some(&effective_session_id),
+    )
+    .await?;
     let result = client
         .send_command(
             "DOM.getBoxModel",

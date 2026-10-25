@@ -4,6 +4,7 @@
 //! frames must be measured in their own session and projected through each owner.
 use super::{CdpClient, HashMap, Rect, Value};
 use serde_json::json;
+use std::collections::HashSet;
 
 #[derive(Clone)]
 struct Frame {
@@ -142,6 +143,8 @@ impl FrameGeometry {
         client: &CdpClient,
         top_session: &str,
         iframe_sessions: &HashMap<String, String>,
+        target_frames: &[Option<&str>],
+        target_session: Option<&str>,
     ) -> Result<Self, String> {
         let tree = client
             .send_command_no_params("Page.getFrameTree", Some(top_session))
@@ -166,6 +169,36 @@ impl FrameGeometry {
                 frame.session = session.clone();
             }
         }
+        // Only project renderers that contribute labels/the selector and their
+        // ancestors. An unrelated hidden iframe has no owner box and must not
+        // prevent capturing a visible target elsewhere in the page.
+        let mut required = HashSet::from([top_session.to_owned()]);
+        if let Some(session) = target_session {
+            required.insert(session.to_owned());
+        }
+        for frame in target_frames.iter().flatten() {
+            let frame = frames
+                .get(*frame)
+                .ok_or("Screenshot: reference frame unavailable")?;
+            required.insert(frame.session.clone());
+        }
+        loop {
+            let previous = required.len();
+            for session in required.clone() {
+                if let Some(root) = roots.get(&session) {
+                    let parent = frames
+                        .get(root)
+                        .and_then(|f| f.parent.as_ref())
+                        .and_then(|id| frames.get(id))
+                        .ok_or("Screenshot: iframe parent unavailable")?;
+                    required.insert(parent.session.clone());
+                }
+            }
+            if required.len() == previous {
+                break;
+            }
+        }
+        roots.retain(|session, _| required.contains(session));
         let mut projections = HashMap::from([(top_session.to_owned(), Projection::IDENTITY)]);
         while !roots.is_empty() {
             let previous = roots.len();
@@ -319,6 +352,9 @@ mod tests {
                     "Page.getFrameTree" if sid == "oop" => {
                         json!({"frameTree":{"frame":{"id":"cross","parentId":"top"}}})
                     }
+                    "Page.getFrameTree" if sid == "hidden-session" => {
+                        json!({"frameTree":{"frame":{"id":"hidden","parentId":"top"}}})
+                    }
                     "Page.getLayoutMetrics" if sid == "oop" => {
                         json!({"cssLayoutViewport":{"clientWidth":440,"clientHeight":180}})
                     }
@@ -370,7 +406,10 @@ mod tests {
             &client,
             "main",
             &refs,
-            &HashMap::from([("cross".into(), "oop".into())]),
+            &HashMap::from([
+                ("cross".into(), "oop".into()),
+                ("hidden".into(), "hidden-session".into()),
+            ]),
         )
         .await
         .unwrap();
