@@ -298,9 +298,11 @@
         非原生控件走 portal-aware 逻辑，选项始终不出现时<strong>明确报错</strong>并列出可见选项，不再静默。
         <code>fill</code> 同样加固：通过 Monaco 的全局或 AMD model API 做一次原子的
         <code>setValue</code>，并在返回成功前精确回读 model。若应用隐藏了该 API，则执行一次可信的编辑器
-        <code>paste</code>，通过编辑器自己的 <code>copy</code> 处理器精确回读，并在结束后恢复浏览器剪贴板；
+        <code>paste</code>，通过编辑器自己的 <code>copy</code> 处理器精确回读，并在结束后尝试恢复浏览器剪贴板；
         操作无法校验或内容不一致时会明确报错。<code>@ref</code> 落在<strong>包裹元素</strong>上的受控输入仍会自动下钻到内部 editable。
       </div>
+
+      <p>Monaco 剪贴板回退将事务状态保存在私有闭包中；操作结束、初始化失败或文档仍存活时的 60 秒租约到期都会移除临时监听器。恢复前比较所有可观察的剪贴板格式，内容不同或归属不确定时拒绝恢复。即使编辑器已改变，恢复失败仍报错。执行上下文丢失可能阻止恢复，比较与写入也不是原子操作；请避免同时使用剪贴板。</p>
 
       <div class="du-callout">
         <div class="du-callout-title">受 CSP 限制的页面</div>
