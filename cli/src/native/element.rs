@@ -37,16 +37,16 @@ pub const SEMANTIC_PIN_GROUP: &str = "chrome-use-semantic-locator";
 pub struct GroupRelease {
     client: std::sync::Arc<CdpClient>,
     session: String,
-    group: &'static str,
+    group: String,
     armed: bool,
 }
 
 impl GroupRelease {
-    pub fn new(client: std::sync::Arc<CdpClient>, session: &str, group: &'static str) -> Self {
+    pub fn new(client: std::sync::Arc<CdpClient>, session: &str, group: &str) -> Self {
         Self {
             client,
             session: session.to_string(),
-            group,
+            group: group.to_string(),
             armed: true,
         }
     }
@@ -58,7 +58,7 @@ impl GroupRelease {
     pub async fn release(mut self) {
         // Disarmed only once the release went through: cancelled before
         // that (say, waiting for the CDP writer), `Drop` releases instead.
-        release_object_group(&self.client, &self.session, self.group).await;
+        release_object_group(&self.client, &self.session, &self.group).await;
         self.armed = false;
     }
 }
@@ -69,8 +69,12 @@ impl Drop for GroupRelease {
             return;
         }
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
-            let (client, session, group) = (self.client.clone(), self.session.clone(), self.group);
-            rt.spawn(async move { release_object_group(&client, &session, group).await });
+            let (client, session, group) = (
+                self.client.clone(),
+                self.session.clone(),
+                self.group.clone(),
+            );
+            rt.spawn(async move { release_object_group(&client, &session, &group).await });
         }
     }
 }
@@ -80,7 +84,7 @@ impl Drop for GroupRelease {
 pub async fn release_after<T>(
     client: std::sync::Arc<CdpClient>,
     session: &str,
-    group: &'static str,
+    group: &str,
     work: impl std::future::Future<Output = T>,
 ) -> T {
     let guard = GroupRelease::new(client, session, group);
@@ -4775,7 +4779,9 @@ mod tests {
     async fn object_group_is_released_when_the_release_is_cancelled() {
         let (url, released) = release_recorder().await;
         let client = std::sync::Arc::new(CdpClient::connect(&url).await.unwrap());
-        let guard = GroupRelease::new(client.clone(), "S1", "group-release-cancel");
+        let dynamic_group = String::from("group-release-cancel");
+        let guard = GroupRelease::new(client.clone(), "S1", &dynamic_group);
+        drop(dynamic_group); // The cancellation cleanup must own its request name.
         let writer = client.hold_writer().await;
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(50), guard.release())

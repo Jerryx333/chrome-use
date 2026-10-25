@@ -6450,13 +6450,16 @@ async fn upload_to_target(
     )
     .await?
     .ok_or("setOn: the element handle is gone")?;
-    let group = "chrome-use-site-file-target";
-    let outcome = super::element::release_after(mgr.client.clone(), &session_id, group, async {
+    let group = format!(
+        "chrome-use-site-file-target-{}",
+        uuid::Uuid::new_v4().simple()
+    );
+    let outcome = super::element::release_after(mgr.client.clone(), &session_id, &group, async {
         let resolved = mgr
             .client
             .send_command(
                 "DOM.resolveNode",
-                Some(json!({"backendNodeId":node,"objectGroup":group})),
+                Some(json!({"backendNodeId":node,"objectGroup":group.as_str()})),
                 Some(&session_id),
             )
             .await?;
