@@ -6701,6 +6701,12 @@ Setup:
                              before priority sending; ordinary queues remain paused.
                              New panel messages after failure/interruption start in the
                              same chat/model; older queued messages remain paused.
+                             In /resume, changing agent/search clears old choices.
+                             Enter selects only a current result; loading, unavailable
+                             or empty results cannot open or resume an old session.
+                             Agent/search changes or closing also invalidate old
+                             confirmations and resume responses; sent host requests
+                             may still finish without blocking fresh selections.
                              Read CLI models fetches bounded CLI metadata without
                              a prompt; account reports do not verify model access.
                              Metadata probes use owned process groups or Windows jobs.
