@@ -158,7 +158,13 @@ impl FrameGeometry {
             }
             let tree = client
                 .send_command_no_params("Page.getFrameTree", Some(session))
-                .await?;
+                .await;
+            // The session map can outlive a detached frame while snapshot
+            // work is in flight. An unrelated stale renderer must not prevent
+            // annotations elsewhere; required renderers are checked below.
+            let Ok(tree) = tree else {
+                continue;
+            };
             let root = add_tree(&tree["frameTree"], session, None, &mut frames)?;
             roots.insert(session.clone(), root);
         }
@@ -197,6 +203,12 @@ impl FrameGeometry {
             if required.len() == previous {
                 break;
             }
+        }
+        if required
+            .iter()
+            .any(|session| session != top_session && !roots.contains_key(session))
+        {
+            return Err("Screenshot: reference frame unavailable".into());
         }
         roots.retain(|session, _| required.contains(session));
         let mut projections = HashMap::from([(top_session.to_owned(), Projection::IDENTITY)]);
@@ -345,6 +357,15 @@ mod tests {
                 };
                 let request: Value = serde_json::from_str(&text).unwrap();
                 let sid = request["sessionId"].as_str().unwrap();
+                if sid == "stale-session" {
+                    assert_eq!(request["method"], "Page.getFrameTree");
+                    ws.send(tokio_tungstenite::tungstenite::Message::Text(
+                        json!({"id":request["id"],"error":{"code":-32000,"message":"Session with given id not found"}}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                    continue;
+                }
                 let result = match request["method"].as_str().unwrap() {
                     "Page.getFrameTree" if sid == "main" => {
                         json!({"frameTree":{"frame":{"id":"top"},"childFrames":[{"frame":{"id":"same"}},{"frame":{"id":"cross"}}]}})
@@ -409,6 +430,7 @@ mod tests {
             &HashMap::from([
                 ("cross".into(), "oop".into()),
                 ("hidden".into(), "hidden-session".into()),
+                ("stale".into(), "stale-session".into()),
             ]),
         )
         .await
@@ -425,6 +447,53 @@ mod tests {
                 ("cross", 478.0, 136.0)
             ]
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn required_stale_renderer_refuses_annotation_and_selector_geometry() {
+        use futures_util::{SinkExt, StreamExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            while let Some(Ok(message)) = ws.next().await {
+                let Ok(text) = message.into_text() else {
+                    continue;
+                };
+                let request: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(request["method"], "Page.getFrameTree");
+                let response = if request["sessionId"] == "main" {
+                    json!({"id":request["id"],"result":{"frameTree":{"frame":{"id":"top"},"childFrames":[{"frame":{"id":"stale"}}]}}})
+                } else {
+                    assert_eq!(request["sessionId"], "stale-session");
+                    json!({"id":request["id"],"error":{"code":-32000,"message":"Session with given id not found"}})
+                };
+                if ws
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        response.to_string(),
+                    ))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let client = CdpClient::connect(&format!("ws://{address}"))
+            .await
+            .unwrap();
+        let sessions = HashMap::from([("stale".into(), "stale-session".into())]);
+        // A stale annotation frame and a stale selector session both require
+        // refusal. Neither may silently inherit the top renderer's geometry.
+        for (frame, session) in [(Some("stale"), None), (None, Some("stale-session"))] {
+            let result = FrameGeometry::load(&client, "main", &sessions, &[frame], session).await;
+            assert_eq!(
+                result.err().as_deref(),
+                Some("Screenshot: reference frame unavailable")
+            );
+        }
         server.abort();
     }
 
