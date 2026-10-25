@@ -89,6 +89,7 @@ fn result_for(req: &Value) -> Value {
             json!({"result": {"type": "undefined"}})
         }
         "Page.navigate" => json!({"frameId": "F1", "loaderId": "L1"}),
+        "Page.createIsolatedWorld" => json!({"executionContextId":42}),
         "Page.getFrameTree" => json!({"frameTree": {"frame": {
             "id": "F1", "loaderId": "L1", "url": "about:blank",
             "securityOrigin": "", "mimeType": "text/html"}}}),

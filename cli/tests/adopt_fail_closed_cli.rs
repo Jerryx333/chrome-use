@@ -343,6 +343,7 @@ impl Fake {
                     _ => json!({"result": {"type": "number", "value": 1}}),
                 }
             }
+            "Page.createIsolatedWorld" => json!({"executionContextId":42}),
             "Page.getFrameTree" => {
                 let url = tab_for_session(&b)
                     .map(|t| t.url)
