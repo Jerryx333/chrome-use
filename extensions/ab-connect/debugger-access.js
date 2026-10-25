@@ -27,7 +27,9 @@ export function debuggerAccessError(error, extensionIds = []) {
   return new Error(
     'debugger_access_denied: Chrome blocked debugger access to protected extension content ' +
     'in this tab (possibly a child frame). The tab may still exist; reattaching does not ' +
-    'resolve this restriction. ' + culprits + 'Use `tab inspect <ref>` to check the browser-level state, then ' +
+    'resolve this restriction. If an inline autofill menu or save-login bar is visible, ' +
+    'close that UI in the browser first; a save-login bar may not close when the tab is hidden. ' +
+    culprits + 'Use `tab inspect <ref>` to check the browser-level state, then ' +
     'use a separate test profile if needed. ' +
     `Original error: ${String(error?.message || error)}`,
   )

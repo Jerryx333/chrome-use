@@ -364,3 +364,17 @@ test('protected content in a top-level tab names the foreign extensions it found
     /debugger_access_denied:.*nhpjggchkhnlbgdfcbgpdpkifemomkpg \(chrome:\/\/extensions\/\?id=nhpjggchkhnlbgdfcbgpdpkifemomkpg\)/)
   assert.equal(f.sent.length, 1)
 })
+
+for (const mode of ['reject', 'throw']) {
+  test(`foreign-frame diagnostics cannot replace the original access denial (${mode})`, async () => {
+    const f = fixture(new Error('Cannot access a chrome-extension:// URL of different extension'))
+    f.deps.foreignFrameExtensions = mode === 'reject'
+      ? async () => { throw new Error('Diagnostic target lookup timed out') }
+      : () => { throw new Error('Diagnostic target lookup failed') }
+    await assert.rejects(sendTabCommand(7, 'Runtime.evaluate', { expression: 'document.title' }, undefined, f.deps),
+      error => error.message.startsWith('debugger_access_denied:') && error.message.includes('Original error: Cannot access a chrome-extension://'))
+    assert.equal(f.sent.length, 1)
+    assert.deepEqual(f.detached, [])
+    assert.deepEqual(f.recovered, [])
+  })
+}

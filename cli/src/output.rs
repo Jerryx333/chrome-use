@@ -6385,11 +6385,16 @@ Core Commands:
   snapshot                   Accessibility tree with refs (for AI)
   eval <js>                  Run JavaScript
   connect <port|url>         Connect to browser via CDP
+  stale_ref: identity changed or could not be confirmed; nothing was acted on.
+  Refresh snapshot -i and use a current dialog ref or a unique stable locator.
+  Keep verification enabled; do not substitute a DOM click.
   debugger_access_denied: protected extension content blocks this tab; do not
   loop on reattach. Listed extension names/IDs are browser-wide candidates,
   not confirmed blockers of this tab. Verify before disabling one. A password manager's inline menu is closed automatically
   (a brief tab switch, or a blank tab in the minimized agent window for a
   background tab in your own window); otherwise follow the error's next step.
+  Close a visible autofill menu or save-login bar first. Candidate lookup
+  failure preserves the original denial; hiding may not dismiss a save bar.
   Relay lifecycle waits stop early on a confirmed access denial; ordinary
   slow pages retain their normal readiness wait.
   Extension popup: Connected means the native host replied; Connecting means

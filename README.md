@@ -647,3 +647,5 @@ Apache-2.0
 `read --filter` uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use `read --outline` to find a heading. `snapshot --filter` separately accepts a regex. `read --help` lists the reading options.
 
 `debugger_access_denied` lists browser-wide candidate extension names and IDs when available. Verify which extension injects a frame into the blocked tab before disabling it; the list does not prove the cause.
+
+A refused dynamic-form ref now reports `code: "stale_ref"` with `retryable: false`. Refresh `snapshot -i`, then use the current dialog's ref or a unique stable CSS/semantic locator; no input is sent by the refusal. Keep verification enabled and do not replace trusted input with a DOM click. For `debugger_access_denied`, close a visible autofill menu or save-login bar first; hiding a tab may not dismiss a save-login bar. Candidate-extension lookup is best effort and never replaces the original access denial.

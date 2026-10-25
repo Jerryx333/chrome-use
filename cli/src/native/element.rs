@@ -1580,7 +1580,7 @@ async fn confirmed_backend_node_id(
         .map(|g| guess_note(entry, g))
         .unwrap_or_default();
     block.push_str(&ref_hints::format_suggestions(&suggestions));
-    let base = ref_hints::insert_before(&base, LAST_RESORT_MARKER, &block);
+    let base = ref_hints::insert_before(&base, REF_GUARD_ADVICE_MARKER, &block);
     if !suggestions.is_empty() {
         // Refs are the better way out; CSS selectors would only compete.
         return Err(base);
@@ -1959,7 +1959,7 @@ async fn locator_hints(
     hints
 }
 
-/// Put the usable locators ahead of the "disable the check" last resort, so the
+/// Put usable locators ahead of the guard advice, so the
 /// first way out the agent reads is one that keeps the guard on.
 fn insert_locator_hints(err: &str, hints: &[LocatorHint]) -> String {
     if hints.is_empty() {
@@ -1975,7 +1975,7 @@ fn insert_locator_hints(err: &str, hints: &[LocatorHint]) -> String {
             h.role, h.name, h.selector
         ));
     }
-    match err.find(LAST_RESORT_MARKER) {
+    match err.find(REF_GUARD_ADVICE_MARKER) {
         Some(i) => format!("{}{}\n{}", &err[..i], block, &err[i..]),
         None => format!("{err}\n{block}"),
     }
@@ -2961,16 +2961,14 @@ fn unconfirmed_ref_error(
 const NOT_ON_PAGE: &str = "and no element with that role and name is on the page now";
 const REANCHOR_UNFINISHED: &str =
     "and re-reading the accessibility tree to re-anchor it did not finish in time";
-const LAST_RESORT_MARKER: &str = "(Last resort:";
+const REF_GUARD_ADVICE_MARKER: &str = "Keep ref verification enabled";
 
 const REF_RECOVERY_HINT: &str =
-    "The DOM mutated between snapshot and interaction (typical with React/Vue \
-     reusing nodes during re-render). Fix: take a fresh `snapshot` and re-target \
-     with the new ref. For SPAs where refs churn every interaction, drive the \
-     element directly with `eval` (e.g. `eval \"document.querySelector(...).click()\"`), \
-     which doesn't depend on refs.\n\
-     (Last resort: AGENT_BROWSER_VERIFY_REF=0 disables this safety check — only \
-     if you accept clicks may land on a re-rendered/wrong node.)";
+    "The element identity changed or could not be confirmed. Nothing was acted on. \
+     Take a fresh `snapshot -i` and use the current ref. On dynamic forms, narrow to \
+     the current dialog and use a unique stable CSS selector or a scoped semantic \
+     locator. Keep ref verification enabled; do not retry a stale ref or replace \
+     trusted input with a DOM click.";
 
 /// At the moment we'd dispatch the click, ask the page itself which element
 /// occupies (x, y). If it's not our target (and not a descendant or
@@ -5450,7 +5448,7 @@ mod tests {
         assert!(err.contains("e273"));
         assert!(err.contains("我的 agent"));
         assert!(err.contains("timed out"));
-        assert!(err.contains("fresh `snapshot`"));
+        assert!(err.contains("fresh `snapshot -i`"));
     }
 
     /// A nameless control's identity lives in its value, and that is the only
@@ -5678,7 +5676,7 @@ mod tests {
     /// #356: the refusal must lead with locators that keep the guard on, not
     /// with "disable the check".
     #[test]
-    fn a_refusal_offers_usable_selectors_before_the_last_resort() {
+    fn a_refusal_offers_usable_selectors_and_preserves_the_guard() {
         let base = unconfirmed_ref_error(
             "e41",
             "textbox",
@@ -5694,8 +5692,15 @@ mod tests {
         let hint_at = err
             .find("input[name=\"username\"]")
             .expect("selector offered");
-        let last_resort_at = err.find("AGENT_BROWSER_VERIFY_REF=0").expect("kept");
-        assert!(hint_at < last_resort_at, "{err}");
+        let guard_at = err
+            .find(REF_GUARD_ADVICE_MARKER)
+            .expect("guard advice kept");
+        assert!(hint_at < guard_at, "{err}");
+        assert!(!err.contains("AGENT_BROWSER_VERIFY_REF=0"), "{err}");
+        assert!(
+            !err.contains("document.querySelector(...).click()"),
+            "{err}"
+        );
         assert!(err.contains("[textbox \"手机号\"]"), "{err}");
         // No hints: message unchanged.
         assert_eq!(insert_locator_hints(&base, &[]), base);
