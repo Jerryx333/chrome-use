@@ -3892,7 +3892,14 @@ Options:
                        --full) unless overridden (AGENT_BROWSER_SCREENSHOT_MAX_EDGE;
                        0 disables). --full-res keeps the captured size. Annotated
                        shots are never downscaled, so ref overlays stay aligned.
-  --annotate           Overlay numbered labels on interactive elements.
+  --annotate           Draw numbered labels into the captured image in the CLI.
+                       No annotation nodes or styles are inserted into the page.
+                       JSON boxes use capture-relative CSS pixels; labels scale
+                       to the image resolution. --clip wins over --full/selector.
+                       Frame labels use their owning renderer. Unsupported frame
+                       transforms or unavailable geometry report an error.
+                       Crops happen in the CLI; off-viewport crops capture the full
+                       page first. Regions outside the page are refused.
                        Each label [N] corresponds to ref @eN from snapshot.
                        Prints a legend mapping labels to element roles/names.
                        With --json, annotations are included in the response.
