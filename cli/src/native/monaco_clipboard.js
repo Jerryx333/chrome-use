@@ -1,0 +1,158 @@
+// Private CDP object, never installed on the anchor or a page global. The lease
+// bounds listener retention if the caller disappears while the document
+// remains alive. Backup release waits for any pending setup API call. Clipboard restoration is best effort, not an atomic compare/write.
+function () {
+    const root = (this.closest && this.closest('.monaco-editor'))
+        || (this.querySelector && this.querySelector('.monaco-editor'));
+    const input = root && root.querySelector('textarea.inputarea');
+    const doc = input && input.ownerDocument;
+    const clipboard = doc && doc.defaultView.navigator.clipboard;
+    let backup = null, backupBytes = null, expected = null, dirty = false, closed = false;
+    let startup = null, completion = null;
+    const state = { paste: null, copy: null };
+    const failure = error => ({ ok: false, error: String(error && error.message || error) });
+    const onPaste = event => {
+        if (!event.isTrusted || closed || !event.composedPath().includes(input)) return;
+        // Monaco's paste controller can stopImmediatePropagation at the input.
+        // Retain the event from capture, then inspect defaultPrevented only
+        // when Rust asks after dispatch. A capture-listener microtask can run
+        // before the editor's target listener has handled the event.
+        state.paste = event;
+    };
+    const onCopy = event => {
+        if (!event.isTrusted || closed || !event.composedPath().includes(input)) return;
+        // Snapshot the data during dispatch, before the browser protects it.
+        const data = event.clipboardData;
+        const formats = data ? Array.from(data.types).map(type => [type, data.getData(type)]) : [];
+        const text = data ? data.getData('text/plain') : '';
+        dirty = true;
+        expected = null;
+        queueMicrotask(() => {
+            if (closed) return;
+            state.copy = { trusted: true, prevented: event.defaultPrevented, text };
+            // Chrome does not expose Monaco's two native custom metadata
+            // formats through Clipboard.read(). Compare every exposed format;
+            // unknown non-text formats still make restoration uncertain.
+            const metadata = new Set(['application/vnd.code.copymetadata', 'vscode-editor-data']);
+            const exposed = formats.filter(([type]) => !metadata.has(type));
+            if (event.defaultPrevented && exposed.length && exposed.every(([type]) => type.startsWith('text/'))) {
+                expected = [exposed.map(([type, text]) => [type, new TextEncoder().encode(text)])];
+            }
+        });
+    };
+    async function bytes(items) {
+        return Promise.all(items.map(async item => Promise.all(Array.from(item.types).sort().map(async type =>
+            [type, new Uint8Array(await (await item.getType(type)).arrayBuffer())]
+        ))));
+    }
+    function matches(a, b) {
+        if (!a || !b || a.length !== b.length) return false;
+        return a.every((item, i) => {
+            const other = b[i].slice().sort(([a], [b]) => a.localeCompare(b));
+            return item.length === other.length && item.every(([type, value], j) =>
+                type === other[j][0] && value.length === other[j][1].length && value.every((v, k) => v === other[j][1][k]));
+        });
+    }
+    function stopListeners() {
+        clearTimeout(timer);
+        if (input) {
+            doc.removeEventListener('paste', onPaste, true);
+            doc.removeEventListener('copy', onCopy);
+        }
+    }
+    function finish() {
+        if (completion) return completion;
+        closed = true;
+        stopListeners();
+        completion = (async () => {
+            if (startup) await startup;
+            try {
+                if (!dirty) return { ok: true };
+                if (!expected || !matches(await bytes(await clipboard.read()), expected)) {
+                    return failure('clipboard changed or ownership is uncertain; original clipboard was not restored');
+                }
+                // No text-only fallback: it would discard non-text formats and
+                // could overwrite a newer clipboard write after a denied restore.
+                await clipboard.write(backup);
+                if (!matches(await bytes(await clipboard.read()), backupBytes)) {
+                    return failure('clipboard restore returned without restoring the saved contents');
+                }
+                return { ok: true };
+            } catch (error) {
+                return failure('original clipboard could not be restored: ' + String(error && error.message || error));
+            } finally {
+                backup = null;
+                backupBytes = null;
+                expected = null;
+                state.paste = null;
+                state.copy = null;
+            }
+        })();
+        return completion;
+    }
+    let timer = setTimeout(() => { void finish(); }, 60000);
+    return {
+        start(value) {
+            if (startup || closed) return Promise.resolve(failure('clipboard transaction is already started or expired'));
+            startup = (async () => {
+                try {
+                    if (!input) throw new Error('Monaco textarea.inputarea was not found');
+                    if (!clipboard || !clipboard.read || !clipboard.write || !clipboard.writeText) {
+                        throw new Error('browser clipboard read/write APIs are unavailable');
+                    }
+                    backupBytes = await bytes(await clipboard.read());
+                    if (!backupBytes.length) throw new Error('clipboard has no restorable items');
+                    // Browser-backed ClipboardItems can become invalid after a
+                    // clipboard change, even after getType has resolved. Keep
+                    // independent Blob-backed items before staging anything.
+                    expected = backupBytes;
+                    backup = backupBytes.map(formats => new doc.defaultView.ClipboardItem(
+                        Object.fromEntries(formats.map(([type, data]) =>
+                            [type, new doc.defaultView.Blob([data], { type })]))));
+                    if (closed) throw new Error('clipboard transaction expired during backup');
+                    doc.addEventListener('paste', onPaste, true);
+                    doc.addEventListener('copy', onCopy);
+                    if (value !== null) {
+                        expected = [[['text/plain', new TextEncoder().encode(value)]]];
+                        dirty = true; // A rejected transport/API call may still have applied.
+                        await clipboard.writeText(value);
+                    }
+                    if (closed) throw new Error('clipboard transaction expired during staging');
+                    input.focus();
+                    return { ok: true };
+                } catch (error) {
+                    stopListeners();
+                    // Rust calls finish even on setup errors; the lease remains
+                    // necessary if its transport dies before that call arrives.
+                    setTimeout(() => { void finish(); }, 0);
+                    return failure(error);
+                }
+            })();
+            return startup;
+        },
+        async active() {
+            if (closed) return failure('clipboard transaction expired or closed');
+            clearTimeout(timer);
+            timer = setTimeout(() => { void finish(); }, 60000);
+            try {
+                // Check before native copy as well as before restoration. A
+                // newer write between paste and readback must not be replaced
+                // by our next copy command. This still cannot make CDP input
+                // and the clipboard comparison atomic.
+                if (!matches(await bytes(await clipboard.read()), expected)) {
+                    return failure('clipboard changed before editor input; operation stopped');
+                }
+                if (closed) return failure('clipboard transaction expired or closed');
+                return { ok: true };
+            } catch (error) {
+                return failure('clipboard could not be checked before editor input: ' + String(error && error.message || error));
+            }
+        },
+        check(kind) {
+            if (closed) return { ok: false, error: 'clipboard transaction expired or closed' };
+            if (kind === 'paste' && state.paste) return { trusted: true, prevented: state.paste.defaultPrevented };
+            return state[kind];
+        },
+        finish,
+    };
+}

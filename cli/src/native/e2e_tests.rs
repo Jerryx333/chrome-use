@@ -2367,6 +2367,20 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
         "default-wrapped Monaco readback must preserve multiline YAML exactly"
     );
 
+    // Give this disposable browser a deterministic, restorable clipboard.
+    // Empty backups are refused because Web Clipboard API cannot restore an
+    // empty set of native formats. Verify both exposed formats after fill/read.
+    let resp = execute_command(
+        &json!({
+            "id": "5g",
+            "action": "evaluate",
+            "script": "navigator.clipboard.write([new ClipboardItem({'text/plain': new Blob(['clipboard sentinel'], {type:'text/plain'}), 'text/html': new Blob(['<b>clipboard sentinel</b>'], {type:'text/html'})})])"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
     // DSM-like Monaco can hide its model API while still handling trusted
     // clipboard commands through textarea.inputarea. That fallback must remain
     // atomic and must verify the copied model value before succeeding.
@@ -2397,6 +2411,24 @@ async fn e2e_fill_monaco_is_atomic_and_verified() {
         get_data(&resp)["value"],
         yaml,
         "clipboard-backed Monaco readback must preserve multiline YAML exactly"
+    );
+
+    let clipboard = execute_command(
+        &json!({
+            "id": "6clipboard",
+            "action": "evaluate",
+            "script": "(async () => Promise.all((await navigator.clipboard.read()).map(async item => Object.fromEntries(await Promise.all(item.types.map(async type => [type, await (await item.getType(type)).text()]))))))()"
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&clipboard);
+    assert_eq!(
+        get_data(&clipboard)["result"],
+        json!([{
+            "text/plain": "clipboard sentinel",
+            "text/html": "<b>clipboard sentinel</b>"
+        }])
     );
 
     // A Monaco model that ignores setValue must fail the fill verification.

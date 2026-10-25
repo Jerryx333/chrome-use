@@ -323,10 +323,12 @@
         <code>fill</code> is hardened the same way: it resolves Monaco through its global or AMD model API,
         performs one atomic <code>setValue</code>, and verifies the exact model readback before reporting
         success. When an app hides that API, it performs one trusted editor <code>paste</code>, verifies the
-        selected model through the editor's own <code>copy</code> handler, and restores the browser clipboard.
+        selected model through the editor's own <code>copy</code> handler, and attempts to restore the browser clipboard.
         If those operations cannot be verified or the value differs, it errors loudly. Controlled inputs whose <code>@ref</code> anchored a
         <strong>wrapper</strong> still retarget to the nested editable.
       </div>
+
+      <p>Monaco clipboard fallback keeps transaction state in a private closure and removes temporary listeners on completion, setup errors, or a 60-second lease expiry while the document survives. The backup uses independent Blob-backed items because browser-backed ClipboardItems may expire after a write. An empty or unreadable backup is refused before staging. Contents are compared before further input and before restoration; changes or uncertain ownership stop the operation. Restoration is read back and verified. Only formats exposed by the Web Clipboard API can be backed up; native application metadata is not preserved. A restore failure is an error, even if the editor changed. Context loss can prevent restoration, and clipboard comparison/write is not atomic; avoid concurrent clipboard use.</p>
 
       <div class="du-callout">
         <div class="du-callout-title">CSP-restricted pages</div>

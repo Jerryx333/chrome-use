@@ -3000,7 +3000,14 @@ not a raw `.value` write — and the response echoes which `engine` was used.
 The written value is read back from the control or editor model and compared
 exactly before success is reported. If Monaco hides its model API, fill uses
 one trusted editor paste, reads the selected model back through the editor's
-copy handler, and restores the browser clipboard. If that cannot be verified,
+copy handler, and attempts clipboard restoration from an independent Blob backup.
+An empty or unreadable backup is refused before staging; restoration is read back
+and verified. Contents are checked before input and restoration; changed or
+uncertain contents stop the operation. Only Web Clipboard API formats are backed
+up; native application metadata is not preserved. Temporary listeners expire
+after 60 seconds of inactivity in a surviving document. Context loss can prevent
+restoration; comparison/write is not atomic. Avoid concurrent clipboard use.
+If restoration or the edit cannot be verified,
 fill fails loudly instead of reporting a false success. Verification
 errors quote both values (`read back "" after writing "千代田区"`); when every
 non-ASCII character vanished while ASCII survived, the error says the page

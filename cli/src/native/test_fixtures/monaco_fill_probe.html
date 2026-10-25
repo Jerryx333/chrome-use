@@ -126,10 +126,14 @@
           : clipboardModelValue + pasted;
         clipboardSelectionAll = false;
         event.preventDefault();
+        // Actual Monaco's paste controller can stop target/bubble listeners.
+        event.stopImmediatePropagation();
       });
       clipboardInput.addEventListener('copy', event => {
         if (!event.isTrusted || !clipboardSelectionAll) return;
         event.clipboardData.setData('text/plain', clipboardModelValue);
+        event.clipboardData.setData('vscode-editor-data', '{"version":1}');
+        event.clipboardData.setData('application/vnd.code.copymetadata', '{}');
         event.preventDefault();
       });
     })();
