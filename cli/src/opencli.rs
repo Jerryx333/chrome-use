@@ -232,6 +232,18 @@ pub fn info(entry: &Value) -> Value {
             args.insert(name.to_string(), a.clone());
         }
     }
+    if bundled_video_publisher(entry) {
+        let choices = if spec_of(entry).as_deref() == Some("douyin/publish") {
+            json!(["review", "keep", "upload"])
+        } else {
+            json!(["review", "keep"])
+        };
+        args.insert("cover-mode".into(), json!({
+            "name": "cover-mode", "type": "str", "required": false,
+            "default": "review", "choices": choices,
+            "help": "chrome-use preflight: review refuses automatic video publication without a cover decision; keep explicitly accepts the upstream platform-selected cover. WeChat manual/draft preparation remains available; Douyin upload requires its existing --cover image argument."
+        }));
+    }
     json!({
         "name": spec_of(entry),
         "description": entry.get("description"),
@@ -360,6 +372,83 @@ pub fn map_args(entry: &Value, rest: &[String]) -> Result<serde_json::Map<String
         }
     }
     Ok(out)
+}
+
+/// Only the known bundled video publishers use this wrapper policy. Added
+/// OpenCLI sources can implement different workflows and keep their own schema.
+fn bundled_video_publisher(entry: &Value) -> bool {
+    entry.get("clisDir").and_then(Value::as_str).is_none()
+        && matches!(
+            spec_of(entry).as_deref(),
+            Some("wechat-channels/publish" | "douyin/publish")
+        )
+}
+
+/// Refuse before invoking an upstream publisher instead of silently approving
+/// its default first frame. Consume the wrapper flag rather than forwarding it
+/// to an OpenCLI registry that does not declare it.
+fn prepare_publish_cover(
+    entry: &Value,
+    kwargs: &mut serde_json::Map<String, Value>,
+) -> Result<(), String> {
+    if !bundled_video_publisher(entry) {
+        return Ok(());
+    }
+    let spec = spec_of(entry).unwrap_or_default();
+    let mode = kwargs
+        .remove("cover-mode")
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "review".into());
+    let douyin = spec == "douyin/publish";
+    let allowed: &[&str] = if douyin {
+        &["review", "keep", "upload"]
+    } else {
+        &["review", "keep"]
+    };
+    if !allowed.contains(&mode.as_str()) {
+        return Err(format!("site {spec}: unsupported --cover-mode {mode}; use review or keep{}; AI and frame selection are not implemented by this bundled publisher", if douyin { ", or upload with --cover" } else { "" }));
+    }
+    for key in ["cover-landscape", "cover-portrait", "cover-index"] {
+        if kwargs.contains_key(key) {
+            return Err(format!("site {spec}: --{key} is not supported by this bundled publisher; nothing was published"));
+        }
+    }
+    let cover = kwargs
+        .get("cover")
+        .and_then(Value::as_str)
+        .filter(|v| !v.trim().is_empty());
+    if !douyin && kwargs.contains_key("cover") {
+        return Err("site wechat-channels/publish: this bundled publisher does not support --cover; use --manual true to prepare the form and choose a cover in its editor, or --draft true. Nothing was published".into());
+    }
+    if let Some(cover) = cover {
+        let ext = Path::new(cover)
+            .extension()
+            .and_then(|v| v.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp") {
+            return Err(format!(
+                "site {spec}: --cover must be a JPG, PNG or WebP image; nothing was published"
+            ));
+        }
+        return Ok(());
+    }
+    if mode == "upload" {
+        return Err(format!(
+            "site {spec}: --cover-mode upload requires --cover <image>; nothing was published"
+        ));
+    }
+    let enabled = |key: &str| {
+        kwargs.get(key).is_some_and(|v| {
+            v.as_bool() == Some(true)
+                || v.as_i64() == Some(1)
+                || matches!(v.as_str(), Some("true" | "1"))
+        })
+    };
+    if mode == "keep" || (!douyin && (enabled("draft") || enabled("manual"))) {
+        return Ok(());
+    }
+    Err(format!("cover_selection_required: {spec} would use a platform-selected frame that may be black. Review the cover first{}; --cover-mode keep explicitly accepts the upstream platform choice. No adapter was invoked and nothing was published", if douyin { ", then pass --cover <image>" } else { " using --manual true or --draft true" }))
 }
 
 /// Same-meaning arg names across packs, for a fallback from one of our
@@ -499,10 +588,13 @@ pub fn run(spec: &str, entry: &Value, rest: &[String], session: &str) -> Value {
         Ok(p) => p,
         Err(e) => return fail(e),
     };
-    let kwargs = match map_args(entry, rest) {
+    let mut kwargs = match map_args(entry, rest) {
         Ok(k) => k,
         Err(e) => return fail(e),
     };
+    if let Err(error) = prepare_publish_cover(entry, &mut kwargs) {
+        return fail(error);
+    }
     let (site, name) = spec.split_once('/').unwrap_or((spec, ""));
     let chrome_use = std::env::current_exe()
         .map(|p| p.display().to_string())
@@ -983,6 +1075,79 @@ pub fn index_sources() -> Result<Vec<SourceReport>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn video_entry(site: &str) -> Value {
+        json!({"site":site,"name":"publish","args":[]})
+    }
+
+    #[test]
+    fn bundled_video_publishers_refuse_implicit_covers_and_advertise_the_wrapper_flag() {
+        for site in ["wechat-channels", "douyin"] {
+            let e = video_entry(site);
+            let mut kwargs = serde_json::Map::new();
+            assert!(prepare_publish_cover(&e, &mut kwargs)
+                .unwrap_err()
+                .starts_with("cover_selection_required:"));
+            assert_eq!(info(&e)["args"]["cover-mode"]["default"], "review");
+            kwargs.insert("cover-mode".into(), json!("keep"));
+            prepare_publish_cover(&e, &mut kwargs).unwrap();
+            assert!(
+                !kwargs.contains_key("cover-mode"),
+                "wrapper flag must not reach upstream"
+            );
+        }
+    }
+
+    #[test]
+    fn wechat_manual_and_draft_are_allowed_only_when_explicitly_enabled() {
+        let e = video_entry("wechat-channels");
+        for key in ["manual", "draft"] {
+            for flag in [json!(true), json!("true"), json!("1")] {
+                let mut kwargs = serde_json::Map::from_iter([(key.to_string(), flag)]);
+                prepare_publish_cover(&e, &mut kwargs).unwrap();
+            }
+            for flag in [json!(false), json!("false"), json!("0")] {
+                let mut kwargs = serde_json::Map::from_iter([(key.to_string(), flag)]);
+                assert!(prepare_publish_cover(&e, &mut kwargs).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn supported_cover_images_are_forwarded_but_unsupported_cover_flags_are_refused() {
+        let douyin = video_entry("douyin");
+        let wechat = video_entry("wechat-channels");
+        let mut kwargs = serde_json::Map::from_iter([("cover".into(), json!("/tmp/cover.PNG"))]);
+        prepare_publish_cover(&douyin, &mut kwargs).unwrap();
+        assert_eq!(kwargs["cover"], "/tmp/cover.PNG");
+        assert!(prepare_publish_cover(&wechat, &mut kwargs)
+            .unwrap_err()
+            .contains("does not support --cover"));
+        for value in [
+            json!({"cover":"clip.mp4"}),
+            json!({"cover-landscape":"cover.png"}),
+            json!({"cover-mode":"frame:2"}),
+            json!({"cover-mode":"upload"}),
+        ] {
+            let mut kwargs = value.as_object().unwrap().clone();
+            assert!(prepare_publish_cover(&douyin, &mut kwargs).is_err());
+        }
+    }
+
+    #[test]
+    fn added_sources_and_nonvideo_publishers_keep_their_own_arguments() {
+        for e in [
+            json!({"site":"wechat-channels","name":"publish","clisDir":"/custom"}),
+            video_entry("xiaohongshu"),
+            video_entry("tiktok"),
+        ] {
+            let mut kwargs = serde_json::Map::from_iter([("cover-mode".into(), json!("custom"))]);
+            let before = kwargs.clone();
+            prepare_publish_cover(&e, &mut kwargs).unwrap();
+            assert_eq!(kwargs, before);
+            assert!(info(&e)["args"].get("cover-mode").is_none());
+        }
+    }
 
     fn entry() -> Value {
         json!({

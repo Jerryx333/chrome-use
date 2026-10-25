@@ -6157,6 +6157,12 @@ never OpenCLI's. OpenCLI is third-party and not maintained by chrome-use:
 each run prints a stderr note and --json adds maintainedBy: "opencli".
 Use it as a last resort; port account actions into chrome-use-sites.
 AGENT_BROWSER_SITES_NO_OPENCLI=1 turns OpenCLI off.
+Bundled wechat-channels/publish and douyin/publish default to --cover-mode review:
+no adapter runs until the cover decision is explicit. WeChat --manual true or
+--draft true prepares the form; --cover-mode keep accepts the upstream platform
+choice. Douyin --cover <image> remains supported; upload mode requires it.
+Unsupported AI/frame/dual-cover args are refused. Added sources keep their schema.
+
 
 OpenCLI sources: `site add` also takes OpenCLI-format adapters (an OpenCLI
 plugin repo, a zip, or a local dir such as ~/.opencli/clis); `.js` modules

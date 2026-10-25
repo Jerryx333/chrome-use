@@ -60,6 +60,12 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    if lower.starts_with("cover_selection_required:") {
+        return ErrorMetadata {
+            code: "cover_selection_required",
+            retryable: false,
+        };
+    }
     if lower.contains("action_outcome_unknown:") {
         return ErrorMetadata {
             code: "action_outcome_unknown",
@@ -285,6 +291,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_cover_review_refusal_is_not_a_retryable_publish() {
+        let metadata =
+            classify_error("cover_selection_required: review before a timeout-prone upload");
+        assert_eq!(metadata.code, "cover_selection_required");
+        assert!(!metadata.retryable);
+    }
 
     #[test]
     fn stale_ref_names_do_not_turn_a_guard_refusal_into_a_retryable_error() {
