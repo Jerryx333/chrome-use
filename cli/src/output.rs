@@ -2999,8 +2999,8 @@ copy handler, and attempts clipboard restoration from an independent Blob backup
 An empty or unreadable backup is refused before staging; restoration is read back
 and verified. Contents are checked before input and restoration; changed or
 uncertain contents stop the operation. Only Web Clipboard API formats are backed
-up; native application metadata is not preserved. Private transaction
-state expires after 60 seconds in a surviving document. Context loss can prevent
+up; native application metadata is not preserved. Temporary listeners expire
+after 60 seconds of inactivity in a surviving document. Context loss can prevent
 restoration; comparison/write is not atomic. Avoid concurrent clipboard use.
 If restoration or the edit cannot be verified,
 fill fails loudly instead of reporting a false success. Verification

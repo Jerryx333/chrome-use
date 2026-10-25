@@ -1,6 +1,6 @@
 // Private CDP object, never installed on the anchor or a page global. The lease
-// bounds listeners/backup retention if the caller disappears while the document
-// remains alive. Clipboard restoration is best effort, not an atomic compare/write.
+// bounds listener retention if the caller disappears while the document
+// remains alive. Backup release waits for any pending setup API call. Clipboard restoration is best effort, not an atomic compare/write.
 function () {
     const root = (this.closest && this.closest('.monaco-editor'))
         || (this.querySelector && this.querySelector('.monaco-editor'));

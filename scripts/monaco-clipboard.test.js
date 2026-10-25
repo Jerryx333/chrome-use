@@ -5,8 +5,8 @@ import vm from 'node:vm'
 
 const source = readFileSync(new URL('../cli/src/native/monaco_clipboard.js', import.meta.url), 'utf8')
 const item = values => ({ types: Object.keys(values), async getType(type) { return new Blob([values[type]]) } })
-function fixture({ denyRead = false, denyStage = false, denyRestore = false, throwFocus = false, deferredStage = false, staleItems = false, silentRestore = false } = {}) {
-  let contents = [item({ 'text/plain': 'before', 'text/html': '<b>before</b>' })]
+function fixture({ denyRead = false, denyStage = false, denyRestore = false, throwFocus = false, deferredStage = false, staleItems = false, silentRestore = false, empty = false } = {}) {
+  let contents = empty ? [] : [item({ 'text/plain': 'before', 'text/html': '<b>before</b>' })]
   let restores = 0, stages = 0, releaseStage
   const listeners = new Map(), captures = new Map(), timers = new Map()
   let nextTimer = 0
@@ -206,4 +206,13 @@ test('unknown non-text copy formats still refuse restoration', async () => {
   await f.event('copy', { 'text/plain': 'replacement', 'application/unknown': 'unobserved' })
   assert.match((await f.tx.finish()).error, /ownership is uncertain/)
   assert.equal(f.restores, 0)
+})
+
+test('an empty backup is refused before staging or native input', async () => {
+  const f = fixture({ empty: true })
+  assert.match((await f.tx.start('replacement')).error, /no restorable items/)
+  await f.tx.finish()
+  assert.equal(f.stages, 0)
+  assert.equal(f.restores, 0)
+  assert.equal(f.listeners.size, 0)
 })
