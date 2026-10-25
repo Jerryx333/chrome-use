@@ -319,6 +319,8 @@ Prefer `snapshot -i -c` for compact controls, scoped reads for a known region, a
 
 After a successful trusted insertion, contenteditable `fill` keeps focus on the editor without synthetic `change` or `focusout` events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.
 
+`dblclick` uses two trusted pointer clicks and verifies delivery to the target. Covered, disabled, transformed-frame and unmappable cross-origin targets are refused; no synthetic fallback is used. If the target changes after the first click, the second is stopped. JSON includes `dispatch: "pointer"` and `verified`; an unverified delivery carries a warning. Inspect the page before retrying an interrupted or unverified action. `AGENT_BROWSER_CLICK_MODE=dom` is not supported for double-clicks.
+
 For Ant Design / rc-picker date ranges, fill the start bound and then the end bound. `fill` confirms each bound through the component's trusted keyboard or visible confirmation control and reads it back, instead of blurring and refocusing a draft. Focus follows the picker. Invalid, read-only or disabled controls fail without a synthetic overwrite; an unverified popup requires explicit picker interaction. Verify the final range before running the query.
 
 If only the post-action capture fails, `observed.refs` says what became of the refs: `kept-unverified` keeps the previous snapshot's refs, but each is confirmed live (same tab, frame, document and element) before a later command uses it and refused otherwise, never re-anchored by role or name (DOM-walk refs are always refused then); `dropped` means the document may have changed. Either way, run `snapshot -i` and do not repeat the action.

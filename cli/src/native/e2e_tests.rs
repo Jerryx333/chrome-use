@@ -18,6 +18,8 @@ use super::actions::{execute_command, DaemonState};
 
 #[path = "contenteditable_stealth_e2e_tests.rs"]
 mod contenteditable_stealth;
+#[path = "double_click_e2e_tests.rs"]
+mod double_click;
 
 #[path = "range_date_e2e_tests.rs"]
 mod range_date;

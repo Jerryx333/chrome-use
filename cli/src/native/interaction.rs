@@ -10,17 +10,6 @@ use super::element::{
 };
 use super::humanize;
 
-/// Whether a pointer interaction should be DOM-dispatched (invoke the event on
-/// the element in its own session) rather than dispatched at a viewport
-/// coordinate via `Input.dispatchMouseEvent`. True when the target is inside an
-/// iframe (an OOPIF element's box can't be mapped to a top-viewport point) or we
-/// drive over the extension relay (a coordinate Input event isn't confined to the
-/// target tab on a busy real Chrome — it drifts onto the foreground tab; issues
-/// #31/#36). DOM-dispatch always hits the right element in the right tab.
-fn prefer_dom_dispatch(ref_map: &RefMap, selector_or_ref: &str) -> bool {
-    ref_map.ref_is_in_iframe(selector_or_ref) || crate::connect::relay_url().is_some()
-}
-
 /// How long the cursor is shown travelling to the target before the click fires.
 /// Without a lead the overlay and the click land in the same frame and the click
 /// reads as instantaneous — you see the aftermath, never the movement.
@@ -778,79 +767,9 @@ async fn dom_activate(
     Ok(true)
 }
 
-/// DOM-dispatch a double-click on the element in its own session (no coordinates)
-/// — the relay/iframe-safe counterpart to a coordinate dblclick. Fires the full
-/// click,click,dblclick sequence so handlers bound to any of them respond.
-async fn dom_dblclick(
-    client: &CdpClient,
-    session_id: &str,
-    ref_map: &RefMap,
-    selector_or_ref: &str,
-    iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
-    let (object_id, effective_session_id) = resolve_element_object_id(
-        client,
-        session_id,
-        ref_map,
-        selector_or_ref,
-        iframe_sessions,
-    )
-    .await?;
-    client
-        .send_command_typed::<_, Value>(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: r#"function() {
-                    const opts = { bubbles: true, cancelable: true, view: window };
-                    this.dispatchEvent(new MouseEvent('click', opts));
-                    this.dispatchEvent(new MouseEvent('click', { ...opts, detail: 2 }));
-                    this.dispatchEvent(new MouseEvent('dblclick', opts));
-                }"#
-                .to_string(),
-                object_id: Some(object_id),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(&effective_session_id),
-        )
-        .await?;
-    wait_for_paint_settled(client, &effective_session_id).await;
-    Ok(())
-}
-
-pub async fn dblclick(
-    client: &CdpClient,
-    session_id: &str,
-    ref_map: &RefMap,
-    selector_or_ref: &str,
-    iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
-    // Same relay/iframe drift hazard as a single click — DOM-dispatch the
-    // double-click there instead of a coordinate one (issues #31/#36).
-    if std::env::var("AGENT_BROWSER_CLICK_MODE").as_deref() != Ok("coord")
-        && prefer_dom_dispatch(ref_map, selector_or_ref)
-    {
-        return dom_dblclick(
-            client,
-            session_id,
-            ref_map,
-            selector_or_ref,
-            iframe_sessions,
-        )
-        .await;
-    }
-    click(
-        client,
-        session_id,
-        ref_map,
-        selector_or_ref,
-        "left",
-        2,
-        iframe_sessions,
-    )
-    .await
-}
+#[path = "double_click.rs"]
+mod double_click;
+pub use double_click::dblclick;
 
 /// DOM-dispatch a hover (pointer/mouse enter+move) on the element in its own
 /// session. Only for a target no real pointer can be placed on (inside a

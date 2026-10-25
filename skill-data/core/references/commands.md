@@ -113,6 +113,8 @@ read `confirmed: null` as success.
 
 After a successful trusted insertion, contenteditable `fill` keeps focus on the editor without synthetic `change` or `focusout` events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.
 
+`dblclick` uses two trusted pointer clicks and verifies delivery to the target. Covered, disabled, transformed-frame and unmappable cross-origin targets are refused; no synthetic fallback is used. If the target changes after the first click, the second is stopped. JSON includes `dispatch: "pointer"` and `verified`; an unverified delivery carries a warning. Inspect the page before retrying an interrupted or unverified action. `AGENT_BROWSER_CLICK_MODE=dom` is not supported for double-clicks.
+
 ```bash
 chrome-use click @e1           # Click
 chrome-use click @e1 --new-tab # Click and open in new tab

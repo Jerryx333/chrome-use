@@ -79,6 +79,9 @@ jobs:
       - name: Test hover recorder lifecycle
         if: steps.changes.outputs.run_heavy == 'true'
         run: node --test scripts/hover-recorder.test.js
+      - name: Test double-click recorder
+        if: steps.changes.outputs.run_heavy == 'true'
+        run: node --test scripts/double-click.test.js
 
       - name: Run extension tests
         if: steps.changes.outputs.run_heavy == 'true'

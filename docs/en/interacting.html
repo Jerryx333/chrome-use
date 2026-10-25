@@ -63,6 +63,7 @@
 
       <!-- ============ Clicking &amp; pointer ============ -->
       <h2>Clicking &amp; pointer</h2>
+      <p><code>dblclick</code> uses two trusted pointer clicks and verifies delivery to the target. Covered, disabled, transformed-frame and unmappable cross-origin targets are refused; no synthetic fallback is used. If the target changes after the first click, the second is stopped. JSON includes <code>dispatch: "pointer"</code> and <code>verified</code>; an unverified delivery carries a warning. Inspect the page before retrying an interrupted or unverified action. <code>AGENT_BROWSER_CLICK_MODE=dom</code> is not supported for double-clicks.</p>
       <p>Semantic clicks report the covering element with a bounded tag, id/class and text description. If the hit-test cannot confirm the target, the click fails without guessing a blocker or dispatching input.</p>
       <p>
         The most-used group of verbs, all acting on a single <code>@ref</code>. <code>click</code> auto-scrolls the

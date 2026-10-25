@@ -9679,7 +9679,7 @@ async fn handle_dblclick(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         .and_then(|v| v.as_str())
         .ok_or("Missing 'selector' parameter")?;
 
-    interaction::dblclick(
+    let outcome = interaction::dblclick(
         &mgr.client,
         &session_id,
         &state.ref_map,
@@ -9687,7 +9687,14 @@ async fn handle_dblclick(cmd: &Value, state: &mut DaemonState) -> Result<Value, 
         &state.iframe_sessions,
     )
     .await?;
-    Ok(json!({ "clicked": selector }))
+    state.mouse_state.x = outcome.point.0;
+    state.mouse_state.y = outcome.point.1;
+    let mut out =
+        json!({ "clicked": selector, "dispatch": "pointer", "verified": outcome.verified });
+    if let Some(warning) = outcome.warning {
+        out["warning"] = json!(warning);
+    }
+    Ok(out)
 }
 
 async fn handle_fill(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
