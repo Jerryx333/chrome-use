@@ -6704,6 +6704,8 @@ Setup:
                              reset; reset does not cancel possible delivery. Idle old
                              agent services exit before replacement; active work can
                              still be read/stopped. Custom programs use absolute paths.
+                             Failed panel turn alerts retry on later worker polls.
+                             Disabled or already-viewed turns stay suppressed.
                              Browser-tool approvals preview arguments and allow one
                              call. Replies remain pending until backend confirmation.
                              Panel conversation menu: Initial page opens the first

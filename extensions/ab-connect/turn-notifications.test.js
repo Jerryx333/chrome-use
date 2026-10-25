@@ -237,3 +237,57 @@ test('with one panel per tab, a finished turn opens its conversation\'s own tab,
   openFromNotification('inspect-reply:dm-a#4', { windowId: 4, chrome, panels, tabs });
   assert.deepEqual(calls.slice(0, 2), [['store', ['ab_panel_show_replies']], ['open', 30]]);
 });
+
+for (const failure of ['create', 'showing']) {
+  test(`a transient ${failure} failure leaves the turn eligible for notification`, async () => {
+    const f = fixture();
+    let attempts = 0;
+    const create = f.options.notifications.create;
+    if (failure === 'create') f.options.notifications.create = async (...args) => {
+      if (++attempts === 1) throw new Error('Temporary failure');
+      return create(...args);
+    };
+    const showing = async () => {
+      if (failure === 'showing' && ++attempts === 1) throw new Error('Temporary failure');
+      return false;
+    };
+    const notifier = new TurnNotifications(f.options);
+    const read = async () => ({ conversations: [chat({ phase: 'idle', lastTurn: { messageId: 'retry', outcome: 'completed', ended: 120 } })] });
+    await assert.rejects(notifier.poll(read, { showing }), /Temporary failure/);
+    assert.equal(notifier.state.seen[ID], undefined);
+    assert.equal(notifier.state.unseen[ID], undefined);
+    await notifier.poll(read, { showing });
+    await notifier.poll(read, { showing });
+    assert.equal(f.notices.length, 1);
+    assert.equal(attempts, 2);
+    await new TurnNotifications(f.options).poll(read);
+    assert.equal(f.notices.length, 1, 'successful delivery stays deduplicated after restart');
+  });
+}
+
+test('failed replacement notification preserves the earlier unread badge', async () => {
+  const f = fixture();
+  const notifier = new TurnNotifications(f.options);
+  const c = chat({ phase: 'idle', lastTurn: { messageId: 'first', outcome: 'completed', ended: 120 } });
+  const read = async () => ({ conversations: [c] });
+  await notifier.poll(read);
+  f.options.notifications.create = async () => { throw new Error('Temporary failure'); };
+  c.lastTurn = { messageId: 'second', outcome: 'completed', ended: 130 };
+  await assert.rejects(notifier.poll(read), /Temporary failure/);
+  assert.equal(notifier.state.seen[ID], 't:first');
+  assert.equal(notifier.state.unseen[ID], 't:first');
+});
+
+test('acknowledging a turn during notification creation does not restore its unread badge', async () => {
+  const f = fixture();
+  let finish;
+  f.options.notifications.create = () => new Promise(resolve => { finish = resolve; });
+  const notifier = new TurnNotifications(f.options);
+  const read = async () => ({ conversations: [chat({ phase: 'idle', lastTurn: { messageId: 'm', outcome: 'completed', ended: 120 } })] });
+  const polling = notifier.poll(read);
+  await new Promise(resolve => setImmediate(resolve));
+  await notifier.seen(ID);
+  finish(); await polling;
+  assert.equal(notifier.state.unseen[ID], undefined);
+  assert.equal(f.badges.at(-1), '');
+});

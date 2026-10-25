@@ -104,6 +104,7 @@
       <p>When a panel task finishes, fails, stops, needs recovery or waits for your approval, Chrome shows a notification and the toolbar icon counts the unseen ones; clicking it opens the side panel on that conversation. The conversation the panel already shows in the focused window does not notify. <strong>Settings → Notify when a task finishes</strong> turns it off.</p>
       <p>Chats cannot schedule more tools or automatic approval than they have. Scheduled conversations can list schedules but cannot change or trigger them, or rewrite library skills for future runs. Agent completion does not establish that the requested page effect succeeded.</p>
 
+      <p>If Chrome rejects a panel turn notification, a later check in the same extension-worker session retries it. Disabled notifications and turns already being viewed remain suppressed.</p>
       <h2 id="turns">A turn for each request</h2>
       <p>Requires CLI 1.5.215 and extension 0.5.58. Older extensions retain the previous view. Chrome Web Store submission, review and public availability are separate from the CLI release.</p>
       <p>Each message has a card containing its attached page, browser steps, response, result files and turn outcome. Running steps expand; finished groups can collapse, with failed steps retained in the summary. Missing evidence in older history is labelled <strong>not recorded</strong>, never guessed.</p>
