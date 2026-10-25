@@ -224,7 +224,8 @@ const notificationPanels = {
   activeTab: windowId => activeTabs.get(windowId) ?? null,
   bind: (tabId, conversationId) => { panelTabs.set(tabId, conversationId); void chrome.storage.session.set({ [panelTabKey(tabId)]: conversationId }).catch(() => {}); },
   open: tabId => openTabPanel(tabId, { sidePanel: chrome.sidePanel }),
-  show: tabId => { void chrome.tabs.update(tabId, { active: true }).catch(() => {}); },
+  // Return the activated Tab so notification focus follows its current window.
+  show: tabId => chrome.tabs.update(tabId, { active: true }),
 };
 async function panelShowing(conversationId) {
   for (const presence of panelPresence.values()) {

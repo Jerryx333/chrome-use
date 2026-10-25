@@ -185,6 +185,8 @@
 
       <!-- ============================================================ -->
       <h2>Interactions</h2>
+      <p>After a successful trusted insertion, contenteditable <code>fill</code> keeps focus on the editor without synthetic <code>change</code> or <code>focusout</code> events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.</p>
+      <p><code>dblclick</code> uses two trusted pointer clicks and verifies delivery to the target. Covered, disabled, transformed-frame and unmappable cross-origin targets are refused; no synthetic fallback is used. If the target changes after the first click, the second is stopped. JSON includes <code>dispatch: "pointer"</code> and <code>verified</code>; an unverified delivery carries a warning. Inspect the page before retrying an interrupted or unverified action. <code>AGENT_BROWSER_CLICK_MODE=dom</code> is not supported for double-clicks.</p>
       <p>Drive the real browser with the <code>@ref</code> values from <code>snapshot</code>: click, type, check, drag, upload.</p>
       <p>Drag mode follows the current session connection and target frame; an extension running in another Chrome profile does not change a launched browser’s drag mode.</p>
       <div class="du-code">
@@ -263,6 +265,7 @@
 
       <!-- ============================================================ -->
       <h2>Screenshots &amp; PDF</h2>
+      <p><code>screenshot --annotate</code> draws numbered labels into the captured image in the CLI, without inserting page nodes or styles. JSON annotation boxes remain capture-relative CSS pixels; labels scale to the image resolution. Explicit clips take precedence over full-page and selector captures. Frame references use their owning renderer and top-viewport geometry. Unsupported out-of-process iframe transforms or missing frame geometry are reported as errors instead of guessed positions. Cropping also happens in the CLI; an off-viewport region is cropped from a full-page capture. Regions outside the page are refused.</p>
       <div class="du-code">
         <div class="du-code-head">
           <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
@@ -948,6 +951,7 @@ JS</code></pre>
 
       <!-- ============================================================ -->
       <h2>Global options</h2>
+      <p>Session-scoped internal DOM reads require an isolated execution context. If creation, recreation or node resolution cannot keep that context, the command returns <code>isolation_unavailable</code> rather than retrying in the page world. Wait for navigation to settle and observe again; some same-process frame operations may remain unsupported. User-requested evaluation, site adapters, deliberate editor-model access and explicitly supplied contexts keep their existing semantics. The existing <code>AGENT_BROWSER_MAIN_WORLD=1</code> compatibility override disables this default isolation requirement; it is not a stealth-preserving workaround. This policy is independent of the extension cursor setting.</p>
       <p>
         These flags go before the command and apply to the whole session. Note: <strong>headless mode is forbidden</strong>
         (a bot signal) — it's headed by default and always (stealth); on a display-less server, use

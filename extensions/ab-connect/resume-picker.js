@@ -105,7 +105,13 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
   const collapsed = new Set(), expanded = new Set();
   let options = [], active = -1;
 
-  function close() { container.hidden = true; confirm.hidden = true; epoch++; if (timer) cancel(timer); timer = null; }
+  /** Invalidate choices, confirmations and pending resume responses together. */
+  function resetResults() {
+    items.replaceChildren(); rows = []; options = []; active = -1;
+    confirm.hidden = true; busy = false;
+    return ++epoch;
+  }
+  function close() { container.hidden = true; confirm.hidden = true; resetResults(); if (timer !== null) cancel(timer); timer = null; }
   function open(query = '', agentId = '') {
     const list = agents();
     agent.replaceChildren(...list.map(({ id, name }) => { const option = element('option', name); option.value = id; return option; }));
@@ -117,8 +123,9 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
   }
   function nameOf(id) { return agents().find(a => a.id === id)?.name || id; }
   async function load() {
-    const current = ++epoch, agentId = agent.value, query = search.value.trim();
-    status.textContent = RESUME_TEXT.loading; status.hidden = false; items.replaceChildren(); rows = [];
+    if (timer !== null) cancel(timer); timer = null;
+    const current = resetResults(), agentId = agent.value, query = search.value.trim();
+    status.textContent = RESUME_TEXT.loading; status.hidden = false;
     const params = { agentId, limit: 100 };
     if (query) params.query = query;
     const path = executable(agentId); if (path) params.executable = path;
@@ -195,28 +202,44 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
   }
   async function choose(row, confirmRunning = false) {
     if (busy) return;
+    const current = epoch;
     if (row.conversationId) { close(); await onResumed({ id: row.conversationId }, true); return; }
     busy = true; status.textContent = RESUME_TEXT.resuming; status.hidden = false;
     try {
       const params = { agentId: row.agentId, sessionId: row.sessionId };
       if (confirmRunning) params.confirmRunning = true;
       const path = executable(row.agentId); if (path) params.executable = path;
-      const result = await api('conversationResume', params);
+      let result;
+      try { result = await api('conversationResume', params); }
+      catch (error) { if (current !== epoch) return; throw error; }
+      // The host request may finish, but an old result must not change a new picker.
+      if (current !== epoch) return;
       if (result.confirmRequired === 'running') { askRunning(row); return; }
       close();
       await onResumed(result.conversation, result.existing === true, result.projectRefused || null);
-    } finally { busy = false; if (!container.hidden && status.textContent === RESUME_TEXT.resuming) { status.textContent = ''; status.hidden = true; } }
+    } finally {
+      if (current === epoch) {
+        busy = false;
+        if (!container.hidden && status.textContent === RESUME_TEXT.resuming) { status.textContent = ''; status.hidden = true; }
+      }
+    }
   }
   // A session another terminal may still be writing is never attached
   // silently: the user confirms, and the host checks again.
   function askRunning(row) {
+    const current = epoch;
     confirm.replaceChildren(element('p', RESUME_TEXT.unsafe), element('p', RESUME_TEXT.unsafeHint, 'hint'));
     const actions = element('div', undefined, 'actions');
-    actions.append(button(RESUME_TEXT.confirm, () => { confirm.hidden = true; return choose(row, true); }, 'danger'), button(RESUME_TEXT.cancel, () => { confirm.hidden = true; }));
+    actions.append(button(RESUME_TEXT.confirm, () => { if (current !== epoch) return; confirm.hidden = true; return choose(row, true); }, 'danger'), button(RESUME_TEXT.cancel, () => { confirm.hidden = true; }));
     confirm.append(actions); confirm.hidden = false;
   }
   agent.addEventListener('change', () => void load());
-  search.addEventListener('input', () => { if (timer) cancel(timer); timer = schedule(() => { timer = null; void load(); }, 250); });
+  search.addEventListener('input', () => {
+    // Invalidate immediately: an earlier request may finish before debounce fires.
+    resetResults(); status.textContent = RESUME_TEXT.loading; status.hidden = false;
+    if (timer !== null) cancel(timer);
+    timer = schedule(() => { timer = null; void load(); }, 250);
+  });
   // The search box keeps the focus: arrows move through the sessions on
   // screen, Enter continues the highlighted one (or the first).
   search.addEventListener('keydown', event => {

@@ -175,3 +175,58 @@ test('explicit navigation reports uncertainty when Chrome returns the wrong dest
   f.tabs.update = async id => { Object.assign(f.live.get(id), { active: true, url: 'https://other.example/' }); };
   await assert.rejects(f.api.show('a', 'initial'), /Could not confirm/);
 });
+
+async function withRestoredInitialPage() {
+  const f = fixture();
+  await f.api.observe('panel-a', 21);
+  f.live.get(21).url = 'https://example.com/final';
+  await f.api.updated(f.live.get(21));
+  const initial = await f.api.show('a', 'initial');
+  const replacement = { ...f.live.get(initial.tabId), id: 30 };
+  f.live.delete(initial.tabId); f.live.set(replacement.id, replacement);
+  return { ...f, initial, replacement };
+}
+
+test('initial page follows its replacement across worker restart without overwriting the final page', async () => {
+  const f = await withRestoredInitialPage();
+  await f.api.replaced(f.initial.tabId, f.replacement);
+  assert.equal((await f.api.show('a', 'initial')).tabId, 30);
+  assert.equal((await f.make().show('a', 'initial')).tabId, 30);
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').length, 1);
+  assert.equal(f.saved.session.ab_conversation_windows.a.initialTabId, 30);
+  assert.equal(f.saved.session.ab_conversation_windows.a.tabId, 21);
+  assert.equal(f.saved.local.ab_conversation_pages.a.initialUrl, 'https://example.com/task');
+  assert.equal(f.saved.local.ab_conversation_pages.a.url, 'https://example.com/final');
+});
+
+test('replacement updates both references when the initial tab is also the current destination', async () => {
+  const f = await withRestoredInitialPage();
+  // The agent subsequently used the same tab that Initial page restored.
+  await f.api.remember('a', { ...f.replacement, id: f.initial.tabId });
+  f.replacement.url = 'https://example.com/new-result';
+  await f.api.replaced(f.initial.tabId, f.replacement);
+  assert.equal(f.saved.session.ab_conversation_windows.a.tabId, 30);
+  assert.equal(f.saved.session.ab_conversation_windows.a.initialTabId, 30);
+  assert.equal(f.saved.local.ab_conversation_pages.a.url, 'https://example.com/new-result');
+  assert.equal(f.saved.local.ab_conversation_pages.a.initialUrl, 'https://example.com/task');
+});
+
+test('an initial replacement at another URL still requires reopening the saved initial address', async () => {
+  const f = await withRestoredInitialPage();
+  f.replacement.url = 'https://other.example/';
+  await f.api.replaced(f.initial.tabId, f.replacement);
+  assert.equal(f.saved.session.ab_conversation_windows.a.initialTabId, 30);
+  const shown = await f.api.show('a', 'initial');
+  assert.notEqual(shown.tabId, 30);
+  assert.equal(f.calls.filter(([kind]) => kind === 'create').at(-1)[1].url, 'https://example.com/task');
+  assert.equal(f.saved.local.ab_conversation_pages.a.url, 'https://example.com/final');
+});
+
+test('late tab replacement does not recreate a deleted conversation record', async () => {
+  const f = await withRestoredInitialPage();
+  await f.api.forget('a');
+  await f.api.replaced(f.initial.tabId, f.replacement);
+  assert.equal(f.saved.session.ab_conversation_windows.a, undefined);
+  assert.equal(f.saved.local.ab_conversation_pages.a, undefined);
+  await assert.rejects(f.make().show('a', 'initial'), /No initial webpage/);
+});

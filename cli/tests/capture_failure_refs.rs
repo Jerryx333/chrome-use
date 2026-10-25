@@ -247,6 +247,7 @@ impl Fake {
             "Page.getFrameTree" if p.denials > 0 && p.frame_tree_error.is_some() => {
                 return Err(p.frame_tree_error.clone().unwrap_or_default());
             }
+            "Page.createIsolatedWorld" => json!({"executionContextId":42}),
             "Page.getFrameTree" => json!({"frameTree": {"frame": {
                 "id": "T1", "loaderId": p.loader, "url": "https://form.test/",
                 "securityOrigin": "https://form.test", "mimeType": "text/html"}}}),

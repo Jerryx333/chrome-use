@@ -2963,8 +2963,13 @@ chrome-use dblclick - Double-click an element
 
 Usage: chrome-use dblclick <selector>
 
-Double-clicks on the specified element. Useful for text selection
-or triggering double-click handlers.
+Sends two trusted pointer clicks and verifies the target received the double-click.
+Covered, disabled, transformed-frame or unmappable cross-origin targets are refused.
+There is no synthetic fallback; AGENT_BROWSER_CLICK_MODE=dom is unsupported here.
+If the target changes after the first click, the second is stopped. JSON includes
+dispatch: "pointer" and verified. Unverified delivery carries a warning; inspect
+the page before retrying an interrupted or unverified action.
+Useful for text selection or triggering double-click handlers.
 
 Global Options:
   --json               Output as JSON
@@ -2995,12 +3000,23 @@ not a raw `.value` write — and the response echoes which `engine` was used.
 The written value is read back from the control or editor model and compared
 exactly before success is reported. If Monaco hides its model API, fill uses
 one trusted editor paste, reads the selected model back through the editor's
-copy handler, and restores the browser clipboard. If that cannot be verified,
+copy handler, and attempts clipboard restoration from an independent Blob backup.
+An empty or unreadable backup is refused before staging; restoration is read back
+and verified. Contents are checked before input and restoration; changed or
+uncertain contents stop the operation. Only Web Clipboard API formats are backed
+up; native application metadata is not preserved. Temporary listeners expire
+after 60 seconds of inactivity in a surviving document. Context loss can prevent
+restoration; comparison/write is not atomic. Avoid concurrent clipboard use.
+If restoration or the edit cannot be verified,
 fill fails loudly instead of reporting a false success. Verification
 errors quote both values (`read back "" after writing "千代田区"`); when every
 non-ASCII character vanished while ASCII survived, the error says the page
 filtered non-Latin input (a Latin-only / masked field), so re-typing the
 same text will not help.
+After successful trusted contenteditable insertion, fill keeps editor focus
+without synthetic change/focusout events. Failed read-back is reported rather
+than overwriting the editor DOM. Use the page's save/commit action when needed.
+
 Ant Design / rc-picker ranges: fill the start bound, then the end bound.
 Each bound uses trusted Tab or the picker's visible confirmation button;
 older date-only pickers commit on blur. The engine is input-date-range and
@@ -3876,7 +3892,14 @@ Options:
                        --full) unless overridden (AGENT_BROWSER_SCREENSHOT_MAX_EDGE;
                        0 disables). --full-res keeps the captured size. Annotated
                        shots are never downscaled, so ref overlays stay aligned.
-  --annotate           Overlay numbered labels on interactive elements.
+  --annotate           Draw numbered labels into the captured image in the CLI.
+                       No annotation nodes or styles are inserted into the page.
+                       JSON boxes use capture-relative CSS pixels; labels scale
+                       to the image resolution. --clip wins over --full/selector.
+                       Frame labels use their owning renderer. Unsupported frame
+                       transforms or unavailable geometry report an error.
+                       Crops happen in the CLI; off-viewport crops capture the full
+                       page first. Regions outside the page are refused.
                        Each label [N] corresponds to ref @eN from snapshot.
                        Prints a legend mapping labels to element roles/names.
                        With --json, annotations are included in the response.
@@ -6685,6 +6708,10 @@ Setup:
                              The extension toolbar opens its agent side panel when
                              Chrome confirms support; otherwise it keeps the setup
                              popup. Settings remain accessible in the side panel.
+                             Panel replies preserve fenced code; use longer outer
+                             fences around examples containing shorter fences.
+                             Closing fences use the same character, at least the
+                             opening length, with only trailing whitespace.
                              The panel supports /skill selection, profile skill imports,
                              up to five image attachments, conversation tool/effort/tier
                              overrides and scheduled prompts. Schedules use host-local
@@ -6697,17 +6724,31 @@ Setup:
                              before priority sending; ordinary queues remain paused.
                              New panel messages after failure/interruption start in the
                              same chat/model; older queued messages remain paused.
+                             In /resume, changing agent/search clears old choices.
+                             Enter selects only a current result; loading, unavailable
+                             or empty results cannot open or resume an old session.
+                             Agent/search changes or closing also invalidate old
+                             confirmations and resume responses; sent host requests
+                             may still finish without blocking fresh selections.
                              Read CLI models fetches bounded CLI metadata without
                              a prompt; account reports do not verify model access.
+                             Task notifications focus the conversation tab
+                             and the window that contains it, even before the current
+                             window is known; a bound tab takes precedence.
                              Metadata probes use owned process groups or Windows jobs.
                              Unconfirmed sends offer explicit same-ID retry or warning
                              reset; reset does not cancel possible delivery. Idle old
                              agent services exit before replacement; active work can
                              still be read/stopped. Custom programs use absolute paths.
+                             Failed panel turn alerts retry on later worker polls.
+                             Disabled or already-viewed turns stay suppressed, even
+                             if notification creation fails after acknowledgement.
                              Browser-tool approvals preview arguments and allow one
                              call. Replies remain pending until backend confirmation.
                              Panel conversation menu: Initial page opens the first
                              recorded URL; Final page opens the latest recorded URL.
+                             Initial page follows Chrome tab replacements without
+                             changing the saved final address.
                              Missing initial addresses are reported, never guessed.
                              Delete conversation requires confirmation; stop first.
                              Deletion reports saved page address cleanup failures.
@@ -6923,6 +6964,11 @@ Environment:
   AGENT_BROWSER_JSON             JSON output
   AGENT_BROWSER_ANNOTATE         Annotated screenshot with numbered labels and legend
   AGENT_BROWSER_DEBUG            Debug output
+  AGENT_BROWSER_MAIN_WORLD       Set to 1 to bypass default internal DOM isolation
+                                 (compatibility override, reduces stealth). By default,
+                                 unavailable isolation reports isolation_unavailable;
+                                 wait for navigation and observe again. Some frame
+                                 operations require a supported isolated frame target.
   AGENT_BROWSER_IGNORE_HTTPS_ERRORS Ignore HTTPS certificate errors
   AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore)
   AGENT_BROWSER_AUTO_CONNECT     Auto-discover and connect to running Chrome

@@ -34,6 +34,47 @@ test('fenced code keeps its text literally, including markup', () => {
   assert.equal(root.children[0].children[0].text, '<script>alert(1)</script>\n**not bold**');
 });
 
+test('long fences preserve shorter nested examples and the language label', () => {
+  for (const marker of ['`', '~']) {
+    const body = `${marker.repeat(3)}js\nconst answer = 42;\n${marker.repeat(3)}`;
+    const root = render(`${marker.repeat(4)}markdown\n${body}\n${marker.repeat(4)}\n\nAfter`);
+    assert.deepEqual(root.children.map(node => node.tag), ['pre', 'p']);
+    assert.equal(root.children[0].attributes['data-language'], 'markdown');
+    assert.equal(root.children[0].children[0].textContent, body);
+    assert.equal(root.children[1].textContent, 'After');
+  }
+});
+
+test('fence-like lines with trailing text remain literal code', () => {
+  for (const marker of ['```', '~~~']) {
+    const body = `before\n${marker}not-a-closing-fence\n${marker} trailing text\n<script>alert(1)</script>\nafter`;
+    const root = render(`${marker}text\n${body}\n${marker}`);
+    assert.deepEqual(root.children.map(node => node.tag), ['pre']);
+    assert.equal(root.children[0].children[0].textContent, body);
+    assert.equal(root.children[0].children[0].children.length, 0);
+  }
+});
+
+test('closing fences must use the opening character and at least its length', () => {
+  for (const [marker, other] of [['`', '~'], ['~', '`']]) {
+    const body = `before\n${other.repeat(5)}\n${marker.repeat(3)}\nafter`;
+    const root = render(`${marker.repeat(4)}\n${body}\n  ${marker.repeat(5)} \t\nAfter`);
+    assert.deepEqual(root.children.map(node => node.tag), ['pre', 'p']);
+    assert.equal(root.children[0].children[0].textContent, body);
+    assert.equal(root.children[0].attributes['data-language'], undefined);
+    assert.equal(root.children[1].textContent, 'After');
+  }
+});
+
+test('an unfinished streamed code block keeps all remaining text', () => {
+  for (const marker of ['````', '~~~~']) {
+    const body = `first\n\n${marker.slice(1)}\nlast`;
+    const root = render(`Before\n${marker}text\n${body}`);
+    assert.deepEqual(root.children.map(node => node.tag), ['p', 'pre']);
+    assert.equal(root.children[1].children[0].textContent, body);
+  }
+});
+
 test('only http(s) links become anchors, and they open safely', () => {
   const root = render('[ok](https://example.com/a) [bad](javascript:alert(1)) https://x.com/p.');
   const anchors = root.children[0].children.filter(n => n.tag === 'a');

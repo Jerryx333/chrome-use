@@ -294,6 +294,7 @@ impl Fake {
                 json!({"result": {"type": "number", "value": 1}})
             }
             "Page.navigate" => json!({"frameId": "F1", "loaderId": "L1"}),
+            "Page.createIsolatedWorld" => json!({"executionContextId":42}),
             "Page.getFrameTree" => json!({"frameTree": {"frame": {
                 "id": "F1", "loaderId": "L1", "url": "about:blank",
                 "securityOrigin": "", "mimeType": "text/html"}}}),

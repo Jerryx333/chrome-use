@@ -63,6 +63,7 @@
 
       <!-- ============ Clicking &amp; pointer ============ -->
       <h2>Clicking &amp; pointer</h2>
+      <p><code>dblclick</code> uses two trusted pointer clicks and verifies delivery to the target. Covered, disabled, transformed-frame and unmappable cross-origin targets are refused; no synthetic fallback is used. If the target changes after the first click, the second is stopped. JSON includes <code>dispatch: "pointer"</code> and <code>verified</code>; an unverified delivery carries a warning. Inspect the page before retrying an interrupted or unverified action. <code>AGENT_BROWSER_CLICK_MODE=dom</code> is not supported for double-clicks.</p>
       <p>Semantic clicks report the covering element with a bounded tag, id/class and text description. If the hit-test cannot confirm the target, the click fails without guessing a blocker or dispatching input.</p>
       <p>
         The most-used group of verbs, all acting on a single <code>@ref</code>. <code>click</code> auto-scrolls the
@@ -114,6 +115,7 @@
 
       <!-- ============ Typing text ============ -->
       <h2>Typing text</h2>
+      <p>After a successful trusted insertion, contenteditable <code>fill</code> keeps focus on the editor without synthetic <code>change</code> or <code>focusout</code> events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.</p>
       <p>For Ant Design / rc-picker date ranges, fill the start bound and then the end bound. <code>fill</code> confirms each bound through the component's trusted keyboard or visible confirmation control and reads it back, instead of blurring and refocusing a draft. Focus follows the picker. Invalid, read-only or disabled controls fail without a synthetic overwrite; an unverified popup requires explicit picker interaction. Verify the final range before running the query.</p>
       <p>
         <code>fill</code> clears first and then types, while <code>type</code> appends after the existing content.
@@ -321,10 +323,12 @@
         <code>fill</code> is hardened the same way: it resolves Monaco through its global or AMD model API,
         performs one atomic <code>setValue</code>, and verifies the exact model readback before reporting
         success. When an app hides that API, it performs one trusted editor <code>paste</code>, verifies the
-        selected model through the editor's own <code>copy</code> handler, and restores the browser clipboard.
+        selected model through the editor's own <code>copy</code> handler, and attempts to restore the browser clipboard.
         If those operations cannot be verified or the value differs, it errors loudly. Controlled inputs whose <code>@ref</code> anchored a
         <strong>wrapper</strong> still retarget to the nested editable.
       </div>
+
+      <p>Monaco clipboard fallback keeps transaction state in a private closure and removes temporary listeners on completion, setup errors, or a 60-second lease expiry while the document survives. The backup uses independent Blob-backed items because browser-backed ClipboardItems may expire after a write. An empty or unreadable backup is refused before staging. Contents are compared before further input and before restoration; changes or uncertain ownership stop the operation. Restoration is read back and verified. Only formats exposed by the Web Clipboard API can be backed up; native application metadata is not preserved. A restore failure is an error, even if the editor changed. Context loss can prevent restoration, and clipboard comparison/write is not atomic; avoid concurrent clipboard use.</p>
 
       <div class="du-callout">
         <div class="du-callout-title">CSP-restricted pages</div>

@@ -10,17 +10,6 @@ use super::element::{
 };
 use super::humanize;
 
-/// Whether a pointer interaction should be DOM-dispatched (invoke the event on
-/// the element in its own session) rather than dispatched at a viewport
-/// coordinate via `Input.dispatchMouseEvent`. True when the target is inside an
-/// iframe (an OOPIF element's box can't be mapped to a top-viewport point) or we
-/// drive over the extension relay (a coordinate Input event isn't confined to the
-/// target tab on a busy real Chrome — it drifts onto the foreground tab; issues
-/// #31/#36). DOM-dispatch always hits the right element in the right tab.
-fn prefer_dom_dispatch(ref_map: &RefMap, selector_or_ref: &str) -> bool {
-    ref_map.ref_is_in_iframe(selector_or_ref) || crate::connect::relay_url().is_some()
-}
-
 /// How long the cursor is shown travelling to the target before the click fires.
 /// Without a lead the overlay and the click land in the same frame and the click
 /// reads as instantaneous — you see the aftermath, never the movement.
@@ -778,79 +767,9 @@ async fn dom_activate(
     Ok(true)
 }
 
-/// DOM-dispatch a double-click on the element in its own session (no coordinates)
-/// — the relay/iframe-safe counterpart to a coordinate dblclick. Fires the full
-/// click,click,dblclick sequence so handlers bound to any of them respond.
-async fn dom_dblclick(
-    client: &CdpClient,
-    session_id: &str,
-    ref_map: &RefMap,
-    selector_or_ref: &str,
-    iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
-    let (object_id, effective_session_id) = resolve_element_object_id(
-        client,
-        session_id,
-        ref_map,
-        selector_or_ref,
-        iframe_sessions,
-    )
-    .await?;
-    client
-        .send_command_typed::<_, Value>(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: r#"function() {
-                    const opts = { bubbles: true, cancelable: true, view: window };
-                    this.dispatchEvent(new MouseEvent('click', opts));
-                    this.dispatchEvent(new MouseEvent('click', { ...opts, detail: 2 }));
-                    this.dispatchEvent(new MouseEvent('dblclick', opts));
-                }"#
-                .to_string(),
-                object_id: Some(object_id),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(&effective_session_id),
-        )
-        .await?;
-    wait_for_paint_settled(client, &effective_session_id).await;
-    Ok(())
-}
-
-pub async fn dblclick(
-    client: &CdpClient,
-    session_id: &str,
-    ref_map: &RefMap,
-    selector_or_ref: &str,
-    iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
-    // Same relay/iframe drift hazard as a single click — DOM-dispatch the
-    // double-click there instead of a coordinate one (issues #31/#36).
-    if std::env::var("AGENT_BROWSER_CLICK_MODE").as_deref() != Ok("coord")
-        && prefer_dom_dispatch(ref_map, selector_or_ref)
-    {
-        return dom_dblclick(
-            client,
-            session_id,
-            ref_map,
-            selector_or_ref,
-            iframe_sessions,
-        )
-        .await;
-    }
-    click(
-        client,
-        session_id,
-        ref_map,
-        selector_or_ref,
-        "left",
-        2,
-        iframe_sessions,
-    )
-    .await
-}
+#[path = "double_click.rs"]
+mod double_click;
+pub use double_click::dblclick;
 
 /// DOM-dispatch a hover (pointer/mouse enter+move) on the element in its own
 /// session. Only for a target no real pointer can be placed on (inside a
@@ -1196,7 +1115,7 @@ fn hover_refusal(selector_or_ref: &str, reply: &Value) -> Option<String> {
     })
 }
 
-/// Stops and releases a hover event recorder however `hover_reporting` ends:
+/// Stops and releases a selector or coordinate hover event recorder:
 /// normally (`finish`), on an early `?` return, or when the command future is
 /// dropped (cancelled). Drop cannot await, so it hands the two CDP calls to a
 /// detached task on the current runtime.
@@ -1458,7 +1377,9 @@ pub async fn hover_reporting(
 
 /// Records the first trusted pointer/mouse move the top document sees, and
 /// what is under it; read back by [`HOVER_POINT_READ_JS`]. The recorder is
-/// held only through its remote object handle: nothing is stored on the page.
+/// held only through its remote object handle, with no named page property.
+/// The guard requests listener cleanup on every command exit; the timer bounds
+/// their lifetime if cleanup cannot reach a still-running document.
 const HOVER_POINT_PROBE_JS: &str = r#"(() => {
   const describe = (n) => {
     if (!n || !n.tagName) return 'nothing';
@@ -1474,10 +1395,17 @@ const HOVER_POINT_PROBE_JS: &str = r#"(() => {
   const record = (e) => { if (e.isTrusted && !seen.hit) seen.hit = describe(e.composedPath ? e.composedPath()[0] : e.target); };
   addEventListener('pointermove', record, true);
   addEventListener('mousemove', record, true);
+  let timer = 0;
+  const stop = () => {
+    removeEventListener('pointermove', record, true);
+    removeEventListener('mousemove', record, true);
+    clearTimeout(timer);
+  };
+  timer = setTimeout(stop, 10000);
   return {
     seen,
     describe,
-    stop() { removeEventListener('pointermove', record, true); removeEventListener('mousemove', record, true); },
+    stop,
   };
 })()"#;
 
@@ -1493,7 +1421,7 @@ const HOVER_POINT_READ_JS: &str = r#"function(x, y) {
 /// Verified when the top document saw a trusted move; a point inside a
 /// cross-origin frame is moved to but cannot be confirmed from here.
 pub async fn hover_point(
-    client: &CdpClient,
+    client: &std::sync::Arc<CdpClient>,
     session_id: &str,
     x: f64,
     y: f64,
@@ -1509,6 +1437,11 @@ pub async fn hover_point(
         .ok()
         .filter(|r| r.get("exceptionDetails").is_none())
         .and_then(|r| r.get("result")?.get("objectId")?.as_str().map(String::from));
+    let guard = RecorderGuard {
+        client: client.clone(),
+        session: session_id.to_string(),
+        object_id: recorder.clone(),
+    };
     let probe = recorder.is_some();
     restore_rendering_if_hidden(client, session_id).await;
     // A move to where the pointer already rests produces no event: step off
@@ -1563,26 +1496,14 @@ pub async fn hover_point(
                 break;
             }
         }
-        let _ = client
-            .send_command(
-                "Runtime.callFunctionOn",
-                Some(json!({
-                    "objectId": recorder,
-                    "functionDeclaration": "function() { this.stop(); }",
-                })),
-                Some(session_id),
-            )
-            .await;
-        let _ = client
-            .send_command(
-                "Runtime.releaseObject",
-                Some(json!({ "objectId": recorder })),
-                Some(session_id),
-            )
-            .await;
     }
+    guard.finish().await;
     Ok(hover_point_outcome(x, y, probe, &read))
 }
+
+#[cfg(test)]
+#[path = "hover_point_tests.rs"]
+mod hover_point_tests;
 
 /// The reply for a coordinate hover, from what the page reported.
 fn hover_point_outcome(x: f64, y: f64, probe: bool, read: &Value) -> HoverOutcome {
@@ -2505,7 +2426,9 @@ pub(crate) fn commit_control_warning(
 }
 
 /// Everything `fill` does after the page script ran: the Monaco clipboard
-/// fallback, the trusted contenteditable insert, and the read-back.
+/// fallback, the trusted contenteditable insert, and the read-back. Successful
+/// native contenteditable insertion preserves focus and does not fabricate
+/// change/focusout events or overwrite a value rejected by the editor.
 async fn finish_fill(
     client: &CdpClient,
     session_id: &str,
@@ -2543,22 +2466,21 @@ async fn finish_fill(
 
         match inserted {
             Ok(()) => {
-                // input/beforeinput already fired (trusted). Fire change + focusout
-                // for parity with the plain-input path; don't blur (would collapse
-                // composers that close on blur).
-                let _ = client
-                    .send_command_typed::<_, Value>(
-                        "Runtime.callFunctionOn",
-                        &CallFunctionOnParams {
-                            function_declaration: "function() { try { this.dispatchEvent(new Event('change', { bubbles: true })); this.dispatchEvent(new Event('focusout', { bubbles: true })); } catch (e) {} }".to_string(),
-                            object_id: Some(object_id.clone()),
-                            arguments: None,
-                            return_by_value: Some(true),
-                            await_promise: Some(false),
-                        },
-                        Some(&effective_session_id),
-                    )
-                    .await;
+                // Chrome already delivered the edit's native events. Keep the
+                // composer focused: fabricating focusout both exposed synthetic
+                // input and told the page focus had moved when it had not (#729).
+                // Verify directly rather than entering the generic refocus-reset
+                // retry below: contenteditable did not blur/refocus, and replacing
+                // its DOM on an empty read would bypass the editor's own model.
+                let actual = verify_fill_value(
+                    client,
+                    &effective_session_id,
+                    &object_id,
+                    value,
+                    engine.as_str(),
+                )
+                .await?;
+                return Ok(reformatted_warning(value, &actual, engine.as_str()));
             }
             Err(_) => {
                 // CDP insert unavailable (rare: some Electron webviews). Fall back to
@@ -2697,85 +2619,23 @@ async fn reapply_value_without_focus_change(
     Ok(())
 }
 
-async fn fill_monaco_via_clipboard(
+/// Independent Blob-backed clipboard items live in a private remote-object
+/// closure; browser-backed items may expire after staging. Restore success is
+/// verified by reading the saved formats back. Normal
+/// returns finish/release it; a page-side lease handles abandoned commands while
+/// the document survives. Context loss can prevent restoration. The Clipboard
+/// API has no atomic compare/write: concurrent writes remain a documented limit.
+async fn monaco_clipboard_call(
     client: &CdpClient,
     session_id: &str,
     object_id: &str,
-    expected: &str,
-) -> Result<String, String> {
-    const TRANSACTION_KEY: &str = "__chromeUseMonacoClipboardFill";
-    let prepare_js = format!(
-        r#"async function() {{
-            const anchor = this;
-            const root = (anchor.closest && anchor.closest('.monaco-editor'))
-                || (anchor.querySelector && anchor.querySelector('.monaco-editor'));
-            const input = root && root.querySelector('textarea.inputarea');
-            if (!input) return {{ ok: false, error: 'Monaco textarea.inputarea was not found' }};
-
-            const clipboard = input.ownerDocument.defaultView.navigator.clipboard;
-            if (!clipboard || !clipboard.read || !clipboard.readText
-                || !clipboard.write || !clipboard.writeText) {{
-                return {{ ok: false, error: 'browser clipboard read/write APIs are unavailable' }};
-            }}
-
-            let backup;
-            let backupText;
-            try {{
-                backup = await clipboard.read();
-                backupText = await clipboard.readText();
-            }} catch (error) {{
-                return {{
-                    ok: false,
-                    error: 'browser clipboard backup was denied: ' + String(error && error.message || error)
-                }};
-            }}
-
-            const state = {{ paste: null, copy: null }};
-            const onPaste = event => {{
-                queueMicrotask(() => {{
-                    state.paste = {{
-                        trusted: event.isTrusted,
-                        prevented: event.defaultPrevented
-                    }};
-                }});
-            }};
-            const onCopy = event => {{
-                queueMicrotask(() => {{
-                    state.copy = {{
-                        trusted: event.isTrusted,
-                        prevented: event.defaultPrevented,
-                        text: event.clipboardData ? event.clipboardData.getData('text/plain') : ''
-                    }};
-                }});
-            }};
-            input.addEventListener('paste', onPaste);
-            input.addEventListener('copy', onCopy);
-            anchor[{key}] = {{ input, clipboard, backup, backupText, state, onPaste, onCopy }};
-
-            try {{
-                await clipboard.writeText({value});
-            }} catch (error) {{
-                input.removeEventListener('paste', onPaste);
-                input.removeEventListener('copy', onCopy);
-                delete anchor[{key}];
-                return {{
-                    ok: false,
-                    error: 'browser clipboard staging was denied: ' + String(error && error.message || error)
-                }};
-            }}
-
-            input.focus();
-            return {{ ok: true }};
-        }}"#,
-        key = serde_json::to_string(TRANSACTION_KEY).unwrap_or_default(),
-        value = serde_json::to_string(expected).unwrap_or_default(),
-    );
-
-    let prepared: EvaluateResult = client
+    function: String,
+) -> Result<Value, String> {
+    let result: EvaluateResult = client
         .send_command_typed(
             "Runtime.callFunctionOn",
             &CallFunctionOnParams {
-                function_declaration: prepare_js,
+                function_declaration: function,
                 object_id: Some(object_id.to_string()),
                 arguments: None,
                 return_by_value: Some(true),
@@ -2784,40 +2644,137 @@ async fn fill_monaco_via_clipboard(
             Some(session_id),
         )
         .await?;
-    if let Some(ex) = prepared.exception_details {
-        return Err(format!("Monaco clipboard fill setup failed: {}", ex.text));
+    if let Some(ex) = result.exception_details {
+        return Err(format!("Monaco clipboard transaction failed: {}", ex.text));
     }
-    let prepared_data = prepared.result.value.unwrap_or(Value::Null);
-    if !prepared_data
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        let reason = prepared_data
+    Ok(result.result.value.unwrap_or(Value::Null))
+}
+
+async fn begin_monaco_clipboard(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    value: Option<&str>,
+) -> Result<String, String> {
+    // Obtain the handle before backup, staging or focus can fail. A setup
+    // exception therefore still has a reachable finish method.
+    let created: EvaluateResult = client
+        .send_command_typed(
+            "Runtime.callFunctionOn",
+            &CallFunctionOnParams {
+                function_declaration: include_str!("monaco_clipboard.js").to_string(),
+                object_id: Some(object_id.to_string()),
+                arguments: None,
+                return_by_value: Some(false),
+                await_promise: Some(false),
+            },
+            Some(session_id),
+        )
+        .await?;
+    if let Some(ex) = created.exception_details {
+        return Err(format!("Monaco clipboard setup failed: {}", ex.text));
+    }
+    let id = created
+        .result
+        .object_id
+        .ok_or("Monaco clipboard setup returned no handle")?;
+    let prepared = monaco_clipboard_call(
+        client,
+        session_id,
+        &id,
+        format!(
+            "function() {{ return this.start({}); }}",
+            serde_json::to_string(&value).unwrap()
+        ),
+    )
+    .await;
+    let error = match prepared {
+        Ok(data) if data.get("ok").and_then(Value::as_bool) == Some(true) => return Ok(id),
+        Ok(data) => data
             .get("error")
             .and_then(Value::as_str)
-            .unwrap_or("clipboard transaction could not start");
-        return Err(format!(
-            "fill cannot safely replace this Monaco editor because its model API is not \
-             accessible and {reason}; no text was written"
-        ));
-    }
+            .unwrap_or("setup failed")
+            .to_string(),
+        Err(error) => error,
+    };
+    let cleanup = finish_monaco_clipboard(client, session_id, &id).await;
+    Err(match cleanup {
+        Ok(()) => format!("Monaco clipboard setup failed: {error}"),
+        Err(cleanup) => format!("Monaco clipboard setup failed: {error}; {cleanup}"),
+    })
+}
 
+async fn finish_monaco_clipboard(
+    client: &CdpClient,
+    session_id: &str,
+    id: &str,
+) -> Result<(), String> {
+    let restored = monaco_clipboard_call(
+        client,
+        session_id,
+        id,
+        "function() { return this.finish(); }".to_string(),
+    )
+    .await;
+    let _ = client
+        .send_command(
+            "Runtime.releaseObject",
+            Some(json!({"objectId": id})),
+            Some(session_id),
+        )
+        .await;
+    let data = restored?;
+    if data.get("ok").and_then(Value::as_bool) == Some(true) {
+        return Ok(());
+    }
+    Err(format!(
+        "Monaco clipboard cleanup failed: {}",
+        data.get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("restoration could not be verified")
+    ))
+}
+
+fn combine_monaco_result<T>(
+    operation: Result<T, String>,
+    cleanup: Result<(), String>,
+) -> Result<T, String> {
+    match (operation, cleanup) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(operation), Err(cleanup)) => Err(format!("{operation}; {cleanup}")),
+    }
+}
+
+async fn fill_monaco_via_clipboard(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+    expected: &str,
+) -> Result<String, String> {
+    let transaction_id =
+        begin_monaco_clipboard(client, session_id, object_id, Some(expected)).await?;
     let modifier = if cfg!(target_os = "macos") { 4 } else { 2 };
     let operation = async {
-        dispatch_editor_command(client, session_id, "a", modifier, "selectAll").await?;
-        dispatch_editor_command(client, session_id, "v", modifier, "paste").await?;
+        monaco_editor_command(
+            client,
+            session_id,
+            &transaction_id,
+            "a",
+            modifier,
+            "selectAll",
+        )
+        .await?;
+        monaco_editor_command(client, session_id, &transaction_id, "v", modifier, "paste").await?;
         wait_for_paint_settled(client, session_id).await;
 
         let paste_check: EvaluateResult = client
             .send_command_typed(
                 "Runtime.callFunctionOn",
                 &CallFunctionOnParams {
-                    function_declaration: format!(
-                        "function() {{ return this[{}]?.state.paste || null; }}",
-                        serde_json::to_string(TRANSACTION_KEY).unwrap_or_default()
-                    ),
-                    object_id: Some(object_id.to_string()),
+                    function_declaration: "function() { return this.check(\"paste\"); }"
+                        .to_string(),
+                    object_id: Some(transaction_id.clone()),
                     arguments: None,
                     return_by_value: Some(true),
                     await_promise: Some(false),
@@ -2849,18 +2806,23 @@ async fn fill_monaco_via_clipboard(
             ));
         }
 
-        dispatch_editor_command(client, session_id, "a", modifier, "selectAll").await?;
-        dispatch_editor_command(client, session_id, "c", modifier, "copy").await?;
+        monaco_editor_command(
+            client,
+            session_id,
+            &transaction_id,
+            "a",
+            modifier,
+            "selectAll",
+        )
+        .await?;
+        monaco_editor_command(client, session_id, &transaction_id, "c", modifier, "copy").await?;
 
         let copy_check: EvaluateResult = client
             .send_command_typed(
                 "Runtime.callFunctionOn",
                 &CallFunctionOnParams {
-                    function_declaration: format!(
-                        "function() {{ return this[{}]?.state.copy || null; }}",
-                        serde_json::to_string(TRANSACTION_KEY).unwrap_or_default()
-                    ),
-                    object_id: Some(object_id.to_string()),
+                    function_declaration: "function() { return this.check(\"copy\"); }".to_string(),
+                    object_id: Some(transaction_id.clone()),
                     arguments: None,
                     return_by_value: Some(true),
                     await_promise: Some(false),
@@ -2905,54 +2867,8 @@ async fn fill_monaco_via_clipboard(
     }
     .await;
 
-    let restore_js = format!(
-        r#"async function() {{
-            const tx = this[{key}];
-            if (!tx) return {{ ok: false, error: 'clipboard transaction state was lost' }};
-            tx.input.removeEventListener('paste', tx.onPaste);
-            tx.input.removeEventListener('copy', tx.onCopy);
-            delete this[{key}];
-            try {{
-                await tx.clipboard.write(tx.backup);
-                return {{ ok: true }};
-            }} catch (error) {{
-                try {{ await tx.clipboard.writeText(tx.backupText); }} catch (ignored) {{}}
-                return {{
-                    ok: false,
-                    error: 'original browser clipboard could not be fully restored: '
-                        + String(error && error.message || error)
-                }};
-            }}
-        }}"#,
-        key = serde_json::to_string(TRANSACTION_KEY).unwrap_or_default(),
-    );
-    let restored: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: restore_js,
-                object_id: Some(object_id.to_string()),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(true),
-            },
-            Some(session_id),
-        )
-        .await?;
-    let restore_data = restored.result.value.unwrap_or(Value::Null);
-    if !restore_data
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        let reason = restore_data
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("original browser clipboard could not be restored");
-        return Err(format!("Monaco clipboard fill failed: {reason}"));
-    }
-
-    operation?;
+    let cleanup = finish_monaco_clipboard(client, session_id, &transaction_id).await;
+    combine_monaco_result(operation, cleanup)?;
     Ok("monaco-clipboard".to_string())
 }
 
@@ -2961,94 +2877,26 @@ pub(crate) async fn read_monaco_via_clipboard(
     session_id: &str,
     object_id: &str,
 ) -> Result<String, String> {
-    const TRANSACTION_KEY: &str = "__chromeUseMonacoClipboardRead";
-    let prepare_js = format!(
-        r#"async function() {{
-            const anchor = this;
-            const root = (anchor.closest && anchor.closest('.monaco-editor'))
-                || (anchor.querySelector && anchor.querySelector('.monaco-editor'));
-            const input = root && root.querySelector('textarea.inputarea');
-            if (!input) return {{ ok: false, error: 'Monaco textarea.inputarea was not found' }};
-
-            const clipboard = input.ownerDocument.defaultView.navigator.clipboard;
-            if (!clipboard || !clipboard.read || !clipboard.readText
-                || !clipboard.write || !clipboard.writeText) {{
-                return {{ ok: false, error: 'browser clipboard read/write APIs are unavailable' }};
-            }}
-
-            let backup;
-            let backupText;
-            try {{
-                backup = await clipboard.read();
-                backupText = await clipboard.readText();
-            }} catch (error) {{
-                return {{
-                    ok: false,
-                    error: 'browser clipboard backup was denied: ' + String(error && error.message || error)
-                }};
-            }}
-
-            const state = {{ copy: null }};
-            const onCopy = event => {{
-                queueMicrotask(() => {{
-                    state.copy = {{
-                        trusted: event.isTrusted,
-                        prevented: event.defaultPrevented,
-                        text: event.clipboardData ? event.clipboardData.getData('text/plain') : ''
-                    }};
-                }});
-            }};
-            input.addEventListener('copy', onCopy);
-            anchor[{key}] = {{ input, clipboard, backup, backupText, state, onCopy }};
-            input.focus();
-            return {{ ok: true }};
-        }}"#,
-        key = serde_json::to_string(TRANSACTION_KEY).unwrap_or_default(),
-    );
-
-    let prepared: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: prepare_js,
-                object_id: Some(object_id.to_string()),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(true),
-            },
-            Some(session_id),
-        )
-        .await?;
-    if let Some(ex) = prepared.exception_details {
-        return Err(format!("Monaco clipboard read setup failed: {}", ex.text));
-    }
-    let prepared_data = prepared.result.value.unwrap_or(Value::Null);
-    if !prepared_data
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        let reason = prepared_data
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("clipboard transaction could not start");
-        return Err(format!("Monaco model API is not accessible and {reason}"));
-    }
-
+    let transaction_id = begin_monaco_clipboard(client, session_id, object_id, None).await?;
     let modifier = if cfg!(target_os = "macos") { 4 } else { 2 };
     let operation = async {
-        dispatch_editor_command(client, session_id, "a", modifier, "selectAll").await?;
-        dispatch_editor_command(client, session_id, "c", modifier, "copy").await?;
+        monaco_editor_command(
+            client,
+            session_id,
+            &transaction_id,
+            "a",
+            modifier,
+            "selectAll",
+        )
+        .await?;
+        monaco_editor_command(client, session_id, &transaction_id, "c", modifier, "copy").await?;
 
         let copy_check: EvaluateResult = client
             .send_command_typed(
                 "Runtime.callFunctionOn",
                 &CallFunctionOnParams {
-                    function_declaration: format!(
-                        "function() {{ return this[{}]?.state.copy || null; }}",
-                        serde_json::to_string(TRANSACTION_KEY).unwrap_or_default()
-                    ),
-                    object_id: Some(object_id.to_string()),
+                    function_declaration: "function() { return this.check(\"copy\"); }".to_string(),
+                    object_id: Some(transaction_id.clone()),
                     arguments: None,
                     return_by_value: Some(true),
                     await_promise: Some(false),
@@ -3079,53 +2927,37 @@ pub(crate) async fn read_monaco_via_clipboard(
     }
     .await;
 
-    let restore_js = format!(
-        r#"async function() {{
-            const tx = this[{key}];
-            if (!tx) return {{ ok: false, error: 'clipboard transaction state was lost' }};
-            tx.input.removeEventListener('copy', tx.onCopy);
-            delete this[{key}];
-            try {{
-                await tx.clipboard.write(tx.backup);
-                return {{ ok: true }};
-            }} catch (error) {{
-                try {{ await tx.clipboard.writeText(tx.backupText); }} catch (ignored) {{}}
-                return {{
-                    ok: false,
-                    error: 'original browser clipboard could not be fully restored: '
-                        + String(error && error.message || error)
-                }};
-            }}
-        }}"#,
-        key = serde_json::to_string(TRANSACTION_KEY).unwrap_or_default(),
-    );
-    let restored: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: restore_js,
-                object_id: Some(object_id.to_string()),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(true),
-            },
-            Some(session_id),
-        )
-        .await?;
-    let restore_data = restored.result.value.unwrap_or(Value::Null);
-    if !restore_data
-        .get("ok")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        let reason = restore_data
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("original browser clipboard could not be restored");
-        return Err(format!("Monaco clipboard read failed: {reason}"));
-    }
+    let cleanup = finish_monaco_clipboard(client, session_id, &transaction_id).await;
+    combine_monaco_result(operation, cleanup)
+}
 
-    operation
+/// Renew the cleanup lease immediately before input. An already-expired
+/// transaction must never paste from a clipboard it may already have restored.
+async fn monaco_editor_command(
+    client: &CdpClient,
+    session_id: &str,
+    transaction_id: &str,
+    key: &str,
+    modifiers: i32,
+    command: &str,
+) -> Result<(), String> {
+    let active = monaco_clipboard_call(
+        client,
+        session_id,
+        transaction_id,
+        "function() { return this.active(); }".to_string(),
+    )
+    .await?;
+    if active.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(format!(
+            "Monaco clipboard transaction refused input: {}; inspect the editor before retrying",
+            active
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("transaction is no longer active")
+        ));
+    }
+    dispatch_editor_command(client, session_id, key, modifiers, command).await
 }
 
 async fn dispatch_editor_command(
@@ -6764,10 +6596,14 @@ mod hidden_page_tests {
                 log.lock()
                     .unwrap()
                     .push((method.clone(), cmd["params"].clone()));
-                let result = if method == "Runtime.evaluate" {
-                    json!({ "result": { "type": "string", "value": state } })
-                } else {
-                    json!({})
+                let result = match method.as_str() {
+                    "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"main"}}}),
+                    "Page.createIsolatedWorld" => json!({"executionContextId":42}),
+                    "Runtime.evaluate" => {
+                        assert_eq!(cmd["params"]["contextId"], 42);
+                        json!({ "result": { "type": "string", "value": state } })
+                    }
+                    _ => json!({}),
                 };
                 let reply =
                     json!({ "id": cmd["id"], "result": result, "sessionId": cmd["sessionId"] });
@@ -6891,6 +6727,8 @@ mod stale_fill_tests {
                 let reply: Result<Value, &str> = {
                     let mut s = state.lock().unwrap();
                     match method {
+                        "Page.getFrameTree" => Ok(json!({"frameTree":{"frame":{"id":"main"}}})),
+                        "Page.createIsolatedWorld" => Ok(json!({"executionContextId":42})),
                         "Runtime.evaluate" if p["returnByValue"] == json!(false) => {
                             s.resolves += 1;
                             Ok(json!({ "result": { "type": "object",
@@ -7339,3 +7177,11 @@ mod rich_text_tests {
         assert!(type_read_back_warning("#民国历史 #世界地图", read).is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "contenteditable_fill_tests.rs"]
+mod contenteditable_fill_tests;
+
+#[cfg(test)]
+#[path = "monaco_clipboard_tests.rs"]
+mod monaco_clipboard_tests;

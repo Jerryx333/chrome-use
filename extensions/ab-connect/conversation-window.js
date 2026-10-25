@@ -84,8 +84,18 @@ export function createConversationWindows({ tabs, windows, storage, boundTab, be
     if (!records.has(id)) await remember(id, tab);
   }
   async function replaced(removedId, tab) {
+    if (!Number.isInteger(tab?.id)) return;
     await load();
-    for (const [id, record] of [...records]) if (record.tabId === removedId) await remember(id, tab);
+    for (const id of [...records.keys()]) {
+      const record = records.get(id);
+      if (!record) continue;
+      const initial = record.initialTabId === removedId;
+      // An initial-only replacement changes the live ID, not either saved URL
+      // or the agent's final tab. Persist it for service-worker restarts too.
+      if (initial) records.set(id, { ...record, initialTabId: tab.id });
+      if (record.tabId === removedId) await remember(id, tab);
+      else if (initial) await save();
+    }
   }
   async function forget(id) { forgotten.add(id); await load(); records.delete(id); await save(); }
   return { remember, binding, replaced, observe, updated, forget, show(id, destination) {

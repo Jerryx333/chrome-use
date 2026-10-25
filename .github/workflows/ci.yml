@@ -62,6 +62,9 @@ jobs:
       - name: Test release notes extraction
         run: node --test scripts/release-notes.test.js
 
+      - name: Monaco clipboard transaction payload tests
+        run: node --test scripts/monaco-clipboard.test.js
+
       - name: Test contributor hook in sandbox
         run: |
           docker pull node:24-bookworm
@@ -75,6 +78,13 @@ jobs:
 
       - name: Check skills frontmatter
         run: python3 scripts/check-skills-frontmatter.py
+
+      - name: Test hover recorder lifecycle
+        if: steps.changes.outputs.run_heavy == 'true'
+        run: node --test scripts/hover-recorder.test.js
+      - name: Test double-click recorder
+        if: steps.changes.outputs.run_heavy == 'true'
+        run: node --test scripts/double-click.test.js
 
       - name: Run extension tests
         if: steps.changes.outputs.run_heavy == 'true'

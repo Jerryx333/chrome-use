@@ -8,7 +8,10 @@ use super::cdp::client::CdpClient;
 use super::cdp::types::*;
 use super::element::RefMap;
 
-const ANNOTATION_OVERLAY_ID: &str = "__agent_browser_annotations__";
+#[path = "screenshot_annotations.rs"]
+mod annotation_image;
+#[path = "screenshot_geometry.rs"]
+mod geometry;
 
 #[derive(Debug, Clone)]
 struct Rect {
@@ -99,8 +102,8 @@ impl Serialize for ScreenshotAnnotation {
     }
 }
 
-/// Captures a screenshot via CDP and optionally overlays numbered annotations
-/// that mirror the Node.js screenshot `annotate` mode.
+/// Captures via CDP, then draws optional labels into the image in the CLI.
+/// Annotation rendering never inserts DOM nodes or styles into the page.
 pub async fn take_screenshot(
     client: &CdpClient,
     session_id: &str,
@@ -108,57 +111,111 @@ pub async fn take_screenshot(
     options: &ScreenshotOptions,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<ScreenshotResult, String> {
-    let target_rect = if options.annotate {
-        match options.selector.as_deref() {
-            Some(selector) => {
-                get_rect_for_selector(client, session_id, ref_map, selector, iframe_sessions)
-                    .await?
+    let mut capture_options = options.clone();
+    let (annotations, region, raster_region) = if options.annotate {
+        let metrics = client
+            .send_command_no_params("Page.getLayoutMetrics", Some(session_id))
+            .await?;
+        // Resolve a selector only when it actually controls the capture. An
+        // explicit clip wins over full-page, which wins over a selector.
+        let target = if options.clip.is_none() && !options.full_page {
+            if let Some(selector) = options.selector.as_deref() {
+                Some(
+                    get_rect_for_selector(client, session_id, ref_map, selector, iframe_sessions)
+                        .await?
+                        .ok_or(
+                            "Annotated screenshot: selected element has no readable rectangle",
+                        )?,
+                )
+            } else {
+                None
             }
-            None => None,
-        }
-    } else {
-        None
-    };
-
-    let raw_annotations = if options.annotate {
-        collect_annotations(client, session_id, ref_map).await?
-    } else {
-        Vec::new()
-    };
-
-    let overlay_items = filter_annotations(raw_annotations, target_rect.as_ref());
-    let overlay_injected = if options.annotate && !overlay_items.is_empty() {
-        inject_annotation_overlay(client, session_id, &overlay_items).await?;
-        true
-    } else {
-        false
-    };
-
-    // Hide the agent cursor so it isn't baked into an image the model then
-    // reasons about (it would read as page content). Skipped when the overlay is
-    // known to be off; best-effort either way.
-    set_cursor_visible(client, session_id, false).await;
-
-    let base64 =
-        capture_screenshot_base64(client, session_id, ref_map, options, iframe_sessions).await;
-
-    set_cursor_visible(client, session_id, true).await;
-
-    if overlay_injected {
-        let _ = remove_annotation_overlay(client, session_id).await;
-    }
-
-    let base64 = base64?;
-    let annotations = if options.annotate {
-        let scroll = if options.full_page {
-            Some(get_scroll_offsets(client, session_id).await?)
         } else {
             None
         };
-        project_annotations(&overlay_items, target_rect.as_ref(), scroll)
+        let (region, projection) = annotation_region(options, &metrics, target.as_ref())?;
+        let raw = collect_annotations(client, session_id, ref_map, iframe_sessions).await?;
+        let raw = filter_annotations(raw, Some(&projection));
+        let annotations = project_annotations(&raw, Some(&projection), None);
+        let viewport = annotation_region(&ScreenshotOptions::default(), &metrics, None)?.0;
+        let raster_region = if contains(&viewport, &region) {
+            // Keep the normal viewport surface. Passing a tiny selector clip
+            // makes Chrome resize the compositor during capture; relay at 2x
+            // can hang on off-screen clips. Crop pixels in the CLI instead.
+            capture_options.clip = None;
+            capture_options.full_page = false;
+            // Unclipped screenshots include classic scrollbars, unlike the
+            // visual viewport client width. Measure that raw surface in the
+            // isolated world so its pixel scale does not stretch the labels.
+            let surface = client.send_command(
+                "Runtime.evaluate",
+                Some(serde_json::json!({
+                    "expression":"({width:innerWidth/(visualViewport?.scale||1),height:innerHeight/(visualViewport?.scale||1)})",
+                    "returnByValue":true
+                })),
+                Some(session_id),
+            ).await?;
+            let width = surface["result"]["value"]["width"]
+                .as_f64()
+                .ok_or("Annotated screenshot: raw viewport width unavailable")?;
+            let height = surface["result"]["value"]["height"]
+                .as_f64()
+                .ok_or("Annotated screenshot: raw viewport height unavailable")?;
+            if !width.is_finite()
+                || !height.is_finite()
+                || width < viewport.width
+                || height < viewport.height
+            {
+                return Err("Annotated screenshot: invalid raw viewport geometry".into());
+            }
+            Rect {
+                width,
+                height,
+                ..viewport
+            }
+        } else {
+            let full = annotation_region(
+                &ScreenshotOptions {
+                    full_page: true,
+                    ..Default::default()
+                },
+                &metrics,
+                None,
+            )?
+            .0;
+            if !contains(&full, &region) {
+                return Err(
+                    "Annotated screenshot: requested region extends outside the page".into(),
+                );
+            }
+            capture_options.full_page = true;
+            capture_options.clip = Some((full.x, full.y, full.width, full.height));
+            full
+        };
+        capture_options.selector = None;
+        // Decode lossless pixels for rendering; encode JPEG only once at the
+        // requested quality after labels have been drawn.
+        capture_options.format = "png".to_string();
+        (annotations, Some(region), Some(raster_region))
     } else {
-        Vec::new()
+        (Vec::new(), None, None)
     };
+
+    // Hide the non-stealth cursor around the raw capture as before.
+    set_cursor_visible(client, session_id, false).await;
+    let captured = capture_screenshot_base64(
+        client,
+        session_id,
+        ref_map,
+        &capture_options,
+        iframe_sessions,
+    )
+    .await;
+    set_cursor_visible(client, session_id, true).await;
+    let mut base64 = captured?;
+    if let (Some(region), Some(raster_region)) = (region, raster_region) {
+        base64 = annotation_image::render(&base64, &annotations, &region, &raster_region, options)?;
+    }
 
     let ext = if options.format == "jpeg" {
         "jpg"
@@ -294,88 +351,58 @@ async fn collect_annotations(
     client: &CdpClient,
     session_id: &str,
     ref_map: &RefMap,
+    iframe_sessions: &HashMap<String, String>,
 ) -> Result<Vec<RawAnnotation>, String> {
     let entries = ref_map.entries_sorted();
     if entries.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Collect entries that have backend_node_ids for batch resolution.
-    let with_backend_ids: Vec<(String, super::element::RefEntry, i64)> = entries
+    // Protocol box models include same-renderer frame offsets. OOP frames
+    // require their own session and a projection through their owner element.
+    // A backendNodeId is renderer-local: resolving it in the top session may
+    // silently select an unrelated node with the same numeric id.
+    let target_frames: Vec<_> = entries
         .iter()
-        .filter_map(|(ref_id, entry)| {
-            entry
-                .backend_node_id
-                .map(|bid| (ref_id.clone(), entry.clone(), bid))
-        })
+        .filter(|(_, entry)| entry.backend_node_id.is_some())
+        .map(|(_, entry)| entry.frame_id.as_deref())
         .collect();
-
-    if with_backend_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Batch-resolve all backend_node_ids to object IDs using concurrent CDP calls.
-    let resolve_futures: Vec<_> = with_backend_ids
-        .iter()
-        .map(|(_, _, backend_node_id)| {
-            client.send_command(
-                "DOM.resolveNode",
-                Some(serde_json::json!({
-                    "backendNodeId": backend_node_id,
-                    "objectGroup": "chrome-use-annotate"
-                })),
-                Some(session_id),
-            )
-        })
-        .collect();
-
-    let resolve_results = futures_util::future::join_all(resolve_futures).await;
-
-    // Collect resolved object IDs paired with their ref info.
-    let mut resolved: Vec<(String, super::element::RefEntry, String)> = Vec::new();
-    for (i, result) in resolve_results.into_iter().enumerate() {
-        if let Ok(val) = result {
-            if let Some(oid) = val
-                .get("object")
-                .and_then(|o| o.get("objectId"))
-                .and_then(|v| v.as_str())
-            {
-                let (ref_id, entry, _) = &with_backend_ids[i];
-                resolved.push((ref_id.clone(), entry.clone(), oid.to_string()));
-            }
+    let geometry =
+        geometry::FrameGeometry::load(client, session_id, iframe_sessions, &target_frames, None)
+            .await?;
+    let mut requests = Vec::new();
+    let mut refs = Vec::new();
+    for (ref_id, entry) in entries {
+        if let Some(backend_node_id) = entry.backend_node_id {
+            let effective_session = geometry.session_for(entry.frame_id.as_deref())?;
+            requests.push(client.send_command(
+                "DOM.getBoxModel",
+                Some(serde_json::json!({"backendNodeId":backend_node_id})),
+                Some(effective_session),
+            ));
+            refs.push((ref_id, entry, effective_session));
         }
     }
-
-    if resolved.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Batch-get bounding rects for all resolved elements using concurrent CDP calls.
-    let rect_futures: Vec<_> = resolved
-        .iter()
-        .map(|(_, _, object_id)| get_rect_for_object(client, session_id, object_id))
-        .collect();
-
-    let rect_results = futures_util::future::join_all(rect_futures).await;
-
     let mut annotations = Vec::new();
-    for (i, rect_result) in rect_results.into_iter().enumerate() {
-        let rect = match rect_result {
-            Ok(Some(r)) if r.width > 0.0 && r.height > 0.0 => r,
-            _ => continue,
-        };
-
-        let (ref_id, entry, _) = &resolved[i];
+    for ((ref_id, entry, effective_session), response) in refs
+        .into_iter()
+        .zip(futures_util::future::join_all(requests).await)
+    {
+        // Detached/hidden nodes can have no layout box. Do not invent one.
+        let Ok(response) = response else { continue };
+        let rect = geometry.rect(effective_session, &response["model"]["border"])?;
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            continue;
+        }
         let number = ref_id
             .strip_prefix('e')
             .and_then(|n| n.parse::<u64>().ok())
             .unwrap_or(0);
-
         annotations.push(RawAnnotation {
-            ref_id: ref_id.clone(),
+            ref_id,
             number,
-            role: entry.role.clone(),
-            name: (!entry.name.is_empty()).then_some(entry.name.clone()),
+            role: entry.role,
+            name: (!entry.name.is_empty()).then_some(entry.name),
             rect,
         });
     }
@@ -398,33 +425,24 @@ async fn get_rect_for_selector(
         iframe_sessions,
     )
     .await?;
-    get_rect_for_object(client, &effective_session_id, &object_id).await
-}
-
-async fn get_rect_for_object(
-    client: &CdpClient,
-    session_id: &str,
-    object_id: &str,
-) -> Result<Option<Rect>, String> {
-    let result: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: r#"function() {
-                    const rect = this.getBoundingClientRect();
-                    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-                }"#
-                .to_string(),
-                object_id: Some(object_id.to_string()),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
+    let geometry = geometry::FrameGeometry::load(
+        client,
+        session_id,
+        iframe_sessions,
+        &[],
+        Some(&effective_session_id),
+    )
+    .await?;
+    let result = client
+        .send_command(
+            "DOM.getBoxModel",
+            Some(serde_json::json!({"objectId":object_id})),
+            Some(&effective_session_id),
         )
         .await?;
-
-    Ok(result.result.value.as_ref().and_then(parse_rect))
+    geometry
+        .rect(&effective_session_id, &result["model"]["border"])
+        .map(Some)
 }
 
 fn parse_rect(value: &Value) -> Option<Rect> {
@@ -461,114 +479,97 @@ fn overlaps(left: &Rect, right: &Rect) -> bool {
     left.x < right_x2 && left_x2 > right.x && left.y < right_y2 && left_y2 > right.y
 }
 
-async fn inject_annotation_overlay(
-    client: &CdpClient,
-    session_id: &str,
-    annotations: &[RawAnnotation],
-) -> Result<(), String> {
-    let overlay_data = annotations
-        .iter()
-        .map(|annotation| {
-            serde_json::json!({
-                "number": annotation.number,
-                "x": round(annotation.rect.x),
-                "y": round(annotation.rect.y),
-                "width": round(annotation.rect.width),
-                "height": round(annotation.rect.height),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    let expression = format!(
-        r#"(() => {{
-            var items = {items};
-            var id = {overlay_id};
-            var existing = document.getElementById(id);
-            if (existing) existing.remove();
-            var sx = window.scrollX || 0;
-            var sy = window.scrollY || 0;
-            var c = document.createElement('div');
-            c.id = id;
-            c.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483647;';
-            for (var i = 0; i < items.length; i++) {{
-                var it = items[i];
-                var dx = it.x + sx;
-                var dy = it.y + sy;
-                var b = document.createElement('div');
-                b.style.cssText = 'position:absolute;left:' + dx + 'px;top:' + dy + 'px;width:' + it.width + 'px;height:' + it.height + 'px;border:2px solid rgba(255,0,0,0.8);box-sizing:border-box;pointer-events:none;';
-                var l = document.createElement('div');
-                l.textContent = String(it.number);
-                var labelTop = dy < 14 ? '2px' : '-14px';
-                l.style.cssText = 'position:absolute;top:' + labelTop + ';left:-2px;background:rgba(255,0,0,0.9);color:#fff;font:bold 11px/14px monospace;padding:0 4px;border-radius:2px;white-space:nowrap;';
-                b.appendChild(l);
-                c.appendChild(b);
-            }}
-            document.documentElement.appendChild(c);
-            return true;
-        }})()"#,
-        items = serde_json::to_string(&overlay_data).unwrap_or_else(|_| "[]".to_string()),
-        overlay_id =
-            serde_json::to_string(ANNOTATION_OVERLAY_ID).unwrap_or_else(|_| "\"\"".to_string()),
-    );
-
-    let _: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await?;
-
-    Ok(())
+fn contains(outer: &Rect, inner: &Rect) -> bool {
+    inner.x >= outer.x
+        && inner.y >= outer.y
+        && inner.x + inner.width <= outer.x + outer.width
+        && inner.y + inner.height <= outer.y + outer.height
 }
 
-async fn remove_annotation_overlay(client: &CdpClient, session_id: &str) -> Result<(), String> {
-    let expression = format!(
-        r#"(() => {{
-            var el = document.getElementById({overlay_id});
-            if (el) el.remove();
-            return true;
-        }})()"#,
-        overlay_id =
-            serde_json::to_string(ANNOTATION_OVERLAY_ID).unwrap_or_else(|_| "\"\"".to_string()),
-    );
-
-    let _: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await?;
-
-    Ok(())
-}
-
-async fn get_scroll_offsets(client: &CdpClient, session_id: &str) -> Result<(f64, f64), String> {
-    let result: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.evaluate",
-            &EvaluateParams {
-                expression: "({x: window.scrollX || 0, y: window.scrollY || 0})".to_string(),
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
-        )
-        .await?;
-
-    let value = result.result.value.unwrap_or(Value::Null);
-    let x = value.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let y = value.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    Ok((x, y))
+/// The document-space capture region and the same region relative to the
+/// layout viewport used by getBoundingClientRect. CSS metrics avoid mixing
+/// device pixels with DOM rectangles under device emulation.
+fn annotation_region(
+    options: &ScreenshotOptions,
+    metrics: &Value,
+    target: Option<&Rect>,
+) -> Result<(Rect, Rect), String> {
+    let layout = metrics
+        .get("cssLayoutViewport")
+        .or_else(|| metrics.get("layoutViewport"))
+        .ok_or("Annotated screenshot: layout viewport metrics unavailable")?;
+    let scroll_x = layout
+        .get("pageX")
+        .and_then(Value::as_f64)
+        .ok_or("Annotated screenshot: horizontal scroll unavailable")?;
+    let scroll_y = layout
+        .get("pageY")
+        .and_then(Value::as_f64)
+        .ok_or("Annotated screenshot: vertical scroll unavailable")?;
+    let region = if let Some((x, y, width, height)) = options.clip {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    } else if options.full_page {
+        metrics
+            .get("cssContentSize")
+            .or_else(|| metrics.get("contentSize"))
+            .and_then(parse_rect)
+            .ok_or("Annotated screenshot: content size unavailable")?
+    } else if let Some(target) = target {
+        Rect {
+            x: target.x + scroll_x,
+            y: target.y + scroll_y,
+            ..target.clone()
+        }
+    } else {
+        let viewport = metrics
+            .get("cssVisualViewport")
+            .or_else(|| metrics.get("visualViewport"))
+            .unwrap_or(layout);
+        Rect {
+            x: viewport
+                .get("pageX")
+                .and_then(Value::as_f64)
+                .unwrap_or(scroll_x),
+            y: viewport
+                .get("pageY")
+                .and_then(Value::as_f64)
+                .unwrap_or(scroll_y),
+            width: viewport
+                .get("clientWidth")
+                .and_then(Value::as_f64)
+                .ok_or("Annotated screenshot: viewport width unavailable")?,
+            height: viewport
+                .get("clientHeight")
+                .and_then(Value::as_f64)
+                .ok_or("Annotated screenshot: viewport height unavailable")?,
+        }
+    };
+    if ![
+        scroll_x,
+        scroll_y,
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+    ]
+    .iter()
+    .all(|v| v.is_finite())
+        || region.width <= 0.0
+        || region.height <= 0.0
+    {
+        return Err("Annotated screenshot: invalid capture geometry".to_string());
+    }
+    let projection = Rect {
+        x: region.x - scroll_x,
+        y: region.y - scroll_y,
+        ..region.clone()
+    };
+    Ok((region, projection))
 }
 
 fn project_annotations(
@@ -660,6 +661,84 @@ fn get_screenshot_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn metrics() -> Value {
+        serde_json::json!({
+            "cssLayoutViewport": {"pageX":10,"pageY":500,"clientWidth":100,"clientHeight":80},
+            "cssVisualViewport": {"pageX":15,"pageY":530,"clientWidth":80,"clientHeight":60},
+            "cssContentSize": {"x":0,"y":0,"width":200,"height":2000},
+            "contentSize": {"x":0,"y":0,"width":400,"height":4000}
+        })
+    }
+
+    #[test]
+    fn annotation_region_uses_visual_viewport_and_layout_scroll() {
+        let (capture, projection) =
+            annotation_region(&ScreenshotOptions::default(), &metrics(), None).unwrap();
+        assert_eq!(
+            (capture.x, capture.y, capture.width, capture.height),
+            (15.0, 530.0, 80.0, 60.0)
+        );
+        assert_eq!((projection.x, projection.y), (5.0, 30.0));
+    }
+
+    #[test]
+    fn annotation_region_prefers_css_content_size_for_full_page() {
+        let options = ScreenshotOptions {
+            full_page: true,
+            ..Default::default()
+        };
+        let (capture, projection) = annotation_region(&options, &metrics(), None).unwrap();
+        assert_eq!((capture.width, capture.height), (200.0, 2000.0));
+        assert_eq!((projection.x, projection.y), (-10.0, -500.0));
+    }
+
+    #[test]
+    fn annotation_region_translates_scrolled_selector_to_document_space() {
+        let target = Rect {
+            x: 20.0,
+            y: 50.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let (capture, projection) =
+            annotation_region(&ScreenshotOptions::default(), &metrics(), Some(&target)).unwrap();
+        assert_eq!((capture.x, capture.y), (30.0, 550.0));
+        assert_eq!((projection.x, projection.y), (20.0, 50.0));
+    }
+
+    #[test]
+    fn annotation_region_explicit_clip_wins_over_full_page_and_selector() {
+        let options = ScreenshotOptions {
+            clip: Some((100.0, 800.0, 50.0, 60.0)),
+            full_page: true,
+            ..Default::default()
+        };
+        let target = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        let (capture, projection) = annotation_region(&options, &metrics(), Some(&target)).unwrap();
+        assert_eq!(
+            (capture.x, capture.y, capture.width, capture.height),
+            (100.0, 800.0, 50.0, 60.0)
+        );
+        assert_eq!((projection.x, projection.y), (90.0, 300.0));
+    }
+
+    #[test]
+    fn annotation_region_refuses_missing_or_invalid_geometry() {
+        assert!(annotation_region(&ScreenshotOptions::default(), &Value::Null, None).is_err());
+        for width in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let options = ScreenshotOptions {
+                clip: Some((0.0, 0.0, width, 10.0)),
+                ..Default::default()
+            };
+            assert!(annotation_region(&options, &metrics(), None).is_err());
+        }
+    }
 
     #[test]
     fn filters_annotations_to_target_overlap() {

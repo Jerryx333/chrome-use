@@ -351,6 +351,7 @@ impl Fake {
                     _ => json!({"result": {"type": "number", "value": 1}}),
                 }
             }
+            "Page.createIsolatedWorld" => json!({"executionContextId":42}),
             "Page.getFrameTree" => {
                 let session = req.get("sessionId").and_then(Value::as_str);
                 let url = Self::tab_for_session(&b, session)
