@@ -1196,7 +1196,7 @@ fn hover_refusal(selector_or_ref: &str, reply: &Value) -> Option<String> {
     })
 }
 
-/// Stops and releases a hover event recorder however `hover_reporting` ends:
+/// Stops and releases a selector or coordinate hover event recorder:
 /// normally (`finish`), on an early `?` return, or when the command future is
 /// dropped (cancelled). Drop cannot await, so it hands the two CDP calls to a
 /// detached task on the current runtime.
@@ -1458,7 +1458,9 @@ pub async fn hover_reporting(
 
 /// Records the first trusted pointer/mouse move the top document sees, and
 /// what is under it; read back by [`HOVER_POINT_READ_JS`]. The recorder is
-/// held only through its remote object handle: nothing is stored on the page.
+/// held only through its remote object handle, with no named page property.
+/// The guard requests listener cleanup on every command exit; the timer bounds
+/// their lifetime if cleanup cannot reach a still-running document.
 const HOVER_POINT_PROBE_JS: &str = r#"(() => {
   const describe = (n) => {
     if (!n || !n.tagName) return 'nothing';
@@ -1474,10 +1476,17 @@ const HOVER_POINT_PROBE_JS: &str = r#"(() => {
   const record = (e) => { if (e.isTrusted && !seen.hit) seen.hit = describe(e.composedPath ? e.composedPath()[0] : e.target); };
   addEventListener('pointermove', record, true);
   addEventListener('mousemove', record, true);
+  let timer = 0;
+  const stop = () => {
+    removeEventListener('pointermove', record, true);
+    removeEventListener('mousemove', record, true);
+    clearTimeout(timer);
+  };
+  timer = setTimeout(stop, 10000);
   return {
     seen,
     describe,
-    stop() { removeEventListener('pointermove', record, true); removeEventListener('mousemove', record, true); },
+    stop,
   };
 })()"#;
 
@@ -1493,7 +1502,7 @@ const HOVER_POINT_READ_JS: &str = r#"function(x, y) {
 /// Verified when the top document saw a trusted move; a point inside a
 /// cross-origin frame is moved to but cannot be confirmed from here.
 pub async fn hover_point(
-    client: &CdpClient,
+    client: &std::sync::Arc<CdpClient>,
     session_id: &str,
     x: f64,
     y: f64,
@@ -1509,6 +1518,11 @@ pub async fn hover_point(
         .ok()
         .filter(|r| r.get("exceptionDetails").is_none())
         .and_then(|r| r.get("result")?.get("objectId")?.as_str().map(String::from));
+    let guard = RecorderGuard {
+        client: client.clone(),
+        session: session_id.to_string(),
+        object_id: recorder.clone(),
+    };
     let probe = recorder.is_some();
     restore_rendering_if_hidden(client, session_id).await;
     // A move to where the pointer already rests produces no event: step off
@@ -1563,26 +1577,14 @@ pub async fn hover_point(
                 break;
             }
         }
-        let _ = client
-            .send_command(
-                "Runtime.callFunctionOn",
-                Some(json!({
-                    "objectId": recorder,
-                    "functionDeclaration": "function() { this.stop(); }",
-                })),
-                Some(session_id),
-            )
-            .await;
-        let _ = client
-            .send_command(
-                "Runtime.releaseObject",
-                Some(json!({ "objectId": recorder })),
-                Some(session_id),
-            )
-            .await;
     }
+    guard.finish().await;
     Ok(hover_point_outcome(x, y, probe, &read))
 }
+
+#[cfg(test)]
+#[path = "hover_point_tests.rs"]
+mod hover_point_tests;
 
 /// The reply for a coordinate hover, from what the page reported.
 fn hover_point_outcome(x: f64, y: f64, probe: bool, read: &Value) -> HoverOutcome {
