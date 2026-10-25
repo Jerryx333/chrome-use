@@ -3880,6 +3880,8 @@ Options:
                        No annotation nodes or styles are inserted into the page.
                        JSON boxes use capture-relative CSS pixels; labels scale
                        to the image resolution. --clip wins over --full/selector.
+                       Frame labels use their owning renderer. Unsupported frame
+                       transforms or unavailable geometry report an error.
                        Each label [N] corresponds to ref @eN from snapshot.
                        Prints a legend mapping labels to element roles/names.
                        With --json, annotations are included in the response.

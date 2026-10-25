@@ -10,6 +10,8 @@ use super::element::RefMap;
 
 #[path = "screenshot_annotations.rs"]
 mod annotation_image;
+#[path = "screenshot_geometry.rs"]
+mod geometry;
 
 #[derive(Debug, Clone)]
 struct Rect {
@@ -132,7 +134,7 @@ pub async fn take_screenshot(
             None
         };
         let (region, projection) = annotation_region(options, &metrics, target.as_ref())?;
-        let raw = collect_annotations(client, session_id, ref_map).await?;
+        let raw = collect_annotations(client, session_id, ref_map, iframe_sessions).await?;
         let raw = filter_annotations(raw, Some(&projection));
         let annotations = project_annotations(&raw, Some(&projection), None);
         capture_options.clip = Some((region.x, region.y, region.width, region.height));
@@ -294,88 +296,51 @@ async fn collect_annotations(
     client: &CdpClient,
     session_id: &str,
     ref_map: &RefMap,
+    iframe_sessions: &HashMap<String, String>,
 ) -> Result<Vec<RawAnnotation>, String> {
     let entries = ref_map.entries_sorted();
     if entries.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Collect entries that have backend_node_ids for batch resolution.
-    let with_backend_ids: Vec<(String, super::element::RefEntry, i64)> = entries
-        .iter()
-        .filter_map(|(ref_id, entry)| {
-            entry
-                .backend_node_id
-                .map(|bid| (ref_id.clone(), entry.clone(), bid))
-        })
-        .collect();
-
-    if with_backend_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Batch-resolve all backend_node_ids to object IDs using concurrent CDP calls.
-    let resolve_futures: Vec<_> = with_backend_ids
-        .iter()
-        .map(|(_, _, backend_node_id)| {
-            client.send_command(
-                "DOM.resolveNode",
-                Some(serde_json::json!({
-                    "backendNodeId": backend_node_id,
-                    "objectGroup": "chrome-use-annotate"
-                })),
-                Some(session_id),
-            )
-        })
-        .collect();
-
-    let resolve_results = futures_util::future::join_all(resolve_futures).await;
-
-    // Collect resolved object IDs paired with their ref info.
-    let mut resolved: Vec<(String, super::element::RefEntry, String)> = Vec::new();
-    for (i, result) in resolve_results.into_iter().enumerate() {
-        if let Ok(val) = result {
-            if let Some(oid) = val
-                .get("object")
-                .and_then(|o| o.get("objectId"))
-                .and_then(|v| v.as_str())
-            {
-                let (ref_id, entry, _) = &with_backend_ids[i];
-                resolved.push((ref_id.clone(), entry.clone(), oid.to_string()));
-            }
+    // Protocol box models include same-renderer frame offsets. OOP frames
+    // require their own session and a projection through their owner element.
+    // A backendNodeId is renderer-local: resolving it in the top session may
+    // silently select an unrelated node with the same numeric id.
+    let geometry = geometry::FrameGeometry::load(client, session_id, iframe_sessions).await?;
+    let mut requests = Vec::new();
+    let mut refs = Vec::new();
+    for (ref_id, entry) in entries {
+        if let Some(backend_node_id) = entry.backend_node_id {
+            let effective_session = geometry.session_for(entry.frame_id.as_deref())?;
+            requests.push(client.send_command(
+                "DOM.getBoxModel",
+                Some(serde_json::json!({"backendNodeId":backend_node_id})),
+                Some(effective_session),
+            ));
+            refs.push((ref_id, entry, effective_session));
         }
     }
-
-    if resolved.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Batch-get bounding rects for all resolved elements using concurrent CDP calls.
-    let rect_futures: Vec<_> = resolved
-        .iter()
-        .map(|(_, _, object_id)| get_rect_for_object(client, session_id, object_id))
-        .collect();
-
-    let rect_results = futures_util::future::join_all(rect_futures).await;
-
     let mut annotations = Vec::new();
-    for (i, rect_result) in rect_results.into_iter().enumerate() {
-        let rect = match rect_result {
-            Ok(Some(r)) if r.width > 0.0 && r.height > 0.0 => r,
-            _ => continue,
-        };
-
-        let (ref_id, entry, _) = &resolved[i];
+    for ((ref_id, entry, effective_session), response) in refs
+        .into_iter()
+        .zip(futures_util::future::join_all(requests).await)
+    {
+        // Detached/hidden nodes can have no layout box. Do not invent one.
+        let Ok(response) = response else { continue };
+        let rect = geometry.rect(effective_session, &response["model"]["border"])?;
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            continue;
+        }
         let number = ref_id
             .strip_prefix('e')
             .and_then(|n| n.parse::<u64>().ok())
             .unwrap_or(0);
-
         annotations.push(RawAnnotation {
-            ref_id: ref_id.clone(),
+            ref_id,
             number,
-            role: entry.role.clone(),
-            name: (!entry.name.is_empty()).then_some(entry.name.clone()),
+            role: entry.role,
+            name: (!entry.name.is_empty()).then_some(entry.name),
             rect,
         });
     }
@@ -398,33 +363,17 @@ async fn get_rect_for_selector(
         iframe_sessions,
     )
     .await?;
-    get_rect_for_object(client, &effective_session_id, &object_id).await
-}
-
-async fn get_rect_for_object(
-    client: &CdpClient,
-    session_id: &str,
-    object_id: &str,
-) -> Result<Option<Rect>, String> {
-    let result: EvaluateResult = client
-        .send_command_typed(
-            "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: r#"function() {
-                    const rect = this.getBoundingClientRect();
-                    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-                }"#
-                .to_string(),
-                object_id: Some(object_id.to_string()),
-                arguments: None,
-                return_by_value: Some(true),
-                await_promise: Some(false),
-            },
-            Some(session_id),
+    let geometry = geometry::FrameGeometry::load(client, session_id, iframe_sessions).await?;
+    let result = client
+        .send_command(
+            "DOM.getBoxModel",
+            Some(serde_json::json!({"objectId":object_id})),
+            Some(&effective_session_id),
         )
         .await?;
-
-    Ok(result.result.value.as_ref().and_then(parse_rect))
+    geometry
+        .rect(&effective_session_id, &result["model"]["border"])
+        .map(Some)
 }
 
 fn parse_rect(value: &Value) -> Option<Rect> {

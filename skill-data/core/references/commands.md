@@ -193,7 +193,7 @@ chrome-use is checked @e1      # Check if checked
 
 ## Screenshots and PDF
 
-`screenshot --annotate` draws numbered labels into the captured image in the CLI, without inserting page nodes or styles. JSON annotation boxes remain capture-relative CSS pixels; labels scale to the image resolution. Explicit clips take precedence over full-page and selector captures.
+`screenshot --annotate` draws numbered labels into the captured image in the CLI, without inserting page nodes or styles. JSON annotation boxes remain capture-relative CSS pixels; labels scale to the image resolution. Explicit clips take precedence over full-page and selector captures. Frame references use their owning renderer and top-viewport geometry. Unsupported out-of-process iframe transforms or missing frame geometry are reported as errors instead of guessed positions.
 
 ```bash
 chrome-use screenshot          # Save to temporary directory
