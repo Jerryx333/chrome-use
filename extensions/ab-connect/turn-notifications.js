@@ -88,12 +88,24 @@ export class TurnNotifications {
         // Acknowledging a recovery leaves the last ended turn in place; that
         // is not a new finish.
         const acknowledged = String(seen[c.id]).startsWith('r:') && event.token.startsWith('t:');
-        seen[c.id] = event.token;
-        if (!fresh || !enabled || acknowledged) continue;
-        if (await showing(c.id)) { delete unseen[c.id]; continue; }
+        // Intentional suppression consumes the event; a failed check or create
+        // must leave it eligible for the next poll of this worker.
+        if (!fresh || !enabled || acknowledged) { seen[c.id] = event.token; continue; }
+        if (await showing(c.id)) { seen[c.id] = event.token; delete unseen[c.id]; continue; }
+        const previousUnseen = unseen[c.id];
         unseen[c.id] = event.token;
         const title = firstLine(c.title || c.site || agentNames[c.agentId] || 'chrome-use', 80);
-        await this.notifications.create(`panel-turn:${c.id}`, { type: 'basic', iconUrl: 'icons/icon128.png', title, message: turnMessage(c, event.kind) });
+        try {
+          await this.notifications.create(`panel-turn:${c.id}`, { type: 'basic', iconUrl: 'icons/icon128.png', title, message: turnMessage(c, event.kind) });
+        } catch (error) {
+          // Keep an earlier unread turn, but never undo a concurrent seen().
+          if (unseen[c.id] === event.token) {
+            if (previousUnseen === undefined) delete unseen[c.id];
+            else unseen[c.id] = previousUnseen;
+          }
+          throw error;
+        }
+        seen[c.id] = event.token;
       }
       for (const id of Object.keys(unseen)) if (!live.has(id) && !id.startsWith('reply:')) delete unseen[id];
       if (!enabled) this.state.unseen = {};
@@ -141,8 +153,10 @@ export class TurnNotifications {
   }
   /** The panel shows `id`: its badge entry and notification are done. */
   async seen(id) {
-    const { unseen } = await this.load();
+    const { seen, unseen } = await this.load();
     if (!(id in unseen)) return;
+    // Consume even a pending create: its later failure must not notify a viewed turn again.
+    seen[id] = unseen[id];
     delete unseen[id];
     await this.save();
     await this.notifications.clear?.(`panel-turn:${id}`);
