@@ -353,3 +353,33 @@ test('the current running-session confirmation still resumes the chosen session'
   assert.deepEqual(calls, [{ agentId: 'codex', sessionId: 'current' }, { agentId: 'codex', sessionId: 'current', confirmRunning: true }]);
   assert.deepEqual(opened, ['current']); assert.equal(picker.isOpen, false);
 });
+
+for (const outcome of ['success', 'failure']) {
+  test(`fresh results remain selectable while a stale resume is pending (${outcome})`, async () => {
+    const oldRequest = deferred(), newRequest = deferred(), opened = [], resumed = [];
+    const row = (sessionId, agentId) => ({ sessionId, agentId, title: sessionId, lastActive: 1 });
+    const picker = createResumePicker({ document,
+      api: async (operation, params) => {
+        if (operation !== 'conversationResume') return { supported: true, sessions: [row(params.agentId === 'pi' ? 'new' : 'old', params.agentId)] };
+        resumed.push(params.sessionId);
+        return params.sessionId === 'old' ? oldRequest.promise : newRequest.promise;
+      },
+      agents: () => [{ id: 'codex', name: 'Codex' }, { id: 'pi', name: 'Pi' }], preferredAgent: () => 'codex',
+      onResumed: async conversation => opened.push(conversation.id), onError: error => { throw error; },
+    });
+    await picker.open();
+    const oldChoosing = picker.choose(row('old', 'codex'));
+    const agent = all(picker.container, node => node.tag === 'select')[0];
+    agent.value = 'pi'; agent.fire('change'); await settle();
+    const freshChoosing = picker.choose(picker.rows[0]);
+    assert.deepEqual(resumed, ['old', 'new'], 'the fresh result does not wait for the stale request');
+    if (outcome === 'failure') oldRequest.reject(new Error('Old request failed'));
+    else oldRequest.resolve({ conversation: { id: 'old' } });
+    await oldChoosing;
+    await picker.choose(picker.rows[0]);
+    assert.deepEqual(resumed, ['old', 'new'], 'a stale completion cannot unlock an in-flight fresh choice');
+    assert.deepEqual(opened, []);
+    newRequest.resolve({ conversation: { id: 'new' } }); await freshChoosing;
+    assert.deepEqual(opened, ['new']); assert.equal(picker.isOpen, false);
+  });
+}

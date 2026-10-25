@@ -105,9 +105,10 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
   const collapsed = new Set(), expanded = new Set();
   let options = [], active = -1;
 
-  /** Clear visible and keyboard choices together, and invalidate older listings. */
+  /** Invalidate choices, confirmations and pending resume responses together. */
   function resetResults() {
-    items.replaceChildren(); rows = []; options = []; active = -1; confirm.hidden = true;
+    items.replaceChildren(); rows = []; options = []; active = -1;
+    confirm.hidden = true; busy = false;
     return ++epoch;
   }
   function close() { container.hidden = true; confirm.hidden = true; resetResults(); if (timer !== null) cancel(timer); timer = null; }
@@ -216,7 +217,12 @@ export function createResumePicker({ document, api, agents, preferredAgent, pref
       if (result.confirmRequired === 'running') { askRunning(row); return; }
       close();
       await onResumed(result.conversation, result.existing === true, result.projectRefused || null);
-    } finally { busy = false; if (current === epoch && !container.hidden && status.textContent === RESUME_TEXT.resuming) { status.textContent = ''; status.hidden = true; } }
+    } finally {
+      if (current === epoch) {
+        busy = false;
+        if (!container.hidden && status.textContent === RESUME_TEXT.resuming) { status.textContent = ''; status.hidden = true; }
+      }
+    }
   }
   // A session another terminal may still be writing is never attached
   // silently: the user confirms, and the host checks again.
