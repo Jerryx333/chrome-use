@@ -1,0 +1,37 @@
+{
+  "baseline": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "visible": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 2704,
+    "bounds": [
+      198,
+      198,
+      249,
+      249
+    ]
+  },
+  "hidden": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "navigation": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  },
+  "navigation-hidden": {
+    "width": 1800,
+    "height": 1114,
+    "magentaPixels": 0,
+    "bounds": null
+  }
+}

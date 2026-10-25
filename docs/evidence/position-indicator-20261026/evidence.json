@@ -1,0 +1,86 @@
+{
+  "date": "2026-10-26",
+  "issue": 721,
+  "browser": {
+    "Browser": "Chrome/156.0.8078.48",
+    "Protocol-Version": "1.3",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+    "V8-Version": "15.6.75.19"
+  },
+  "host": "m3b",
+  "platform": "macOS arm64",
+  "method": "Overlay.setShowHinge without Overlay.enable",
+  "launchMode": "headed, disposable profile, localhost fixture only",
+  "checks": {
+    "noInjection": true,
+    "noExtraFixtureRequests": true,
+    "viewportUnchanged": true,
+    "focusUnchanged": true,
+    "visibilityUnchanged": true,
+    "eventsBeforeInputUnchanged": true,
+    "trustedClickDelivered": true
+  },
+  "pixels": {
+    "baseline": {
+      "width": 1800,
+      "height": 1114,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "visible": {
+      "width": 1800,
+      "height": 1114,
+      "magentaPixels": 2704,
+      "bounds": [
+        198,
+        198,
+        249,
+        249
+      ]
+    },
+    "hidden": {
+      "width": 1800,
+      "height": 1114,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "navigation": {
+      "width": 1800,
+      "height": 1114,
+      "magentaPixels": 0,
+      "bounds": null
+    },
+    "navigation-hidden": {
+      "width": 1800,
+      "height": 1114,
+      "magentaPixels": 0,
+      "bounds": null
+    }
+  },
+  "colorThreshold": {
+    "redGreaterThan": 200,
+    "greenLessThan": 100,
+    "blueGreaterThan": 200
+  },
+  "desktopCapture": {
+    "verified": false,
+    "permissionCheck": "CGPreflightScreenCaptureAccess() returned false",
+    "error": "screencapture: could not create image from rect"
+  },
+  "limits": [
+    "Direct CDP only; extension relay not exercised",
+    "Desktop recording and screen capture not verified",
+    "Only one device scale (2x) and one window position tested",
+    "Input timing, resource usage, disconnect and hung-process cleanup not measured",
+    "Page.captureScreenshot includes the marker; a production feature must suppress it during captures",
+    "No production feature or enable flag added"
+  ],
+  "scriptSha256": "3231ffd1bf484b76347b9cef1a0bbcb69aa5dc83b1316eb2aafbe39ed7a45d0e",
+  "images": {
+    "baseline-page.png": "b1fda30986d981268d027d84a07d5f6e6bbf35bde66a21d60eb8f9bb24560c20",
+    "visible-page.png": "f8fff394e326c3ccc57e17ae8b748a9e64d4cbedc8a8cce7bb9aee95ce61101a",
+    "hidden-page.png": "b1fda30986d981268d027d84a07d5f6e6bbf35bde66a21d60eb8f9bb24560c20",
+    "navigation-page.png": "b1fda30986d981268d027d84a07d5f6e6bbf35bde66a21d60eb8f9bb24560c20",
+    "navigation-hidden-page.png": "b1fda30986d981268d027d84a07d5f6e6bbf35bde66a21d60eb8f9bb24560c20"
+  }
+}
