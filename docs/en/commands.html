@@ -185,6 +185,7 @@
 
       <!-- ============================================================ -->
       <h2>Interactions</h2>
+      <p>After a successful trusted insertion, contenteditable <code>fill</code> keeps focus on the editor without synthetic <code>change</code> or <code>focusout</code> events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.</p>
       <p>Drive the real browser with the <code>@ref</code> values from <code>snapshot</code>: click, type, check, drag, upload.</p>
       <p>Drag mode follows the current session connection and target frame; an extension running in another Chrome profile does not change a launched browser’s drag mode.</p>
       <div class="du-code">

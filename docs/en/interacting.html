@@ -114,6 +114,7 @@
 
       <!-- ============ Typing text ============ -->
       <h2>Typing text</h2>
+      <p>After a successful trusted insertion, contenteditable <code>fill</code> keeps focus on the editor without synthetic <code>change</code> or <code>focusout</code> events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.</p>
       <p>For Ant Design / rc-picker date ranges, fill the start bound and then the end bound. <code>fill</code> confirms each bound through the component's trusted keyboard or visible confirmation control and reads it back, instead of blurring and refocusing a draft. Focus follows the picker. Invalid, read-only or disabled controls fail without a synthetic overwrite; an unverified popup requires explicit picker interaction. Verify the final range before running the query.</p>
       <p>
         <code>fill</code> clears first and then types, while <code>type</code> appends after the existing content.

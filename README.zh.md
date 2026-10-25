@@ -297,6 +297,8 @@ chrome-use snapshot -i --diff          # 只回传相对上一张快照变化的
 
 用 `snapshot -i -c` 精简控件视图，已知区域用 scoped read；只有上一次观察还留下问题时才用 `--diff`。已知动作序列用 `batch`（每一步可以带自己的 `--observe`：`batch "fill @e1 Ada" "click @e2 --observe"`；`pick`、`hover` 和 `click` 一样可以观察），有条件分支的 observe/decide/act/verify 流程用 `script`，多个字段用 `form fill --map`，最后核验任务要求的结果：`observed.status: complete` 只表示这次捕获完整，不表示任务完成，要等页面自己的最终信号（`wait --text`）。小页面（树不超过 4 KB 且不超过 60 行）的观察直接带整棵当前树 `observed.snapshot` 和只含 `+`/`-` 行的 `observed.changes`；更大的页面照旧给 `delta`。`observed.text` 列出任意帧里变化的可见文字行（回执、日志、页码），不含输入框、文本域、下拉框和可编辑区域的内容，任一密码框带值时一行都不返回（`textStatus: redacted`）；读不到的帧列在 `textFrames` 里，观察随之变成 `partial`。每个 JSON 回复都带 `observed.target`，写明标签页和 target。`observed.announced` 收录动作执行和页面稳定期间出现的 toast 以及 alert/status/aria-live 区域的文字，回复前已经消失的也在（例如“视频审核中，修改未保存”）。元素截图写成 `screenshot <selector> <path>` 或 `screenshot <path> --selector <selector>`。只有树无法回答视觉问题时才加 `--with-screenshot <path>`。
 
+可编辑区域（contenteditable）的 `fill` 在真实输入成功后保留编辑器焦点，不再派发合成的 `change` 或 `focusout` 事件。读回核验失败时会明确报错，不会覆盖编辑器 DOM。需要保存或确认时，请使用页面提供的操作。
+
 Ant Design / rc-picker 日期范围请先填开始时间，再填结束时间。`fill` 会通过组件支持的真实键盘事件或可见确认控件确认当前边界并读回，避免失焦后重新聚焦清空草稿；焦点按组件自己的流程移动。日期无效、只读或禁用时会明确失败，不会用合成事件强行写入；无法核验弹窗时请直接操作日期选择器。查询前仍需核对完整范围。
 
 只有动作后的捕获失败时，`observed.refs` 说明 ref 怎么处理：`kept-unverified` 保留上一次快照的 ref，但之后的命令使用前会实时确认标签页、frame、文档和元素都没变，确认不了就拒绝，绝不按角色或名称重新定位（DOM 遍历得到的 ref 这时一律拒绝）；`dropped` 表示文档可能已经变了。两种情况都用 `snapshot -i` 取当前 ref，不要重放动作。
