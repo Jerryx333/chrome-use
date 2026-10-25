@@ -57,7 +57,7 @@ and explicit retries retain them. Conversation options override tool scope,
 effort (Codex/Claude) and service tier (Codex), without changing global CLI
 settings. Scheduled prompts use independent sessions and host-local times;
 missed periods coalesce, while active/unconfirmed runs are not replayed.
-Clicking a task notification activates the conversation tab and focuses the window containing that tab, even when another Chrome window was last active.
+Clicking a task notification activates the conversation tab and focuses the window containing that tab, even when another Chrome window was last active or the current window is not yet known. A bound conversation tab takes precedence over the last-window fallback.
 
 Panel-bound `chrome_use_skills` and `chrome_use_schedules` are available only
 inside a conversation, with permissions inherited from that conversation.

@@ -72,7 +72,7 @@
         <li><strong>OpenCode：</strong><strong>CLI permissions</strong> 遵循它自己的规则，部分工具可能无需询问。收到的审批会显示在侧栏，完整权限模式按 <strong>Allow once</strong> 自动回复，不改保存的权限规则。</li>
         <li><strong>Pi：</strong>没有逐次审批机制。<strong>Browser only</strong> 只开放 <code>chrome_use</code> MCP 工具，不开放 shell 或文件工具；完整权限模式使用 CLI 的完整工具集。</li>
       </ul>
-      <p>点击任务通知会激活对应会话的标签页，并聚焦该标签页所在的窗口，即使之前使用的是另一个 Chrome 窗口。</p>
+      <p>点击任务通知会激活对应会话的标签页，并聚焦该标签页所在的窗口，即使之前使用的是另一个 Chrome 窗口，或当前窗口尚未确定。已绑定的会话标签优先于最后聚焦的窗口。</p>
       <h2 id="queue">排队、停止与继续</h2>
       <p>历史显示流式回复，工具行可展开查看。工具返回不代表浏览器任务成功。回复中发送的消息进入队列，失败或中断后需点 <strong>Resume queue</strong> 恢复。 失败或中断后，新发的消息会在原会话中使用原模型立即开始；旧队列仍暂停，需手动恢复。<strong>Stop &amp; send</strong> 或 Ctrl/Cmd+Enter 等确认终止或进程退出后才优先发送，普通队列仍暂停。重连只读回历史，不重发。</p>
       <h2 id="history">历史与删除</h2>

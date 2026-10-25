@@ -295,3 +295,42 @@ for (const failure of ['rejected', 'missing tab']) {
     assert.equal(warnings.length, 1, 'activation uncertainty is reported');
   });
 }
+
+for (const kind of ['panel-turn', 'schedule-run']) {
+  for (const windowId of [null, undefined]) {
+    test(`${kind} routes to its bound tab before the current window is known (${windowId})`, async () => {
+      const calls = [];
+      const chrome = {
+        storage: { local: { set: async value => calls.push(['store', value]) } },
+        windows: { getLastFocused: async () => { calls.push(['last-focused']); return { id: 99 }; }, update: async id => calls.push(['focus', id]) },
+        sidePanel: { open: async value => calls.push(['global-open', value]) },
+        notifications: { clear: async () => {} },
+      };
+      const tabs = {
+        tabFor: () => 21,
+        activeTab: () => { throw new Error('A bound tab must not use the current-window fallback'); },
+        show: notificationActivation(async id => { calls.push(['show', id]); return { id, windowId: 7 }; }),
+        open: id => calls.push(['open', id]),
+      };
+      assert.equal(openFromNotification(`${kind}:${ID}`, { windowId, chrome, panels: new Map(), tabs }), true);
+      assert.deepEqual(calls.slice(0, 2), [['show', 21], ['open', 21]], 'side panel opens synchronously in the notification gesture');
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(calls, [['show', 21], ['open', 21], ['focus', 7]]);
+    });
+  }
+}
+
+for (const id of [`panel-turn:${ID}`, 'inspect-reply:dm-a#4']) {
+  test(`an unbound ${id.split(':')[0]} keeps its last-window fallback when no current window is known`, async () => {
+    const calls = [];
+    const chrome = {
+      storage: { local: { set: async () => {} } },
+      windows: { getLastFocused: async () => ({ id: 99 }), update: async id => calls.push(['focus', id]) },
+      sidePanel: { open: async value => calls.push(['open', value]) }, notifications: { clear: async () => {} },
+    };
+    const tabs = { tabFor: () => null, activeTab: () => { throw new Error('No current window is available'); } };
+    assert.equal(openFromNotification(id, { windowId: null, chrome, panels: new Map(), tabs }), true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(calls, [['open', { windowId: 99 }], ['focus', 99]]);
+  });
+}

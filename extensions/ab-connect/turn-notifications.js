@@ -168,14 +168,15 @@ export function openFromNotification(id, { windowId, chrome, panels, pending = (
     if (tab?.id !== tabId || !Number.isInteger(tab.windowId)) throw new Error('Could not confirm the conversation tab window');
     await chrome.windows.update(tab.windowId, { focused: true });
   };
-  if (tabs && windowId !== null && windowId !== undefined) {
+  // A bound conversation tab is sufficient even before the current window is known.
+  if (tabs) {
     const finished = /^(schedule-run|panel-turn):([a-f0-9-]{36})$/.exec(id)?.[2];
     if (id.startsWith('inspect-reply:') || finished) {
       // The conversation's own tab when it has one, else the tab the user is on.
       let tabId = finished ? tabs.tabFor(finished) : null;
       const hasBoundTab = tabId !== null;
       if (hasBoundTab) void focusTabWindow(tabId).catch(error => console.warn('Focus the conversation window:', String(error?.message || error)));
-      else { tabId = tabs.activeTab(windowId); if (tabId !== null && finished) tabs.bind(tabId, finished); }
+      else if (windowId !== null && windowId !== undefined) { tabId = tabs.activeTab(windowId); if (tabId !== null && finished) tabs.bind(tabId, finished); }
       if (tabId !== null) {
         if (id.startsWith('inspect-reply:')) void Promise.resolve(chrome.storage.local.set({ ab_panel_show_replies: Date.now() })).catch(() => {});
         openTab(tabId);

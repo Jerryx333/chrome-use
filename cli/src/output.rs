@@ -6700,7 +6700,8 @@ Setup:
                              Read CLI models fetches bounded CLI metadata without
                              a prompt; account reports do not verify model access.
                              Task notifications focus the conversation tab
-                             and the window that contains it.
+                             and the window that contains it, even before the current
+                             window is known; a bound tab takes precedence.
                              Metadata probes use owned process groups or Windows jobs.
                              Unconfirmed sends offer explicit same-ID retry or warning
                              reset; reset does not cancel possible delivery. Idle old
