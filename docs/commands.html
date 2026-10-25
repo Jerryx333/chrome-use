@@ -175,6 +175,7 @@
 
       <!-- ============================================================ -->
       <h2>交互操作</h2>
+      <p><code>dblclick</code> 使用两次真实指针点击，并核验目标收到双击事件。目标被遮挡、禁用，或 frame 存在变换、跨源坐标无法可靠映射时会拒绝，不使用合成事件回退。第一次点击后目标变化时停止第二次点击。JSON 包含 <code>dispatch: "pointer"</code> 和 <code>verified</code>，无法确认事件送达时附带警告。操作中断或结果未确认时，请先检查页面再重试。双击不支持 <code>AGENT_BROWSER_CLICK_MODE=dom</code>。</p>
       <p>用 <code>snapshot</code> 拿到的 <code>@ref</code> 驱动真实浏览器：点击、输入、勾选、拖拽、上传。</p>
       <p>拖拽方式取决于当前会话的连接及目标框架；其他 Chrome profile 中运行的扩展不会改变独立启动浏览器的拖拽方式。</p>
       <div class="du-code">

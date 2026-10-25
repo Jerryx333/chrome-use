@@ -185,6 +185,7 @@
 
       <!-- ============================================================ -->
       <h2>Interactions</h2>
+      <p><code>dblclick</code> uses two trusted pointer clicks and verifies delivery to the target. Covered, disabled, transformed-frame and unmappable cross-origin targets are refused; no synthetic fallback is used. If the target changes after the first click, the second is stopped. JSON includes <code>dispatch: "pointer"</code> and <code>verified</code>; an unverified delivery carries a warning. Inspect the page before retrying an interrupted or unverified action. <code>AGENT_BROWSER_CLICK_MODE=dom</code> is not supported for double-clicks.</p>
       <p>Drive the real browser with the <code>@ref</code> values from <code>snapshot</code>: click, type, check, drag, upload.</p>
       <p>Drag mode follows the current session connection and target frame; an extension running in another Chrome profile does not change a launched browser’s drag mode.</p>
       <div class="du-code">

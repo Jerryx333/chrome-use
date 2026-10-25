@@ -2963,8 +2963,13 @@ chrome-use dblclick - Double-click an element
 
 Usage: chrome-use dblclick <selector>
 
-Double-clicks on the specified element. Useful for text selection
-or triggering double-click handlers.
+Sends two trusted pointer clicks and verifies the target received the double-click.
+Covered, disabled, transformed-frame or unmappable cross-origin targets are refused.
+There is no synthetic fallback; AGENT_BROWSER_CLICK_MODE=dom is unsupported here.
+If the target changes after the first click, the second is stopped. JSON includes
+dispatch: "pointer" and verified. Unverified delivery carries a warning; inspect
+the page before retrying an interrupted or unverified action.
+Useful for text selection or triggering double-click handlers.
 
 Global Options:
   --json               Output as JSON
