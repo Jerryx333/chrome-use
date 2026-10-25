@@ -2832,8 +2832,16 @@ async fn fill_monaco_via_clipboard(
         begin_monaco_clipboard(client, session_id, object_id, Some(expected)).await?;
     let modifier = if cfg!(target_os = "macos") { 4 } else { 2 };
     let operation = async {
-        dispatch_editor_command(client, session_id, "a", modifier, "selectAll").await?;
-        dispatch_editor_command(client, session_id, "v", modifier, "paste").await?;
+        monaco_editor_command(
+            client,
+            session_id,
+            &transaction_id,
+            "a",
+            modifier,
+            "selectAll",
+        )
+        .await?;
+        monaco_editor_command(client, session_id, &transaction_id, "v", modifier, "paste").await?;
         wait_for_paint_settled(client, session_id).await;
 
         let paste_check: EvaluateResult = client
@@ -2874,8 +2882,16 @@ async fn fill_monaco_via_clipboard(
             ));
         }
 
-        dispatch_editor_command(client, session_id, "a", modifier, "selectAll").await?;
-        dispatch_editor_command(client, session_id, "c", modifier, "copy").await?;
+        monaco_editor_command(
+            client,
+            session_id,
+            &transaction_id,
+            "a",
+            modifier,
+            "selectAll",
+        )
+        .await?;
+        monaco_editor_command(client, session_id, &transaction_id, "c", modifier, "copy").await?;
 
         let copy_check: EvaluateResult = client
             .send_command_typed(
@@ -2940,8 +2956,16 @@ pub(crate) async fn read_monaco_via_clipboard(
     let transaction_id = begin_monaco_clipboard(client, session_id, object_id, None).await?;
     let modifier = if cfg!(target_os = "macos") { 4 } else { 2 };
     let operation = async {
-        dispatch_editor_command(client, session_id, "a", modifier, "selectAll").await?;
-        dispatch_editor_command(client, session_id, "c", modifier, "copy").await?;
+        monaco_editor_command(
+            client,
+            session_id,
+            &transaction_id,
+            "a",
+            modifier,
+            "selectAll",
+        )
+        .await?;
+        monaco_editor_command(client, session_id, &transaction_id, "c", modifier, "copy").await?;
 
         let copy_check: EvaluateResult = client
             .send_command_typed(
@@ -2981,6 +3005,32 @@ pub(crate) async fn read_monaco_via_clipboard(
 
     let cleanup = finish_monaco_clipboard(client, session_id, &transaction_id).await;
     combine_monaco_result(operation, cleanup)
+}
+
+/// Renew the cleanup lease immediately before input. An already-expired
+/// transaction must never paste from a clipboard it may already have restored.
+async fn monaco_editor_command(
+    client: &CdpClient,
+    session_id: &str,
+    transaction_id: &str,
+    key: &str,
+    modifiers: i32,
+    command: &str,
+) -> Result<(), String> {
+    let active = monaco_clipboard_call(
+        client,
+        session_id,
+        transaction_id,
+        "function() { return this.active(); }".to_string(),
+    )
+    .await?;
+    if active.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(
+            "Monaco clipboard transaction expired before input; inspect the editor before retrying"
+                .to_string(),
+        );
+    }
+    dispatch_editor_command(client, session_id, key, modifiers, command).await
 }
 
 async fn dispatch_editor_command(

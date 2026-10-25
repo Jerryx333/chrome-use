@@ -128,3 +128,15 @@ test('lease expiry during pending staging waits for it before restoration', asyn
   assert.equal((await f.tx.finish()).ok, true)
   assert.equal(f.restores, 1)
 })
+
+test('active input renews the lease and expired transactions refuse renewal', async () => {
+  const f = fixture()
+  await f.tx.start('staged')
+  const old = [...f.timers.keys()][0]
+  assert.equal(f.tx.active().ok, true)
+  assert.equal(f.timers.has(old), false)
+  const timer = [...f.timers.values()][0]
+  timer.fn()
+  assert.equal(f.tx.active().ok, false)
+  assert.equal((await f.tx.finish()).ok, true)
+})

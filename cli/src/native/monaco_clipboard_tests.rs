@@ -48,6 +48,8 @@ async fn run(
                             } else {
                                 json!({"ok":true})
                             }
+                        } else if script.contains("this.active()") {
+                            json!({"ok":true})
                         } else if script.contains("this.finish()") {
                             if cleanup_error {
                                 json!({"ok":false,"error":"restore denied"})

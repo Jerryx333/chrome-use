@@ -81,7 +81,7 @@ function () {
         })();
         return completion;
     }
-    const timer = setTimeout(() => { void finish(); }, 60000);
+    let timer = setTimeout(() => { void finish(); }, 60000);
     return {
         start(value) {
             if (startup || closed) return Promise.resolve(failure('clipboard transaction is already started or expired'));
@@ -115,6 +115,12 @@ function () {
                 }
             })();
             return startup;
+        },
+        active() {
+            if (closed) return { ok: false, error: 'clipboard transaction expired or closed' };
+            clearTimeout(timer);
+            timer = setTimeout(() => { void finish(); }, 60000);
+            return { ok: true };
         },
         check(kind) {
             if (closed) return { ok: false, error: 'clipboard transaction expired or closed' };
