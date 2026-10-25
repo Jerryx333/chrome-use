@@ -2474,10 +2474,9 @@ fn main() {
                     if let Some(v) = env.get("verify") {
                         data["verify"] = v.clone();
                     }
-                    println!(
-                        "{}",
-                        json!({ "success": ok, "data": data, "error": if ok { Value::Null } else { env.get("error").cloned().unwrap_or(Value::Null) } })
-                    );
+                    let mut response = json!({ "success": ok, "data": data, "error": if ok { Value::Null } else { env.get("error").cloned().unwrap_or(Value::Null) } });
+                    error_envelope::enrich_error_value(&mut response);
+                    println!("{}", response);
                 } else if ok {
                     eprintln!("{}", color::dim(&format!("site {spec} (via OpenCLI)")));
                     println!(

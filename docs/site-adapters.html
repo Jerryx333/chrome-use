@@ -387,7 +387,8 @@ site adapters for github.com — prefer these for structured data:
         </a>
       </div>
 
-    </main>
+    <p>发布器来源与封面核对：<code>wechat-channels/publish</code> 仍由内置 OpenCLI 提供，没有被移除。OpenCLI 1.8.8 还提供小红书图文发布，但不是视频发布；其 TikTok 清单没有上传／发布命令。用 <code>site info</code> 查看当前命令及来源。内置视频号、抖音视频发布器现在默认经过 chrome-use 的 <code>--cover-mode review</code> 检查，未明确选择封面时不会调用适配器。视频号可以用 <code>--manual true</code> 或 <code>--draft true</code> 准备表单而不自动发布；<code>--cover-mode keep</code> 明确接受上游平台选出的封面，不承诺保留之前表单里手选的封面。抖音原有的 <code>--cover &lt;image&gt;</code> 继续可用，<code>--cover-mode upload</code> 必须同时提供图片。不支持的封面参数、AI／指定帧模式会明确拒绝，不再静默忽略。额外添加的 OpenCLI 来源保留自己的参数定义。任意截帧及修改已发布作品封面仍未实现。</p>
+</main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 
     <!-- injected: right on-this-page TOC -->

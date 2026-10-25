@@ -396,7 +396,8 @@ site adapters for github.com — prefer these for structured data:
         </a>
       </div>
 
-    </main>
+    <p>Video publisher sources and cover review: <code>wechat-channels/publish</code> still comes from bundled OpenCLI; it was not removed. OpenCLI 1.8.8 also provides Xiaohongshu image-note publishing, not a video publisher, and its TikTok manifest has no upload/publish command. Use <code>site info</code> to check the installed command and source. The bundled WeChat and Douyin video publishers now default to a chrome-use <code>--cover-mode review</code> preflight that refuses an implicit platform cover before invoking the adapter. WeChat <code>--manual true</code> or <code>--draft true</code> prepares the form without automatic publication; <code>--cover-mode keep</code> explicitly accepts the upstream platform-selected cover, without claiming to preserve a cover chosen in a previous form. Douyin&#x27;s existing <code>--cover &lt;image&gt;</code> remains supported; <code>--cover-mode upload</code> requires it. Unsupported cover arguments and AI/frame modes are refused rather than silently ignored. Added OpenCLI sources keep their own schemas. Arbitrary frame extraction and existing-work cover updates remain unimplemented.</p>
+</main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 
     <!-- injected: right on-this-page TOC -->
