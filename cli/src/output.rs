@@ -2997,8 +2997,9 @@ exactly before success is reported. If Monaco hides its model API, fill uses
 one trusted editor paste, reads the selected model back through the editor's
 copy handler, and attempts clipboard restoration from an independent Blob backup.
 An empty or unreadable backup is refused before staging; restoration is read back
-and verified. Restoration checks all observed
-formats and fails if contents changed or ownership is uncertain. Private transaction
+and verified. Contents are checked before input and restoration; changed or
+uncertain contents stop the operation. Only Web Clipboard API formats are backed
+up; native application metadata is not preserved. Private transaction
 state expires after 60 seconds in a surviving document. Context loss can prevent
 restoration; comparison/write is not atomic. Avoid concurrent clipboard use.
 If restoration or the edit cannot be verified,

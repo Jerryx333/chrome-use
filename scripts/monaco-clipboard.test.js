@@ -141,11 +141,11 @@ test('active input renews the lease and expired transactions refuse renewal', as
   const f = fixture()
   await f.tx.start('staged')
   const old = [...f.timers.keys()][0]
-  assert.equal(f.tx.active().ok, true)
+  assert.equal((await f.tx.active()).ok, true)
   assert.equal(f.timers.has(old), false)
   const timer = [...f.timers.values()][0]
   timer.fn()
-  assert.equal(f.tx.active().ok, false)
+  assert.equal((await f.tx.active()).ok, false)
   assert.equal((await f.tx.finish()).ok, true)
 })
 
@@ -179,4 +179,31 @@ test('a resolved write is not success when the saved clipboard was not restored'
   assert.match((await f.tx.finish()).error, /without restoring/)
   assert.deepEqual(await f.contents(), [{ 'text/plain': 'replacement' }])
   assert.equal(f.listeners.size, 0)
+})
+
+test('a newer clipboard write stops the next editor input and is preserved by cleanup', async () => {
+  for (const staged of ['staged', null]) {
+    const f = fixture()
+    await f.tx.start(staged)
+    f.change({ 'text/plain': 'newer', 'text/html': '<b>newer</b>' })
+    assert.match((await f.tx.active()).error, /changed before editor input/)
+    await f.tx.finish()
+    assert.equal(f.restores, 0)
+    assert.deepEqual(await f.contents(), [{ 'text/plain': 'newer', 'text/html': '<b>newer</b>' }])
+  }
+})
+
+test('Monaco native metadata does not invalidate matching Web Clipboard API formats', async () => {
+  const f = fixture()
+  await f.tx.start('replacement')
+  await f.event('copy', { 'text/plain': 'replacement', 'vscode-editor-data': '{"version":1}', 'application/vnd.code.copymetadata': '{}' })
+  assert.equal((await f.tx.finish()).ok, true)
+  assert.deepEqual(await f.contents(), [{ 'text/plain': 'before', 'text/html': '<b>before</b>' }])
+})
+test('unknown non-text copy formats still refuse restoration', async () => {
+  const f = fixture()
+  await f.tx.start('replacement')
+  await f.event('copy', { 'text/plain': 'replacement', 'application/unknown': 'unobserved' })
+  assert.match((await f.tx.finish()).error, /ownership is uncertain/)
+  assert.equal(f.restores, 0)
 })

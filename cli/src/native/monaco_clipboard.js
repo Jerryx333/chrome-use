@@ -30,10 +30,13 @@ function () {
         queueMicrotask(() => {
             if (closed) return;
             state.copy = { trusted: true, prevented: event.defaultPrevented, text };
-            // Default-copy contents and non-text formats cannot be reconstructed
-            // from this event. Refuse restoration if ownership is uncertain.
-            if (event.defaultPrevented && formats.length && formats.every(([type]) => type.startsWith('text/'))) {
-                expected = [formats.map(([type, text]) => [type, new TextEncoder().encode(text)])];
+            // Chrome does not expose Monaco's two native custom metadata
+            // formats through Clipboard.read(). Compare every exposed format;
+            // unknown non-text formats still make restoration uncertain.
+            const metadata = new Set(['application/vnd.code.copymetadata', 'vscode-editor-data']);
+            const exposed = formats.filter(([type]) => !metadata.has(type));
+            if (event.defaultPrevented && exposed.length && exposed.every(([type]) => type.startsWith('text/'))) {
+                expected = [exposed.map(([type, text]) => [type, new TextEncoder().encode(text)])];
             }
         });
     };
@@ -102,6 +105,7 @@ function () {
                     // Browser-backed ClipboardItems can become invalid after a
                     // clipboard change, even after getType has resolved. Keep
                     // independent Blob-backed items before staging anything.
+                    expected = backupBytes;
                     backup = backupBytes.map(formats => new doc.defaultView.ClipboardItem(
                         Object.fromEntries(formats.map(([type, data]) =>
                             [type, new doc.defaultView.Blob([data], { type })]))));
@@ -126,11 +130,23 @@ function () {
             })();
             return startup;
         },
-        active() {
-            if (closed) return { ok: false, error: 'clipboard transaction expired or closed' };
+        async active() {
+            if (closed) return failure('clipboard transaction expired or closed');
             clearTimeout(timer);
             timer = setTimeout(() => { void finish(); }, 60000);
-            return { ok: true };
+            try {
+                // Check before native copy as well as before restoration. A
+                // newer write between paste and readback must not be replaced
+                // by our next copy command. This still cannot make CDP input
+                // and the clipboard comparison atomic.
+                if (!matches(await bytes(await clipboard.read()), expected)) {
+                    return failure('clipboard changed before editor input; operation stopped');
+                }
+                if (closed) return failure('clipboard transaction expired or closed');
+                return { ok: true };
+            } catch (error) {
+                return failure('clipboard could not be checked before editor input: ' + String(error && error.message || error));
+            }
         },
         check(kind) {
             if (closed) return { ok: false, error: 'clipboard transaction expired or closed' };

@@ -9,6 +9,7 @@ async fn run(
     setup_error: bool,
     input_error: bool,
     cleanup_error: bool,
+    changed_before_input: bool,
 ) -> (Result<String, String>, Vec<Value>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -49,7 +50,11 @@ async fn run(
                                 json!({"ok":true})
                             }
                         } else if script.contains("this.active()") {
-                            json!({"ok":true})
+                            if changed_before_input {
+                                json!({"ok":false,"error":"clipboard changed before editor input"})
+                            } else {
+                                json!({"ok":true})
+                            }
                         } else if script.contains("this.finish()") {
                             if cleanup_error {
                                 json!({"ok":false,"error":"restore denied"})
@@ -93,13 +98,13 @@ fn assert_finished(commands: &[Value]) {
 }
 #[tokio::test]
 async fn monaco_private_handle_success_is_verified_and_released() {
-    let (result, commands) = run(false, false, false).await;
+    let (result, commands) = run(false, false, false, false).await;
     assert_eq!(result.unwrap(), "monaco-clipboard");
     assert_finished(&commands);
 }
 #[tokio::test]
 async fn monaco_setup_failure_still_finishes_and_never_sends_input() {
-    let (result, commands) = run(true, false, false).await;
+    let (result, commands) = run(true, false, false, false).await;
     assert!(result.unwrap_err().contains("focus failed"));
     assert!(!commands
         .iter()
@@ -108,7 +113,7 @@ async fn monaco_setup_failure_still_finishes_and_never_sends_input() {
 }
 #[tokio::test]
 async fn monaco_input_failure_keeps_both_operation_and_cleanup_errors() {
-    let (result, commands) = run(false, true, true).await;
+    let (result, commands) = run(false, true, true, false).await;
     let error = result.unwrap_err();
     assert!(error.contains("input rejected"));
     assert!(error.contains("restore denied"));
@@ -116,7 +121,19 @@ async fn monaco_input_failure_keeps_both_operation_and_cleanup_errors() {
 }
 #[tokio::test]
 async fn monaco_cleanup_failure_is_not_reported_as_fill_success() {
-    let (result, commands) = run(false, false, true).await;
+    let (result, commands) = run(false, false, true, false).await;
     assert!(result.unwrap_err().contains("restore denied"));
+    assert_finished(&commands);
+}
+
+#[tokio::test]
+async fn monaco_changed_clipboard_refuses_input_and_preserves_the_reason() {
+    let (result, commands) = run(false, false, false, true).await;
+    assert!(result
+        .unwrap_err()
+        .contains("clipboard changed before editor input"));
+    assert!(!commands
+        .iter()
+        .any(|r| r["method"] == "Input.dispatchKeyEvent"));
     assert_finished(&commands);
 }

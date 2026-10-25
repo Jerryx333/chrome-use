@@ -3027,10 +3027,13 @@ async fn monaco_editor_command(
     )
     .await?;
     if active.get("ok").and_then(Value::as_bool) != Some(true) {
-        return Err(
-            "Monaco clipboard transaction expired before input; inspect the editor before retrying"
-                .to_string(),
-        );
+        return Err(format!(
+            "Monaco clipboard transaction refused input: {}; inspect the editor before retrying",
+            active
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("transaction is no longer active")
+        ));
     }
     dispatch_editor_command(client, session_id, key, modifiers, command).await
 }
