@@ -6708,6 +6708,8 @@ Setup:
                              call. Replies remain pending until backend confirmation.
                              Panel conversation menu: Initial page opens the first
                              recorded URL; Final page opens the latest recorded URL.
+                             Initial page follows Chrome tab replacements without
+                             changing the saved final address.
                              Missing initial addresses are reported, never guessed.
                              Delete conversation requires confirmation; stop first.
                              Deletion reports saved page address cleanup failures.
