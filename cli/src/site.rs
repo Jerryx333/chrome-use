@@ -630,6 +630,7 @@ pub fn build_start(
          if (!sel) return Promise.reject(new Error('setOn: no selector, and @meta.args.' + k + ' declares no \"input\"'));\n\
          return rpc('upload', {{ arg: k, selector: sel }});\n\
          }} }};\n\
+         Object.defineProperty(a[k], 'elementRelayUpload', {{ value: true, enumerable: false }});\n\
          a[k].toString = () => f.path;\n\
          }}\n\
          hide('budgetMs', {BUDGET_PLACEHOLDER});\n\
@@ -2928,7 +2929,7 @@ async function(args) {
   const up = await args.video.setOn();
   args.progress('uploaded');
   return { status: 'submitted', title: args.title, file: args.video.name, size: args.video.size,
-           attached: up.attached, keys: Object.keys(args).join(',') };
+           attached: up.attached, elementRelayUpload: args.video.elementRelayUpload, fileKeys: Object.keys(args.video), keys: Object.keys(args).join(',') };
 }"#;
 
     fn no_stdin() -> Result<String, String> {
@@ -3130,6 +3131,12 @@ async function(args) { return args; }"#;
         assert_eq!(v["last"]["result"]["status"], "submitted");
         assert_eq!(v["last"]["result"]["file"], "clip.mp4");
         assert_eq!(v["last"]["result"]["attached"], 1);
+        assert_eq!(v["last"]["result"]["elementRelayUpload"], true);
+        assert!(!v["last"]["result"]["fileKeys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|key| key == "elementRelayUpload"));
         // budgetMs / progress are hidden from an adapter that enumerates args.
         assert_eq!(v["last"]["result"]["keys"], "title,video");
     }
