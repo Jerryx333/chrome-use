@@ -39,6 +39,14 @@ async fn e2e_screenshot_annotations_leave_no_dom_mutations() {
             for (key, value) in extra.as_object().unwrap() {
                 command[key] = value.clone();
             }
+            let viewport_width = eval_in(&mut state, "visualViewport.width")
+                .await
+                .as_f64()
+                .unwrap();
+            let content_width = eval_in(&mut state, "document.documentElement.scrollWidth")
+                .await
+                .as_f64()
+                .unwrap();
             let response = run_cmd(&mut state, command).await;
             assert_success(&response);
             assert_eq!(
@@ -82,14 +90,6 @@ async fn e2e_screenshot_annotations_leave_no_dom_mutations() {
             }
             let pixels = STANDARD.decode(data["base64"].as_str().unwrap()).unwrap();
             let image = image::load_from_memory(&pixels).unwrap().to_rgb8();
-            let viewport_width = eval_in(&mut state, "visualViewport.width")
-                .await
-                .as_f64()
-                .unwrap();
-            let content_width = eval_in(&mut state, "document.documentElement.scrollWidth")
-                .await
-                .as_f64()
-                .unwrap();
             let css_width = [viewport_width, content_width, 90.0, 600.0][index];
             let raster_scale = image.width() as f64 / css_width;
             assert_eq!(raster_scale, scale, "capture scale {index}");
