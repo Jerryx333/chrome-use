@@ -16,6 +16,9 @@ use crate::test_utils::EnvGuard;
 
 use super::actions::{execute_command, DaemonState};
 
+#[path = "screenshot_annotation_e2e_tests.rs"]
+mod screenshot_annotation;
+
 #[path = "range_date_e2e_tests.rs"]
 mod range_date;
 

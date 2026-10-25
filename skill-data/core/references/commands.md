@@ -193,6 +193,8 @@ chrome-use is checked @e1      # Check if checked
 
 ## Screenshots and PDF
 
+`screenshot --annotate` draws numbered labels into the captured image in the CLI, without inserting page nodes or styles. JSON annotation boxes remain capture-relative CSS pixels; labels scale to the image resolution. Explicit clips take precedence over full-page and selector captures.
+
 ```bash
 chrome-use screenshot          # Save to temporary directory
 chrome-use screenshot path.png # Save to specific path
