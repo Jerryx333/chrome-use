@@ -157,23 +157,29 @@ export class TurnNotifications {
  * `pending` receives the selection for a panel that has yet to report.
  */
 // `tabs` (one panel per tab, 0.5.63): { tabFor(conversationId), activeTab(windowId),
-// bind(tabId, conversationId), open(tabId), show(tabId) }, all answering at
-// once so the panel opens while the click's gesture lasts. Without it the
-// window's single panel is opened, as before.
+// bind(tabId, conversationId), open(tabId), show(tabId) }. show returns the
+// activated Tab asynchronously; open is still called synchronously while the
+// click's gesture lasts. Without it the window's single panel opens as before.
 export function openFromNotification(id, { windowId, chrome, panels, pending = () => {}, tabs = null }) {
   const postTo = (tabId, message) => { for (const [port, presence] of panels) if (presence.tabId === tabId) try { port.postMessage(message); } catch {} };
   const openTab = tabId => void Promise.resolve(tabs.open(tabId)).catch(error => console.warn('Open the side panel:', String(error?.message || error)));
+  const focusTabWindow = async tabId => {
+    const tab = await tabs.show(tabId);
+    if (tab?.id !== tabId || !Number.isInteger(tab.windowId)) throw new Error('Could not confirm the conversation tab window');
+    await chrome.windows.update(tab.windowId, { focused: true });
+  };
   if (tabs && windowId !== null && windowId !== undefined) {
     const finished = /^(schedule-run|panel-turn):([a-f0-9-]{36})$/.exec(id)?.[2];
     if (id.startsWith('inspect-reply:') || finished) {
       // The conversation's own tab when it has one, else the tab the user is on.
       let tabId = finished ? tabs.tabFor(finished) : null;
-      if (tabId !== null) tabs.show(tabId);
+      const hasBoundTab = tabId !== null;
+      if (hasBoundTab) void focusTabWindow(tabId).catch(error => console.warn('Focus the conversation window:', String(error?.message || error)));
       else { tabId = tabs.activeTab(windowId); if (tabId !== null && finished) tabs.bind(tabId, finished); }
       if (tabId !== null) {
         if (id.startsWith('inspect-reply:')) void Promise.resolve(chrome.storage.local.set({ ab_panel_show_replies: Date.now() })).catch(() => {});
         openTab(tabId);
-        void Promise.resolve(chrome.windows.update(windowId, { focused: true })).catch(() => {});
+        if (!hasBoundTab) void Promise.resolve(chrome.windows.update(windowId, { focused: true })).catch(() => {});
         postTo(tabId, finished ? { type: 'select', conversationId: finished } : { type: 'showReplies' });
         void Promise.resolve(chrome.notifications.clear(id)).catch(() => {});
         return true;

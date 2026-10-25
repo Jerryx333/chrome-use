@@ -72,6 +72,7 @@
         <li><strong>OpenCode:</strong> <strong>CLI permissions</strong> keeps its own rules, which may allow tools without asking. Incoming requests appear in the panel; full access answers with <strong>Allow once</strong> without changing stored rules.</li>
         <li><strong>Pi:</strong> tools have no per-call approval mechanism. <strong>Browser only</strong> exposes only <code>chrome_use</code> MCP tools, without shell or file tools. Full access enables the CLI's full tool set.</li>
       </ul>
+      <p>Clicking a task notification activates the conversation tab and focuses the window containing that tab, even when another Chrome window was last active.</p>
       <h2 id="queue">Queue, stop and resume</h2>
       <p>Replies stream into history, with tool rows that expand for details. Tool output does not prove the browser task succeeded. Messages sent during a response queue up; failure or interruption pauses the queue until <strong>Resume queue</strong>. After a failed or interrupted turn, a new message starts immediately in the same conversation and model; older queued messages stay paused until you resume them explicitly. <strong>Stop &amp; send</strong> or Ctrl/Cmd+Enter waits for confirmed interruption or process exit before sending ahead of the ordinary queue. Reconnect reads history without resending.</p>
       <h2 id="history">History and deletion</h2>
