@@ -401,6 +401,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dynamic_form_guard_is_classified_as_stale_ref() {
+        assert_eq!(categorize("Ref e209 no longer matches its snapshot. Was [textbox \"old\"], now [textbox \"new\"]."), "stale_ref");
+    }
+
+    #[test]
     fn occlusion_uses_the_non_retryable_envelope_category() {
         assert_eq!(categorize("Ref e9 is occluded by DIV text=\"Connection timeout\" at the click point (still occluded after 3 retries / 600ms)."), "element_occluded");
     }

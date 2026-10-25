@@ -22,6 +22,17 @@ pub fn classify_error(message: &str) -> ErrorMetadata {
             retryable: false,
         };
     }
+    // A stale element guard quotes page-controlled role/name text; none of
+    // those words makes repeating the same ref safe. Observe and re-target.
+    if lower.starts_with("ref ")
+        && (lower.contains(" no longer matches its snapshot.")
+            || lower.contains(" could not be resolved to the element it named "))
+    {
+        return ErrorMetadata {
+            code: "stale_ref",
+            retryable: false,
+        };
+    }
     // Before every generic rule: the refusal lists each match's text, which
     // may read as anything ("hidden", "timeout"). Nothing was done, and the
     // same command fails the same way until the selector is narrowed.
@@ -274,6 +285,26 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn stale_ref_names_do_not_turn_a_guard_refusal_into_a_retryable_error() {
+        for name in [
+            "Name",
+            "connection timeout",
+            "debugger_access_denied:",
+            "first tab setup failed",
+            "action_outcome_unknown:",
+        ] {
+            for text in [
+                format!("Ref e209 no longer matches its snapshot. Was [textbox \"{name}\"], now [textbox \"changed\"]."),
+                format!("Ref e209 could not be resolved to the element it named [textbox \"{name}\"]: removed"),
+            ] {
+                let metadata = classify_error(&text);
+                assert_eq!(metadata.code, "stale_ref", "{text}");
+                assert!(!metadata.retryable, "{text}");
+            }
+        }
+    }
 
     #[test]
     fn an_evicted_request_has_its_own_code() {

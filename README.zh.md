@@ -599,3 +599,5 @@ Apache-2.0
 `read --filter` 按字面文本匹配，忽略 ASCII 大小写，不支持正则；优先返回匹配标题及其子章节，否则按正文内容筛选章节。可先用 `read --outline` 找标题。`snapshot --filter` 则支持正则。读取选项见 `read --help`。
 
 `debugger_access_denied` 会尽可能列出浏览器范围内的候选扩展名称和 ID。先确认哪个扩展向被阻挡的标签页注入了框架，再禁用它；候选列表不能证明原因。
+
+动态表单的 ref 身份核验被拒绝时，返回 `code: "stale_ref"`、`retryable: false`，不会发送输入。重新执行 `snapshot -i`，使用当前弹窗中的 ref，或唯一且稳定的 CSS／语义定位器。保留身份核验，不要改用 DOM 点击绕过真实输入。遇到 `debugger_access_denied` 时，先关闭可见的自动填充菜单或保存登录信息提示条；隐藏标签页不一定能关闭提示条。候选扩展查询失败时仍保留原始访问拒绝错误。

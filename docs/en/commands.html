@@ -1026,6 +1026,7 @@ AGENT_BROWSER_ADAPTIVE_REF=<span class="du-str">"0"</span>        <span class="d
 </p>
 <p>The existing <code>chrome_use_find</code> tool in <code>mcp --tools all</code> accepts <code>within</code> with the same unique-scope rules; tool count is unchanged. <code>text</code> for fill/type is passed literally, including <code>--name --observe</code>, rather than parsed as CLI options.</p>
 <p>Semantic find retains the existing <code>--observe</code> unsupported warning; use one <code>batch</code> containing the scoped find action and a task-specific <code>get text</code> receipt when both are known. The MCP find tool does not advertise an observe field.</p>
+<p>A refused dynamic-form ref now reports <code>code: &amp;quot;stale_ref&amp;quot;</code> with <code>retryable: false</code>. Refresh <code>snapshot -i</code>, then use the current dialog&#x27;s ref or a unique stable CSS/semantic locator; no input is sent by the refusal. Keep verification enabled and do not replace trusted input with a DOM click. For <code>debugger_access_denied</code>, close a visible autofill menu or save-login bar first; hiding a tab may not dismiss a save-login bar. Candidate-extension lookup is best effort and never replaces the original access denial.</p>
 </main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 
