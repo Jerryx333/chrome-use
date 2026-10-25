@@ -2507,7 +2507,9 @@ pub(crate) fn commit_control_warning(
 }
 
 /// Everything `fill` does after the page script ran: the Monaco clipboard
-/// fallback, the trusted contenteditable insert, and the read-back.
+/// fallback, the trusted contenteditable insert, and the read-back. Successful
+/// native contenteditable insertion preserves focus and does not fabricate
+/// change/focusout events or overwrite a value rejected by the editor.
 async fn finish_fill(
     client: &CdpClient,
     session_id: &str,
@@ -2545,22 +2547,21 @@ async fn finish_fill(
 
         match inserted {
             Ok(()) => {
-                // input/beforeinput already fired (trusted). Fire change + focusout
-                // for parity with the plain-input path; don't blur (would collapse
-                // composers that close on blur).
-                let _ = client
-                    .send_command_typed::<_, Value>(
-                        "Runtime.callFunctionOn",
-                        &CallFunctionOnParams {
-                            function_declaration: "function() { try { this.dispatchEvent(new Event('change', { bubbles: true })); this.dispatchEvent(new Event('focusout', { bubbles: true })); } catch (e) {} }".to_string(),
-                            object_id: Some(object_id.clone()),
-                            arguments: None,
-                            return_by_value: Some(true),
-                            await_promise: Some(false),
-                        },
-                        Some(&effective_session_id),
-                    )
-                    .await;
+                // Chrome already delivered the edit's native events. Keep the
+                // composer focused: fabricating focusout both exposed synthetic
+                // input and told the page focus had moved when it had not (#729).
+                // Verify directly rather than entering the generic refocus-reset
+                // retry below: contenteditable did not blur/refocus, and replacing
+                // its DOM on an empty read would bypass the editor's own model.
+                let actual = verify_fill_value(
+                    client,
+                    &effective_session_id,
+                    &object_id,
+                    value,
+                    engine.as_str(),
+                )
+                .await?;
+                return Ok(reformatted_warning(value, &actual, engine.as_str()));
             }
             Err(_) => {
                 // CDP insert unavailable (rare: some Electron webviews). Fall back to
@@ -7341,3 +7342,7 @@ mod rich_text_tests {
         assert!(type_read_back_warning("#民国历史 #世界地图", read).is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "contenteditable_fill_tests.rs"]
+mod contenteditable_fill_tests;

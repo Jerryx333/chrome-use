@@ -3001,6 +3001,10 @@ errors quote both values (`read back "" after writing "千代田区"`); when eve
 non-ASCII character vanished while ASCII survived, the error says the page
 filtered non-Latin input (a Latin-only / masked field), so re-typing the
 same text will not help.
+After successful trusted contenteditable insertion, fill keeps editor focus
+without synthetic change/focusout events. Failed read-back is reported rather
+than overwriting the editor DOM. Use the page's save/commit action when needed.
+
 Ant Design / rc-picker ranges: fill the start bound, then the end bound.
 Each bound uses trusted Tab or the picker's visible confirmation button;
 older date-only pickers commit on blur. The engine is input-date-range and

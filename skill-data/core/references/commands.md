@@ -111,6 +111,8 @@ read `confirmed: null` as success.
 
 ## Interactions (use @refs from snapshot)
 
+After a successful trusted insertion, contenteditable `fill` keeps focus on the editor without synthetic `change` or `focusout` events. If read-back fails, it reports the failure instead of overwriting the editor DOM. Use the page's own save or commit action when needed.
+
 ```bash
 chrome-use click @e1           # Click
 chrome-use click @e1 --new-tab # Click and open in new tab
