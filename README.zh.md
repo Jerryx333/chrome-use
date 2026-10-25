@@ -204,6 +204,8 @@ Codex 走 app-server 协议，Claude Code 走 stream-json，OpenCode 走 ACP，P
 
 `/resume` 可以接着用你在终端里开始的 Claude Code、Codex、OpenCode 或 Pi 会话；新会话也可以在项目文件夹中工作，网站可以记住它的项目。详见[继续终端里的会话](https://chrome-use.leeguoo.com/agent-panel.html#resume)和[项目文件夹](https://chrome-use.leeguoo.com/agent-panel.html#project)。
 
+Chrome 替换已记录的初始网页标签页时，会话会跟随替换后的标签页，不会重复打开。已保存的初始网址和最终网址仍分别保留。
+
 面板历史按 Chrome profile 保存在本机 `~/.chrome-use/agent-panel`。所选 CLI 可能把任务和网页内容发送给它配置的模型服务，该服务的隐私政策适用。侧栏没有新增网页 content script，打开时仍可能改变页面视口。下面的点选改代码只在你按快捷键或按钮时才注入页面。自定义程序需填写绝对路径。
 
 点击任务通知会激活对应会话的标签页，并聚焦该标签页所在的窗口，即使之前使用的是另一个 Chrome 窗口，或当前窗口尚未确定。已绑定的会话标签优先于最后聚焦的窗口。

@@ -216,6 +216,8 @@ In the /resume picker, changing the agent or search clears the previous selectio
 
 Each conversation row offers **Initial page**, **Final page**, and **Delete conversation**. Initial page opens the first recorded HTTP(S) URL; Final page opens the most recently recorded URL, including while a task is running. A matching recorded tab is focused, otherwise the saved URL opens in a new tab. Opening the initial page preserves the final address. Older conversations without an initial address report it as unavailable. The title switches chats; opening a page does not send messages, rerun tasks or restore unsaved input. Addresses stay in local extension storage. Deletion requires confirmation and reports cleanup failures; stop a running reply before deleting.
 
+If Chrome replaces a saved Initial page tab, the conversation follows its replacement instead of opening a duplicate. The saved initial and final addresses remain separate.
+
 Panel history is stored locally under `~/.chrome-use/agent-panel`, scoped to the Chrome profile. The selected CLI may send tasks and page content to its configured model service, whose privacy policy applies. The side panel adds no webpage content script; opening it can change the page viewport. Inspect & Ask (below) injects into a page only when you press its shortcut or button. Custom programs require an absolute path.
 
 Clicking a task notification activates the conversation tab and focuses the window containing that tab, even when another Chrome window was last active or the current window is not yet known. A bound conversation tab takes precedence over the last-window fallback.
