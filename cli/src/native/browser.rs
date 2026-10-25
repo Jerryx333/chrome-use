@@ -13718,6 +13718,8 @@ mod first_tab_custody_tests {
             .push(req["method"].as_str().unwrap_or("").to_string());
         let params = &req["params"];
         Some(match req["method"].as_str().unwrap_or("") {
+            "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"main"}}}),
+            "Page.createIsolatedWorld" => json!({"executionContextId":42}),
             "Target.getTargets" => json!({"targetInfos": c.targets.iter().map(|t| json!({
                 "targetId": t, "type": "page", "title": t, "url": "about:blank",
                 "attached": true, "browserContextId": "C1"})).collect::<Vec<_>>()}),
