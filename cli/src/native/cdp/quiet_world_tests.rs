@@ -263,7 +263,20 @@ async fn navigation_retries_a_world_previously_unavailable_on_the_session() {
         .send_command("Test.refuseWorld", None, Some(&session))
         .await
         .unwrap();
-    assert_eq!(read(&client, &session).await, "about:blank");
+    let error = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(json!({"expression":"location.href"})),
+            Some(&session),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.contains("isolation_unavailable"), "{error}");
+    let stats = client
+        .send_command("Test.stats", None, Some(&session))
+        .await
+        .unwrap();
+    assert_eq!(stats["evaluations"], 0);
     event(&client, &session, "Page.navigate").await;
     assert_eq!(read(&client, &session).await, "current-1");
     drop(client);

@@ -518,6 +518,8 @@ anything already typed into the form, so treat the file as sensitive. The run re
 
 ## Anti-detection
 
+Session-scoped internal DOM reads require an isolated execution context. If creation, recreation or node resolution cannot keep that context, the command returns `isolation_unavailable` rather than retrying in the page world. Wait for navigation to settle and observe again; some same-process frame operations may remain unsupported. User-requested evaluation, site adapters, deliberate editor-model access and explicitly supplied contexts keep their existing semantics. The existing `AGENT_BROWSER_MAIN_WORLD=1` compatibility override disables this default isolation requirement; it is not a stealth-preserving workaround. This policy is independent of the extension cursor setting.
+
 In extension settings, enabling **Stealth mode** or disabling **Agent cursor** removes existing cursor overlays and their page global through current debugger connections. Detached or unreachable tabs show an unconfirmed-cleanup warning in settings; reload affected pages before relying on stealth. Cleanup retries when the agent normally reattaches, without forcing a new connection.
 
 <img src="assets/shield.webp" alt="stealth shield" width="320" align="right" />

@@ -339,8 +339,10 @@ impl CdpClient {
     /// `callFunctionOn` on the objects it hands out) never calls a function
     /// the page could have wrapped. Code that has to see the page's own JS
     /// (the user's `eval`, site adapters, the passkey guard, React tools)
-    /// marks its params `"__cuMain": true`. A node the isolated world cannot
-    /// reach (a same-process frame) falls back to the main world.
+    /// marks its params `"__cuMain": true`. Required isolation failures are
+    /// explicit errors, including nodes outside this frame context. They must
+    /// never be retried without a context. Explicit contexts and the existing
+    /// AGENT_BROWSER_MAIN_WORLD compatibility override remain intentional.
     async fn send_quietly(
         &self,
         method: &str,
@@ -372,7 +374,7 @@ impl CdpClient {
         let ctx = match Box::pin(crate::native::quiet_dom::world(self, session)).await {
             Ok(ctx) => ctx,
             Err(error) if error == crate::native::quiet_dom::WORLD_CHANGED => return Err(error),
-            Err(_) => return self.send_command_untimed(method, Some(p), session_id).await,
+            Err(error) => return Err(Self::isolation_unavailable(method, &error)),
         };
         let mut quiet = p.clone();
         quiet[ctx_key] = Value::from(ctx);
@@ -393,20 +395,24 @@ impl CdpClient {
                                 if method == "DOM.resolveNode"
                                     && crate::native::quiet_dom::other_frame(&e) =>
                             {
-                                self.send_command_untimed(method, Some(p), session_id).await
+                                Err(Self::isolation_unavailable(method, &e))
                             }
                             other => other,
                         }
                     }
                     Err(error) if error == crate::native::quiet_dom::WORLD_CHANGED => Err(error),
-                    Err(_) => self.send_command_untimed(method, Some(p), session_id).await,
+                    Err(error) => Err(Self::isolation_unavailable(method, &error)),
                 }
             }
             Err(e) if method == "DOM.resolveNode" && crate::native::quiet_dom::other_frame(&e) => {
-                self.send_command_untimed(method, Some(p), session_id).await
+                Err(Self::isolation_unavailable(method, &e))
             }
             other => other,
         }
+    }
+
+    fn isolation_unavailable(method: &str, error: &str) -> String {
+        format!("isolation_unavailable: {method} requires an isolated execution context; no main-world fallback was attempted. Observe again after navigation settles, or use a supported frame target. Cause: {error}")
     }
 
     async fn send_command_untimed(
@@ -887,3 +893,7 @@ mod malformed_reply_tests {
 #[cfg(test)]
 #[path = "quiet_world_tests.rs"]
 mod quiet_world_tests;
+
+#[cfg(test)]
+#[path = "isolation_policy_tests.rs"]
+mod isolation_policy_tests;

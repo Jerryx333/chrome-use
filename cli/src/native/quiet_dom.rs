@@ -10,7 +10,9 @@
 //!
 //! One isolated world per tab session and main frame, created on first use
 //! under a name chosen per process, and created again when its context is
-//! gone (a navigation).
+//! gone (a navigation). Session-scoped internal operations refuse unavailable
+//! isolation rather than silently retrying in the main world. Explicit main-world
+//! callers and explicitly supplied contexts retain their intentional semantics.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};

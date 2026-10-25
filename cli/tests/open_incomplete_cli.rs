@@ -178,6 +178,7 @@ impl Fake {
                 };
                 json!({"frameId": "T1", "loaderId": p.nav_loader})
             }
+            "Page.createIsolatedWorld" => json!({"executionContextId":42}),
             "Page.getFrameTree" => json!({"frameTree": {"frame": {
                 "id": "T1", "loaderId": p.frame_loader, "url": p.url,
                 "securityOrigin": "https://slow.test", "mimeType": "text/html"}}}),

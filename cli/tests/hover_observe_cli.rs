@@ -135,6 +135,7 @@ impl Fake {
                 "title": "Menu", "url": "https://menu.test/", "attached": true}}),
             "Browser.getVersion" => json!({"protocolVersion": "1.3", "product": "Chrome/1",
                 "revision": "1", "userAgent": "fake", "jsVersion": "1"}),
+            "Page.createIsolatedWorld" => json!({"executionContextId":42}),
             "Page.getFrameTree" => json!({"frameTree": {"frame": {
                 "id": "T1", "loaderId": "L1", "url": "https://menu.test/",
                 "securityOrigin": "https://menu.test", "mimeType": "text/html"}}}),

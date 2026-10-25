@@ -6957,6 +6957,11 @@ Environment:
   AGENT_BROWSER_JSON             JSON output
   AGENT_BROWSER_ANNOTATE         Annotated screenshot with numbered labels and legend
   AGENT_BROWSER_DEBUG            Debug output
+  AGENT_BROWSER_MAIN_WORLD       Set to 1 to bypass default internal DOM isolation
+                                 (compatibility override, reduces stealth). By default,
+                                 unavailable isolation reports isolation_unavailable;
+                                 wait for navigation and observe again. Some frame
+                                 operations require a supported isolated frame target.
   AGENT_BROWSER_IGNORE_HTTPS_ERRORS Ignore HTTPS certificate errors
   AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore)
   AGENT_BROWSER_AUTO_CONNECT     Auto-discover and connect to running Chrome

@@ -6596,10 +6596,14 @@ mod hidden_page_tests {
                 log.lock()
                     .unwrap()
                     .push((method.clone(), cmd["params"].clone()));
-                let result = if method == "Runtime.evaluate" {
-                    json!({ "result": { "type": "string", "value": state } })
-                } else {
-                    json!({})
+                let result = match method.as_str() {
+                    "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"main"}}}),
+                    "Page.createIsolatedWorld" => json!({"executionContextId":42}),
+                    "Runtime.evaluate" => {
+                        assert_eq!(cmd["params"]["contextId"], 42);
+                        json!({ "result": { "type": "string", "value": state } })
+                    }
+                    _ => json!({}),
                 };
                 let reply =
                     json!({ "id": cmd["id"], "result": result, "sessionId": cmd["sessionId"] });
@@ -6723,6 +6727,8 @@ mod stale_fill_tests {
                 let reply: Result<Value, &str> = {
                     let mut s = state.lock().unwrap();
                     match method {
+                        "Page.getFrameTree" => Ok(json!({"frameTree":{"frame":{"id":"main"}}})),
+                        "Page.createIsolatedWorld" => Ok(json!({"executionContextId":42})),
                         "Runtime.evaluate" if p["returnByValue"] == json!(false) => {
                             s.resolves += 1;
                             Ok(json!({ "result": { "type": "object",
