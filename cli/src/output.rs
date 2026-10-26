@@ -6464,6 +6464,9 @@ Check State:  chrome-use is <what> <selector>
 
 Anti-bot:  chrome-use stealth | cf-status
   stealth         Basic page probes and actual headless state; not a bot verdict
+                  Chrome may expose only the preferred language for privacy.
+                  Locale benchmarks accept native reduced/full matching lists;
+                  wrong locales or page/worker disagreement still fail.
   cf-status       Cloudflare challenge + cf_clearance preflight (skip re-solving)
   Extension settings: enabling stealth or disabling the cursor removes existing
   cursor overlays through current connections. If cleanup is unconfirmed, settings

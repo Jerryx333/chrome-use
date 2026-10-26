@@ -234,6 +234,9 @@ pub async fn apply_stealth(
 }
 
 /// Chrome `--accept-lang` list for a locale: `zh-CN` -> `zh-CN,zh`.
+// This configures Chrome's preferences, not the exact navigator.languages
+// result. Chrome's native language reduction may expose only the first entry
+// in both pages and workers; do not disable it to force the expanded list.
 pub fn accept_lang_list(locale: &str) -> Option<String> {
     let locale = locale.trim();
     if locale.is_empty() {

@@ -391,6 +391,8 @@ saved fullAccess flag.
 
 ## Remote Linux browser acceptance
 
+Chrome may reduce `navigator.languages` to its first preferred language for privacy. With `AGENT_BROWSER_LOCALE=ja-JP`, the stealth benchmark accepts matching page/worker lists of `ja-JP` or `ja-JP,ja`; wrong locales, disagreement and missing results still fail. It does not disable Chrome's language reduction. Native GPU availability and site challenge outcomes must be measured on the actual host; other detector failures still make the benchmark fail.
+
 Run the CLI and browser on the SSH host. Prefer headed Chrome on a real or virtual display (for example Xvfb); the default headed launch preserves native CPU, GPU, screen, UA Client Hints and iframe functions across pages and workers. Keep the CDP port on loopback if attaching over an SSH tunnel. Configure the display and browser executable on that host explicitly.
 
 `AGENT_BROWSER_ALLOW_HEADLESS=1` permits a compatibility fallback, not an undetectable browser. Headless page UA patches cannot conceal Worker or Service Worker fingerprints. `stealth status` includes `headless`, `scope` and `warnings`, and marks a known headless launch as needing attention even when the basic page probes pass. Recheck public detectors on the actual host; cloud-provider IPs, graphics support, fonts and site policies still affect results. Do not infer Cloudflare or real-account acceptance from one detector.

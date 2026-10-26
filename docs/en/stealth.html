@@ -144,6 +144,8 @@ BrowserScan        Webdriver · User-Agent · CDP all clean
 Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
       </div>
 
+      <p>Chrome may reduce <code>navigator.languages</code> to its first preferred language for privacy. With <code>AGENT_BROWSER_LOCALE=ja-JP</code>, the stealth benchmark accepts matching page/worker lists of <code>ja-JP</code> or <code>ja-JP,ja</code>; wrong locales, disagreement and missing results still fail. It does not disable Chrome's language reduction. Native GPU availability and site challenge outcomes must be measured on the actual host; other detector failures still make the benchmark fail.</p>
+
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ About "soft flags"</div>
         When some dashboards read <code>navigator.languages</code> order or IP geolocation, they may raise a soft

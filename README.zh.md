@@ -499,6 +499,8 @@ chrome-use jev run --goal "查苏黎世到伦敦的航班" --url https://www.goo
 
 CreepJS 上的 `0% stealth` 是关键数字：因为连接路径**什么都不打补丁**，根本没有可供说谎检测器抓的 override。（读 `navigator.languages` 顺序或 IP 地理位置的面板可能给个软性的「navigator」/「location」标记。那反映的是*你真实 Chrome* 的语言列表和网络，不是自动化破绽。）
 
+Chrome 可能出于隐私保护仅在 `navigator.languages` 中暴露首选语言。设置 `AGENT_BROWSER_LOCALE=ja-JP` 时，隐身基准接受页面与 Worker 一致的 `ja-JP` 或 `ja-JP,ja`，错误语言、不一致或缺失结果仍会失败，不会禁用 Chrome 的语言精简。原生 GPU 可用性和网站挑战结果必须在实际主机上测量；其他检测失败仍会使基准失败。
+
 有头 `--launch` 默认保留 Chrome 的原生指纹，包括 CPU、GPU、UA Client Hints、屏幕尺寸和 iframe 函数。页面、Web Worker 和 Service Worker 使用同一个真实浏览器的属性。Canvas/音频噪声和 disable-devtool 兼容包装仍需显式开启，开启后可能被检测到。扩展连接路径也保留原生指纹。
 
 没有桌面的 Linux 服务器建议用 Xvfb 等虚拟显示运行有头 Chrome。`AGENT_BROWSER_ALLOW_HEADLESS=1` 仅作为兼容选项：headless 仍可能被识别，Worker 也可能暴露它。`stealth status` 会报告实际启动方式并提示这一限制；基础页面探针通过不代表反爬验收通过。检测结果取决于浏览器、主机、图形支持和网络，不能保证 Cloudflare 放行或账号安全。

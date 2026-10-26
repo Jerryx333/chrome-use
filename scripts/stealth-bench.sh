@@ -115,7 +115,13 @@ run_launch() {
   local out
   cu sbench-locale launch open about:blank >/dev/null
   out=$(ev sbench-locale launch "$WORKER_LANGS")
-  [ "$out" = "same ja-JP,ja" ] && pass "locale applied everywhere" "$out" || fail "locale applied everywhere" "$out"
+  # Chrome's native ReduceAcceptLanguage feature can expose only the first
+  # preference to both page and worker. Do not disable that privacy behavior
+  # to satisfy the benchmark. Both supported native lists must still match.
+  case "$out" in
+    "same ja-JP"|"same ja-JP,ja") pass "locale applied everywhere" "$out" ;;
+    *) fail "locale applied everywhere" "$out" ;;
+  esac
   check_cloudflare sbench-locale launch "cloudflare with locale"
   cu sbench-locale launch close >/dev/null
   unset AGENT_BROWSER_LOCALE
