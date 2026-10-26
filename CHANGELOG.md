@@ -1,8 +1,35 @@
 # Changelog
 
-## 1.5.265
+## 1.5.266
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.87.
+
+### New Features
+
+- **Explicit video covers and local frame selection.** Native video cover adapters can extract a requested local frame with `--cover-mode frame:<seconds>`, `--cover-video` and a new `--cover-output` PNG. FFmpeg is required. Near-black or nearly uniform frames stop for review; outputs are retained and never overwritten. Synced WeChat Channels, Bilibili, Douyin and YouTube adapters verify uploaded previews; Douyin and Bilibili check both crop ratios. Run `chrome-use site update` for the companion adapters (#740, #742, #743).
+- **Bilibili AI candidate review.** The companion `bilibili-creator/cover-ai` adapter explicitly requests one platform generation and returns candidates for screenshot review. Selection requires a reviewed token and explicit index. Generation failure stays distinct from system-recommended frames; no candidate is selected or published automatically. Platform generation success is not guaranteed.
+
+### Bug Fixes
+
+- **Reliable side-panel conversations.** Preserve nested Markdown fences, discard stale resume results and confirmations, retry failed notifications without duplicating acknowledged turns, focus a notification's bound conversation window, and follow replacement initial-page tabs (#722, #723, #725, #726, #727).
+- **Native input and private page reads.** Keep contenteditable events native and verify edits, deliver real double-clicks, clean up cancelled hover probes, keep Monaco clipboard transactions private with bounded cleanup, and refuse implicit main-world fallback for internal reads (#730, #731, #733, #734, #735).
+- **Screenshot annotations outside the page.** Render labels into screenshot pixels with frame geometry and off-viewport handling, without injecting page annotations (#732).
+- **Fresh navigation reads and actionable errors.** Read the current document after cross-site navigation. Stale refs require fresh observations; debugger-frame diagnostics preserve the original failure and identify candidate blocking extensions (#720, #738).
+- **Verified element file uploads.** `file.setOn(element)` shares ordinary upload's relay fallback and attached-file checks. Only explicit native permission refusal triggers fallback; uncertain outcomes are not replayed, and concurrent temporary object groups remain isolated (#742).
+
+### Improvements
+
+- **Cover preflight for bundled publishers.** WeChat Channels and Douyin stop before an implicit cover choice. Unsupported AI/frame options remain explicit on OpenCLI publishers; local-frame support is limited to opted-in native adapters. Existing-work cover updates remain an offline experiment, and Xiaohongshu/TikTok video publishers are not included in this release (#740).
+
+### Contributors
+
+- @leeguooooo
+- @euvoor
+<!-- release:end -->
+
+## 1.5.265
+
 Works with extension ab-connect 0.5.86.
 
 ### New Features
@@ -18,7 +45,6 @@ Works with extension ab-connect 0.5.86.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.264
 
