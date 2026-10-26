@@ -625,9 +625,10 @@
 
       <!-- ============================================================ -->
       <h2>Frames (iframe)</h2>
+      <p>The extension relay attaches to nested out-of-process iframe targets recursively, so snapshots can resolve their contents up to the existing three-level expansion limit. Chrome must allow debugger access to each target. If a frame or ref is missing, inspect <code>frames</code> and take a fresh snapshot; do not guess another target.</p>
       <p>
         iframes are detected automatically during a snapshot, and their contents are inlined beneath the iframe
-        element (one level of nesting). refs inside an iframe can be operated on directly; you can also switch frame
+        element (up to three nested levels). refs inside an iframe can be operated on directly; you can also switch frame
         context for a scoped snapshot.
       </p>
       <div class="du-code">

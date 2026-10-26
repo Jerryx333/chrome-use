@@ -4800,10 +4800,12 @@ Arguments:
   @ref                 An iframe element's ref from `snapshot -i`
   main                 Switch back to main frame
 
-A cross-origin overlay (a bank/branch picker, a payment field) is a separate
-frame: `snapshot -i` on the page will not show what is inside it. List frames
-with `frames`, switch in with `frame <index>`, then `snapshot -i` / `click` /
-`fill` act inside it. `eval --frame <f>` is the one-off form.
+Snapshots inline iframe contents up to three nested levels. The extension relay
+attaches to nested out-of-process frame targets recursively, subject to Chrome's
+debugger access rules. For a scoped view, list `frames`, switch with `frame <index>`,
+then use `snapshot -i` / `click` / `fill`. `eval --frame <f>` is the one-off form.
+If a frame or ref is missing, inspect frames and refresh the snapshot; do not
+substitute another target.
 
 Global Options:
   --json               Output as JSON

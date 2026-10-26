@@ -2472,6 +2472,14 @@ chrome.debugger.onEvent.addListener(
       if (!entry) return;
       if (method === 'Target.attachedToTarget' && params?.sessionId) {
         childSessionToTab.set(String(params.sessionId), tabId);
+        // Auto-attach reaches only immediate related targets. Each OOP frame
+        // must arm its own descendants before nested frames can be routed.
+        if (params.targetInfo?.type === 'iframe') {
+          void trackedDebuggerCommand({ tabId, sessionId: String(params.sessionId) }, 'Target.setAutoAttach', {
+            autoAttach: true, flatten: true, waitForDebuggerOnStart: false,
+            filter: [{ type: 'iframe', exclude: false }],
+          }).catch(() => {});
+        }
       }
       if (method === 'Target.detachedFromTarget' && params?.sessionId) {
         childSessionToTab.delete(String(params.sessionId));
