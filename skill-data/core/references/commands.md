@@ -744,6 +744,8 @@ chrome-use frame main          # Back to main frame
 
 ### Iframe support
 
+The extension relay attaches to nested out-of-process iframe targets recursively, so snapshots can resolve their contents up to the existing three-level expansion limit. Chrome must allow debugger access to each target. If a frame or ref is missing, inspect `frames` and take a fresh snapshot; do not guess another target.
+
 For plain receipt text, `get text` without a selector reads across frames by default. A full snapshot (without `-i`) includes noninteractive static text and inline frame contents; the interactive view may omit ordinary paragraphs.
 
 Iframes are detected automatically during snapshots. When the main-frame snapshot runs, `Iframe` nodes are resolved and their content is inlined beneath the iframe element in the output (up to three nested iframe levels).
