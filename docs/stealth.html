@@ -129,6 +129,8 @@ BrowserScan        Webdriver · User-Agent · CDP 全部干净
 Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
       </div>
 
+      <p>Chrome 可能出于隐私保护仅在 <code>navigator.languages</code> 中暴露首选语言。设置 <code>AGENT_BROWSER_LOCALE=ja-JP</code> 时，隐身基准接受页面与 Worker 一致的 <code>ja-JP</code> 或 <code>ja-JP,ja</code>，错误语言、不一致或缺失结果仍会失败，不会禁用 Chrome 的语言精简。原生 GPU 可用性和网站挑战结果必须在实际主机上测量；其他检测失败仍会使基准失败。</p>
+
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 关于「soft flag」</div>
         某些仪表盘读 <code>navigator.languages</code> 顺序或 IP 地理位置时，可能给一个软性的 <code>navigator</code> /
