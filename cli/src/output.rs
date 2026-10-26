@@ -6167,7 +6167,12 @@ Bundled wechat-channels/publish and douyin/publish default to --cover-mode revie
 no adapter runs until the cover decision is explicit. WeChat --manual true or
 --draft true prepares the form; --cover-mode keep accepts the upstream platform
 choice. Douyin --cover <image> remains supported; upload mode requires it.
-Unsupported AI/frame/dual-cover args are refused. Added sources keep their schema.
+Unsupported OpenCLI AI/frame/dual-cover args are refused. Added sources keep their schema.
+Native adapters opting in with coverFrame metadata accept --cover-mode frame:1.5
+--cover-video ./clip.mp4 --cover-output ./frame.png. FFmpeg extracts locally;
+outputs are retained and never overwritten. Near-black/uniform frames stop for
+review; --allow-dark-cover true explicitly accepts one with a new output path.
+The adapter still verifies uploaded previews. This does not invoke platform AI.
 
 
 OpenCLI sources: `site add` also takes OpenCLI-format adapters (an OpenCLI

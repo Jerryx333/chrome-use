@@ -37,6 +37,7 @@ mod report;
 mod session_title;
 mod silence;
 mod site;
+mod site_cover;
 mod skills;
 mod system_load;
 mod test_runner;

@@ -818,6 +818,8 @@ pub struct Invocation {
 /// Map CLI args onto the adapter: positionals in declaration order, `--key
 /// value`, `--key @file` / `@-` and `--key-file path` (#365), `"type": "file"`
 /// args checked and made absolute (#364), and the runner flags (#366).
+/// Opted-in cover adapters first extract explicit local video frames to a new
+/// review PNG; rejected dark/uniform frames never reach browser execution.
 /// `named` excludes the value-less `--until-done`, which the caller has already
 /// recorded in `until_done`.
 pub fn prepare_invocation(
@@ -858,6 +860,7 @@ pub fn prepare_invocation(
     }
     let mut args = map_args(adapter, &pos, &resolved);
 
+    crate::site_cover::prepare(&adapter.meta, &mut args)?;
     let mut files = serde_json::Map::new();
     if let (Some(decl), Some(obj)) = (
         adapter.meta.get("args").and_then(|a| a.as_object()),

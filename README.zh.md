@@ -602,8 +602,10 @@ Apache-2.0
 
 动态表单的 ref 身份核验被拒绝时，返回 `code: "stale_ref"`、`retryable: false`，不会发送输入。重新执行 `snapshot -i`，使用当前弹窗中的 ref，或唯一且稳定的 CSS／语义定位器。保留身份核验，不要改用 DOM 点击绕过真实输入。遇到 `debugger_access_denied` 时，先关闭可见的自动填充菜单或保存登录信息提示条；隐藏标签页不一定能关闭提示条。候选扩展查询失败时仍保留原始访问拒绝错误。
 
-发布器来源与封面核对：`wechat-channels/publish` 仍由内置 OpenCLI 提供，没有被移除。OpenCLI 1.8.8 还提供小红书图文发布，但不是视频发布；其 TikTok 清单没有上传／发布命令。用 `site info` 查看当前命令及来源。内置视频号、抖音视频发布器现在默认经过 chrome-use 的 `--cover-mode review` 检查，未明确选择封面时不会调用适配器，返回 `code: "cover_selection_required"`、`retryable: false`。视频号可以用 `--manual true` 或 `--draft true` 准备表单而不自动发布；`--cover-mode keep` 明确接受上游平台选出的封面，不承诺保留之前表单里手选的封面。抖音原有的 `--cover <image>` 继续可用，`--cover-mode upload` 必须同时提供图片。不支持的封面参数、AI／指定帧模式会明确拒绝，不再静默忽略。额外添加的 OpenCLI 来源保留自己的参数定义。任意截帧及修改已发布作品封面仍未实现。
+发布器来源与封面核对：`wechat-channels/publish` 仍由内置 OpenCLI 提供，没有被移除。OpenCLI 1.8.8 还提供小红书图文发布，但不是视频发布；其 TikTok 清单没有上传／发布命令。用 `site info` 查看当前命令及来源。内置视频号、抖音视频发布器现在默认经过 chrome-use 的 `--cover-mode review` 检查，未明确选择封面时不会调用适配器，返回 `code: "cover_selection_required"`、`retryable: false`。视频号可以用 `--manual true` 或 `--draft true` 准备表单而不自动发布；`--cover-mode keep` 明确接受上游平台选出的封面，不承诺保留之前表单里手选的封面。抖音原有的 `--cover <image>` 继续可用，`--cover-mode upload` 必须同时提供图片。不支持的封面参数、AI／指定帧模式会明确拒绝，不再静默忽略。额外添加的 OpenCLI 来源保留自己的参数定义。已声明接入的原生适配器支持本地截帧；修改已发布作品封面仍未实现。
 
 适配器的 `file.setOn(element)` 现在与普通 `upload` 共用原生／relay 上传路径。Chrome 明确返回 `Not allowed` 时改走字节流，不添加输入框标记；目标不是文件输入框时先拒绝。其他原生错误返回 `action_outcome_unknown`，不会重放未确认的上传。结果报告实际文件数量，并保留输入框已清空／消费的警告；文件送达后仍须由适配器核对预览或业务状态。
 
 文件对象通过 `elementRelayUpload: true` 声明元素目标可使用 relay 安全上传路径。适配器可在操作前检查该能力，不必猜测 CLI 版本。
+
+声明 `coverFrame` 的原生适配器支持 `--cover-mode frame:1.5 --cover-video ./clip.mp4 --cover-output ./cover-1.5.png`。CLI 在浏览器操作前通过 FFmpeg 截取明确时间点，保留一个新的 PNG，再走适配器原有图片上传与预览核验；不会覆盖文件。找不到对应帧会失败；近黑、近纯色帧返回 `cover_frame_review_required`。先查看已保存图片，再选其他时间，或明确传 `--allow-dark-cover true` 并使用新的输出路径。这只是像素启发式检查，不是质量评价。抖音会用同一帧分别裁剪横、竖封面，上传后仍须核对两张预览及最终选择。本地截帧不触发平台 AI，也不操作平台时间轴。OpenCLI 发布器仍保留原有预检，不因此获得截帧能力；自定义适配器需明确声明接入，已有参数定义保持不变。已有作品改封面仍需单独接入和验收。
