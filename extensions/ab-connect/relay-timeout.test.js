@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { INPUT_COMMAND_TIMEOUT_MS, PAYLOAD_MAX_TIMEOUT_MS, RELAY_COMMAND_TIMEOUT_MS, getRelayTimeoutHistory, isRelayTimeoutError, relayCommandBudgetMs, relayInFlightCount, withRelayTimeout } from './relay-timeout.js'
+import { INPUT_COMMAND_TIMEOUT_MS, SCREENSHOT_COMMAND_TIMEOUT_MS, PAYLOAD_MAX_TIMEOUT_MS, RELAY_COMMAND_TIMEOUT_MS, getRelayTimeoutHistory, isRelayTimeoutError, relayCommandBudgetMs, relayInFlightCount, withRelayTimeout } from './relay-timeout.js'
 import { sendTabCommand } from './tab-command.js'
 
 for (const method of [
@@ -30,6 +30,43 @@ test('ordinary commands keep the flat 8s budget', () => {
   for (const method of ['Runtime.evaluate', 'Page.enable', 'Input.setIgnoreInputEvents']) {
     assert.equal(relayCommandBudgetMs(method, {}), 8000)
   }
+})
+
+test('a slow screenshot completes once after the ordinary deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  assert.equal(SCREENSHOT_COMMAND_TIMEOUT_MS, 25000)
+  assert.equal(relayCommandBudgetMs('Page.captureScreenshot', { format: 'png' }), 25000)
+  assert.ok(SCREENSHOT_COMMAND_TIMEOUT_MS < 30000)
+  let dispatches = 0, recoveries = 0, finished = false
+  const operation = sendTabCommand(7, 'Page.captureScreenshot', {}, undefined, {
+    sendCommand() { dispatches++; return new Promise(resolve => setTimeout(() => resolve({ data: 'png' }), 12000)) },
+    detachTab() { recoveries++ },
+    recoverSessionTab() { recoveries++; return 7 },
+  }).then(value => { finished = true; return value })
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(8000)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(finished, false)
+  t.mock.timers.tick(4000)
+  assert.deepEqual(await operation, { data: 'png' })
+  assert.equal(dispatches, 1)
+  assert.equal(recoveries, 0)
+})
+
+test('a stalled screenshot still fails without replay or recovery', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let dispatches = 0, recoveries = 0
+  const operation = sendTabCommand(7, 'Page.captureScreenshot', {}, undefined, {
+    sendCommand() { dispatches++; return new Promise(() => {}) },
+    detachTab() { recoveries++ },
+    recoverSessionTab() { recoveries++; return 7 },
+  })
+  const rejected = assert.rejects(operation, /relay timeout after 25000ms/)
+  await new Promise(resolve => setImmediate(resolve))
+  t.mock.timers.tick(25000)
+  await rejected
+  assert.equal(dispatches, 1)
+  assert.equal(recoveries, 0)
 })
 
 test('an input timeout is not payload-scaled or replayed', async (t) => {
