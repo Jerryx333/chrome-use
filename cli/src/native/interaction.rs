@@ -2451,8 +2451,9 @@ const ACE_UNSUPPORTED: &str = "fill: this is an Ace code editor, and its editor 
     editor), calling `setValue(<json string>, 1)` on it. Do not call `ace.edit()` on the \
     container: without an existing instance it builds a second editor.";
 
-/// Everything `fill` does after the page script ran: the Monaco clipboard
-/// fallback, the trusted contenteditable insert, and the read-back. Successful
+/// Everything `fill` does after the page script ran: clipboard-free Monaco
+/// model access when discoverable, the verified clipboard fallback, the trusted
+/// contenteditable insert, and the read-back. Successful
 /// native contenteditable insertion preserves focus and does not fabricate
 /// change/focusout events or overwrite a value rejected by the editor.
 async fn finish_fill(
@@ -2465,6 +2466,13 @@ async fn finish_fill(
     let effective_session_id = session_id.to_string();
     let object_id = object_id.to_string();
     if engine.as_str() == "monaco-unsupported" {
+        if super::monaco_model::access(client, session_id, &object_id, Some(value))
+            .await?
+            .is_some()
+        {
+            *engine = "monaco-native".into();
+            return Ok(None);
+        }
         *engine =
             fill_monaco_via_clipboard(client, &effective_session_id, &object_id, value).await?;
         return Ok(None);
@@ -2904,6 +2912,19 @@ async fn fill_monaco_via_clipboard(
     let cleanup = finish_monaco_clipboard(client, session_id, &transaction_id).await;
     combine_monaco_result(operation, cleanup)?;
     Ok("monaco-clipboard".to_string())
+}
+
+/// Prefer a public API recovered from module scopes before using the shared
+/// clipboard. A discovered model's errors never fall through to another edit.
+pub(crate) async fn read_hidden_monaco(
+    client: &CdpClient,
+    session_id: &str,
+    object_id: &str,
+) -> Result<String, String> {
+    if let Some(value) = super::monaco_model::access(client, session_id, object_id, None).await? {
+        return Ok(value);
+    }
+    read_monaco_via_clipboard(client, session_id, object_id).await
 }
 
 pub(crate) async fn read_monaco_via_clipboard(

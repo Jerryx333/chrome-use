@@ -2998,7 +2998,11 @@ Works on rich editors too (issue #41): CodeMirror 5, Monaco, ProseMirror and
 plain contenteditable are detected and set via their own API / input events,
 not a raw `.value` write — and the response echoes which `engine` was used.
 The written value is read back from the control or editor model and compared
-exactly before success is reported. If Monaco hides its model API, fill uses
+exactly before success is reported. When a hidden Monaco module API can be
+matched to the exact editor, fill uses native input and direct model verification
+(engine: monaco-native); get value also reads it without using the clipboard.
+Model changes, focus loss or mismatched readback fail without a clipboard retry.
+When discovery finds no usable API before input, the existing fallback uses
 one trusted editor paste, reads the selected model back through the editor's
 copy handler, and attempts clipboard restoration from an independent Blob backup.
 An empty or unreadable backup is refused before staging; restoration is read back

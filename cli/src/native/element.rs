@@ -4498,12 +4498,8 @@ pub async fn get_element_input_value(
     if !data.get("ok").and_then(Value::as_bool).unwrap_or(false)
         && data.get("engine").and_then(Value::as_str) == Some("monaco")
     {
-        return super::interaction::read_monaco_via_clipboard(
-            client,
-            &effective_session_id,
-            &object_id,
-        )
-        .await;
+        return super::interaction::read_hidden_monaco(client, &effective_session_id, &object_id)
+            .await;
     }
 
     if !data.get("ok").and_then(Value::as_bool).unwrap_or(false) {

@@ -28,6 +28,7 @@ pub mod humanize;
 pub mod inspect_server;
 #[allow(dead_code)]
 pub mod interaction;
+mod monaco_model;
 pub mod login_wall;
 #[allow(dead_code)]
 pub mod network;
