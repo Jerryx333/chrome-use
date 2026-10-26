@@ -202,4 +202,4 @@ assets and visual evidence; they are not a default extra check after a click.
 
 `read --filter` uses literal, ASCII-case-insensitive text matching, not a regex. It prefers matching page headings with their descendants, then matching sections. Use `read --outline` to find a heading. `snapshot --filter` separately accepts a regex. `read --help` lists the reading options.
 
-Annotated screenshots project nested frame rotation, skew, reflection and perspective without adding page DOM. Boxes enclose projected corners; collapsed or unstable transforms and perspective-horizon crossings fail explicitly. See `core/commands` for capture coordinates and cropping.
+Annotated screenshots project nested frame rotation, skew, reflection and perspective without adding page DOM. Viewport measurements include scrollbar space and run in an isolated world. Boxes enclose projected corners; collapsed or unstable transforms and perspective-horizon crossings fail explicitly. See `core/commands` for capture coordinates and cropping.

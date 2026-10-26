@@ -2,6 +2,8 @@
 //! DOM.getBoxModel returns CSS viewport quads for the session's renderer root.
 //! Same-process descendants already include their frame offsets. Out-of-process
 //! frames must be measured in their own session and projected through each owner.
+//! Their full viewport dimensions are read in an isolated world, including
+//! scrollbar space; the page receives no added globals, DOM or listeners.
 use super::{CdpClient, HashMap, Rect, Value};
 use serde_json::json;
 use std::collections::HashSet;
@@ -116,11 +118,10 @@ fn quad_points(value: &Value) -> Result<Vec<f64>, String> {
     Ok(points)
 }
 
-fn owner_projection(quad: &Value, metrics: &Value) -> Result<Projection, String> {
+fn owner_projection(quad: &Value, viewport: &Value) -> Result<Projection, String> {
     let q = quad_points(quad)?;
-    let viewport = &metrics["cssLayoutViewport"];
-    let width = viewport["clientWidth"].as_f64().unwrap_or(0.0);
-    let height = viewport["clientHeight"].as_f64().unwrap_or(0.0);
+    let width = viewport["width"].as_f64().unwrap_or(0.0);
+    let height = viewport["height"].as_f64().unwrap_or(0.0);
     let invalid = "Screenshot: cannot safely project this iframe transform or viewport";
     if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
         return Err(invalid.into());
@@ -350,10 +351,25 @@ impl FrameGeometry {
                         Some(&parent.session),
                     )
                     .await?;
-                let metrics = client
-                    .send_command_no_params("Page.getLayoutMetrics", Some(&session))
+                // The owner's content quad includes the child's scrollbar area.
+                // Page.getLayoutMetrics excludes it, which incorrectly scales
+                // boxes in a scrolling frame. Read the full viewport dimensions
+                // through CdpClient's required isolated world; add no page state.
+                let viewport = client
+                    .send_command(
+                        "Runtime.evaluate",
+                        Some(json!({
+                            "expression": "({width: innerWidth, height: innerHeight})",
+                            "returnByValue": true
+                        })),
+                        Some(&session),
+                    )
                     .await?;
-                let projection = owner_projection(&model["model"]["content"], &metrics)?;
+                if viewport.get("exceptionDetails").is_some() {
+                    return Err("Screenshot: iframe viewport measurement failed".into());
+                }
+                let projection =
+                    owner_projection(&model["model"]["content"], &viewport["result"]["value"])?;
                 projections.insert(session.clone(), parent_projection.compose(projection)?);
                 roots.remove(&session);
             }
@@ -404,7 +420,7 @@ mod tests {
 
     #[test]
     fn maps_rotated_skewed_and_mirrored_owner_interiors() {
-        let metrics = json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}});
+        let metrics = json!({"width":100,"height":100});
         for (quad, expected) in [
             (
                 json!([300, 100, 300, 200, 200, 200, 200, 100]),
@@ -428,7 +444,7 @@ mod tests {
     fn perspective_maps_interior_not_bounding_box_interpolation() {
         let p = owner_projection(
             &json!([100, 100, 300, 100, 260, 180, 140, 180]),
-            &json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}}),
+            &json!({"width":100,"height":100}),
         )
         .unwrap();
         // The image of the center is the intersection of the diagonals,
@@ -442,7 +458,7 @@ mod tests {
 
     #[test]
     fn nested_projection_preserves_corners_before_forming_bounds() {
-        let metrics = json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}});
+        let metrics = json!({"width":100,"height":100});
         let parent =
             owner_projection(&json!([100, 100, 300, 100, 260, 180, 140, 180]), &metrics).unwrap();
         let child = owner_projection(&json!([100, 0, 100, 100, 0, 100, 0, 0]), &metrics).unwrap();
@@ -453,7 +469,7 @@ mod tests {
 
     #[test]
     fn refuses_collapsed_concave_and_horizon_geometry() {
-        let metrics = json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}});
+        let metrics = json!({"width":100,"height":100});
         for quad in [
             json!([0, 0, 100, 0, 100, 0, 0, 0]),
             json!([0, 0, 100, 0, 10, 10, 0, 100]),
@@ -474,7 +490,7 @@ mod tests {
     fn projects_oop_boxes_through_content_border_scroll_and_scale() {
         let p = owner_projection(
             &json!([470, 58, 1350, 58, 1350, 418, 470, 418]),
-            &json!({"cssLayoutViewport":{"clientWidth":440,"clientHeight":180}}),
+            &json!({"width":440,"height":180}),
         )
         .unwrap();
         let rect = p.rect(&json!([8, 8, 92, 8, 92, 29, 8, 29])).unwrap();
@@ -496,7 +512,7 @@ mod tests {
 
     #[test]
     fn refuses_unsupported_frame_geometry() {
-        let metrics = json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}});
+        let metrics = json!({"width":100,"height":100});
         assert!(owner_projection(&json!([0, 0, 100, 100, 100, 0, 0, 100]), &metrics).is_err());
         assert!(owner_projection(&json!([0, 0, 100, 0, 100, 100, 0, 100]), &json!({})).is_err());
         assert!(Projection::IDENTITY.rect(&json!([1, 2])).is_err());
@@ -562,8 +578,17 @@ mod tests {
                     "Page.getFrameTree" if sid == "hidden-session" => {
                         json!({"frameTree":{"frame":{"id":"hidden","parentId":"top"}}})
                     }
-                    "Page.getLayoutMetrics" if sid == "oop" => {
-                        json!({"cssLayoutViewport":{"clientWidth":440,"clientHeight":180}})
+                    "Page.createIsolatedWorld" if sid == "oop" => {
+                        assert_eq!(request["params"]["frameId"], "cross");
+                        json!({"executionContextId":55})
+                    }
+                    "Runtime.evaluate" if sid == "oop" => {
+                        assert_eq!(request["params"]["contextId"], 55);
+                        assert_eq!(
+                            request["params"]["expression"],
+                            "({width: innerWidth, height: innerHeight})"
+                        );
+                        json!({"result":{"value":{"width":440,"height":180}}})
                     }
                     "DOM.getFrameOwner" => {
                         assert_eq!(sid, "main");
@@ -588,7 +613,7 @@ mod tests {
                         }
                     }
                     other => {
-                        panic!("annotation measurement must not evaluate page JavaScript: {other}")
+                        panic!("unexpected annotation measurement command: {other}")
                     }
                 };
                 if ws

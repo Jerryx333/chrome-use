@@ -3903,7 +3903,8 @@ Options:
                        JSON boxes use capture-relative CSS pixels; labels scale
                        to the image resolution. --clip wins over --full/selector.
                        Frame labels support nested rotation, skew, reflection and
-                       perspective. Boxes enclose the projected corners. Collapsed
+                       perspective, including frames with scrollbars. Boxes enclose
+                       the projected corners. Collapsed
                        or unstable transforms, perspective-horizon crossings and
                        unavailable geometry report an error.
                        Crops happen in the CLI; off-viewport crops capture the full

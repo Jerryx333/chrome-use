@@ -6,7 +6,7 @@ use super::*;
 async fn e2e_screenshot_projects_transformed_oop_frames() {
     let leaf = |name: &str| {
         format!(
-        "<!doctype html><style>body{{margin:0}}button{{position:absolute;left:20px;top:30px;width:80px;height:40px;border:0}}</style><button>{name}</button>"
+        "<!doctype html><style>body{{margin:0;width:600px;height:700px}}button{{position:absolute;left:20px;top:30px;width:80px;height:40px;border:0}}</style><button>{name}</button>"
     )
     };
     let (leaf_port, leaf_server) = spawn_html_server(leaf("Specimen")).await;
