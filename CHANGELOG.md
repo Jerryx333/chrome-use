@@ -1,8 +1,26 @@
 # Changelog
 
-## 1.5.266
+## 1.5.267
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.88.
+
+### Bug Fixes
+
+- **`fill` replaces Ace editor content.** On an Ace code editor (e.g. a SQL console), `fill` typed into Ace's hidden input, which appended to the existing text. It now writes through the editor instance on the `.ace_editor` element and reads the value back; an Ace editor whose instance the page does not expose is refused with nothing written (#745).
+- **Password-manager menus on an agent tab in front of your window.** When the agent's own tab was the one in front of your window, a Bitwarden-style inline menu blocked every command until someone pressed Escape. chrome-use now closes it with the same brief tab flip it uses elsewhere, without activating any of your tabs (#750).
+- **Nested out-of-process iframes in snapshots.** The relay now attaches to iframes inside iframes, so snapshots include their content up to the existing three-level limit (#749).
+- **Screenshot annotations across transformed iframes.** Annotated screenshots now place labels correctly inside rotated, skewed, mirrored, perspective and scrolling out-of-process iframes instead of refusing them; collapsed or horizon-crossing geometry is still refused (#752).
+- **Locale benchmark matches Chrome's language reduction.** `stealth-bench` accepts Chrome's native reduced language list (`["ja-JP"]`) as well as the full list when page and worker agree; wrong or mismatched locales still fail (#748).
+
+### Contributors
+
+- @leeguooooo
+- @euvoor
+<!-- release:end -->
+
+## 1.5.266
+
 Works with extension ab-connect 0.5.87.
 
 ### New Features
@@ -26,7 +44,6 @@ Works with extension ab-connect 0.5.87.
 
 - @leeguooooo
 - @euvoor
-<!-- release:end -->
 
 ## 1.5.265
 
