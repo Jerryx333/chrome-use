@@ -106,6 +106,7 @@ fn native_test_fixture_html(name: &str) -> &'static str {
         "hidden_upload_probe" => include_str!("test_fixtures/hidden_upload_probe.html"),
         "iframe_button_probe" => include_str!("test_fixtures/iframe_button_probe.html"),
         "monaco_fill_probe" => include_str!("test_fixtures/monaco_fill_probe.html"),
+        "ace_fill_probe" => include_str!("test_fixtures/ace_fill_probe.html"),
         "ref_reuse_probe" => include_str!("test_fixtures/ref_reuse_probe.html"),
         "enter_submit_probe" => include_str!("test_fixtures/enter_submit_probe.html"),
         "trusted_input_dialog_probe" => {
@@ -2214,6 +2215,97 @@ async fn e2e_select_uses_native_setter_and_framework_events() {
         json!({ "value": "jp", "instanceSetterCalls": 0, "events": ["input", "change"] })
     );
 
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// Issue #745: `fill` on an Ace editor replaces the document through the
+/// editor instance and verifies it, and refuses one whose instance it cannot
+/// reach instead of appending through the hidden textarea.
+#[tokio::test]
+#[ignore]
+async fn e2e_fill_ace_replaces_or_refuses() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let (fixture_port, fixture_server) =
+        spawn_html_server(native_test_fixture_html("ace_fill_probe").to_string()).await;
+    let resp = execute_command(
+        &json!({
+            "id": "2",
+            "action": "navigate",
+            "url": format!("http://127.0.0.1:{fixture_port}/")
+        }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let sql = "SELECT event_name,\n  count(1)\nFROM events\nGROUP BY 1";
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "fill", "selector": "#working-editor textarea", "value": sql }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], "ace");
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "evaluate", "script": "window.__aceProbe['working-editor'].value" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(
+        get_data(&resp)["result"],
+        sql,
+        "Ace fill must replace, not append"
+    );
+
+    // The editor's find box is an ordinary input, not the document.
+    let resp = execute_command(
+        &json!({ "id": "4b", "action": "fill", "selector": "#working-editor .ace_search_field", "value": "needle" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_ne!(get_data(&resp)["engine"], "ace");
+    let resp = execute_command(
+        &json!({ "id": "4c", "action": "evaluate", "script": "[window.__aceProbe['working-editor'].value, document.querySelector('.ace_search_field').value]" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], json!([sql, "needle"]));
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "fill", "selector": "#bare-editor textarea", "value": sql }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "{resp}");
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Ace code editor"),
+        "{resp}"
+    );
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "evaluate", "script": "window.__aceProbe['bare-editor'].value" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], "SELECT old_query FROM drafts");
+
+    fixture_server.abort();
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
 }

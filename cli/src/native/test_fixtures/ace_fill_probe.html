@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Ace fill probe</title>
+</head>
+<body>
+  <!-- Ace's DOM shape: a container holding a hidden textarea.ace_text-input.
+       Text inserted into that textarea is added at the cursor, as in Ace. -->
+  <div id="working-editor" class="ace_editor">
+    <textarea class="ace_text-input" aria-label="Working SQL editor"></textarea>
+    <input class="ace_search_field" aria-label="Find in editor">
+  </div>
+
+  <div id="bare-editor" class="ace_editor">
+    <textarea class="ace_text-input" aria-label="Bare SQL editor"></textarea>
+  </div>
+
+  <script>
+    (() => {
+      const editors = {};
+      for (const id of ['working-editor', 'bare-editor']) {
+        const root = document.getElementById(id);
+        const input = root.querySelector('textarea');
+        const doc = { value: 'SELECT old_query FROM drafts' };
+        editors[id] = doc;
+        // Typed text goes in at the end and the textarea is emptied again,
+        // so a select-all + insert on it appends.
+        input.addEventListener('input', () => {
+          doc.value += input.value;
+          input.value = '';
+        });
+        if (id === 'working-editor') {
+          root.env = {
+            editor: {
+              getValue: () => doc.value,
+              setValue: (value, cursor) => {
+                doc.value = String(value);
+                return cursor;
+              },
+            },
+          };
+        }
+      }
+      window.__aceProbe = editors;
+    })();
+  </script>
+</body>
+</html>

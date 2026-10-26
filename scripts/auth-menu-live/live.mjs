@@ -4,7 +4,9 @@
 // (fakepm/, modelled on Bitwarden 2026.10). Build host only, one browser run
 // per host at a time:
 //   HOST_BIN=<chrome-use> [BASE_BIN=<released chrome-use>] CHROME=<Chrome for Testing> \
-//   EXT_DIR=<ab-connect> [HEADED=1] [FRONT_APP=cft|<app>] node live.mjs
+//   EXT_DIR=<ab-connect> [HEADED=1] [FRONT_APP=cft|<app>] [AGENT_FRONT=1] node live.mjs
+// AGENT_FRONT=1: instead of the login, fill and click on a sign-up form in an
+// agent tab that is in front of the user's window (the user watching, #750).
 // HEADED=1 runs a visible Chrome (on the build host's screen); run windows.swift
 // beside it and screen-check.py afterwards to see what appeared on screen.
 // Chrome for Testing runs headless with its own profile, the unpacked
@@ -47,7 +49,12 @@ const frameServer = await serve((req, res) => { res.setHeader('Content-Type', 't
 const framePort = frameServer.address().port;
 const topServer = await serve((req, res) => {
   res.setHeader('Content-Type', 'text/html');
-  if (req.url.startsWith('/login')) {
+  if (req.url.startsWith('/signup')) {
+    // #750: a plain sign-up form in the top document; the password manager
+    // opens its menu on each focused field.
+    res.end(`<!doctype html><title>Sign up</title><form onsubmit="event.preventDefault(); document.title = 'created:' + handle.value + ':' + email.value">
+<input id="handle" type="text" aria-label="Handle"> <input id="email" type="email" aria-label="Email"> <button id="create">Create</button></form>`);
+  } else if (req.url.startsWith('/login')) {
     res.end(`<!doctype html><title>App Store Connect</title><div id="host"></div><script>
 setTimeout(() => { const f = document.createElement('iframe'); f.src = 'http://idmsa.test.localhost:${framePort}/appleauth/auth/signin'; f.width = 480; f.height = 320; document.getElementById('host').append(f); }, 800);
 addEventListener('message', (e) => { if (e.data && e.data.signedIn) { history.pushState({}, '', '/home'); document.body.innerHTML = '<h1>Apps</h1>'; } });
@@ -83,11 +90,54 @@ try {
     const r = spawnSync(b, args, { env: { ...process.env, HOME: home, CHROME_USE_NO_UPDATE_CHECK: '1', ...env }, encoding: 'utf8', timeout: 120000 });
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
   };
+  // AGENT_FRONT=1 (#750): the agent tab in front of the user's window, fill
+  // and click on a sign-up form while the menu keeps opening on each field.
+  const frontSignup = async (b, session) => {
+    await inPm(`resetEvents().then(() => true)`);
+    const opened = cli(b, ['--session', session, '--json', 'open', `${origin}/signup`, '--wait-until', 'none']);
+    await waitFor(() => cli(b, ['--session', session, 'eval', 'document.readyState']).stdout.includes('complete'), { timeout: 20000, label: 'sign-up page loaded' });
+    const agentTab = await inExt(`chrome.tabs.query({}).then((ts) => ts.find((t) => (t.url || t.pendingUrl || '').startsWith(${JSON.stringify(origin)})))`);
+    await inExt(`chrome.tabs.update(${agentTab.id}, { active: true }).then(() => true)`);
+    await sleep(500);
+    await inPm(`resetEvents().then(() => true)`);
+    const step = (args) => {
+      const r = cli(b, ['--session', session, '--json', ...args]);
+      let json = null;
+      try { json = JSON.parse(r.stdout.trim().split('\n').pop()); } catch {}
+      return { args, code: r.code, json, stderr: r.stderr.slice(-800) };
+    };
+    const steps = [
+      step(['fill', '#handle', 'leo-agent']),
+      step(['fill', '#email', 'agent@example.com']),
+      step(['click', '#create']),
+    ];
+    await sleep(500);
+    const title = step(['eval', 'document.title']);
+    const events = (await inPm(`readEvents()`)).events || [];
+    const front = await inExt(`chrome.tabs.query({ active: true, windowId: ${user.window} }).then(([t]) => t && t.id)`);
+    const run = { label: 'front', open: opened.code, agentTab: { id: agentTab.id, window: agentTab.windowId }, steps, title, events, front };
+    evidence.runs.push(run);
+    save();
+    for (const s of steps) console.log(`[front] ${s.args.join(' ')}: ${JSON.stringify(s.json).slice(0, 400)}`);
+    check(agentTab.windowId === user.window, 'the agent tab is in the user\'s window');
+    check(events.some((e) => e.kind === 'open'), 'the password manager opened its menu on a field');
+    check(events.some((e) => e.kind === 'close'), 'the menu was closed without the user');
+    check(steps.every((s) => s.json?.success === true), `fill, fill and click succeeded (${steps.map((s) => s.json?.error || 'ok').join(' | ').slice(0, 600)})`);
+    check(String(title.json?.data?.result || '') === 'created:leo-agent:agent@example.com', `the form got both values (${JSON.stringify(title.json?.data)})`);
+    check(front === agentTab.id, 'the agent tab is in front of the user\'s window again');
+    check(!events.some((e) => e.kind === 'activated' && e.tab === user.tab), 'the user\'s own tab was never activated');
+    cli(b, ['--session', session, 'close']);
+  };
   const runs = [['new', process.env.HOST_BIN]];
   if (process.env.BASE_BIN) runs.unshift(['base', process.env.BASE_BIN]);
   for (const [label, b] of runs) {
     const session = `aml-${label}`;
     const run0 = {};
+    if (process.env.AGENT_FRONT) {
+      if (label !== 'new') continue;
+      await frontSignup(b, session);
+      continue;
+    }
     await inPm(`resetEvents().then(() => true)`);
     const version = cli(b, ['--version']).stdout.trim();
     // `--wait-until none`: in this headless rig a relay `open` that waits for

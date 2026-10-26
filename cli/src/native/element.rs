@@ -283,6 +283,16 @@ const READ_EDITABLE_VALUE_TEMPLATE: &str = r#"function() {
         return { ok: true, engine: 'codemirror5', value: cm5.CodeMirror.getValue() };
     }
 
+    const aceRoot = el.classList && (el.classList.contains('ace_text-input')
+        || el.classList.contains('ace_editor')) ? el.closest('.ace_editor') : null;
+    if (aceRoot) {
+        const ace = aceRoot.env && aceRoot.env.editor;
+        if (ace && ace.getValue) {
+            return { ok: true, engine: 'ace', value: ace.getValue() };
+        }
+        return { ok: false, engine: 'ace', error: 'Ace editor instance is not accessible for this editor' };
+    }
+
     const editable = node => node && (
         node.tagName === 'INPUT'
         || node.tagName === 'TEXTAREA'

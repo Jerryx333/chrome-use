@@ -1768,8 +1768,9 @@ pub async fn fill_reporting(
 }
 
 /// Elements are resolved in the isolated world (`quiet_dom`), where the
-/// page's own JS is out of reach. Monaco and CodeMirror keep their model in
-/// page JS (`window.monaco`, the `CodeMirror` instance), so `fill` has to
+/// page's own JS is out of reach. Monaco, CodeMirror and Ace keep their model
+/// in page JS (`window.monaco`, the `CodeMirror` instance, Ace's `env.editor`
+/// on its container), so `fill` has to
 /// reach them from the main world: the same element's main-world handle, or
 /// None to keep the one we have.
 pub(crate) async fn rich_editor_main_twin(
@@ -1782,7 +1783,7 @@ pub(crate) async fn rich_editor_main_twin(
             "Runtime.callFunctionOn",
             Some(json!({
                 "objectId": object_id,
-                "functionDeclaration": "function () { const s = '.monaco-editor, .CodeMirror, .cm-editor'; return !!((this.closest && this.closest(s)) || (this.querySelector && this.querySelector(s))); }",
+                "functionDeclaration": "function () { const s = '.monaco-editor, .CodeMirror, .cm-editor, .ace_editor'; return !!((this.closest && this.closest(s)) || (this.querySelector && this.querySelector(s))); }",
                 "returnByValue": true,
             })),
             Some(session_id),
@@ -2256,6 +2257,21 @@ fn fill_function(value: &str, allow_trusted: bool) -> String {
             const cm5 = el.closest && el.closest('.CodeMirror');
             if (cm5 && cm5.CodeMirror) {{ cm5.CodeMirror.setValue(v); return 'codemirror5'; }}
 
+            // Ace: its hidden textarea.ace_text-input is an input transport;
+            // text inserted there is added at the cursor, never replacing the
+            // document (#745). `ace.edit()` leaves the editor on its container
+            // as `env.editor`. Without it there is no model to write, and
+            // `ace.edit(container)` would build a second editor, so refuse.
+            // Only Ace's own input or container: a find/replace box inside
+            // the editor is an ordinary input.
+            const aceRoot = el.classList && (el.classList.contains('ace_text-input')
+                || el.classList.contains('ace_editor')) ? el.closest('.ace_editor') : null;
+            if (aceRoot) {{
+                const ace = aceRoot.env && aceRoot.env.editor;
+                if (ace && ace.setValue && ace.getValue) {{ ace.setValue(v, 1); return 'ace'; }}
+                return 'ace-unsupported';
+            }}
+
             if (tag === 'SELECT') {{ el.value = v; fire('input'); fire('change'); return 'select'; }}
 
             if (el.isContentEditable) {{
@@ -2425,6 +2441,16 @@ pub(crate) fn commit_control_warning(
     ))
 }
 
+/// `fill` on an Ace editor whose instance the page did not leave on its
+/// container. Typing into its textarea would add to the document, not replace
+/// it (#745), so nothing is written.
+const ACE_UNSUPPORTED: &str = "fill: this is an Ace code editor, and its editor instance \
+    is not reachable from the page (no `env.editor` on the .ace_editor element), so nothing \
+    was written: typing into it would add to the existing text instead of replacing it. Set \
+    it with `eval` through an editor object the page already holds (its own variable for that \
+    editor), calling `setValue(<json string>, 1)` on it. Do not call `ace.edit()` on the \
+    container: without an existing instance it builds a second editor.";
+
 /// Everything `fill` does after the page script ran: the Monaco clipboard
 /// fallback, the trusted contenteditable insert, and the read-back. Successful
 /// native contenteditable insertion preserves focus and does not fabricate
@@ -2442,6 +2468,9 @@ async fn finish_fill(
         *engine =
             fill_monaco_via_clipboard(client, &effective_session_id, &object_id, value).await?;
         return Ok(None);
+    }
+    if engine.as_str() == "ace-unsupported" {
+        return Err(ACE_UNSUPPORTED.to_string());
     }
 
     // Contenteditable rich editors (DraftJS / Lexical / ProseMirror): the JS above
@@ -2537,6 +2566,11 @@ async fn finish_fill(
     {
         Ok(actual) => Ok(reformatted_warning(value, &actual, engine.as_str())),
         Err(first) => {
+            // The re-apply writes the DOM directly, which would bypass (and
+            // break) an Ace editor's model.
+            if engine.as_str() == "ace" {
+                return Err(first);
+            }
             if !value.is_empty() && first.contains("read back an empty value") {
                 let reapplied = reapply_value_without_focus_change(
                     client,

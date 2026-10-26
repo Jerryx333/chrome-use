@@ -7133,19 +7133,21 @@ impl BrowserManager {
                 "its window is minimized, so switching tabs in it hides nothing".to_string(),
             );
         }
-        // The flip below inserts a blank tab next to the user's front tab and
-        // switches tabs in this window. That is only acceptable in a window that
-        // holds nothing but agent tabs (the background agent window). In a
-        // window with the user's own tabs it would grab their tab, even for
-        // 150ms, so leave it to the user.
-        if self.window_holds_user_tabs(window_id).await {
-            // In the background of the user's window (where agent tabs live
-            // since 1.5.236), the menu can be closed without touching that
-            // window: see `close_menu_from_agent_window`. A tab in front of
-            // it is the one the user is looking at; that stays theirs.
-            if in_front {
-                return Err(USER_WINDOW_MENU.to_string());
-            }
+        // The flip below switches tabs in this window. For a tab in the
+        // background that means showing it next to the front tab, which in a
+        // window with the user's own tabs would grab their tab, even for
+        // 150ms. There (where agent tabs live since 1.5.236) the menu is
+        // closed without touching that window: see
+        // `close_menu_from_agent_window`.
+        //
+        // A tab in front is this session's own tab (checked above), so the
+        // flip only puts a blank tab right of it for a moment and switches
+        // back: none of the user's tabs is activated, and the user's window
+        // keeps the focus. Bitwarden does not close the menu of the tab in
+        // front of the focused window on another window's tab switch, so
+        // this is the only way it closes without the user pressing Escape
+        // (#750).
+        if !in_front && self.window_holds_user_tabs(window_id).await {
             return self.close_menu_from_agent_window(window_id).await;
         }
         let front = self
@@ -7165,6 +7167,15 @@ impl BrowserManager {
             .and_then(Value::as_i64)
             .ok_or("no front tab id")?;
         let front_index = front.get("index").and_then(Value::as_i64).unwrap_or(0);
+        // The user picked another tab since the tab was inspected: it is not
+        // in front any more, and the flip would take their choice away.
+        if in_front && front_tab != chrome_tab {
+            return Err(
+                "the user switched to another tab in that window just now, so chrome-use \
+                 left the tabs alone"
+                    .to_string(),
+            );
+        }
         // Activating a tab expands its collapsed group; put that back after.
         let collapsed_group =
             match live_group(&self.chrome_call("tabs", "get", json!([chrome_tab])).await) {
@@ -7515,6 +7526,25 @@ impl BrowserManager {
             // The value typed so far stays.
             if let Some(session) = blur_session {
                 remembered = self.blur_focused_field(session, remember_focus).await;
+            }
+            // Back to the pinned tab only if the blank tab is still the one in
+            // front: a tab the user picked meanwhile stays in front.
+            let now = self
+                .chrome_call(
+                    "tabs",
+                    "query",
+                    json!([{ "active": true, "windowId": window_id }]),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.as_array().and_then(|t| t.first()).cloned())
+                .and_then(|t| t.get("id").and_then(Value::as_i64));
+            if now.is_some() && now != Some(temp_tab) {
+                return Err(
+                    "the user switched to another tab while chrome-use was closing the menu; \
+                     that tab stays in front"
+                        .to_string(),
+                );
             }
             self.chrome_call("tabs", "update", activate(chrome_tab))
                 .await?;
