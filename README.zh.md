@@ -252,6 +252,10 @@ AI 标签默认开在你正在用的窗口里，以后台标签打开、不抢�
 
 自动化开始前，你的 Chrome profile 里必须已经开着一个窗口：没有窗口时它会停下并报 `profile not open`（错误码 `profile_not_open`），先在那个 profile 里打开一个窗口再重跑。如果它判断不了有没有窗口，会报 `profile window unavailable`（错误码 `profile_window_unavailable`），判断不了就什么都不创建。第一个标签页清理相关的错误码见[故障排查](https://chrome-use.leeguoo.com/troubleshooting.html)。
 
+中继超时仅表示命令未在期限内完成。标签元数据无法证明 JavaScript 阻塞或命令通道正常。
+截图仍在等待时，JavaScript 也可能正常回答。保留标签，检查 `status` 和 `tab inspect <ref>`，
+避免重叠重试截图，并在重复执行操作前确认它是否已经生效。探针失败时也应先查看原因，不要直接认定标签已关闭。
+
 ### 多 profile 的 Chrome：读 ChooseBrowser 的规则
 
 同时开着工作号、个人号、客户号的人，心里本来就清楚「哪个站点用哪个账号」，只是每次都要用 `--browser` 再告诉我们一遍。[ChooseBrowser](https://choosebrowser.leeguoo.com) 是一个 macOS 链接路由工具，它把这份映射存了下来。装了它之后，`chrome-use open <url>` 在你没显式指定 `--browser` 时会按你自己写的规则选 profile，并且会说明来源：

@@ -264,6 +264,12 @@ All AI sessions in a Chrome profile share one background agent window, with one 
 
 Your Chrome profile must already have a window open before automation: with no window it stops with `profile not open` (code `profile_not_open`), so open a window in that profile first and rerun. If it cannot tell whether a window is open, it stops with `profile window unavailable` (code `profile_window_unavailable`); unknown means nothing is created. See [Troubleshooting](https://chrome-use.leeguoo.com/en/troubleshooting.html) for the first-tab cleanup codes.
 
+A relay timeout means a command missed its deadline. Tab metadata cannot prove
+blocked JavaScript or a healthy command channel; screenshots can remain pending
+while JavaScript answers. Preserve the tab, inspect `status` and `tab inspect <ref>`,
+avoid overlapping capture retries, and verify an action's effect before repeating
+it. If the probe also fails, inspect its reason before treating the tab as closed.
+
 ### Multi-profile Chrome: ChooseBrowser rules
 
 If you keep several Chrome profiles (work, personal, a client's), you already know which account each site belongs to, and you tell us with `--browser` every time. [ChooseBrowser](https://choosebrowser.leeguoo.com) is a macOS link router that stores that mapping. When it is installed, `chrome-use open <url>` without an explicit `--browser` follows the rule you already wrote for that site, and says so:

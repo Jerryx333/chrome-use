@@ -2707,13 +2707,13 @@ where
 /// timed out (#661).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabProbe {
-    /// Chrome still has the tab and answers for it; its page did not.
+    /// Chrome returned tab metadata, which does not diagnose a CDP timeout.
     Alive {
         status: Option<String>,
         discarded: bool,
         frozen: bool,
     },
-    /// Nothing answered for the tab: the connection to it is gone.
+    /// The tab probe failed; the reason may identify a closed tab or an unavailable probe.
     Unreachable(String),
 }
 
@@ -2731,9 +2731,8 @@ pub(crate) fn is_relay_timeout(error: &str) -> bool {
         && !error.contains("budget already scaled with the payload")
 }
 
-/// Rewrite a relay timeout with what the probe found: a busy page (wait and
-/// retry, do not restart anything) or a lost connection (a fresh tab or
-/// session is the way out).
+/// Report the browser-level probe without inferring a renderer or compositor
+/// cause. Native screenshot capture can time out while page JavaScript answers.
 pub(crate) fn diagnose_relay_timeout(error: &str, probe: &TabProbe) -> String {
     let error = error.replace(RELAY_TIMEOUT_RESTART_ADVICE, "");
     match probe {
@@ -2742,35 +2741,26 @@ pub(crate) fn diagnose_relay_timeout(error: &str, probe: &TabProbe) -> String {
             discarded,
             frozen,
         } => {
-            let why = if *discarded || *frozen {
-                "Chrome has discarded or frozen the tab to save resources; it wakes up when \
-                 it is shown again (`tab select <ref>`), or reload it"
-                    .to_string()
-            } else if status.as_deref() == Some("loading") {
-                "the page is still loading: its network is held open (a slow or stalled \
-                 server) or a script is blocking the main thread"
-                    .to_string()
-            } else {
-                "page JavaScript is blocking the main thread (a long-running script, or a \
-                 tight loop)"
-                    .to_string()
-            };
             format!(
-                "{error}\n{RELAY_TIMEOUT_DIAGNOSIS} the tab is alive — Chrome still answers for \
-                 it (status: {}) — but its page did not answer in time: {why}. The connection \
-                 is fine: do NOT restart the session or re-adopt the tab, that does not help. \
-                 Wait a few seconds and run the same command again; reads (snapshot, get, \
-                 screenshot, eval of a read) are safe to retry, but a command that changes \
-                 the page may already have run. If the page stays stuck for a minute or more, \
-                 reload it (`reload`), or close the tab and `open` the url in a fresh one.",
+                "{error}\n{RELAY_TIMEOUT_DIAGNOSIS} Chrome still reports this tab \
+                 (status: {}, discarded: {discarded}, frozen: {frozen}), but the CDP command \
+                 did not finish before its deadline. Tab metadata does not establish the \
+                 cause or prove that the command channel is healthy. In particular, a \
+                 screenshot can remain pending while page JavaScript still answers. \
+                 Preserve the tab and inspect `status` and `tab inspect <ref>` before \
+                 deciding how to recover; do not restart, re-adopt or reload solely on \
+                 this timeout. The original command may still be running: avoid overlapping \
+                 capture retries, and inspect the page before repeating an action that \
+                 may already have changed it.",
                 status.as_deref().unwrap_or("unknown")
             )
         }
         TabProbe::Unreachable(reason) => format!(
-            "{error}\n{RELAY_TIMEOUT_DIAGNOSIS} the session's connection to this tab is gone — \
-             not even the extension could answer for it ({reason}). Waiting or retrying will \
-             not help: open the page in a fresh tab (`open <url>`, `tab new <url>`) or start a \
-             new session, then `snapshot` again."
+            "{error}\n{RELAY_TIMEOUT_DIAGNOSIS} the tab probe also failed ({reason}); \
+             tab and connection state are unconfirmed. Inspect `status` and `tab list` \
+             before deciding how to recover. If the tab was closed, open a fresh tab or \
+             session and run `snapshot` again. A timed-out action may already have run; \
+             do not replay it without checking its effect."
         ),
     }
 }
@@ -13371,8 +13361,8 @@ mod tests {
             },
         );
         assert!(!busy.contains("restart the session and retry"), "{busy}");
-        assert!(busy.contains("blocking the main thread"), "{busy}");
-        assert!(busy.contains("do NOT restart"), "{busy}");
+        assert!(busy.contains("does not establish the cause"), "{busy}");
+        assert!(busy.contains("do not restart"), "{busy}");
         assert!(busy.contains("in-flight=1"), "diagnostics kept: {busy}");
         let loading = diagnose_relay_timeout(
             raw,
@@ -13382,16 +13372,41 @@ mod tests {
                 frozen: false,
             },
         );
-        assert!(loading.contains("still loading"), "{loading}");
+        assert!(loading.contains("status: loading"), "{loading}");
         let dead = diagnose_relay_timeout(
             raw,
             &TabProbe::Unreachable("inspectTab: Chrome tab 7 no longer exists".into()),
         );
-        assert!(dead.contains("connection to this tab is gone"), "{dead}");
+        assert!(dead.contains("Chrome tab 7 no longer exists"), "{dead}");
+        assert!(dead.contains("state are unconfirmed"), "{dead}");
         assert!(dead.contains("fresh tab"), "{dead}");
         // The generic hint is not stacked on a diagnosed timeout.
         assert_eq!(to_ai_friendly_error(&busy), busy);
         assert_eq!(to_ai_friendly_error(&dead), dead);
+    }
+
+    #[test]
+    fn capture_timeout_metadata_does_not_invent_a_cause_or_replay() {
+        let raw =
+            "CDP error (Page.captureScreenshot): relay timeout after 8000ms [diag in-flight=1]";
+        for status in [None, Some("complete"), Some("loading")] {
+            for (discarded, frozen) in [(false, false), (true, false), (false, true)] {
+                let message = diagnose_relay_timeout(
+                    raw,
+                    &TabProbe::Alive {
+                        status: status.map(str::to_owned),
+                        discarded,
+                        frozen,
+                    },
+                );
+                assert!(message.starts_with(raw));
+                assert!(message.contains(&format!("discarded: {discarded}, frozen: {frozen}")));
+                assert!(message.contains("avoid overlapping capture retries"));
+                assert!(!message.contains("JavaScript is blocking"));
+                assert!(!message.contains("connection is fine"));
+                assert!(!message.contains("network is held open"));
+            }
+        }
     }
 
     #[test]

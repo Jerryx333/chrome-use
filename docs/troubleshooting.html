@@ -250,7 +250,11 @@
         <div class="du-callout-title">说明</div>
         如果 <code>tab list</code> 仍列得出白屏或卡死标签，先用 <code>tab select</code> 或
         <code>tab adopt</code> 保留现场，再用 <code>tab inspect</code> 读取浏览器级状态。
-        <code>relay timeout</code> 表示 renderer/debugger 没有及时回答，不代表标签已经消失。
+        <code>relay timeout</code> 表示 CDP 命令未在期限内完成。标签元数据无法确定原因，
+        不能证明 JavaScript 阻塞，也不能证明命令通道正常。截图仍在等待时，JavaScript 也可能正常回答。
+        保留标签，检查 <code>status</code> 和 <code>tab inspect</code>，避免重叠重试截图，
+        重复执行操作前先确认它是否已经生效。标签探针失败也只表示状态未确认；先查看失败原因，
+        不要仅凭探针超时就认定标签已关闭。
         同样，<code>tab select</code> 的存活探针失败也不能单独证明 renderer 已无响应。
         <code>tab select</code> 与 <code>tab adopt</code> 有三种结果：
         <code>verified: confirmed</code>（探针从新标签页回答了，可以放心驱动）、明确失败（目标已失效或已关闭），

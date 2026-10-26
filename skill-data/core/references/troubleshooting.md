@@ -60,8 +60,14 @@ If the tab is still present but the page is white or frozen, do not reopen it
 and destroy the diagnostic state. Select it only when `tab list` marks it
 `created` or `adopted`; otherwise inspect its browser metadata directly with
 `tab inspect <targetId>`, and use `tab adopt <url-substring|targetId>` before
-selecting or driving it. A relay timeout means the renderer did not answer; it
-does not mean the tab disappeared.
+selecting or driving it. A relay timeout means a CDP command did not finish
+before its deadline. Tab metadata cannot establish the cause, prove blocked
+JavaScript, or prove that the command channel is healthy. A screenshot can
+remain pending while JavaScript answers. Preserve the tab and inspect `status`
+and `tab inspect <ref>` before deciding how to recover. Avoid overlapping
+capture retries; verify an action's effect before repeating it. A failed tab
+probe also leaves tab and connection state unconfirmed; its reason may identify
+a closed tab, but a probe timeout alone does not.
 
 For an explicit `open`/`navigate`, ab-connect 0.5.18 and newer recover a
 renderer-scoped `Page.navigate` timeout through Chrome's browser-level tab API.

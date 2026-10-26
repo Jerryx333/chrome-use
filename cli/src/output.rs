@@ -4739,6 +4739,11 @@ fails, the error retains the target ID: recover that same tab with
 `tab new` or replay a click whose outcome is unknown. Keep the same session
 and connection endpoint when recovering.
 
+After a relay timeout, tab metadata does not prove that JavaScript is blocked
+or that the command channel is healthy. Inspect status and tab inspect <ref>.
+The original command may still be running; avoid overlapping capture retries
+and verify an action's effect before repeating it.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
