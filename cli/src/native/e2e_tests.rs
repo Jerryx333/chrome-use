@@ -2268,6 +2268,22 @@ async fn e2e_fill_ace_replaces_or_refuses() {
         "Ace fill must replace, not append"
     );
 
+    // The editor's find box is an ordinary input, not the document.
+    let resp = execute_command(
+        &json!({ "id": "4b", "action": "fill", "selector": "#working-editor .ace_search_field", "value": "needle" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_ne!(get_data(&resp)["engine"], "ace");
+    let resp = execute_command(
+        &json!({ "id": "4c", "action": "evaluate", "script": "[window.__aceProbe['working-editor'].value, document.querySelector('.ace_search_field').value]" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["result"], json!([sql, "needle"]));
+
     let resp = execute_command(
         &json!({ "id": "5", "action": "fill", "selector": "#bare-editor textarea", "value": sql }),
         &mut state,

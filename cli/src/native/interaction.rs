@@ -2262,8 +2262,10 @@ fn fill_function(value: &str, allow_trusted: bool) -> String {
             // document (#745). `ace.edit()` leaves the editor on its container
             // as `env.editor`. Without it there is no model to write, and
             // `ace.edit(container)` would build a second editor, so refuse.
-            const aceRoot = (el.closest && el.closest('.ace_editor'))
-                || (el.querySelector && el.querySelector('.ace_editor'));
+            // Only Ace's own input or container: a find/replace box inside
+            // the editor is an ordinary input.
+            const aceRoot = el.classList && (el.classList.contains('ace_text-input')
+                || el.classList.contains('ace_editor')) ? el.closest('.ace_editor') : null;
             if (aceRoot) {{
                 const ace = aceRoot.env && aceRoot.env.editor;
                 if (ace && ace.setValue && ace.getValue) {{ ace.setValue(v, 1); return 'ace'; }}
@@ -2445,9 +2447,9 @@ pub(crate) fn commit_control_warning(
 const ACE_UNSUPPORTED: &str = "fill: this is an Ace code editor, and its editor instance \
     is not reachable from the page (no `env.editor` on the .ace_editor element), so nothing \
     was written: typing into it would add to the existing text instead of replacing it. Set \
-    it through the page's own handle with `eval`, e.g. \
-    `ace.edit(document.querySelector('.ace_editor')).setValue(<json string>, 1)` when the page \
-    exposes `ace`.";
+    it with `eval` through an editor object the page already holds (its own variable for that \
+    editor), calling `setValue(<json string>, 1)` on it. Do not call `ace.edit()` on the \
+    container: without an existing instance it builds a second editor.";
 
 /// Everything `fill` does after the page script ran: the Monaco clipboard
 /// fallback, the trusted contenteditable insert, and the read-back. Successful
@@ -2564,6 +2566,11 @@ async fn finish_fill(
     {
         Ok(actual) => Ok(reformatted_warning(value, &actual, engine.as_str())),
         Err(first) => {
+            // The re-apply writes the DOM directly, which would bypass (and
+            // break) an Ace editor's model.
+            if engine.as_str() == "ace" {
+                return Err(first);
+            }
             if !value.is_empty() && first.contains("read back an empty value") {
                 let reapplied = reapply_value_without_focus_change(
                     client,

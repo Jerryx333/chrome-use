@@ -7167,6 +7167,15 @@ impl BrowserManager {
             .and_then(Value::as_i64)
             .ok_or("no front tab id")?;
         let front_index = front.get("index").and_then(Value::as_i64).unwrap_or(0);
+        // The user picked another tab since the tab was inspected: it is not
+        // in front any more, and the flip would take their choice away.
+        if in_front && front_tab != chrome_tab {
+            return Err(
+                "the user switched to another tab in that window just now, so chrome-use \
+                 left the tabs alone"
+                    .to_string(),
+            );
+        }
         // Activating a tab expands its collapsed group; put that back after.
         let collapsed_group =
             match live_group(&self.chrome_call("tabs", "get", json!([chrome_tab])).await) {
@@ -7517,6 +7526,25 @@ impl BrowserManager {
             // The value typed so far stays.
             if let Some(session) = blur_session {
                 remembered = self.blur_focused_field(session, remember_focus).await;
+            }
+            // Back to the pinned tab only if the blank tab is still the one in
+            // front: a tab the user picked meanwhile stays in front.
+            let now = self
+                .chrome_call(
+                    "tabs",
+                    "query",
+                    json!([{ "active": true, "windowId": window_id }]),
+                )
+                .await
+                .ok()
+                .and_then(|v| v.as_array().and_then(|t| t.first()).cloned())
+                .and_then(|t| t.get("id").and_then(Value::as_i64));
+            if now.is_some() && now != Some(temp_tab) {
+                return Err(
+                    "the user switched to another tab while chrome-use was closing the menu; \
+                     that tab stays in front"
+                        .to_string(),
+                );
             }
             self.chrome_call("tabs", "update", activate(chrome_tab))
                 .await?;

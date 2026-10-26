@@ -283,8 +283,8 @@ const READ_EDITABLE_VALUE_TEMPLATE: &str = r#"function() {
         return { ok: true, engine: 'codemirror5', value: cm5.CodeMirror.getValue() };
     }
 
-    const aceRoot = (el.closest && el.closest('.ace_editor'))
-        || (el.querySelector && el.querySelector('.ace_editor'));
+    const aceRoot = el.classList && (el.classList.contains('ace_text-input')
+        || el.classList.contains('ace_editor')) ? el.closest('.ace_editor') : null;
     if (aceRoot) {
         const ace = aceRoot.env && aceRoot.env.editor;
         if (ace && ace.getValue) {
