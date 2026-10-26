@@ -7,7 +7,7 @@ Works with extension ab-connect 0.5.87.
 
 ### New Features
 
-- **Explicit video covers and local frame selection.** Native video cover adapters can extract a requested local frame with `--cover-mode frame:<seconds>`, `--cover-video` and a new `--cover-output` PNG. FFmpeg is required. Near-black or nearly uniform frames stop for review; outputs are retained and never overwritten. Synced WeChat Channels, Bilibili, Douyin and YouTube adapters verify uploaded previews; Douyin and Bilibili check both crop ratios. Run `chrome-use site update` for the companion adapters (#740, #742, #743).
+- **Explicit video covers and local frame selection.** Native video cover adapters can extract a requested local frame with `--cover-mode frame:<seconds>`, `--cover-video` and a new `--cover-output` PNG. FFmpeg is required. Near-black or nearly uniform frames stop for review; outputs are retained and never overwritten. The native WeChat Channels, Bilibili, Douyin and YouTube adapters verify uploaded previews; Douyin and Bilibili check both crop ratios. Run `chrome-use site update` for the companion adapters (#740, #742, #743).
 - **Bilibili AI candidate review.** The companion `bilibili-creator/cover-ai` adapter explicitly requests one platform generation and returns candidates for screenshot review. Selection requires a reviewed token and explicit index. Generation failure stays distinct from system-recommended frames; no candidate is selected or published automatically. Platform generation success is not guaranteed.
 
 ### Bug Fixes
