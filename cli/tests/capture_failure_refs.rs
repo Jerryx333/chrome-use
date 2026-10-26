@@ -57,6 +57,8 @@ struct Page {
     /// The #373 recovery's footprint since the denial: `tabs.update` calls,
     /// blank temp tabs created, and blur scripts sent to the page.
     tab_updates: u32,
+    /// The Chrome tab `tabs.update` last put in front (tab 11 until then).
+    front_tab: Option<i64>,
     temp_tabs: u32,
     blurs: u32,
     /// Every method called, for diagnostics.
@@ -227,11 +229,15 @@ impl Fake {
                     "windows.get" => json!({"result": {"state": "normal", "focused": true}}),
                     // The profile has a window (#486 checks before a first tab).
                     "windows.getAll" => json!({"result": [{"id": 1, "type": "normal"}]}),
-                    "tabs.query" => json!({"result": [{"id": 11, "index": 0, "active": true,
+                    "tabs.query" => json!({"result": [{"id": p.front_tab.unwrap_or(11),
+                                                       "index": 0, "active": true,
                                                        "windowId": 1}]}),
                     "tabs.get" => json!({"result": {"id": 11, "groupId": -1}}),
                     "tabs.update" => {
                         p.tab_updates += 1;
+                        if params["args"][1]["active"] == json!(true) {
+                            p.front_tab = params["args"][0].as_i64();
+                        }
                         // Hiding the tab closes the blocking frame.
                         p.blocked = false;
                         json!({"result": {}})
