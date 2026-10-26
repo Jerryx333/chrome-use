@@ -171,6 +171,17 @@ fn owner_projection(quad: &Value, metrics: &Value) -> Result<Projection, String>
     }
     let g = (dx3 * dy2 - dx2 * dy3) / determinant;
     let h = (dx1 * dy3 - dx3 * dy1) / determinant;
+    // Affine quads need no normalization round trip. Preserve exact simple
+    // translations/scales and avoid introducing rounding at pixel boundaries.
+    if g == 0.0 && h == 0.0 {
+        return Ok(Projection {
+            matrix: [
+                [(q[2] - q[0]) / width, (q[6] - q[0]) / height, q[0]],
+                [(q[3] - q[1]) / width, (q[7] - q[1]) / height, q[1]],
+                [0.0, 0.0, 1.0],
+            ],
+        });
+    }
     let normalized = Projection {
         matrix: [
             [x1 * (1.0 + g) / width, x3 * (1.0 + h) / height, 0.0],
