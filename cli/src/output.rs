@@ -3306,6 +3306,12 @@ Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
 
+File arguments advertise elementRelayUpload: true for capability checks.
+Adapter file.setOn(element) shares this native/relay delivery and live-count
+verification. Only an explicit Not allowed response uses relay streaming;
+other native errors report action_outcome_unknown without replay. A cleared
+file input carries a warning: verify the application's preview before continuing.
+
 Examples:
   chrome-use upload "#file-input" ./document.pdf
   chrome-use upload @e3 ./image1.png ./image2.png

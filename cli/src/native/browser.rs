@@ -3628,6 +3628,22 @@ pub struct UploadOutcome {
     pub delivery: Option<Value>,
 }
 
+/// Only Chrome's explicit file-input permission denial authorizes a second
+/// delivery path. Error prose can quote filenames containing the same words.
+fn file_input_permission_denied(error: &str) -> bool {
+    let Some(raw) = error.strip_prefix("CDP error (DOM.setFileInputFiles): ") else {
+        return false;
+    };
+    if raw == "Not allowed" {
+        return true;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return false;
+    };
+    value.get("code").and_then(Value::as_i64) == Some(-32000)
+        && value.get("message").and_then(Value::as_str) == Some("Not allowed")
+}
+
 /// Whether console/error capture (and thus `Runtime.enable`) is opted into for this
 /// daemon. Defaults to `false` so the common automation path leaves no Runtime-domain
 /// fingerprint. Set `AGENT_BROWSER_CAPTURE_CONSOLE=1` (or `true`) to turn it on.
@@ -9662,12 +9678,27 @@ impl BrowserManager {
             Err(no_input) => return Err(no_input),
         };
 
+        self.upload_files_to_input_object(&input_object_id, files, &effective_session_id)
+            .await
+    }
+
+    /// Deliver to an already-resolved file input, including an adapter's private
+    /// setOn(element) target. Share the relay fallback and live-count verification
+    /// with ordinary upload; no marker, dropzone or duplicate change event is used.
+    pub(crate) async fn upload_files_to_input_object(
+        &self,
+        input_object_id: &str,
+        files: &[String],
+        session_id: &str,
+    ) -> Result<UploadOutcome, String> {
+        // Reject a stale/non-file target before native input or byte streaming.
+        self.count_file_input(input_object_id, session_id).await?;
         let describe: Value = self
             .client
             .send_command(
                 "DOM.describeNode",
                 Some(json!({ "objectId": input_object_id })),
-                Some(&effective_session_id),
+                Some(session_id),
             )
             .await?;
 
@@ -9685,7 +9716,7 @@ impl BrowserManager {
                     "files": files,
                     "backendNodeId": backend_node_id,
                 })),
-                Some(&effective_session_id),
+                Some(session_id),
             )
             .await;
 
@@ -9701,22 +9732,22 @@ impl BrowserManager {
             // trigger button), so it takes the `input.files = …` branch — never
             // the dropzone branch, whose uncancelled `drop` DragEvent made the
             // tab navigate to the dropped file (the about:blank side effect).
-            if e.contains("Not allowed") || e.contains("-32000") {
+            if file_input_permission_denied(&e) {
                 // `allow_dropzone = false`: we hand it a resolved `<input type=file>`,
                 // so it takes the `input.files = …` branch. The drop/paste dropzone
                 // branch stays gated OFF (and is nav-guarded even when enabled), so a
                 // stray `drop` can never navigate the page.
                 delivery = Some(
                     self.upload_files_via_page(
-                        input_object_id.clone(),
+                        input_object_id.to_string(),
                         files,
-                        &effective_session_id,
+                        session_id,
                         false,
                     )
                     .await?,
                 );
             } else {
-                return Err(e);
+                return Err(format!("action_outcome_unknown: file delivery could not be confirmed; inspect the page before retrying. Original error: {e}"));
             }
         }
 
@@ -9730,7 +9761,7 @@ impl BrowserManager {
         // to consume the FileList and synchronously clear or replace the input;
         // that is successful page behavior, not a rejected upload (#208).
         match self
-            .count_file_input(&input_object_id, &effective_session_id)
+            .count_file_input(input_object_id, session_id)
             .await
         {
             Ok(attached) if attached > 0 => Ok(UploadOutcome {
@@ -9952,8 +9983,6 @@ impl BrowserManager {
         })
     }
 
-    /// Read the file input's `files.length` and dispatch bubbling `input`+`change`
-    /// so Vue/React register the new files. Returns the attached file count.
     /// How many files the input holds now. Deliberately does not dispatch
     /// anything: both delivery paths have already fired `input`/`change`
     /// (Chrome does it natively for `DOM.setFileInputFiles`; the relay
@@ -14273,6 +14302,10 @@ mod relay_upload_tests {
         /// Drop every buffer after this many chunks (a navigation).
         navigate_after_chunks: Option<usize>,
         chunk_delay: Duration,
+        invalid_input: bool,
+        native_error: Option<String>,
+        native_calls: usize,
+        consumed_input: bool,
     }
     type Shared = Arc<std::sync::Mutex<Page>>;
 
@@ -14283,6 +14316,16 @@ mod relay_upload_tests {
         let function = params["functionDeclaration"].as_str().unwrap_or("");
         let target = params["objectId"].as_str().unwrap_or("").to_string();
         let gone = || "Could not find object with given id".to_string();
+        if function.contains("if (!el || el.tagName !== 'INPUT' || el.type !== 'file') return -1") {
+            let count = if p.invalid_input {
+                -1
+            } else if p.consumed_input {
+                0
+            } else {
+                p.attached.len() as i64
+            };
+            return Ok(json!({"result":{"type":"number","value":count}}));
+        }
         if function == upload::BEGIN_FUNCTION {
             let key = format!("buf-{}", p.groups.len() + 1);
             let group = params["objectGroup"].as_str().unwrap_or("").to_string();
@@ -14383,6 +14426,15 @@ mod relay_upload_tests {
                                     }
                                     call_reply(&page, &req["params"])
                                 }
+                                "DOM.describeNode" => Ok(json!({"node":{"backendNodeId":42}})),
+                                "DOM.setFileInputFiles" => {
+                                    let mut p = page.lock().unwrap();
+                                    p.native_calls += 1;
+                                    Err(p
+                                        .native_error
+                                        .clone()
+                                        .unwrap_or_else(|| "Not allowed".into()))
+                                }
                                 "Runtime.releaseObjectGroup" => {
                                     Ok(release_reply(&page, &req["params"]))
                                 }
@@ -14453,6 +14505,81 @@ mod relay_upload_tests {
         let dir = std::env::temp_dir().join(format!("cu-relay-upload-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn resolved_file_targets_share_the_relay_fallback_and_keep_verification_warnings() {
+        for (consumed, message) in [
+            (false, "Not allowed"),
+            (true, "Not allowed"),
+            (false, r#"{"code":-32000,"message":"Not allowed"}"#),
+        ] {
+            let page = Arc::new(std::sync::Mutex::new(Page {
+                consumed_input: consumed,
+                native_error: Some(message.into()),
+                ..Default::default()
+            }));
+            let url = start(page.clone()).await;
+            let mgr = manager(&url).await;
+            let dir = scratch();
+            let (path, sha) = file_of(&dir, "cover.png", 8193);
+            let result = mgr
+                .upload_files_to_input_object("OBJ", &[path], "S1")
+                .await
+                .unwrap();
+            let p = page.lock().unwrap();
+            assert_eq!(p.native_calls, 1);
+            assert_eq!(p.attached, vec![("cover.png".into(), sha, 8193)]);
+            assert_eq!(result.attached_count, Some(if consumed { 0 } else { 1 }));
+            assert_eq!(result.warning.is_some(), consumed);
+            assert_eq!(result.delivery.as_ref().unwrap()["via"], "relay-stream");
+            assert!(p.buffers.is_empty());
+            drop(p);
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_nonfile_target_is_refused_before_delivery() {
+        let page = Arc::new(std::sync::Mutex::new(Page {
+            invalid_input: true,
+            ..Default::default()
+        }));
+        let url = start(page.clone()).await;
+        let mgr = manager(&url).await;
+        let result = mgr
+            .upload_files_to_input_object("OBJ", &["unused.png".into()], "S1")
+            .await;
+        assert!(result.unwrap_err().contains("not a file input"));
+        let p = page.lock().unwrap();
+        assert_eq!(p.native_calls, 0);
+        assert_eq!(p.chunks, 0);
+        assert!(p.attached.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unexpected_native_error_does_not_replay_an_unconfirmed_upload() {
+        for message in [
+            "Could not find node with given id",
+            "Could not read file Not allowed.png",
+        ] {
+            let page = Arc::new(std::sync::Mutex::new(Page {
+                native_error: Some(message.into()),
+                ..Default::default()
+            }));
+            let url = start(page.clone()).await;
+            let mgr = manager(&url).await;
+            let result = mgr
+                .upload_files_to_input_object("OBJ", &["unused.png".into()], "S1")
+                .await;
+            let error = result.unwrap_err();
+            assert!(error.starts_with("action_outcome_unknown:"));
+            assert!(!crate::error_envelope::classify_error(&error).retryable);
+            let p = page.lock().unwrap();
+            assert_eq!(p.native_calls, 1);
+            assert_eq!(p.chunks, 0);
+            assert!(p.attached.is_empty());
+        }
     }
 
     #[tokio::test]

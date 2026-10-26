@@ -6430,8 +6430,9 @@ async fn serve_site_request(run_key: &str, req: &Value, files: &Value, state: &m
     let _ = call_on_run(run_key, &settle, state).await;
 }
 
-/// `setOn(el)` with an element handle: `DOM.setFileInputFiles` on that node,
-/// which fires the input's own (trusted) input and change events.
+/// `setOn(el)` uses the same verified native/relay delivery as ordinary
+/// upload. The private element handle is resolved without a page-visible marker;
+/// its temporary remote objects are released even on error/cancellation.
 async fn upload_to_target(
     run_key: &str,
     req: &Value,
@@ -6449,14 +6450,35 @@ async fn upload_to_target(
     )
     .await?
     .ok_or("setOn: the element handle is gone")?;
-    mgr.client
-        .send_command(
-            "DOM.setFileInputFiles",
-            Some(json!({ "files": [path], "backendNodeId": node })),
-            Some(&session_id),
-        )
-        .await?;
-    Ok(json!({ "attached": 1 }))
+    let group = format!(
+        "chrome-use-site-file-target-{}",
+        uuid::Uuid::new_v4().simple()
+    );
+    let outcome = super::element::release_after(mgr.client.clone(), &session_id, &group, async {
+        let resolved = mgr
+            .client
+            .send_command(
+                "DOM.resolveNode",
+                Some(json!({"backendNodeId":node,"objectGroup":group.as_str()})),
+                Some(&session_id),
+            )
+            .await?;
+        let object = resolved
+            .pointer("/object/objectId")
+            .and_then(Value::as_str)
+            .ok_or("setOn: the file input object could not be resolved")?;
+        mgr.upload_files_to_input_object(object, &[path.to_string()], &session_id)
+            .await
+    })
+    .await?;
+    let mut reply = json!({"uploaded":1,"attached":outcome.attached_count});
+    if let Some(warning) = outcome.warning {
+        reply["warning"] = json!(warning);
+    }
+    if let Some(delivery) = outcome.delivery {
+        reply["delivery"] = delivery;
+    }
+    Ok(reply)
 }
 
 /// `args.page(fn, ...args)` from an isolated-world adapter: call `fn` with
