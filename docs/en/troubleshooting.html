@@ -266,10 +266,10 @@
       <div class="du-callout note">
         <div class="du-callout-title">Note</div>
         If <code>tab list</code> still shows the white-screen or frozen tab, preserve it with <code>tab select</code>
-        or <code>tab adopt</code>, then use <code>tab inspect</code> for browser-level state. A
+        or <code>tab adopt</code>, then use <code>tab inspect &lt;ref&gt;</code> for browser-level state. A
         <code>relay timeout</code> means a CDP command missed its deadline. Tab metadata cannot identify the
         cause, prove blocked JavaScript, or prove a healthy command channel. A screenshot can remain pending
-        while JavaScript answers. Preserve the tab, inspect <code>status</code> and <code>tab inspect</code>,
+        while JavaScript answers. Preserve the tab, inspect <code>status</code> and <code>tab inspect &lt;ref&gt;</code>,
         avoid overlapping capture retries, and verify an action's effect before repeating it. A failed tab
         probe also leaves the state unconfirmed; inspect its reason before treating the tab as closed.
         Likewise, a failed <code>tab select</code> liveness probe does not by itself prove that the
@@ -287,9 +287,9 @@
         target ID from the error instead of repeatedly creating tabs. If reads still fail, preserve and inspect
         the target; do not automatically replay clicks or reload the page. A method timeout alone does not prove
         that the relay or browser connection is broken. Check <code>status</code> and <code>tab list</code> to
-        distinguish connection health from a page that did not answer. <code>tab inspect</code> reads browser-level metadata
+        distinguish connection health from a page that did not answer. <code>tab inspect &lt;ref&gt;</code> reads browser-level metadata
         over a different connection than driving uses, so a successful inspect is not evidence that the tab is
-        drivable. On the extension relay, <code>tab inspect</code> requires ab-connect 0.5.16 or
+        drivable. On the extension relay, <code>tab inspect &lt;ref&gt;</code> requires ab-connect 0.5.16 or
         newer. If the warning says the live extension is behind the bundled version, open
         <code>chrome://extensions</code>, update or reload ab-connect, then retry.
         From ab-connect 0.5.18, explicit navigation recovers a renderer-scoped <code>Page.navigate</code> timeout

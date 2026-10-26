@@ -249,10 +249,10 @@
       <div class="du-callout note">
         <div class="du-callout-title">说明</div>
         如果 <code>tab list</code> 仍列得出白屏或卡死标签，先用 <code>tab select</code> 或
-        <code>tab adopt</code> 保留现场，再用 <code>tab inspect</code> 读取浏览器级状态。
+        <code>tab adopt</code> 保留现场，再用 <code>tab inspect &lt;ref&gt;</code> 读取浏览器级状态。
         <code>relay timeout</code> 表示 CDP 命令未在期限内完成。标签元数据无法确定原因，
         不能证明 JavaScript 阻塞，也不能证明命令通道正常。截图仍在等待时，JavaScript 也可能正常回答。
-        保留标签，检查 <code>status</code> 和 <code>tab inspect</code>，避免重叠重试截图，
+        保留标签，检查 <code>status</code> 和 <code>tab inspect &lt;ref&gt;</code>，避免重叠重试截图，
         重复执行操作前先确认它是否已经生效。标签探针失败也只表示状态未确认；先查看失败原因，
         不要仅凭探针超时就认定标签已关闭。
         同样，<code>tab select</code> 的存活探针失败也不能单独证明 renderer 已无响应。
@@ -267,9 +267,9 @@
         保持相同 session 和连接端点。新标签初始化失败时，使用错误中保留的目标 ID，不要反复新建标签。
         读取仍失败时保留目标并检查，不要自动重放点击或刷新页面。单次方法超时不能证明中继或浏览器连接
         已断开，可用 <code>status</code> 和 <code>tab list</code> 区分连接状态与页面未响应。
-        <code>tab inspect</code> 走的是浏览器级连接，与驱动页面的通道不同，
+        <code>tab inspect &lt;ref&gt;</code> 走的是浏览器级连接，与驱动页面的通道不同，
         因此 inspect 成功并不能证明该标签页可以被驱动。
-        通过扩展连接时，<code>tab inspect</code> 需要 ab-connect 0.5.16 或更新版本；
+        通过扩展连接时，<code>tab inspect &lt;ref&gt;</code> 需要 ab-connect 0.5.16 或更新版本；
         如果警告显示当前扩展落后于 CLI 内置版本，请打开 <code>chrome://extensions</code>
         更新或重新加载 ab-connect 后重试。
         ab-connect 0.5.18 起，明确导航遇到 <code>Page.navigate</code> 超时时会改走浏览器级标签 API；
