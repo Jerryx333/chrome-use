@@ -3,6 +3,96 @@ use super::*;
 
 #[tokio::test]
 #[ignore]
+async fn e2e_screenshot_projects_transformed_oop_frames() {
+    let leaf = |name: &str| {
+        format!(
+        "<!doctype html><style>body{{margin:0}}button{{position:absolute;left:20px;top:30px;width:80px;height:40px;border:0}}</style><button>{name}</button>"
+    )
+    };
+    let (leaf_port, leaf_server) = spawn_html_server(leaf("Specimen")).await;
+    let nested_style = "position:absolute;left:30px;top:40px;width:160px;height:100px;border:0;transform-origin:0 0;transform:rotate(12deg) skewX(8deg)";
+    let nested = format!("<!doctype html><style>body{{margin:0}}</style><iframe style='{nested_style}' src='http://127.0.0.1:{leaf_port}/'></iframe>");
+    let (nested_port, nested_server) = spawn_html_server(nested).await;
+    let mut state = DaemonState::new();
+    for (index, transform) in [
+        "scale(.8)",
+        "rotate(25deg)",
+        "skew(20deg,10deg)",
+        "translateX(300px) scaleX(-1)",
+        "perspective(450px) rotateY(30deg)",
+        "rotate(-15deg) scale(.9)",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let control = if index == 5 {
+            format!("<!doctype html><style>body{{margin:0}}</style><iframe style='{nested_style}' srcdoc='{}'></iframe>", leaf("Control"))
+        } else {
+            leaf("Control")
+        };
+        let cross_port = if index == 5 { nested_port } else { leaf_port };
+        // Same-renderer control uses Chrome's own projection. The OOP copy
+        // differs only by the outer slot's 500 CSS pixel horizontal offset.
+        let html = format!(
+            r##"<!doctype html><style>body{{margin:0;height:1400px}}.slot{{position:absolute;top:240px;left:100px}}.slot+.slot{{left:600px}}iframe{{width:300px;height:220px;border:0;transform-origin:0 0;transform:{transform}}}</style>
+            <div class="slot"><iframe srcdoc="{}"></iframe></div>
+            <div class="slot"><iframe src="http://localhost:{cross_port}/"></iframe></div>
+            <script>window.mutations=[];new MutationObserver(r=>mutations.push(...r)).observe(document.documentElement,{{subtree:true,childList:true,attributes:true}});</script>"##,
+            control.replace('&', "&amp;").replace('"', "&quot;")
+        );
+        let (port, server) = spawn_html_server(html).await;
+        if index == 0 {
+            launch_on(port, &mut state).await;
+        } else {
+            assert_success(&run_cmd(&mut state, json!({"id":"open","action":"navigate","url":format!("http://127.0.0.1:{port}/")})).await);
+        }
+        for scale in [1.0, 2.0] {
+            assert_success(&run_cmd(&mut state, json!({"id":"viewport","action":"viewport","width":1100,"height":750,"deviceScaleFactor":scale})).await);
+            eval_in(&mut state, "scrollTo(0,80);mutations=[]").await;
+            let before = eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await;
+            let shot = run_cmd(
+                &mut state,
+                json!({"id":"shot","action":"screenshot","annotate":true,"base64":true}),
+            )
+            .await;
+            assert_success(&shot);
+            assert_eq!(eval_in(&mut state, "mutations.length").await, 0);
+            assert_eq!(
+                eval_in(&mut state, "Object.getOwnPropertyNames(window).sort()").await,
+                before
+            );
+            let data = get_data(&shot);
+            let labels = data["annotations"].as_array().unwrap();
+            let control = labels
+                .iter()
+                .find(|a| a["name"] == "Control")
+                .expect("same-renderer control");
+            let specimen = labels
+                .iter()
+                .find(|a| a["name"] == "Specimen")
+                .expect("OOP specimen");
+            for key in ["x", "y", "width", "height"] {
+                let expected =
+                    control["box"][key].as_i64().unwrap() + if key == "x" { 500 } else { 0 };
+                let actual = specimen["box"][key].as_i64().unwrap();
+                assert!(
+                    (actual - expected).abs() <= 1,
+                    "{transform}, scale {scale}, {key}: expected {expected}, got {actual}"
+                );
+            }
+            if let Some(path) = data["path"].as_str() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        server.abort();
+    }
+    run_cmd(&mut state, json!({"id":"close","action":"close"})).await;
+    leaf_server.abort();
+    nested_server.abort();
+}
+
+#[tokio::test]
+#[ignore]
 async fn e2e_screenshot_annotations_leave_no_dom_mutations() {
     let child =
         "<!doctype html><style>button{width:90px;height:30px}</style><button>Child</button>";

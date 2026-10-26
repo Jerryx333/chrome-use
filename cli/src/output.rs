@@ -3902,8 +3902,10 @@ Options:
                        No annotation nodes or styles are inserted into the page.
                        JSON boxes use capture-relative CSS pixels; labels scale
                        to the image resolution. --clip wins over --full/selector.
-                       Frame labels use their owning renderer. Unsupported frame
-                       transforms or unavailable geometry report an error.
+                       Frame labels support nested rotation, skew, reflection and
+                       perspective. Boxes enclose the projected corners. Collapsed
+                       or unstable transforms, perspective-horizon crossings and
+                       unavailable geometry report an error.
                        Crops happen in the CLI; off-viewport crops capture the full
                        page first. Regions outside the page are refused.
                        Each label [N] corresponds to ref @eN from snapshot.

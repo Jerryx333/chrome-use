@@ -12,52 +12,92 @@ struct Frame {
     session: String,
 }
 
+/// Homogeneous mapping from a renderer viewport into the top viewport.
+/// Keeping the full matrix preserves rotation, reflection, skew and perspective
+/// when crossing nested renderer boundaries; bounding boxes are formed last.
 #[derive(Clone, Copy, Debug)]
 struct Projection {
-    x: f64,
-    y: f64,
-    sx: f64,
-    sy: f64,
+    matrix: [[f64; 3]; 3],
 }
 
 impl Projection {
     const IDENTITY: Self = Self {
-        x: 0.0,
-        y: 0.0,
-        sx: 1.0,
-        sy: 1.0,
+        matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
     };
 
-    fn compose(self, child: Self) -> Self {
-        Self {
-            x: self.x + child.x * self.sx,
-            y: self.y + child.y * self.sy,
-            sx: self.sx * child.sx,
-            sy: self.sy * child.sy,
+    fn compose(self, child: Self) -> Result<Self, String> {
+        let mut matrix = [[0.0; 3]; 3];
+        for (row, values) in matrix.iter_mut().enumerate() {
+            for (col, value) in values.iter_mut().enumerate() {
+                *value = (0..3)
+                    .map(|i| self.matrix[row][i] * child.matrix[i][col])
+                    .sum();
+            }
         }
+        if matrix.iter().flatten().any(|v| !v.is_finite()) {
+            return Err("Screenshot: non-finite iframe projection".into());
+        }
+        Ok(Self { matrix })
+    }
+
+    fn denominator(self, x: f64, y: f64) -> Result<f64, String> {
+        let terms = [
+            self.matrix[2][0] * x,
+            self.matrix[2][1] * y,
+            self.matrix[2][2],
+        ];
+        let denominator: f64 = terms.iter().sum();
+        let magnitude: f64 = terms.iter().map(|v| v.abs()).sum();
+        if !denominator.is_finite() || denominator.abs() <= 1e-10 * magnitude {
+            return Err("Screenshot: iframe projection approaches the perspective horizon".into());
+        }
+        Ok(denominator)
+    }
+
+    fn point(self, x: f64, y: f64) -> Result<[f64; 2], String> {
+        let denominator = self.denominator(x, y)?;
+        let point = [
+            (self.matrix[0][0] * x + self.matrix[0][1] * y + self.matrix[0][2]) / denominator,
+            (self.matrix[1][0] * x + self.matrix[1][1] * y + self.matrix[1][2]) / denominator,
+        ];
+        if point.iter().any(|v| !v.is_finite()) {
+            return Err("Screenshot: non-finite projected coordinates".into());
+        }
+        Ok(point)
     }
 
     fn rect(self, quad: &Value) -> Result<Rect, String> {
         let quad = quad_points(quad)?;
-        let xs: Vec<_> = quad
-            .as_chunks::<2>()
-            .0
+        let mut points = Vec::with_capacity(4);
+        let mut sign = None;
+        for p in quad.as_chunks::<2>().0 {
+            let positive = self.denominator(p[0], p[1])? > 0.0;
+            if sign.is_some_and(|previous| previous != positive) {
+                return Err("Screenshot: iframe box crosses the perspective horizon".into());
+            }
+            sign = Some(positive);
+            points.push(self.point(p[0], p[1])?);
+        }
+        let x = points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+        let y = points.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+        let width = points
             .iter()
-            .map(|p| self.x + p[0] * self.sx)
-            .collect();
-        let ys: Vec<_> = quad
-            .as_chunks::<2>()
-            .0
+            .map(|p| p[0])
+            .fold(f64::NEG_INFINITY, f64::max)
+            - x;
+        let height = points
             .iter()
-            .map(|p| self.y + p[1] * self.sy)
-            .collect();
-        let x = xs.iter().copied().fold(f64::INFINITY, f64::min);
-        let y = ys.iter().copied().fold(f64::INFINITY, f64::min);
+            .map(|p| p[1])
+            .fold(f64::NEG_INFINITY, f64::max)
+            - y;
+        if !width.is_finite() || !height.is_finite() {
+            return Err("Screenshot: non-finite projected bounds".into());
+        }
         Ok(Rect {
             x,
             y,
-            width: xs.iter().copied().fold(f64::NEG_INFINITY, f64::max) - x,
-            height: ys.iter().copied().fold(f64::NEG_INFINITY, f64::max) - y,
+            width,
+            height,
         })
     }
 }
@@ -81,25 +121,84 @@ fn owner_projection(quad: &Value, metrics: &Value) -> Result<Projection, String>
     let viewport = &metrics["cssLayoutViewport"];
     let width = viewport["clientWidth"].as_f64().unwrap_or(0.0);
     let height = viewport["clientHeight"].as_f64().unwrap_or(0.0);
-    // Translate and scale axis-aligned owners. Refuse rotation/perspective
-    // rather than placing labels using an unverified frame transformation.
-    if width <= 0.0
-        || height <= 0.0
-        || (q[1] - q[3]).abs() > 0.01
-        || (q[2] - q[4]).abs() > 0.01
-        || (q[5] - q[7]).abs() > 0.01
-        || (q[6] - q[0]).abs() > 0.01
-        || q[2] <= q[0]
-        || q[5] <= q[1]
-    {
-        return Err("Screenshot: cannot safely project this iframe transform or viewport".into());
+    let invalid = "Screenshot: cannot safely project this iframe transform or viewport";
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return Err(invalid.into());
     }
-    Ok(Projection {
-        x: q[0],
-        y: q[1],
-        sx: (q[2] - q[0]) / width,
-        sy: (q[5] - q[1]) / height,
-    })
+    // Solve the unit-square-to-quad homography in translated, normalized
+    // coordinates, avoiding loss of precision from large page offsets. CDP
+    // supplies ordered content corners, so borders are already excluded.
+    let scale = q
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .flat_map(|p| [(p[0] - q[0]).abs(), (p[1] - q[1]).abs()])
+        .fold(0.0_f64, f64::max);
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(invalid.into());
+    }
+    let points: Vec<_> = q
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| [(p[0] - q[0]) / scale, (p[1] - q[1]) / scale])
+        .collect();
+    // Both windings are valid (mirrored owners). Concave, crossing, edge-on
+    // and almost collapsed quads cannot establish a stable visible plane.
+    let mut winding = None;
+    for i in 0..4 {
+        let a = points[i];
+        let b = points[(i + 1) % 4];
+        let c = points[(i + 2) % 4];
+        let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        if cross.abs() <= 1e-10 || winding.is_some_and(|sign| sign != (cross > 0.0)) {
+            return Err(invalid.into());
+        }
+        winding = Some(cross > 0.0);
+    }
+    let [x1, y1] = points[1];
+    let [x2, y2] = points[2];
+    let [x3, y3] = points[3];
+    let dx1 = x1 - x2;
+    let dx2 = x3 - x2;
+    let dx3 = -x1 + x2 - x3;
+    let dy1 = y1 - y2;
+    let dy2 = y3 - y2;
+    let dy3 = -y1 + y2 - y3;
+    let determinant = dx1 * dy2 - dx2 * dy1;
+    if determinant.abs() <= 1e-10 {
+        return Err(invalid.into());
+    }
+    let g = (dx3 * dy2 - dx2 * dy3) / determinant;
+    let h = (dx1 * dy3 - dx3 * dy1) / determinant;
+    let normalized = Projection {
+        matrix: [
+            [x1 * (1.0 + g) / width, x3 * (1.0 + h) / height, 0.0],
+            [y1 * (1.0 + g) / width, y3 * (1.0 + h) / height, 0.0],
+            [g / width, h / height, 1.0],
+        ],
+    };
+    let projection = Projection {
+        matrix: [[scale, 0.0, q[0]], [0.0, scale, q[1]], [0.0, 0.0, 1.0]],
+    }
+    .compose(normalized)?;
+    // A valid viewport must stay on one side of the perspective horizon.
+    // Check the four supplied correspondences as a final conditioning guard.
+    for (i, [x, y]) in [[0.0, 0.0], [width, 0.0], [width, height], [0.0, height]]
+        .into_iter()
+        .enumerate()
+    {
+        if projection.denominator(x, y)? <= 0.0 {
+            return Err(invalid.into());
+        }
+        let actual = projection.point(x, y)?;
+        if (actual[0] - q[2 * i]).abs() > scale * 1e-8
+            || (actual[1] - q[2 * i + 1]).abs() > scale * 1e-8
+        {
+            return Err(invalid.into());
+        }
+    }
+    Ok(projection)
 }
 
 pub(super) struct FrameGeometry {
@@ -244,7 +343,7 @@ impl FrameGeometry {
                     .send_command_no_params("Page.getLayoutMetrics", Some(&session))
                     .await?;
                 let projection = owner_projection(&model["model"]["content"], &metrics)?;
-                projections.insert(session.clone(), parent_projection.compose(projection));
+                projections.insert(session.clone(), parent_projection.compose(projection)?);
                 roots.remove(&session);
             }
             if roots.len() == previous {
@@ -283,6 +382,83 @@ impl FrameGeometry {
 mod tests {
     use super::*;
 
+    fn assert_point(actual: [f64; 2], expected: [f64; 2]) {
+        for (a, e) in actual.into_iter().zip(expected) {
+            assert!(
+                (a - e).abs() < 1e-8,
+                "expected {expected:?}, got {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn maps_rotated_skewed_and_mirrored_owner_interiors() {
+        let metrics = json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}});
+        for (quad, expected) in [
+            (
+                json!([300, 100, 300, 200, 200, 200, 200, 100]),
+                [240.0, 125.0],
+            ),
+            (
+                json!([100, 100, 300, 150, 350, 250, 150, 200]),
+                [180.0, 172.5],
+            ),
+            (
+                json!([300, 100, 100, 100, 100, 200, 300, 200]),
+                [250.0, 160.0],
+            ),
+        ] {
+            let projection = owner_projection(&quad, &metrics).unwrap();
+            assert_point(projection.point(25.0, 60.0).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn perspective_maps_interior_not_bounding_box_interpolation() {
+        let p = owner_projection(
+            &json!([100, 100, 300, 100, 260, 180, 140, 180]),
+            &json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}}),
+        )
+        .unwrap();
+        // The image of the center is the intersection of the diagonals,
+        // not the arithmetic mean of the projected corners (200, 140).
+        assert_point(p.point(50.0, 50.0).unwrap(), [200.0, 150.0]);
+        assert_point(p.point(0.0, 50.0).unwrap(), [125.0, 150.0]);
+        let rect = p.rect(&json!([25, 25, 75, 25, 75, 75, 25, 75])).unwrap();
+        assert_point([rect.x, rect.y], [1100.0 / 7.0, 900.0 / 7.0]);
+        assert_point([rect.width, rect.height], [600.0 / 7.0, 800.0 / 21.0]);
+    }
+
+    #[test]
+    fn nested_projection_preserves_corners_before_forming_bounds() {
+        let metrics = json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}});
+        let parent =
+            owner_projection(&json!([100, 100, 300, 100, 260, 180, 140, 180]), &metrics).unwrap();
+        let child = owner_projection(&json!([100, 0, 100, 100, 0, 100, 0, 0]), &metrics).unwrap();
+        let nested = parent.compose(child).unwrap();
+        assert_point(nested.point(50.0, 50.0).unwrap(), [200.0, 150.0]);
+        assert_point(nested.point(50.0, 100.0).unwrap(), [125.0, 150.0]);
+    }
+
+    #[test]
+    fn refuses_collapsed_concave_and_horizon_geometry() {
+        let metrics = json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}});
+        for quad in [
+            json!([0, 0, 100, 0, 100, 0, 0, 0]),
+            json!([0, 0, 100, 0, 10, 10, 0, 100]),
+            json!([0, 0, 100, 0, 100, 0.000000001, 0, 0.000000001]),
+        ] {
+            assert!(owner_projection(&quad, &metrics).is_err(), "{quad}");
+        }
+        let p = Projection {
+            matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.01, 0.0, 1.0]],
+        };
+        assert!(p
+            .rect(&json!([-110, 0, -90, 0, -90, 10, -110, 10]))
+            .is_err());
+        assert!(p.point(-100.0, 0.0).is_err());
+    }
+
     #[test]
     fn projects_oop_boxes_through_content_border_scroll_and_scale() {
         let p = owner_projection(
@@ -295,12 +471,11 @@ mod tests {
             (rect.x, rect.y, rect.width, rect.height),
             (486.0, 74.0, 168.0, 42.0)
         );
-        let nested = p.compose(Projection {
-            x: 10.0,
-            y: 20.0,
-            sx: 0.5,
-            sy: 0.5,
-        });
+        let nested = p
+            .compose(Projection {
+                matrix: [[0.5, 0.0, 10.0], [0.0, 0.5, 20.0], [0.0, 0.0, 1.0]],
+            })
+            .unwrap();
         let rect = nested.rect(&json!([8, 8, 92, 8, 92, 29, 8, 29])).unwrap();
         assert_eq!(
             (rect.x, rect.y, rect.width, rect.height),
@@ -311,7 +486,7 @@ mod tests {
     #[test]
     fn refuses_unsupported_frame_geometry() {
         let metrics = json!({"cssLayoutViewport":{"clientWidth":100,"clientHeight":100}});
-        assert!(owner_projection(&json!([0, 0, 100, 10, 90, 110, 0, 100]), &metrics).is_err());
+        assert!(owner_projection(&json!([0, 0, 100, 100, 100, 0, 0, 100]), &metrics).is_err());
         assert!(owner_projection(&json!([0, 0, 100, 0, 100, 100, 0, 100]), &json!({})).is_err());
         assert!(Projection::IDENTITY.rect(&json!([1, 2])).is_err());
     }
