@@ -264,8 +264,10 @@ impl RelayState {
                     "result": { "capabilities": capabilities }
                 }))
             }
-            // Discovery is best-effort and event-driven in real CDP; abs only
-            // reads the getTargets result, so an empty ack is enough here.
+            // The extension owns discovery and auto-attachment, including
+            // recursive iframe filters. A daemon's per-child setup is also
+            // acknowledged locally; it must not overwrite the extension's
+            // configuration through chrome.debugger.
             "Target.setDiscoverTargets" | "Target.setAutoAttach" => {
                 ClientRoute::Local(json!({ "id": id, "result": {} }))
             }
@@ -683,6 +685,30 @@ impl RelayState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_child_auto_attach_cannot_override_extension_filter() {
+        let mut state = RelayState::new();
+        for session in [None, Some("cb-tab-12"), Some("nested-iframe-session")] {
+            let mut command = json!({
+                "id": 42,
+                "method": "Target.setAutoAttach",
+                "params": {
+                    "autoAttach": true,
+                    "flatten": true,
+                    "waitForDebuggerOnStart": false
+                }
+            });
+            if let Some(session) = session {
+                command["sessionId"] = json!(session);
+            }
+            assert_eq!(
+                state.route_client_command(1, &command),
+                ClientRoute::Local(json!({"id": 42, "result": {}}))
+            );
+        }
+        assert!(state.pending.is_empty());
+    }
 
     fn attached_event(target_id: &str, session_id: &str) -> Value {
         json!({
