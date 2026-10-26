@@ -101,6 +101,8 @@ configuration transactions, skills, images, conversation options and schedules.
 Upgrade legacy Windows hosts that advertise readOnly. Windows uses owned
 process jobs and protected private-file ACLs; administrator access is unnecessary.
 
+Native cover adapters may opt in to local `--cover-mode frame:<seconds>` with `--cover-video` and a new `--cover-output .png`. FFmpeg extraction and near-black/uniform review happen before browser interaction; final preview verification remains required. See [site adapters](references/site-adapters.md).
+
 ## Start with the cheapest useful evidence
 
 | Task | First choice |
