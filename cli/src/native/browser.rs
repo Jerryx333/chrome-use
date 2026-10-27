@@ -1847,7 +1847,9 @@ const MENU_COVERED_WINDOW: &str = "the menu was still open after chrome-use hid 
     moment. Chrome is not the window in front: while another app covers it (or it is on another \
     Space), macOS reports every tab in it as hidden, so hiding the tab closes nothing. Ask the \
     user to bring that Chrome window to the front once (or to press Escape in the tab); \
-    chrome-use then closes the menu by itself on the next command";
+    chrome-use then closes the menu by itself on the next command. With \"Allow element picking \
+    on all sites\" on in the extension's options, chrome-use closes it without that, except \
+    for a key press, which needs the field focused";
 
 /// Password managers whose inline autofill menu is a frame of their own
 /// extension, mounted next to a focused login or card field. While that frame
@@ -7123,6 +7125,18 @@ impl BrowserManager {
                 "its window is minimized, so switching tabs in it hides nothing".to_string(),
             );
         }
+        // Chrome is not the frontmost app: every tab of the window already
+        // counts as hidden, so the flip below changes nothing (#449). Take
+        // focus out of the field instead, which closes Bitwarden's menu the
+        // way a click elsewhere does. Not when the key press must reach the
+        // field: focusing it again reopens the menu.
+        let mut blur_failure = None;
+        if blur_focused && window.get("focused").and_then(Value::as_bool) == Some(false) {
+            match self.close_menu_by_blur(&session_id, &pinned).await {
+                Ok(()) => return Ok(None),
+                Err(e) => blur_failure = Some(e),
+            }
+        }
         // The flip below switches tabs in this window. For a tab in the
         // background that means showing it next to the front tab, which in a
         // window with the user's own tabs would grab their tab, even for
@@ -7314,7 +7328,13 @@ impl BrowserManager {
             .ok()
             .and_then(|w| w.get("focused").and_then(Value::as_bool));
         if window_focused == Some(false) {
-            return Err(MENU_COVERED_WINDOW.to_string());
+            return Err(match blur_failure {
+                Some(why) => format!(
+                    "{MENU_COVERED_WINDOW}. Taking focus out of the field did not close it \
+                     either: {why}"
+                ),
+                None => MENU_COVERED_WINDOW.to_string(),
+            });
         }
         Err(if in_front {
             MENU_STILL_OPEN_IN_FRONT
@@ -7322,6 +7342,34 @@ impl BrowserManager {
             MENU_STILL_OPEN
         }
         .to_string())
+    }
+
+    /// Close a password manager's menu by blurring the focused field of the
+    /// pinned tab from the extension (`ABExt.blurFocusedField`, 0.5.90): no
+    /// debugger command, no tab switch. Bitwarden closes its menu when its
+    /// field blurs and none of its frames has the focus. Needs the
+    /// extension's optional site access; an older extension does not know
+    /// the method. Either way the error says why, for the caller's message.
+    async fn close_menu_by_blur(&self, session_id: &str, target_id: &str) -> Result<(), String> {
+        let out: Value = self
+            .client
+            .send_command(
+                "ABExt.blurFocusedField",
+                Some(json!({ "sessionId": session_id, "targetId": target_id })),
+                None,
+            )
+            .await?;
+        if out.get("blurred").and_then(Value::as_u64).unwrap_or(0) == 0 {
+            return Err("no field had the focus".to_string());
+        }
+        // The menu closes after a message round trip inside the password manager.
+        for _ in 0..6 {
+            if !self.pinned_tab_blocked().await {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        Err("the field lost the focus and the menu stayed open".to_string())
     }
 
     /// Close a password manager's menu on a background tab of the user's

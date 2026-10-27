@@ -3523,7 +3523,7 @@
     "message": "允许在所有网站选择元素"
   },
   "options_pick_all_hint": {
-    "message": "Chrome 只问一次，不用在每个网站第一次选择元素时再问。插件仍然只在你选择元素时才接触页面。"
+    "message": "Chrome 只问一次，不用在每个网站第一次选择元素时再问。插件仍然只在你选择元素时才接触页面；另外，在 chrome-use 自己打开的标签里，密码管理器的菜单挡住 agent 时，会让输入框失焦来关掉菜单。"
   },
   "ext_version_cli_outdated": {
     "message": "chrome-use CLI 有新版本 $LATEST$（当前 $CURRENT$）。",
