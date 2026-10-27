@@ -1324,6 +1324,7 @@ pub async fn hover_reporting(
                     delta_x: None,
                     delta_y: None,
                     modifiers: None,
+                    force: None,
                 },
                 Some(session_id),
             )
@@ -1465,6 +1466,7 @@ pub async fn hover_point(
                     delta_x: None,
                     delta_y: None,
                     modifiers: None,
+                    force: None,
                 },
                 Some(session_id),
             )
@@ -3589,7 +3591,11 @@ pub async fn ime_commit(client: &CdpClient, session_id: &str, chunk: &str) -> Re
     let chars: Vec<char> = chunk.chars().collect();
     for i in 1..=chars.len() {
         let partial: String = chars[..i].iter().collect();
+        let mut dwell = std::time::Duration::ZERO;
         for kind in ["rawKeyDown", "keyUp"] {
+            if kind == "keyUp" {
+                dwell = hold_key().await;
+            }
             client
                 .send_command(
                     "Input.dispatchKeyEvent",
@@ -3612,7 +3618,7 @@ pub async fn ime_commit(client: &CdpClient, session_id: &str, chunk: &str) -> Re
                 Some(session_id),
             )
             .await?;
-        tokio::time::sleep(pause_ms(90, 220)).await;
+        tokio::time::sleep(pause_ms(90, 220).saturating_sub(dwell)).await;
     }
     let n = chars.len() as u64;
     tokio::time::sleep(pause_ms(120 + 60 * n, 260 + 120 * n)).await;
@@ -3651,6 +3657,16 @@ fn pause_ms(lo: u64, hi: u64) -> std::time::Duration {
     std::time::Duration::from_millis(lo + humanize::next_seed() % (hi - lo + 1))
 }
 
+/// Hold the key that just went down for a humanized dwell before its keyUp
+/// (zero at HumanizeLevel::Off), and return how long it was held.
+async fn hold_key() -> std::time::Duration {
+    let dwell = humanize::key_dwell(humanize::active_level(), humanize::next_seed());
+    if !dwell.is_zero() {
+        tokio::time::sleep(dwell).await;
+    }
+    dwell
+}
+
 async fn type_chars(
     client: &CdpClient,
     session_id: &str,
@@ -3670,6 +3686,9 @@ async fn type_chars(
     };
 
     for (i, ch) in chars.into_iter().enumerate() {
+        // How long this character's key was held; it comes out of the gap
+        // that follows so the cadence stays the same.
+        let mut dwell = std::time::Duration::ZERO;
         if matches!(ch, '\n' | '\r' | '\t') {
             let (key, code, key_code) = char_to_key_info(ch);
             let text_str = key_text(&key);
@@ -3689,6 +3708,7 @@ async fn type_chars(
                     Some(session_id),
                 )
                 .await?;
+            dwell = hold_key().await;
 
             client
                 .send_command_typed::<_, Value>(
@@ -3740,6 +3760,7 @@ async fn type_chars(
                     Some(session_id),
                 )
                 .await?;
+            dwell = hold_key().await;
             client
                 .send_command_typed::<_, Value>(
                     "Input.dispatchKeyEvent",
@@ -3775,7 +3796,12 @@ async fn type_chars(
                 .await?;
         }
 
-        let gap = cadence[i];
+        let gap = humanize::flight_after_dwell(
+            cadence[i],
+            dwell,
+            humanize::active_level(),
+            humanize::next_seed(),
+        );
         if !gap.is_zero() {
             tokio::time::sleep(gap).await;
         }
@@ -3846,6 +3872,7 @@ pub async fn press_key_once(client: &CdpClient, session_id: &str, key: &str) -> 
             Some(session_id),
         )
         .await?;
+    hold_key().await;
     let _ = client
         .send_command_typed::<_, Value>(
             "Input.dispatchKeyEvent",
@@ -3924,6 +3951,7 @@ pub async fn press_key_with_modifiers(
             Some(session_id),
         )
         .await?;
+    hold_key().await;
 
     client
         .send_command_typed::<_, Value>(
@@ -4064,6 +4092,231 @@ pub async fn scroll(
     }
 }
 
+/// How `select` set the value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectOutcome {
+    /// `keyboard`: trusted type-ahead keys on the focused native `<select>`,
+    /// so Chrome itself fired trusted `input`/`change`. `unchanged`: the
+    /// option was already selected and nothing was sent. `setter`: the value
+    /// setter plus synthetic `input`/`change` (`isTrusted: false`), for a
+    /// `<select multiple>`, a non-web page, or a fallback. `custom`: a
+    /// non-native combobox opened and clicked through the DOM.
+    pub engine: &'static str,
+    /// Set when the trusted path was expected but the setter had to be used:
+    /// a page that checks `isTrusted` may ignore the change.
+    pub warning: Option<String>,
+}
+
+/// One type-ahead keypress on a closed menu-list `<select>`, the way Blink's
+/// `TypeAhead::HandleEvent` handles it (kMatchPrefix | kCycleFirstChar):
+/// the typed character joins the buffer; repeating the buffer's only
+/// character cycles to the next option starting with it; otherwise the whole
+/// buffer is a prefix searched from the selected option (from the one after
+/// it for a buffer of one character). Matching skips disabled options
+/// (`None`), ignores leading whitespace and case. Measured on macOS Chrome:
+/// `t` from Tokyo goes to Tokyo West (a disabled Tottori between is skipped),
+/// `t` again wraps back to Tokyo.
+struct TypeAhead {
+    buffer: String,
+    repeating: Option<char>,
+}
+
+impl TypeAhead {
+    fn press(
+        &mut self,
+        labels: &[Option<String>],
+        selected: Option<usize>,
+        c: char,
+    ) -> Option<usize> {
+        self.buffer.push(c);
+        let (prefix, offset) = if self.repeating == Some(c) {
+            (c.to_string(), 1)
+        } else if self.buffer.chars().count() > 1 {
+            self.repeating = None;
+            (self.buffer.clone(), 0)
+        } else {
+            self.repeating = Some(c);
+            (self.buffer.clone(), 1)
+        };
+        let n = labels.len();
+        if n == 0 {
+            return selected;
+        }
+        let prefix = prefix.to_lowercase();
+        let start = (selected.unwrap_or(0) + offset) % n;
+        (0..n)
+            .map(|i| (start + i) % n)
+            .find(|&i| {
+                labels[i]
+                    .as_deref()
+                    .is_some_and(|l| l.trim_start().to_lowercase().starts_with(&prefix))
+            })
+            .or(selected)
+    }
+}
+
+/// Where a burst of type-ahead `keys` leaves a closed `<select>` whose
+/// options read `labels` (`None` = disabled) and whose selected index is
+/// `selected`.
+pub fn typeahead_lands_on(
+    labels: &[Option<String>],
+    selected: Option<usize>,
+    keys: &str,
+) -> Option<usize> {
+    let mut ta = TypeAhead {
+        buffer: String::new(),
+        repeating: None,
+    };
+    let mut sel = selected;
+    for c in keys.chars() {
+        sel = ta.press(labels, sel, c);
+    }
+    sel
+}
+
+/// The shortest burst of type-ahead keys that moves a closed `<select>` from
+/// `selected` to `target`, typed as a person would: a prefix of the option's
+/// label, or its first letter pressed repeatedly to cycle. Lowercase (the
+/// match ignores case, so no Shift). Only printable ASCII: other text would
+/// need an IME, which does not feed type-ahead. A space only after the first
+/// key (a space with no type-ahead session opens the popup), and only when
+/// nothing without one works. `None` when no burst reaches the option.
+pub fn typeahead_keys(
+    labels: &[Option<String>],
+    selected: Option<usize>,
+    target: usize,
+) -> Option<String> {
+    let label = labels.get(target)?.as_deref()?.trim_start().to_lowercase();
+    let first = label.chars().next()?;
+    let typable = |c: char| c.is_ascii_graphic() || c == ' ';
+    let mut candidates: Vec<String> = Vec::new();
+    let mut prefix = String::new();
+    for c in label.chars() {
+        if !typable(c) {
+            break;
+        }
+        prefix.push(c);
+        candidates.push(prefix.clone());
+    }
+    if first.is_ascii_graphic() {
+        for k in 2..=labels.len() {
+            candidates.push(std::iter::repeat_n(first, k).collect());
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|keys| !keys.starts_with(' '))
+        .filter(|keys| typeahead_lands_on(labels, selected, keys) == Some(target))
+        .min_by_key(|keys| (keys.contains(' '), keys.chars().count()))
+}
+
+/// Blink's type-ahead timeout (`kTypeAheadTimeout`, 1 s) plus a margin.
+const TYPEAHEAD_SESSION: std::time::Duration = std::time::Duration::from_millis(1100);
+/// When `select` last typed type-ahead keys.
+static TYPEAHEAD_LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// Drive a closed native `<select>` to option `plan.index` with trusted
+/// input: focus it through CDP (no page script, no click, which would open
+/// the native popup on macOS), type the type-ahead keys, and read the result
+/// back. `Err(reason)` when the option was not reached; the caller falls back.
+async fn select_by_typeahead(
+    client: &CdpClient,
+    session_id: &str,
+    element_session_id: &str,
+    object_id: &str,
+    plan: &Value,
+) -> Result<(), String> {
+    let index = plan
+        .get("index")
+        .and_then(Value::as_u64)
+        .ok_or("no target index")? as usize;
+    let selected = plan
+        .get("selected")
+        .and_then(Value::as_i64)
+        .and_then(|i| usize::try_from(i).ok());
+    let labels: Vec<Option<String>> = plan
+        .get("labels")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().map(|l| l.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    if plan.get("disabled").and_then(Value::as_bool) == Some(true) {
+        return Err("the <select> is disabled".to_string());
+    }
+    let keys = typeahead_keys(&labels, selected, index).ok_or_else(|| {
+        "no type-ahead keys reach the option (disabled, a non-ASCII label, or one an earlier \
+         option shadows)"
+            .to_string()
+    })?;
+
+    client
+        .send_command(
+            "DOM.focus",
+            Some(json!({ "objectId": object_id })),
+            Some(element_session_id),
+        )
+        .await
+        .map_err(|e| format!("could not focus the <select>: {e}"))?;
+    const STATE: &str = r#"function() {
+        let open = false;
+        try { open = this.matches(':open'); } catch (e) {}
+        return { focused: this.getRootNode().activeElement === this, open,
+                 index: this.selectedIndex, value: this.value };
+    }"#;
+    let focused = call_on(client, element_session_id, object_id, STATE)
+        .await?
+        .result
+        .value
+        .unwrap_or(Value::Null);
+    if focused.get("focused").and_then(Value::as_bool) != Some(true) {
+        return Err("the <select> did not take focus".to_string());
+    }
+
+    // Chrome keeps a type-ahead buffer for a second after the last key: a
+    // second `select` straight after the first would extend it ("tt" + "na"
+    // matches nothing) instead of starting over. Let it lapse, as a person
+    // pausing between two choices does.
+    let lapse = TYPEAHEAD_LAST
+        .lock()
+        .unwrap()
+        .map(|t| TYPEAHEAD_SESSION.saturating_sub(t.elapsed()))
+        .unwrap_or_default();
+    if !lapse.is_zero() {
+        tokio::time::sleep(lapse).await;
+    }
+    // Keys go to the page session: Chrome routes them to the focused frame,
+    // as `type` does.
+    let typed = type_chars(client, session_id, &keys, None, true).await;
+    *TYPEAHEAD_LAST.lock().unwrap() = Some(std::time::Instant::now());
+    typed?;
+
+    let after = call_on(client, element_session_id, object_id, STATE)
+        .await?
+        .result
+        .value
+        .unwrap_or(Value::Null);
+    if after.get("open").and_then(Value::as_bool) == Some(true) {
+        return Err("the native option popup opened".to_string());
+    }
+    let want = plan.get("value").and_then(Value::as_str);
+    if after.get("index").and_then(Value::as_u64) == Some(index as u64)
+        && after.get("value").and_then(Value::as_str) == want
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "type-ahead {keys:?} left option {} selected",
+            after.get("index").cloned().unwrap_or(Value::Null)
+        ))
+    }
+}
+
+/// `select`: choose `values` in a native `<select>` or a custom combobox.
+///
+/// A native single `<select>` on a web page (`trusted_input`) is driven with
+/// trusted type-ahead keys, so the page sees the `input`/`change` Chrome
+/// fires for a person (`isTrusted: true`). The value setter plus synthetic
+/// events is kept for `<select multiple>`, non-web pages, and as a reported
+/// fallback.
 pub async fn select_option(
     client: &CdpClient,
     session_id: &str,
@@ -4071,7 +4324,8 @@ pub async fn select_option(
     selector_or_ref: &str,
     values: &[String],
     iframe_sessions: &HashMap<String, String>,
-) -> Result<(), String> {
+    trusted_input: bool,
+) -> Result<SelectOutcome, String> {
     let (object_id, effective_session_id) = resolve_element_object_id(
         client,
         session_id,
@@ -4091,7 +4345,7 @@ pub async fn select_option(
     // success while nothing was selected (#105.1). Now non-<select> targets fall
     // through to the same portal-aware open→poll→click routine `pick` uses, so
     // `select @ref "Pageview"` actually lands on react-select and friends.
-    let js = r#"async function(vals) {
+    let js = r#"async function(vals, plan) {
             // Zero-width characters out, any whitespace run (NBSP included)
             // to one space: a label that reads "Tokyo" must match "Tokyo"
             // (after upstream vercel-labs/agent-browser #1736).
@@ -4135,6 +4389,17 @@ pub async fn select_option(
                 }
                 if (matches.length === 0) {
                     return { ok: false, kind: 'select', available: options.map(o => ({ value: o.value, label: norm(o.textContent) })) };
+                }
+
+                // Trusted path: hand the caller what type-ahead needs and
+                // change nothing here.
+                if (plan && !el.multiple) {
+                    const index = options.indexOf(matches[0]);
+                    return { ok: true, kind: 'select', plan: {
+                        index, selected: el.selectedIndex, value: matches[0].value,
+                        disabled: el.matches(':disabled'),
+                        labels: options.map(o => o.matches(':disabled') ? null : norm(o.label || o.text)),
+                    } };
                 }
 
                 // Use the platform setters, not an instance-level `.value =` /
@@ -4190,22 +4455,58 @@ pub async fn select_option(
         }"#
     .to_string();
 
-    let resp = client
+    let params = |plan: bool| CallFunctionOnParams {
+        function_declaration: js.clone(),
+        object_id: Some(object_id.clone()),
+        arguments: Some(vec![
+            CallArgument {
+                value: Some(serde_json::json!(values)),
+                object_id: None,
+            },
+            CallArgument {
+                value: Some(serde_json::json!(plan)),
+                object_id: None,
+            },
+        ]),
+        return_by_value: Some(true),
+        await_promise: Some(true),
+    };
+    let mut resp = client
         .send_command_typed::<_, Value>(
             "Runtime.callFunctionOn",
-            &CallFunctionOnParams {
-                function_declaration: js,
-                object_id: Some(object_id),
-                arguments: Some(vec![CallArgument {
-                    value: Some(serde_json::json!(values)),
-                    object_id: None,
-                }]),
-                return_by_value: Some(true),
-                await_promise: Some(true),
-            },
+            &params(trusted_input),
             Some(&effective_session_id),
         )
         .await?;
+    let mut fallback: Option<String> = None;
+    if let Some(plan) = resp.pointer("/result/value/plan").cloned() {
+        let index = plan.get("index").and_then(Value::as_i64);
+        if index.is_some() && index == plan.get("selected").and_then(Value::as_i64) {
+            // Already selected: a person would not touch it, and no event fires.
+            return Ok(SelectOutcome {
+                engine: "unchanged",
+                warning: None,
+            });
+        }
+        match select_by_typeahead(client, session_id, &effective_session_id, &object_id, &plan)
+            .await
+        {
+            Ok(()) => {
+                return Ok(SelectOutcome {
+                    engine: "keyboard",
+                    warning: None,
+                })
+            }
+            Err(reason) => fallback = Some(reason),
+        }
+        resp = client
+            .send_command_typed::<_, Value>(
+                "Runtime.callFunctionOn",
+                &params(false),
+                Some(&effective_session_id),
+            )
+            .await?;
+    }
 
     // A thrown exception (or a missing result) must be a loud error, never a silent
     // success — this is what let the old `select` no-op on custom comboboxes (#105.1).
@@ -4279,7 +4580,17 @@ pub async fn select_option(
         ));
     }
 
-    Ok(())
+    let custom = result.and_then(|v| v.get("kind")).and_then(|v| v.as_str()) == Some("custom");
+    Ok(SelectOutcome {
+        engine: if custom { "custom" } else { "setter" },
+        warning: fallback.map(|reason| {
+            format!(
+                "selected with the value setter and synthetic input/change events \
+                 (isTrusted false), because trusted type-ahead did not reach the option: \
+                 {reason}. A page that checks isTrusted may ignore the change"
+            )
+        }),
+    })
 }
 
 pub async fn check(
@@ -5270,6 +5581,7 @@ async fn move_pointer_with(
                     delta_x: None,
                     delta_y: None,
                     modifiers: None,
+                    force: None,
                 },
                 Some(session_id),
             )
@@ -5321,6 +5633,7 @@ async fn dispatch_click(
                 delta_x: None,
                 delta_y: None,
                 modifiers: None,
+                force: mouse_force("mousePressed", button_value),
             },
             Some(session_id),
         )
@@ -5347,6 +5660,7 @@ async fn dispatch_click(
                 delta_x: None,
                 delta_y: None,
                 modifiers: None,
+                force: mouse_force("mouseReleased", 0),
             },
             Some(session_id),
         )
@@ -6062,6 +6376,99 @@ async fn active_element_object_id(client: &CdpClient, session_id: &str) -> Resul
     result.result.object_id.ok_or_else(|| {
         "paste needs a target: pass a selector/@ref, or focus a field first.".to_string()
     })
+}
+
+#[cfg(test)]
+mod typeahead_tests {
+    use super::{typeahead_keys, typeahead_lands_on};
+
+    fn labels(l: &[Option<&str>]) -> Vec<Option<String>> {
+        l.iter().map(|o| o.map(String::from)).collect()
+    }
+
+    // The fixture measured on macOS Chrome 155 (see TypeAhead).
+    fn cities() -> Vec<Option<String>> {
+        labels(&[
+            Some("Osaka"),
+            Some("Tokyo"),
+            Some("Tokyo West"),
+            None, // Tottori, disabled
+            Some("New York"),
+            Some("Nagoya"),
+            Some("北京"),
+        ])
+    }
+
+    #[test]
+    fn simulation_matches_what_chrome_did() {
+        let c = cities();
+        // `t`, `o`, `n` in one burst from Osaka: "ton" matches nothing after
+        // Tokyo, so Tokyo stays.
+        assert_eq!(typeahead_lands_on(&c, Some(0), "ton"), Some(1));
+        // Separate presses (new sessions): t from Tokyo skips the disabled
+        // Tottori to Tokyo West, t again wraps to Tokyo, n goes to New York.
+        assert_eq!(typeahead_lands_on(&c, Some(1), "t"), Some(2));
+        assert_eq!(typeahead_lands_on(&c, Some(2), "t"), Some(1));
+        assert_eq!(typeahead_lands_on(&c, Some(1), "n"), Some(4));
+        // "tokyo w" (space inside the session) reaches Tokyo West.
+        assert_eq!(typeahead_lands_on(&c, Some(1), "tokyo w"), Some(2));
+    }
+
+    #[test]
+    fn picks_the_shortest_burst_and_avoids_spaces() {
+        let c = cities();
+        assert_eq!(typeahead_keys(&c, Some(0), 1).as_deref(), Some("t"));
+        assert_eq!(typeahead_keys(&c, Some(0), 4).as_deref(), Some("n"));
+        assert_eq!(typeahead_keys(&c, Some(0), 5).as_deref(), Some("na"));
+        // From New York, Nagoya is the next "n".
+        assert_eq!(typeahead_keys(&c, Some(4), 5).as_deref(), Some("n"));
+        // Tokyo West from Osaka: cycling "tt" beats "tokyo w".
+        assert_eq!(typeahead_keys(&c, Some(0), 2).as_deref(), Some("tt"));
+        // From Tokyo it is one press.
+        assert_eq!(typeahead_keys(&c, Some(1), 2).as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn refuses_what_typing_cannot_reach() {
+        let c = cities();
+        // Disabled option.
+        assert_eq!(typeahead_keys(&c, Some(0), 3), None);
+        // Non-ASCII label: would need an IME.
+        assert_eq!(typeahead_keys(&c, Some(0), 6), None);
+        // Out of range.
+        assert_eq!(typeahead_keys(&c, Some(0), 99), None);
+        // An empty label.
+        assert_eq!(
+            typeahead_keys(&labels(&[Some("A"), Some("")]), Some(0), 1),
+            None
+        );
+    }
+
+    #[test]
+    fn every_reachable_burst_lands_on_its_target() {
+        let c = labels(&[
+            Some("Apple"),
+            Some("Apricot"),
+            Some("aardvark"),
+            Some("  Banana"),
+            Some("Band (live)"),
+            Some("banana split"),
+            Some("C++"),
+        ]);
+        for from in 0..c.len() {
+            for to in 0..c.len() {
+                let keys = typeahead_keys(&c, Some(from), to)
+                    .unwrap_or_else(|| panic!("{from} -> {to} unreachable"));
+                assert!(!keys.starts_with(' '));
+                assert!(keys.chars().all(|ch| !ch.is_ascii_uppercase()));
+                assert_eq!(
+                    typeahead_lands_on(&c, Some(from), &keys),
+                    Some(to),
+                    "{keys:?}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
