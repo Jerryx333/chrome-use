@@ -221,11 +221,35 @@ jobs:
             echo "signed but NOT notarized (no App Store Connect key configured)"
           fi
 
+          # The double-clickable installer the extension's setup guide
+          # downloads: the stapled bundle in a disk image, signed with the
+          # same Developer ID Application identity, notarized and stapled.
+          # Opened from Finder, the app installs itself where install.sh
+          # would and registers the native host (`chrome-use` Finder-launch
+          # setup, cli/src/gui_setup.rs). A pkg would need a Developer ID
+          # Installer certificate, which this repo does not have, and an
+          # admin password to install.
+          sh scripts/macos-dmg.sh "$app" "$RUNNER_TEMP/${{ matrix.asset }}.dmg" \
+            --identity "$APPLE_SIGN_IDENTITY" --keychain "$kc"
+          if [ -n "${APPLE_API_KEY_P8:-}" ]; then
+            echo "$APPLE_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc.p8"
+            xcrun notarytool submit "$RUNNER_TEMP/${{ matrix.asset }}.dmg" \
+              --key "$RUNNER_TEMP/asc.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+              --wait --timeout 30m
+            rm -f "$RUNNER_TEMP/asc.p8"
+            xcrun stapler staple "$RUNNER_TEMP/${{ matrix.asset }}.dmg"
+            spctl -a -t open --context context:primary-signature -vv "$RUNNER_TEMP/${{ matrix.asset }}.dmg" \
+              || echo "::warning::spctl did not accept the stapled disk image"
+          fi
+
           security delete-keychain "$kc" || true
 
       - name: Build app bundle, ad-hoc signed (macOS, no signing secrets)
         if: env.IS_RELEASE == 'true' && startsWith(matrix.os, 'macos') && env.HAS_SIGNING != 'true'
-        run: sh scripts/macos-app-bundle.sh "cli/target/${{ matrix.target }}/release/chrome-use" "$RUNNER_TEMP/bundle"
+        run: |
+          sh scripts/macos-app-bundle.sh "cli/target/${{ matrix.target }}/release/chrome-use" "$RUNNER_TEMP/bundle"
+          # Unsigned: Gatekeeper refuses it on a double-click (a fork's build).
+          sh scripts/macos-dmg.sh "$RUNNER_TEMP/bundle/ChromeUse.app" "$RUNNER_TEMP/${{ matrix.asset }}.dmg"
 
       - name: Package (.tar.gz + .sha256)
         if: env.IS_RELEASE == 'true'
@@ -262,13 +286,20 @@ jobs:
               shasum -a 256 "${{ matrix.asset }}.tar.gz" > "${{ matrix.asset }}.tar.gz.sha256"
             fi
           )
+          # macOS: the disk image the extension's setup guide downloads.
+          if [ -f "$RUNNER_TEMP/${{ matrix.asset }}.dmg" ]; then
+            cp "$RUNNER_TEMP/${{ matrix.asset }}.dmg" dist/
+            ( cd dist && shasum -a 256 "${{ matrix.asset }}.dmg" > "${{ matrix.asset }}.dmg.sha256" )
+          fi
 
       - name: Upload artifact
         if: env.IS_RELEASE == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}.tar.gz*
+          path: |
+            dist/${{ matrix.asset }}.tar.gz*
+            dist/${{ matrix.asset }}.dmg*
           compression-level: 0
           retention-days: 3
 
@@ -317,6 +348,8 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.tar.gz.sha256
+            dist/*.dmg
+            dist/*.dmg.sha256
           fail_on_unmatched_files: true
           body_path: release-notes.md
           append_body: false
