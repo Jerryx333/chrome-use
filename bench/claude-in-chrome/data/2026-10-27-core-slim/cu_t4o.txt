@@ -1,0 +1,11 @@
+secs 20.43 turns 6 tool_calls 5 in 12 cache_create 13652 cache_read 159025 out 547 cost 0.152
+  $ chrome-use skills get core
+  $ chrome-use open http://127.0.0.1:8711/frame.html && chrome-use snapshot -i
+  $ chrome-use snapshot -i
+  $ chrome-use fill @e4 "spring-25" --observe && chrome-use click @e3 --observe
+  $ chrome-use done
+I entered `spring-25` in the coupon widget and clicked Apply. The widget now shows:
+
+**APPLIED:SPRING-25**
+
+I closed the browser tab afterwards.

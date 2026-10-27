@@ -97,3 +97,24 @@ Notes:
   `cu_t2.json` is a plain `--output-format json` result, so its command list
   was not captured. The rebrowser screenshot for Claude in Chrome is not
   published.
+
+## Core skill check, 2026-10-27 (issue #781, G7)
+
+Same rig and harness, chrome-use 1.5.271, run back to back on t4 and t3.
+"Old" is the 1.5.271 `skills get core` (26,031 bytes); "new" serves the
+slimmed entry point from this branch (7,496 bytes) through
+`AGENT_BROWSER_SKILLS_DIR`. One run each; logs in `data/2026-10-27-core-slim/`.
+
+| Run | Result | Time | Turns | Cache-write tokens | Cache-read tokens | Cost |
+|---|---|---|---|---|---|---|
+| t4 old | exact `APPLIED:SPRING-25` | 20.4 s | 6 | 13,652 | 159,025 | $0.152 |
+| t4 new | exact `APPLIED:SPRING-25` | 31.6 s | 6 | 4,134 | 138,039 | $0.073 |
+| t3 old | `PO CREATED quote=Q-4471 total=107.50` | 23.7 s | 7 | 12,026 | 191,675 | $0.150 |
+| t3 new | `PO CREATED quote=Q-4471 total=107.50` | 19.1 s | 8 | 4,249 | 187,102 | $0.088 |
+
+Both tasks stayed correct with the same browser commands. Each run wrote about
+8–9.5k fewer tokens to the prompt cache and cost 42–52% less. Wall-clock time
+moved both ways across single runs, so it is noise at this sample size. The
+extra turn in "t3 new" was the agent storing `--session po` in a shell
+variable, which zsh does not word-split; it reran the command with the flag
+written out.

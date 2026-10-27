@@ -1,0 +1,22 @@
+secs 19.132 turns 8 tool_calls 7 in 16 cache_create 4249 cache_read 187102 out 850 cost 0.088
+  $ chrome-use skills get core
+  $ S="--session po"; chrome-use $S open http://127.0.0.1:8711/price.html && chrome-use $S read; chrome-use $S open --new-tab http://127.0.0.1:8711/order.html && ch
+  $ chrome-use open http://127.0.0.1:8711/price.html --session po && chrome-use read --session po
+  $ chrome-use extract --session po --schema '{"rows":"tr","fields":{"c":"td:nth-child(1)","q":"td:nth-child(2)","u":"td:nth-child(3)"}}'
+  $ chrome-use open --new-tab http://127.0.0.1:8711/order.html --session po && chrome-use snapshot -i --session po
+  $ chrome-use batch --session po "fill @e3 Q-4471" "fill @e4 107.50" "click @e2 --observe"
+  $ chrome-use done --session po
+The purchase order was created. The order page showed this confirmation:
+
+**`PO CREATED quote=Q-4471 total=107.50`**
+
+Quote Q-4471 adds up to 107.50:
+
+| Item | Qty × Unit price | Line total |
+|---|---|---|
+| Widget A | 12 × 3.25 | 39.00 |
+| Widget B | 5 × 7.10 | 35.50 |
+| Widget C | 3 × 11.00 | 33.00 |
+| **Total** | | **107.50** |
+
+I've closed both tabs.
