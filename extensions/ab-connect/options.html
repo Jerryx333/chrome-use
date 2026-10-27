@@ -26,6 +26,7 @@
   .row { display: flex; align-items: center; gap: 16px; padding: 14px 0; border-top: 1px solid var(--line); }
   .row:first-of-type { border-top: 0; }
   .card .lead + .row { border-top: 0; }
+  .card:target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .row .grow { flex: 1; min-width: 0; }
   .row .name { font-weight: 600; }
   .row .hint { color: var(--muted); font-size: 12.5px; }
@@ -100,6 +101,18 @@
         </div>
       </div>
       <span class="pill" id="tabPill" style="display:none"></span>
+    </div>
+  </section>
+
+  <!-- Site access (site-access.js) -->
+  <section class="card" id="site-access">
+    <h2 data-i18n="options_site_access_heading">Site access</h2>
+    <div class="row">
+      <div class="grow">
+        <div class="name" data-i18n="options_pick_all_name">Allow chrome-use on all sites</div>
+        <div class="hint" data-i18n="options_pick_all_hint">When a password manager's menu (Bitwarden, 1Password…) covers a field on a tab chrome-use opened, chrome-use closes it by taking focus out of the field; without this it waits for you to press Escape. It also lets you pick elements without a prompt on each site. Chrome asks once. The extension touches a page only on a tab chrome-use opened, or when you pick an element there.</div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="optPickAll" /><span class="track"></span><span class="knob"></span></label>
     </div>
   </section>
 
@@ -181,13 +194,6 @@
           <a href="#" id="inspectShortcuts" data-i18n="options_inspect_change_shortcut">Change the shortcut</a></div>
       </div>
       <label class="toggle"><input type="checkbox" id="optInspect" /><span class="track"></span><span class="knob"></span></label>
-    </div>
-    <div class="row">
-      <div class="grow">
-        <div class="name" data-i18n="options_pick_all_name">Allow element picking on all sites</div>
-        <div class="hint" data-i18n="options_pick_all_hint">Chrome asks once, instead of the first time you pick an element on each site. The extension still touches a page only when you pick an element there, or, on a tab chrome-use opened, to take focus out of a field when a password manager's menu blocks the agent.</div>
-      </div>
-      <label class="toggle"><input type="checkbox" id="optPickAll" /><span class="track"></span><span class="knob"></span></label>
     </div>
     <div class="row">
       <div class="grow">

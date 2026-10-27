@@ -48,7 +48,7 @@ test('missing site access names the option that grants it', async () => {
   const d = deps({
     executeScript: async () => { throw new Error('Cannot access contents of the page. Extension manifest must request permission to access the respective host.') },
   })
-  await assert.rejects(blurFocusedField(7, d), /no site access .*Allow element picking on all sites/)
+  await assert.rejects(blurFocusedField(7, d), /no site access .*Allow on all sites/)
 })
 
 test('the frame script blurs only an editable field', () => {

@@ -3520,10 +3520,25 @@
     "message": "Page not recorded"
   },
   "options_pick_all_name": {
-    "message": "Allow element picking on all sites"
+    "message": "Allow chrome-use on all sites"
   },
   "options_pick_all_hint": {
-    "message": "Chrome asks once, instead of the first time you pick an element on each site. The extension still touches a page only when you pick an element there, or, on a tab chrome-use opened, to take focus out of a field when a password manager's menu blocks the agent."
+    "message": "When a password manager's menu (Bitwarden, 1Password…) covers a field on a tab chrome-use opened, chrome-use closes it by taking focus out of the field; without this it waits for you to press Escape. It also lets you pick elements without a prompt on each site. Chrome asks once. The extension touches a page only on a tab chrome-use opened, or when you pick an element there."
+  },
+  "options_site_access_heading": {
+    "message": "Site access"
+  },
+  "popup_site_access_text": {
+    "message": "Site access is off. When a password manager's menu covers a field on chrome-use's tab, the agent waits for you to press Escape."
+  },
+  "popup_site_access_button": {
+    "message": "Allow on all sites"
+  },
+  "bg_site_access_title": {
+    "message": "A password manager's menu is blocking chrome-use"
+  },
+  "bg_site_access_message": {
+    "message": "Click to allow chrome-use on all sites, so it can close the menu itself next time."
   },
   "ext_version_cli_outdated": {
     "message": "chrome-use CLI $LATEST$ is available (you have $CURRENT$).",

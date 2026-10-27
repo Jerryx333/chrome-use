@@ -3520,10 +3520,25 @@
     "message": "未记录页面"
   },
   "options_pick_all_name": {
-    "message": "允许在所有网站选择元素"
+    "message": "允许 chrome-use 访问所有网站"
   },
   "options_pick_all_hint": {
-    "message": "Chrome 只问一次，不用在每个网站第一次选择元素时再问。插件仍然只在你选择元素时才接触页面；另外，在 chrome-use 自己打开的标签里，密码管理器的菜单挡住 agent 时，会让输入框失焦来关掉菜单。"
+    "message": "在 chrome-use 打开的标签里，密码管理器的菜单（Bitwarden、1Password 等）挡住输入框时，chrome-use 会让输入框失焦来关掉菜单；不开这个就只能等你按 Esc。开了之后，选择元素也不用在每个网站单独确认。Chrome 只问一次。插件只在 chrome-use 自己打开的标签里、或者你选择元素时才接触页面。"
+  },
+  "options_site_access_heading": {
+    "message": "网站访问"
+  },
+  "popup_site_access_text": {
+    "message": "网站访问未开启：密码管理器的菜单挡住 chrome-use 标签里的输入框时，agent 只能等你按 Esc。"
+  },
+  "popup_site_access_button": {
+    "message": "允许访问所有网站"
+  },
+  "bg_site_access_title": {
+    "message": "密码管理器的菜单挡住了 chrome-use"
+  },
+  "bg_site_access_message": {
+    "message": "点这里允许 chrome-use 访问所有网站，下次它就能自己关掉菜单。"
   },
   "ext_version_cli_outdated": {
     "message": "chrome-use CLI 有新版本 $LATEST$（当前 $CURRENT$）。",

@@ -39,6 +39,7 @@ import { attachTabById } from './attach-by-id.js';
 import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
 import { blurFocusedField } from './menu-blur.js';
+import { SITE_ACCESS_NOTIFICATION, SITE_ACCESS_OPTIONS_PAGE, hasSiteAccess, isSiteAccessError, notifySiteAccessNeeded } from './site-access.js';
 import { DWELL_MS, UserTouchedTabs } from './user-touched.js';
 import { removeAgentTab } from './remove-agent-tab.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
@@ -280,6 +281,11 @@ try {
   });
 } catch {}
 chrome.notifications.onClicked.addListener(id => {
+  if (id === SITE_ACCESS_NOTIFICATION) {
+    void chrome.tabs.create({ url: chrome.runtime.getURL(SITE_ACCESS_OPTIONS_PAGE) }).catch(() => {});
+    void chrome.notifications.clear(id).catch(() => {});
+    return;
+  }
   openFromNotification(id, { windowId: lastFocusedWindowId, chrome, panels: panelPresence, pending: selection => { pendingPanelSelect = selection; }, tabs: agentPanelEntry.ready ? notificationPanels : null });
 });
 const SKIP_URL = /^(chrome|chrome-extension|devtools|chrome-untrusted|edge|about):/i;
@@ -1680,11 +1686,17 @@ async function handleForwardCdpCommand(msg) {
     const tid = typeof params?.targetId === 'string' ? params.targetId : '';
     const sid = typeof params?.sessionId === 'string' ? params.sessionId : sessionId;
     const tabId = (sid ? resolveSessionTab(sid, sessionToTab, childSessionToTab) : null) ?? (tid ? tabForTarget(tid) : null);
-    return blurFocusedField(tabId, {
-      isOwned: (id) => ownedTabs.has(id),
-      getAllFrames: (id) => chrome.webNavigation.getAllFrames({ tabId: id }),
-      executeScript: (injection) => chrome.scripting.executeScript(injection),
-    });
+    try {
+      return await blurFocusedField(tabId, {
+        isOwned: (id) => ownedTabs.has(id),
+        getAllFrames: (id) => chrome.webNavigation.getAllFrames({ tabId: id }),
+        executeScript: (injection) => chrome.scripting.executeScript(injection),
+      });
+    } catch (e) {
+      // The agent now waits for the user: say where the switch is.
+      if (isSiteAccessError(e)) void notifySiteAccessNeeded({ storage: chrome.storage.local, notifications: chrome.notifications, t }).catch(() => {});
+      throw e;
+    }
   }
 
   if (method === 'ABExt.inspectTab') {
@@ -1859,6 +1871,8 @@ async function handleForwardCdpCommand(msg) {
       stealthMode: cursorSettings.ab_stealth !== false,
       notifyEnabled,
       idleDetachMs,
+      // 0.5.92: the optional http(s) access menu-blur.js needs.
+      siteAccess: await hasSiteAccess(chrome.permissions),
     };
   }
 

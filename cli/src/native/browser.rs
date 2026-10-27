@@ -1821,6 +1821,17 @@ fn window_has_unowned_tab(tabs: &Value, owned: &HashSet<i64>) -> bool {
 
 /// The recovery's error when the menu was open again after the tab was shown.
 const MENU_STILL_OPEN: &str = "the menu was still open after chrome-use hid the tab for a moment";
+/// A menu recovery's error, with why taking focus out of the field (tried
+/// first while Chrome is not the window in front) did not close the menu.
+fn with_blur_failure(error: String, blur_failure: Option<&str>) -> String {
+    match blur_failure {
+        Some(why) => {
+            format!("{error}. Taking focus out of the field did not close it either: {why}")
+        }
+        None => error,
+    }
+}
+
 /// What [`BrowserManager::activate_in_agent_window`] found in the agent window.
 struct AgentWindowNudge {
     window: i64,
@@ -1847,9 +1858,9 @@ const MENU_COVERED_WINDOW: &str = "the menu was still open after chrome-use hid 
     moment. Chrome is not the window in front: while another app covers it (or it is on another \
     Space), macOS reports every tab in it as hidden, so hiding the tab closes nothing. Ask the \
     user to bring that Chrome window to the front once (or to press Escape in the tab); \
-    chrome-use then closes the menu by itself on the next command. With \"Allow element picking \
-    on all sites\" on in the extension's options, chrome-use closes it without that, except \
-    for a key press, which needs the field focused";
+    chrome-use then closes the menu by itself on the next command. Once the user allows \
+    chrome-use on all sites (the chrome-use icon in Chrome's toolbar → \"Allow on all sites\"), \
+    chrome-use closes it without that, except for a key press, which needs the field focused";
 
 /// Password managers whose inline autofill menu is a frame of their own
 /// extension, mounted next to a focused login or card field. While that frame
@@ -7308,7 +7319,10 @@ impl BrowserManager {
         // this is the only way it closes without the user pressing Escape
         // (#750).
         if !in_front && self.window_holds_user_tabs(window_id).await {
-            return self.close_menu_from_agent_window(window_id).await;
+            return self
+                .close_menu_from_agent_window(window_id)
+                .await
+                .map_err(|e| with_blur_failure(e, blur_failure.as_deref()));
         }
         let front = self
             .chrome_call(
@@ -7484,13 +7498,10 @@ impl BrowserManager {
             .ok()
             .and_then(|w| w.get("focused").and_then(Value::as_bool));
         if window_focused == Some(false) {
-            return Err(match blur_failure {
-                Some(why) => format!(
-                    "{MENU_COVERED_WINDOW}. Taking focus out of the field did not close it \
-                     either: {why}"
-                ),
-                None => MENU_COVERED_WINDOW.to_string(),
-            });
+            return Err(with_blur_failure(
+                MENU_COVERED_WINDOW.to_string(),
+                blur_failure.as_deref(),
+            ));
         }
         Err(if in_front {
             MENU_STILL_OPEN_IN_FRONT

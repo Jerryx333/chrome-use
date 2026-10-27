@@ -7,20 +7,22 @@ import { t, applyI18n } from './i18n.js'
 import { versionNotices } from './version-notice.js'
 import { renderVersionNotices } from './version-banner.js'
 import { missingHostHint } from './native-host-hint.js'
+import { SITE_ACCESS, hasSiteAccess } from './site-access.js'
 
 // popup.js is a module; vm runs it as a script with its i18n import supplied.
 const source = readFileSync(new URL('./popup.js', import.meta.url), 'utf8')
   .replace(/^import .*\n/gm, '')
 
-function popup(initial, extensionAvailable = true, deferred = false) {
+function popup(initial, extensionAvailable = true, deferred = false, permissions = undefined) {
   const callbacks = [], timers = []
   const nodes = new Map()
   let changed
   const context = {
     document: {
       getElementById(id) {
-        if (!nodes.has(id)) nodes.set(id, { textContent: '', style: {}, children: [],
-          classList: { add() {}, remove() {} }, replaceChildren(...c) { this.children = c } })
+        if (!nodes.has(id)) nodes.set(id, { textContent: '', style: {}, children: [], listeners: {},
+          classList: { add() {}, remove() {} }, replaceChildren(...c) { this.children = c },
+          addEventListener(type, fn) { this.listeners[type] = fn } })
         return nodes.get(id)
       },
       querySelectorAll() { return [] },
@@ -29,9 +31,9 @@ function popup(initial, extensionAvailable = true, deferred = false) {
     chrome: { runtime: {
       sendMessage(_request, callback) { if (deferred) callbacks.push(callback); else callback(initial) },
       onMessage: { addListener(fn) { changed = fn } },
-    } },
+    }, permissions },
     setTimeout(callback, delay) { timers.push({ callback, delay }) },
-    t, applyI18n, versionNotices, renderVersionNotices, missingHostHint,
+    t, applyI18n, versionNotices, renderVersionNotices, missingHostHint, SITE_ACCESS, hasSiteAccess,
   }
   if (!extensionAvailable) delete context.chrome
   vm.runInNewContext(source, context)
@@ -110,4 +112,19 @@ test('popup shows an outdated CLI and a waiting extension update', () => {
   assert.match(texts[1], /0\.5\.80 is downloaded/)
   p.change({ connected: true, connectionState: 'connected', tabCount: 0 })
   assert.equal(box.hidden, true)
+})
+
+test('popup offers site access when it is off and asks Chrome on the button', async () => {
+  let granted = false, requested = null
+  const permissions = {
+    contains: async () => granted,
+    request: async (p) => { requested = p; granted = true; return true },
+  }
+  const { nodes } = popup({ connected: true }, true, false, permissions)
+  await new Promise((r) => setImmediate(r))
+  assert.equal(nodes.get('siteAccess').hidden, false)
+  await nodes.get('siteAccessGrant').listeners.click()
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(requested, SITE_ACCESS)
+  assert.equal(nodes.get('siteAccess').hidden, true)
 })

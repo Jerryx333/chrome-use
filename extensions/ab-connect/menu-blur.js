@@ -53,7 +53,7 @@ export async function blurFocusedField(tabId, deps) {
   } catch (e) {
     const message = String(e?.message || e)
     if (/permission|Cannot access/i.test(message)) {
-      throw new Error(`blurFocusedField: no site access (${message}); grant it in the chrome-use extension options ("Allow element picking on all sites")`)
+      throw new Error(`blurFocusedField: no site access (${message}); the user grants it once: the chrome-use icon in Chrome's toolbar → "Allow on all sites" (or Settings → Site access)`)
     }
     throw new Error(`blurFocusedField: ${message}`)
   }

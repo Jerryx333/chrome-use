@@ -271,6 +271,24 @@ fn relay_checks(checks: &mut Vec<Check>, health: &crate::connect::RelayHealth) {
             .with_fix("reload the chrome-use extension at chrome://extensions (or restart Chrome)");
     }
     checks.push(debugger);
+    match health.site_access {
+        Some(true) => checks.push(Check::new(
+            "relay.siteAccess",
+            "Launch test",
+            Status::Pass,
+            "site access: on (password-manager menus on chrome-use tabs close by themselves)",
+        )),
+        Some(false) => checks.push(
+            Check::new(
+                "relay.siteAccess",
+                "Launch test",
+                Status::Warn,
+                crate::connect::SITE_ACCESS_OFF,
+            )
+            .with_fix(crate::connect::SITE_ACCESS_FIX),
+        ),
+        None => {}
+    }
     // A downloaded extension update and what holds it back (#524).
     if let Some(notice) = health.update_notice() {
         let mut update = Check::new(
@@ -378,6 +396,29 @@ mod tests {
     use super::*;
     use crate::native::cdp::chrome::{launch_args_for_test, launches_headless, LaunchOptions};
     use crate::test_utils::EnvGuard;
+
+    /// Site access off is a warning that says how to grant it; an extension
+    /// that does not report it (before 0.5.92) adds no check.
+    #[test]
+    fn missing_site_access_is_a_doctor_warning() {
+        let run = |site_access: Option<bool>| {
+            let mut checks = vec![];
+            relay_checks(
+                &mut checks,
+                &crate::connect::RelayHealth {
+                    transport_responsive: true,
+                    site_access,
+                    ..Default::default()
+                },
+            );
+            checks.into_iter().find(|c| c.id == "relay.siteAccess")
+        };
+        assert!(run(None).is_none());
+        assert_eq!(run(Some(true)).unwrap().status, Status::Pass);
+        let off = run(Some(false)).unwrap();
+        assert_eq!(off.status, Status::Warn);
+        assert!(off.fix.unwrap().contains("Allow on all sites"));
+    }
 
     /// #524: a pending extension update is a doctor check with its blocker
     /// and a fix; none when nothing is pending.

@@ -5,6 +5,7 @@
 // viewable without the extension context.
 
 import { t, applyI18n } from './i18n.js'
+import { SITE_ACCESS } from './site-access.js'
 
 applyI18n(document)
 
@@ -158,9 +159,9 @@ function saveInspect(patch) {
 }
 optInspect?.addEventListener('change', () => saveInspect({ enabled: optInspect.checked }))
 optInspectEditor?.addEventListener('change', () => saveInspect({ editor: optInspectEditor.value }))
-// Element picking from the side panel needs host access; this grants it for
-// every http(s) site at once instead of one prompt per site.
-const PICK_ALL = { origins: ['http://*/*', 'https://*/*'] }
+// Site access (site-access.js): closes a password manager's menu on agent
+// tabs, and grants element picking for every http(s) site at once.
+const PICK_ALL = SITE_ACCESS
 const optPickAll = el('optPickAll')
 function loadPickAll() {
   if (!optPickAll || !chrome.permissions?.contains) return

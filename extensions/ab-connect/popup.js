@@ -6,6 +6,7 @@ import { t, applyI18n } from './i18n.js'
 import { missingHostHint } from './native-host-hint.js'
 import { versionNotices } from './version-notice.js'
 import { renderVersionNotices } from './version-banner.js'
+import { SITE_ACCESS, hasSiteAccess } from './site-access.js'
 
 applyI18n(document)
 
@@ -133,6 +134,19 @@ document.querySelectorAll('[data-action="options"]').forEach((button) => {
     if (typeof chrome !== 'undefined') chrome.runtime?.openOptionsPage?.()
   })
 })
+
+// Site access (site-access.js): offered here, where users look, rather than
+// only in the options page. The click is the gesture Chrome's prompt needs.
+async function renderSiteAccess() {
+  const box = document.getElementById('siteAccess')
+  if (typeof chrome === 'undefined' || !chrome.permissions?.contains) return
+  box.hidden = (await hasSiteAccess(chrome.permissions)) !== false
+}
+document.getElementById('siteAccessGrant')?.addEventListener('click', async () => {
+  try { await chrome.permissions.request(SITE_ACCESS) } catch {}
+  renderSiteAccess()
+})
+renderSiteAccess()
 
 // Update an open popup even when the host confirms after the startup queries.
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
