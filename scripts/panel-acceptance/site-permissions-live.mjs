@@ -147,4 +147,8 @@ try {
 } finally {
   save();
   cleanup(rig);
+  // A panel service the native host started under /private/tmp outlives
+  // cleanup's pkill pattern and keeps node's handles open; do not wait.
+  spawnSync('pkill', ['-f', `${fs.realpathSync(work)}/`], { stdio: 'ignore' });
+  process.exit(process.exitCode ?? 0);
 }
