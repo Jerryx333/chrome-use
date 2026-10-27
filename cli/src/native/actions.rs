@@ -5631,37 +5631,146 @@ fn insert_data_field(resp: &mut Value, key: &str, value: Value) {
 /// [`humanize::HIGH_RISK_HOSTS`] site, else the `Fast` baseline. Best-effort: any failure leaves the level unchanged. Skipped when
 /// `AGENT_BROWSER_HUMANIZE` is set, since the override always wins and the probe
 /// would be wasted work.
+///
+/// Nothing here is visible to the page. Cookies and script URLs are read in
+/// the tab's isolated world, where the page cannot wrap `document.cookie` or
+/// `document.scripts`. The page's own globals do not exist in that world, so
+/// they are listed with `Runtime.getProperties` on the main world's global
+/// object, which V8 enumerates without calling any page function (no
+/// `Object.getOwnPropertyNames`, no getters). That listing is only taken when
+/// cookies, scripts and the host have not already settled on `Human`.
 async fn detect_and_set_humanize(mgr: &BrowserManager) {
     if std::env::var("AGENT_BROWSER_HUMANIZE").is_ok() {
         return;
     }
-    let js = r#"(() => { try {
-        const cookies = document.cookie.split(';').map(c => c.trim().split('=')[0]).filter(Boolean);
-        const scripts = Array.from(document.scripts, s => s.src || '').filter(Boolean);
-        const re = /_px|bmak|_abck|datadome|reese84|kpsdk|incap_ses|visid_incap|akam/i;
-        const globals = Object.getOwnPropertyNames(window).filter(k => re.test(k));
-        return { cookies, scripts, globals, host: location.hostname };
-    } catch (e) { return {}; } })()"#;
-    let Ok(val) = mgr.evaluate_main(js).await else {
+    let Ok(val) = mgr.evaluate(VENDOR_PROBE_JS, None).await else {
         return;
     };
-    let to_strings = |v: Option<&Value>| -> Vec<String> {
-        v.and_then(|v| v.as_array())
-            .map(|a| {
-                a.iter()
-                    .filter_map(|x| x.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let signals = humanize::DetectSignals {
-        cookie_names: to_strings(val.get("cookies")),
-        script_urls: to_strings(val.get("scripts")),
-        window_globals: to_strings(val.get("globals")),
+    let mut signals = humanize::DetectSignals {
+        cookie_names: json_strings(val.get("cookies")),
+        script_urls: json_strings(val.get("scripts")),
+        window_globals: Vec::new(),
     };
     let host = val.get("host").and_then(|v| v.as_str()).unwrap_or("");
-    let level = humanize::detect_level(&signals, humanize::host_baseline(host));
-    humanize::set_detected_level(level);
+    let baseline = humanize::host_baseline(host);
+    if humanize::detect_level(&signals, baseline) != humanize::HumanizeLevel::Human {
+        if let Ok(names) = mgr.main_world_global_names().await {
+            signals.window_globals = vendor_global_names(names);
+        }
+    }
+    humanize::set_detected_level(humanize::detect_level(&signals, baseline));
+}
+
+/// Isolated-world half of the vendor probe: cookie names, script URLs, host.
+const VENDOR_PROBE_JS: &str = r#"(() => { try {
+    const cookies = document.cookie.split(';').map(c => c.trim().split('=')[0]).filter(Boolean);
+    const scripts = Array.from(document.scripts, s => s.src || '').filter(Boolean);
+    return { cookies, scripts, host: location.hostname };
+} catch (e) { return {}; } })()"#;
+
+/// Substrings that mark a page global as an anti-bot vendor's (matched
+/// case-insensitively), the same set the page-side probe used to filter with.
+const VENDOR_GLOBAL_MARKERS: &[&str] = &[
+    "_px",
+    "bmak",
+    "_abck",
+    "datadome",
+    "reese84",
+    "kpsdk",
+    "incap_ses",
+    "visid_incap",
+    "akam",
+];
+
+/// The page globals worth handing to the vendor matcher.
+fn vendor_global_names(names: Vec<String>) -> Vec<String> {
+    names
+        .into_iter()
+        .filter(|name| {
+            let lower = name.to_ascii_lowercase();
+            VENDOR_GLOBAL_MARKERS.iter().any(|m| lower.contains(m))
+        })
+        .collect()
+}
+
+fn json_strings(v: Option<&Value>) -> Vec<String> {
+    v.and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod vendor_probe_tests {
+    use super::*;
+
+    #[test]
+    fn vendor_probe_js_reads_nothing_from_page_globals() {
+        // The isolated world cannot see page globals; the probe must not try.
+        assert!(!VENDOR_PROBE_JS.contains("getOwnPropertyNames"));
+        assert!(!VENDOR_PROBE_JS.contains("window"));
+    }
+
+    #[test]
+    fn vendor_global_names_keeps_only_vendor_markers() {
+        let names = [
+            "document",
+            "_pxAppId",
+            "bmak",
+            "KPSDK",
+            "ddjskey",
+            "DataDomeOptions",
+            "reese84interrogator",
+            "location",
+            "akamaiBmp",
+            "__NEXT_DATA__",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            vendor_global_names(names),
+            [
+                "_pxAppId",
+                "bmak",
+                "KPSDK",
+                "DataDomeOptions",
+                "reese84interrogator",
+                "akamaiBmp"
+            ]
+        );
+    }
+
+    #[test]
+    fn vendor_globals_still_upgrade_to_human() {
+        for (global, vendor) in [
+            ("_pxAppId", "perimeterx"),
+            ("bmak", "akamai"),
+            ("KPSDK", "kasada"),
+            ("datadome", "datadome"),
+        ] {
+            let signals = humanize::DetectSignals {
+                window_globals: vendor_global_names(vec![global.into(), "foo".into()]),
+                ..Default::default()
+            };
+            assert_eq!(
+                humanize::detect_level(&signals, humanize::HumanizeLevel::Fast),
+                humanize::HumanizeLevel::Human,
+                "{global}"
+            );
+            assert_eq!(humanize::detected_vendors(&signals), [vendor], "{global}");
+        }
+        let plain = humanize::DetectSignals {
+            window_globals: vendor_global_names(vec!["jQuery".into(), "ga".into()]),
+            ..Default::default()
+        };
+        assert_eq!(
+            humanize::detect_level(&plain, humanize::HumanizeLevel::Fast),
+            humanize::HumanizeLevel::Fast
+        );
+    }
 }
 
 async fn handle_url(state: &DaemonState) -> Result<Value, String> {
@@ -6000,6 +6109,9 @@ async fn handle_site_analyze(cmd: &Value, state: &mut DaemonState) -> Result<Val
         handle_navigate(cmd, state).await?;
     }
     let mgr = state.browser.as_ref().ok_or("site analyze: no browser")?;
+    // Main world on purpose: the scan reads the page's own JS state
+    // (`__NEXT_DATA__`, webpack chunk globals), which the isolated
+    // world cannot see. It is run by hand, never on the default path.
     let raw = mgr.evaluate_main(crate::site::ANALYZE_JS).await?;
     let strings = |key: &str| -> Vec<String> {
         raw.get("signals")
@@ -8560,6 +8672,12 @@ async fn handle_screenshot(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
+    // A launched browser leaves its front tab without focus emulation (see
+    // `enable_domains`); if the user has since hidden it, it makes no frames
+    // and the capture would stall. Give it emulation back first.
+    if !mgr.on_relay() {
+        super::interaction::restore_rendering_if_hidden(&mgr.client, &session_id).await;
+    }
 
     let format = cmd
         .get("format")

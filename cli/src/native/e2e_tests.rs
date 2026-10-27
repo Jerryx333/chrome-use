@@ -13486,6 +13486,51 @@ Object.defineProperty(HTMLElement.prototype, 'innerText', { ...d, get() { window
     server.abort();
 }
 
+/// The adaptive humanize probe that runs after every navigation reads the
+/// page without calling anything the page can wrap (`document.cookie`,
+/// `document.scripts`, `Object.getOwnPropertyNames`, a getter on `window`),
+/// and still finds a vendor global.
+#[tokio::test]
+#[ignore]
+async fn e2e_vendor_probe_is_invisible_to_the_page() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>probe</title>
+<script>
+window.seen = [];
+var _pxAppId = 'PXtest';
+const note = n => window.seen.push(n);
+for (const [o, k] of [[Document.prototype, 'cookie'], [Document.prototype, 'scripts']]) {
+  const d = Object.getOwnPropertyDescriptor(o, k);
+  Object.defineProperty(o, k, { ...d, get() { note(k); return d.get.call(this); } });
+}
+for (const [o, k] of [[Object, 'getOwnPropertyNames'], [Object, 'keys'], [Reflect, 'ownKeys'], [Object, 'getOwnPropertyDescriptors']]) {
+  const f = o[k];
+  o[k] = function (...a) { note(k); return f.apply(this, a); };
+}
+Object.defineProperty(window, 'zzTrap', { get() { note('zzTrap getter'); return 1; }, configurable: true });
+</script><p>hello</p>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    let seen = execute_command(
+        &json!({ "id": "2", "action": "evaluate", "script": "JSON.stringify(window.seen)" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&seen)["result"], "[]", "{seen}");
+    if std::env::var("AGENT_BROWSER_HUMANIZE").is_err() {
+        assert_eq!(
+            super::humanize::active_level(),
+            super::humanize::HumanizeLevel::Human,
+            "a PerimeterX global should raise the level"
+        );
+    }
+
+    let _ = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    server.abort();
+}
+
 /// With humanize on (the default), `scroll` and `scrollintoview` move the
 /// page with trusted wheel events, as a person does, instead of scrollBy /
 /// scrollIntoView, which scroll with no input at all.
