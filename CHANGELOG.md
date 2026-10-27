@@ -1,8 +1,25 @@
 # Changelog
 
-## 1.5.274
+## 1.5.275
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.97.
+
+### Fixes
+
+- **Clicks after a fill no longer hit a password manager's menu in a background tab.** Bitwarden starts opening its inline menu when a field gets the focus, but on a hidden page the open waits until the page is shown; the click showed the page and the menu came up 10-80 ms later, under the press (`action_outcome_unknown` / `debugger_access_denied`), even with the field blurred. A click or key press now shows a hidden tab first, gives a pending menu 250 ms to open, and closes it before the press. With stealth mode off, 17 of 18 fill-fill-click logins passed in a real Chrome with Bitwarden 2026.10 (0 of 2 before). With stealth mode on the menu still cannot be closed for you, but the failure now comes before the press, so the click is safe to retry (#799).
+- **Hidden Monaco editors are found without the clipboard.** On Monaco 0.52 minified AMD builds with no `window.monaco`, `require` or `define`, chrome-use reads the loaded editor module through the loader's closure, and checks the full selection before inserting text (#796, #747).
+- **Agent tab groups no longer pile up as saved groups.** The orphan sweep and one more close path now ungroup a tab before closing it, so Chrome does not keep the group in the Tab groups menu. Requires extension 0.5.97 (#793).
+
+### Contributors
+
+- @leeguooooo
+- @euvoor
+- @Jerryx333
+<!-- release:end -->
+
+## 1.5.274
+
 Works with extension ab-connect 0.5.96.
 
 ### Features
@@ -13,7 +30,6 @@ Works with extension ab-connect 0.5.96.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.273
 
