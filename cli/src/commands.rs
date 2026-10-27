@@ -155,6 +155,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "expect",
     "extract",
     "script",
+    "teach",
     "form",
     "click",
     "fill",
@@ -3965,64 +3966,12 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
         // === Single-pass scripting: run a JSON op-list in one round-trip ===
         // `chrome-use script prog.json` | `chrome-use script - < prog.json` (stdin)
         // Flags: --timeout <ms> --dry-run --yes/--autoconfirm --arg k=v
-        "script" => {
-            let mut cmd = json!({ "id": id, "action": "script" });
-            let mut script_args = serde_json::Map::new();
-            let mut timeout_ms: Option<u64> = None;
-            let mut i = 0;
-            while i < rest.len() {
-                let a = rest[i];
-                match a {
-                    "--dry-run" => cmd["dryRun"] = json!(true),
-                    "--yes" | "--autoconfirm" => cmd["autoConfirm"] = json!(true),
-                    "--json" => {}
-                    "--timeout" => {
-                        i += 1;
-                        if i < rest.len() {
-                            timeout_ms = rest[i].parse().ok();
-                        }
-                    }
-                    "--arg" => {
-                        i += 1;
-                        if i < rest.len() {
-                            if let Some((k, v)) = rest[i].split_once('=') {
-                                script_args.insert(k.to_string(), json!(v));
-                            }
-                        }
-                    }
-                    // Named persistent JS contexts (#289): `--keep` runs in one
-                    // and creates it on demand, `--in` requires it to exist, and
-                    // `--drop` releases it.
-                    "--keep" => {
-                        i += 1;
-                        if i < rest.len() {
-                            cmd["keepContext"] = json!(rest[i]);
-                        }
-                    }
-                    "--in" => {
-                        i += 1;
-                        if i < rest.len() {
-                            cmd["inContext"] = json!(rest[i]);
-                        }
-                    }
-                    "--drop" => {
-                        i += 1;
-                        if i < rest.len() {
-                            cmd["dropContext"] = json!(rest[i]);
-                        }
-                    }
-                    "--contexts" => cmd["listContexts"] = json!(true),
-                    s if !s.starts_with("--") => cmd["file"] = json!(s),
-                    _ => {}
-                }
-                i += 1;
-            }
-            cmd["timeout_ms"] = json!(timeout_ms.unwrap_or(60_000));
-            if !script_args.is_empty() {
-                cmd["scriptArgs"] = json!(script_args);
-            }
-            Ok(cmd)
-        }
+        "script" => parse_script(&rest, &id),
+
+        // === Teach by demonstration ===
+        // `teach start [--name N]` / `teach stop [--out F] [--format script|adapter]`
+        // / `teach status` / `teach cancel` / `teach replay <file> [script flags]`
+        "teach" => parse_teach(&rest, &id),
 
         // === React (requires `open --enable react-devtools`) ===
         "react" => parse_react(&rest, &id),
@@ -6113,6 +6062,191 @@ pub fn shell_words_split(s: &str) -> Vec<String> {
         args.push(current);
     }
     args
+}
+
+/// `script [file|-] [--timeout ms] [--dry-run] [--yes] [--arg k=v] [--arg-env k=VAR]
+/// [--keep|--in|--drop name] [--contexts]`: a JSON op-list or a JS program.
+fn parse_script(rest: &[&str], id: &str) -> Result<Value, ParseError> {
+    let mut cmd = json!({ "id": id, "action": "script" });
+    let mut script_args = serde_json::Map::new();
+    let mut timeout_ms: Option<u64> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        let a = rest[i];
+        match a {
+            "--dry-run" => cmd["dryRun"] = json!(true),
+            "--yes" | "--autoconfirm" => cmd["autoConfirm"] = json!(true),
+            "--json" => {}
+            "--timeout" => {
+                i += 1;
+                if i < rest.len() {
+                    timeout_ms = rest[i].parse().ok();
+                }
+            }
+            "--arg" => {
+                i += 1;
+                if i < rest.len() {
+                    if let Some((k, v)) = rest[i].split_once('=') {
+                        script_args.insert(k.to_string(), json!(v));
+                    }
+                }
+            }
+            // `--arg-env name=VAR`: the value of an environment variable, so a
+            // secret never appears on the command line (or in `ps`).
+            "--arg-env" => {
+                i += 1;
+                let spec = rest.get(i).copied().unwrap_or("");
+                let (k, var) = spec.split_once('=').unwrap_or((spec, spec));
+                if k.is_empty() || var.is_empty() {
+                    return Err(ParseError::MissingArguments {
+                        context: "script --arg-env".to_string(),
+                        usage: "script <file> --arg-env <name>=<ENV_VAR>",
+                    });
+                }
+                let value = std::env::var(var).map_err(|_| ParseError::InvalidValue {
+                    message: format!("--arg-env {k}={var}: environment variable {var} is not set"),
+                    usage: "script <file> --arg-env <name>=<ENV_VAR>",
+                })?;
+                script_args.insert(k.to_string(), json!(value));
+            }
+            // Named persistent JS contexts (#289): `--keep` runs in one
+            // and creates it on demand, `--in` requires it to exist, and
+            // `--drop` releases it.
+            "--keep" => {
+                i += 1;
+                if i < rest.len() {
+                    cmd["keepContext"] = json!(rest[i]);
+                }
+            }
+            "--in" => {
+                i += 1;
+                if i < rest.len() {
+                    cmd["inContext"] = json!(rest[i]);
+                }
+            }
+            "--drop" => {
+                i += 1;
+                if i < rest.len() {
+                    cmd["dropContext"] = json!(rest[i]);
+                }
+            }
+            "--contexts" => cmd["listContexts"] = json!(true),
+            s if !s.starts_with("--") => cmd["file"] = json!(s),
+            _ => {}
+        }
+        i += 1;
+    }
+    cmd["timeout_ms"] = json!(timeout_ms.unwrap_or(60_000));
+    if !script_args.is_empty() {
+        cmd["scriptArgs"] = json!(script_args);
+    }
+    Ok(cmd)
+}
+
+const TEACH_USAGE: &str = "teach start [--name <flow>] | teach stop [--out <file>] [--format script|adapter] [--force] | teach status | teach cancel | teach replay <file> [--arg k=v] [--arg-env k=VAR]";
+
+/// `teach start|stop|status|cancel|replay` (teach by demonstration).
+fn parse_teach(rest: &[&str], id: &str) -> Result<Value, ParseError> {
+    let sub = rest.first().copied().ok_or(ParseError::MissingArguments {
+        context: "teach".to_string(),
+        usage: TEACH_USAGE,
+    })?;
+    let opts = &rest[1..];
+    let value_of = |flag: &str| -> Result<Option<String>, ParseError> {
+        match opts.iter().position(|a| *a == flag) {
+            None => Ok(None),
+            Some(i) => opts
+                .get(i + 1)
+                .filter(|v| !v.starts_with("--"))
+                .map(|v| Some(v.to_string()))
+                .ok_or(ParseError::MissingArguments {
+                    context: format!("teach {sub} {flag}"),
+                    usage: TEACH_USAGE,
+                }),
+        }
+    };
+    let known = |allowed: &[&str], with_value: &[&str]| -> Result<(), ParseError> {
+        let mut i = 0;
+        while i < opts.len() {
+            let a = opts[i];
+            if with_value.contains(&a) {
+                i += 2;
+                continue;
+            }
+            if !allowed.contains(&a) {
+                return Err(ParseError::InvalidValue {
+                    message: format!("teach {sub}: unexpected argument `{a}`"),
+                    usage: TEACH_USAGE,
+                });
+            }
+            i += 1;
+        }
+        Ok(())
+    };
+    match sub {
+        "start" => {
+            known(&["--json"], &["--name"])?;
+            let mut cmd = json!({ "id": id, "action": "teach_start" });
+            if let Some(n) = value_of("--name")? {
+                cmd["name"] = json!(n);
+            }
+            Ok(cmd)
+        }
+        "stop" => {
+            // `--format`, not `--as`: `--as` is the global account flag.
+            known(
+                &["--json", "--force", "--print", "--adapter"],
+                &["--out", "--format", "--name"],
+            )?;
+            let mut cmd = json!({ "id": id, "action": "teach_stop" });
+            if let Some(out) = value_of("--out")? {
+                cmd["out"] = json!(out);
+            }
+            let format = if opts.contains(&"--adapter") {
+                "adapter".to_string()
+            } else {
+                value_of("--format")?.unwrap_or_else(|| "script".to_string())
+            };
+            if !matches!(format.as_str(), "script" | "json" | "adapter" | "site") {
+                return Err(ParseError::InvalidValue {
+                    message: format!("teach stop --format {format}: use script or adapter"),
+                    usage: TEACH_USAGE,
+                });
+            }
+            cmd["as"] = json!(format);
+            if let Some(n) = value_of("--name")? {
+                cmd["name"] = json!(n);
+            }
+            if opts.contains(&"--force") {
+                cmd["force"] = json!(true);
+            }
+            if opts.contains(&"--print") {
+                cmd["print"] = json!(true);
+            }
+            Ok(cmd)
+        }
+        "cancel" => {
+            known(&["--json"], &[])?;
+            Ok(json!({ "id": id, "action": "teach_stop", "discard": true }))
+        }
+        "status" => {
+            known(&["--json"], &[])?;
+            Ok(json!({ "id": id, "action": "teach_status" }))
+        }
+        "replay" | "run" => {
+            if opts.first().is_none_or(|f| f.starts_with("--")) {
+                return Err(ParseError::MissingArguments {
+                    context: "teach replay".to_string(),
+                    usage: "teach replay <file> [--arg k=v] [--arg-env k=VAR] [--timeout ms]",
+                });
+            }
+            parse_script(opts, id)
+        }
+        other => Err(ParseError::InvalidValue {
+            message: format!("unknown teach subcommand `{other}`"),
+            usage: TEACH_USAGE,
+        }),
+    }
 }
 
 #[cfg(test)]

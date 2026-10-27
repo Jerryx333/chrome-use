@@ -18,7 +18,9 @@ let
       || keepTree "skill-data"
       || rel == "extensions"
       || rel == "extensions/ab-connect"
-      || rel == "extensions/ab-connect/manifest.json";
+      || rel == "extensions/ab-connect/manifest.json"
+      # `teach` evaluates the same recorder the side panel injects.
+      || rel == "extensions/ab-connect/teach-recorder.js";
   };
 in
 rustPlatform.buildRustPackage {

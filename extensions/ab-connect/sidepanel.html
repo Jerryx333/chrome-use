@@ -60,6 +60,7 @@
     </div>
     <button id="latest" class="latest" type="button" data-i18n="sidepanel_jump_latest" hidden>↓ Latest</button>
     <section id="siteApprovals" class="requests" aria-label="Site approvals" data-i18n-aria-label="sidepanel_site_approvals" hidden></section>
+    <section id="teachReview" class="teach-review" aria-label="Recorded flow" data-i18n-aria-label="panel_teach_review_title" hidden></section>
     <section id="requests" class="requests" aria-label="Agent requests" data-i18n-aria-label="sidepanel_agent_requests"></section>
     <section id="queuedMessages" class="queued-messages" aria-label="Queued messages" data-i18n-aria-label="sidepanel_queued_messages" hidden></section>
     <section id="pendingRecovery" class="requests recovery" hidden>
@@ -86,6 +87,7 @@
         <textarea id="message" rows="2" placeholder="Describe a browser task…" maxlength="32768" data-i18n-placeholder="sidepanel_message_placeholder"></textarea>
         <div class="composer-controls">
           <button id="pickElement" class="tool pick" type="button" aria-pressed="false" title="Pick element" aria-label="Pick element" data-i18n-title="sidepanel_pick_element" data-i18n-aria-label="sidepanel_pick_element" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><path d="M10 10l4.5 10.5 1.6-4.4 4.4-1.6z"/></svg></button>
+          <button id="teachRecord" class="tool teach" type="button" aria-pressed="false" title="Record a flow to replay" aria-label="Record a flow to replay" data-i18n-title="panel_teach_start" data-i18n-aria-label="panel_teach_start" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle class="teach-dot" cx="12" cy="12" r="4" fill="currentColor" stroke="none"/></svg></button>
           <button id="attachImages" class="tool" type="button" title="Attach images" aria-label="Attach images" data-i18n-title="sidepanel_attach_images" data-i18n-aria-label="sidepanel_attach_images" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg></button>
           <span id="newOptions" class="new-options" aria-label="New conversation options" data-i18n-aria-label="sidepanel_new_conversation_options">
             <details class="more">
@@ -227,5 +229,6 @@
   </main>
   <script type="module" src="sidepanel.js"></script>
   <script type="module" src="site-approvals-entry.js"></script>
+  <script type="module" src="teach-panel-entry.js"></script>
 </body>
 </html>

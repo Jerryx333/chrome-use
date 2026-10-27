@@ -82,3 +82,12 @@ test('replay map keeps enables and emulation state, drops disabled domains and o
     ['Page.addScriptToEvaluateOnNewDocument', { source: 'b' }],
   ])
 })
+
+test('a removed binding is not replayed after re-attach', () => {
+  const replay = new Map()
+  rememberReplayable(replay, 'Runtime.addBinding', { name: 'keep', executionContextName: 'w1' })
+  rememberReplayable(replay, 'Runtime.addBinding', { name: 'teach', executionContextName: 'w2' })
+  rememberReplayable(replay, 'Runtime.addBinding', { name: 'teach', executionContextName: 'w2' })
+  rememberReplayable(replay, 'Runtime.removeBinding', { name: 'teach' })
+  assert.deepEqual([...replay.values()].map((c) => c.params.name), ['keep'])
+})

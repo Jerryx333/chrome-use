@@ -3741,5 +3741,20 @@
   "panel_window_no_initial_page": { "message": "No initial webpage was recorded for this conversation." },
   "panel_taint_title": { "message": "This command contains text from a web page" },
   "panel_taint_remote_exec": { "message": "This command downloads and runs code a web page pointed to" },
-  "panel_taint_body": { "message": "The agent read these strings on a page, not in your messages. Pages can plant instructions for agents. Allow only if you meant this to run; it was not approved automatically." }
+  "panel_taint_body": { "message": "The agent read these strings on a page, not in your messages. Pages can plant instructions for agents. Allow only if you meant this to run; it was not approved automatically." },
+  "panel_teach_start": {"message": "Record a flow to replay (no model needed)"},
+  "panel_teach_stop": {"message": "Stop recording and review the steps"},
+  "panel_teach_failed": {"message": "Recording could not start on this page."},
+  "panel_teach_permission_denied": {"message": "Recording needs access to this site. Allow it when Chrome asks."},
+  "panel_teach_host_failed": {"message": "The chrome-use CLI did not answer. Update it (chrome-use upgrade) and try again."},
+  "panel_teach_review_title": {"message": "Recorded flow: review before saving"},
+  "panel_teach_name": {"message": "Name of the flow"},
+  "panel_teach_param_secret": {"message": "`$NAME$` is a secret you typed (never stored). Pass it when you run the script: --arg-env $NAME$=YOUR_ENV_VAR", "placeholders": {"name": {"content": "$1"}}},
+  "panel_teach_param_file": {"message": "`$NAME$` is the file you uploaded. Pass it when you run the script: --arg $NAME$=path/to/file", "placeholders": {"name": {"content": "$1"}}},
+  "panel_teach_edit": {"message": "Edit the script"},
+  "panel_teach_source": {"message": "Script (JSON op-list)"},
+  "panel_teach_save": {"message": "Save script"},
+  "panel_teach_discard": {"message": "Discard"},
+  "panel_teach_close": {"message": "Close"},
+  "panel_teach_saved": {"message": "Saved to $PATH$. Run it with:", "placeholders": {"path": {"content": "$1"}}}
 }

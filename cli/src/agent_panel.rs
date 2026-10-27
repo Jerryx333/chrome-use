@@ -630,7 +630,7 @@ pub fn handle(operation: &str, params: &Value) -> Result<Value, String> {
 /// Profile identity is supplied by the native host's extension handshake,
 /// never by a panel request. Public reads need no persisted profile store.
 pub fn capabilities() -> Value {
-    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"heicConvert":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"inspectReplies":1,"requestRevision":1,"turnEvidence":1,"artifacts":1,"recovery":1,"recording":1,"sessionResume":1,"projectDirectory":2,"tabGrant":1,"chatAgents":CHAT_AGENTS})
+    json!({"schemaVersion":1,"mode":"full","modelInspection":true,"conversationDelete":true,"fullAccess":true,"pageContext":true,"conversationOptions":true,"imageAttachments":true,"heicConvert":true,"skillLibrary":true,"schedules":true,"inspect":true,"inspectResolve":true,"inspectReplies":1,"requestRevision":1,"turnEvidence":1,"artifacts":1,"recovery":1,"recording":1,"sessionResume":1,"projectDirectory":2,"tabGrant":1,"teach":1,"chatAgents":CHAT_AGENTS})
 }
 
 /// `chrome-use inspect link|unlink|list`; returns the process exit code.
@@ -652,6 +652,9 @@ pub fn handle_for_profile(
             Ok(json!({ "schemaVersion": 1, "agents": discover_in(&context) }))
         }
         "imageConvert" => heic::handle(params),
+        // The side panel's Record button: compiling a recording and saving
+        // the reviewed script (teach.rs).
+        "teachCompile" | "teachSave" => crate::teach::panel_handle(operation, params),
         "configRead" | "configPlan" | "configApply" | "configRestore" => {
             configuration::handle(operation, params, profile)
         }

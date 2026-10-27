@@ -57,6 +57,7 @@ pub mod sensitive;
 pub mod site_policy;
 
 pub mod script;
+pub mod teach;
 
 #[allow(dead_code)]
 pub mod rotating_slider;

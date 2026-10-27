@@ -25,3 +25,13 @@ test('page-visible CDP methods are refused only while stealth is on', () => {
   assert.equal(stealthBlockReason({ ab_stealth: true }, 'Runtime.evaluate'), null)
   assert.equal(stealthBlockReason({ ab_stealth: true }, 'Fetch.fulfillRequest'), null)
 })
+
+test('a binding limited to a named isolated world passes under stealth (teach recording)', () => {
+  const isolated = { name: 'b1', executionContextName: 'w1' }
+  assert.equal(stealthBlockReason({ ab_stealth: true }, 'Runtime.addBinding', isolated), null)
+  assert.equal(stealthBlockReason(undefined, 'Runtime.addBinding', isolated), null)
+  // No name, an empty one, or a context id (which may be the main world) stay refused.
+  assert.match(stealthBlockReason({ ab_stealth: true }, 'Runtime.addBinding', { name: 'b1' }), /stealth mode is on/)
+  assert.match(stealthBlockReason({ ab_stealth: true }, 'Runtime.addBinding', { name: 'b1', executionContextName: '' }), /stealth mode is on/)
+  assert.match(stealthBlockReason({ ab_stealth: true }, 'Runtime.addBinding', { name: 'b1', executionContextName: 'w1', executionContextId: 3 }), /stealth mode is on/)
+})

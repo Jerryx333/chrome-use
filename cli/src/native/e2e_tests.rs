@@ -30,6 +30,9 @@ mod range_date;
 #[path = "cursor_cleanup_e2e_tests.rs"]
 mod cursor_cleanup;
 
+#[path = "teach_e2e_tests.rs"]
+mod teach;
+
 fn assert_success(resp: &Value) {
     assert_eq!(
         resp.get("success").and_then(|v| v.as_bool()),

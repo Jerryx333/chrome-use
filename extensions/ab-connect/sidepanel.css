@@ -532,3 +532,18 @@ html[data-mode="tab"] .conversation-menu { left:auto; right:auto; width:min(calc
 .force-takeover { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; margin-top:6px; }
 .force-takeover > div { flex-basis:100%; }
 .force-takeover code { font:12px ui-monospace,SFMono-Regular,Menlo,monospace; padding:2px 6px; border-radius:6px; background:var(--bg); color:var(--ink); user-select:all; }
+
+/* Record control (teach-panel.js): records a flow to replay without a model. */
+.tool.teach .teach-dot { opacity:.35; }
+.tool.teach.active { color:#d93025; }
+.tool.teach.active .teach-dot { opacity:1; }
+.teach-review { margin:0 0 8px; padding:8px 10px; border:1px solid var(--border, #ccc); border-radius:8px; font-size:12px; }
+.teach-review h3 { margin:0 0 6px; font-size:13px; }
+.teach-review input { width:100%; box-sizing:border-box; margin:0 0 6px; }
+.teach-steps { margin:0 0 6px; padding-left:20px; }
+.teach-steps li { margin:2px 0; overflow-wrap:anywhere; }
+.teach-note, .teach-status { margin:4px 0; overflow-wrap:anywhere; }
+.teach-error { margin:0; color:#d93025; }
+.teach-source { width:100%; box-sizing:border-box; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.teach-actions { display:flex; gap:6px; margin-top:6px; }
+.teach-run { user-select:all; overflow-wrap:anywhere; }
