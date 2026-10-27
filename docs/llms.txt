@@ -27,7 +27,7 @@ chrome-use lets any AI agent (Claude Code, Cursor, Codex, or your own scripts) d
 - Site: https://chrome-use.leeguoo.com/
 - Repo: https://github.com/leeguooooo/chrome-use
 - Author: 郭立 (Guo Li / Leo / leeguoo) — https://leeguoo.com
-- Family: chrome-use, iphone-use, cookie-use, profile-use, bitwarden-use, image-use, wechat-use.
+- Family: chrome-use, iphone-use (https://iphone-use.leeguoo.com/en/), cookie-use, profile-use, bitwarden-use, image-use, wechat-use.
 
 ## Guides and evidence
 - [Automate logged-in Chrome with Codex or Claude Code](https://chrome-use.leeguoo.com/en/logged-in-browser.html)
