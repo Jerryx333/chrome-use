@@ -18,7 +18,7 @@
   <link rel="stylesheet" href="/assets/docs/docs.css" />
   <style>
     .cmp-scroll { overflow-x: auto; margin: 14px 0; }
-    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 760px; }
+    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 900px; }
     .cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
     .cmp-table thead th { background: var(--paper-2); font-weight: 700; position: sticky; top: 0; }
     .cmp-table tbody th { background: var(--paper-2); font-weight: 700; min-width: 128px; }
@@ -82,7 +82,7 @@
       <table class="cmp-table">
         <thead>
           <tr>
-            <th>Option</th><th>How it connects</th><th>Whose sign-ins</th><th>Which agents</th><th>Setup / permission</th><th>License</th>
+            <th>Option</th><th>How it connects</th><th>Whose sign-ins</th><th>Which agents</th><th>Setup / permission</th><th>Stealth / anti-detection</th><th>License</th>
           </tr>
         </thead>
         <tbody>
@@ -92,6 +92,7 @@
             <td class="cmp-win">The Chrome you use, any profile</td>
             <td class="cmp-win">Any agent: CLI / MCP / HTTP; plus side-panel and phone chat</td>
             <td>One-line install + store extension</td>
+            <td class="cmp-win">Core capability: nothing injected into your real Chrome, <code>Runtime.enable</code> off by default, <code>--humanize</code> behavior, attempts ordinary CAPTCHAs; CreepJS 0% bot (measured)</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -100,6 +101,7 @@
             <td class="cmp-win">Your Chrome / Edge</td>
             <td>Claude only: side panel, Claude Code <code>--chrome</code>, Cowork</td>
             <td>Claude Pro / Max / Team / Enterprise</td>
+            <td class="cmp-mut">No anti-detection in the docs; pauses at sign-ins and CAPTCHAs for you</td>
             <td class="cmp-mut">Proprietary</td>
           </tr>
           <tr>
@@ -108,6 +110,7 @@
             <td class="cmp-win">Your Chrome, multiple profiles</td>
             <td>Any agent, CLI-first; many built-in site adapters</td>
             <td>CLI or desktop app + extension</td>
+            <td class="cmp-mut">Not mentioned in the README</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -116,6 +119,7 @@
             <td class="cmp-win">Existing tabs you pick</td>
             <td>Any MCP client, or playwright-cli</td>
             <td>Approve each connection (or set a token)</td>
+            <td class="cmp-mut">Not mentioned in the README</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -124,6 +128,7 @@
             <td>All windows of the default profile</td>
             <td>Any MCP client, plus a CLI</td>
             <td>Enable remote debugging at <code>chrome://inspect</code> + allow the dialog; usage stats on by default</td>
+            <td class="cmp-mut">Not mentioned in the README</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -132,6 +137,7 @@
             <td>Your Chrome (once the toggle is on)</td>
             <td>Any shell-capable agent; browser-harness also has MCP</td>
             <td>Remote-debugging toggle + allow dialog</td>
+            <td>agent-browser via a stealth plugin or the experimental Obscura engine; browser-harness leaves it to its cloud</td>
             <td>Apache-2.0 / MIT</td>
           </tr>
           <tr>
@@ -140,6 +146,7 @@
             <td>Sign-ins inside ego, after a one-click Chrome import</td>
             <td>Via the ego-browser skill: Claude Code, Codex, Cursor and others</td>
             <td>Install a new browser (macOS / Windows)</td>
+            <td>Claims "fewer CAPTCHAs" (from reused sign-ins); no anti-detection technique described</td>
             <td class="cmp-mut">Free, proprietary</td>
           </tr>
           <tr>
@@ -148,6 +155,7 @@
             <td class="cmp-win">Your Chrome</td>
             <td>CLI / MCP / HTTP</td>
             <td>npm global + Developer-mode extension</td>
+            <td class="cmp-mut">Not mentioned in the README</td>
             <td>MIT</td>
           </tr>
           <tr>
@@ -156,6 +164,7 @@
             <td>A separate browser by default; browser-use can read the system Chrome profile (close Chrome first), Stagehand takes a <code>userDataDir</code></td>
             <td>Integrate in code</td>
             <td>Framework + browser; each also sells a cloud</td>
+            <td>Not built into the open-source libraries; offered by their clouds</td>
             <td>MIT</td>
           </tr>
           <tr>
@@ -164,6 +173,7 @@
             <td class="cmp-mut">A separate profile; since Chrome 136 the default profile ignores the remote-debugging port</td>
             <td>Integrate in code</td>
             <td>Library + browser</td>
+            <td class="cmp-mut">Not handled by the libraries; community stealth plugins patch JS</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -172,6 +182,7 @@
             <td class="cmp-mut">Cloud sessions; bring your own sign-ins</td>
             <td>SDK / API</td>
             <td>Billed per browser-hour; anti-detection mostly on paid tiers</td>
+            <td>Browserbase by tier (basic / advanced); Steel Enterprise only; Hyperbrowser and Browser Use Cloud offer it</td>
             <td class="cmp-mut">Commercial, partly open source</td>
           </tr>
           <tr>
@@ -180,6 +191,7 @@
             <td class="cmp-win">Your sign-ins in that browser</td>
             <td class="cmp-mut">Only the vendor's assistant; no interface for third-party agents</td>
             <td>Gemini auto browse needs AI Pro / Ultra and is US-English only for now; ChatGPT Atlas is retired in favor of the desktop app and Chrome extension</td>
+            <td class="cmp-mut">Not applicable: vendor assistant only</td>
             <td class="cmp-mut">Proprietary</td>
           </tr>
         </tbody>
@@ -189,6 +201,25 @@
         <div class="du-callout-title">ℹ️ How to read it</div>
         Green means that column favors "let an agent use your signed-in browser", not that the option wins overall. Other projects' rows come from their official docs; we did not benchmark each one.
       </div>
+
+
+      <h2>Stealth: what's left once you're on a real Chrome</h2>
+      <p>
+        Any tool that drives your real Chrome presents a genuine fingerprint; that part is the same everywhere. Sites can still spot an agent from <strong>traces the automation leaves</strong> and from <strong>how it behaves</strong>,
+        and that's where tools differ. chrome-use treats this as a core capability:
+      </p>
+      <ul>
+        <li><strong>Nothing injected</strong>: zero JS patches when driving your real Chrome, so CreepJS finds no overrides.</li>
+        <li><strong><code>Runtime.enable</code> off by default</strong>: an active Runtime domain is a detectable CDP signal; it's only turned on when you ask for console or error capture.</li>
+        <li><strong>No marks in the DOM</strong>: locating and observing use node handles instead of temporary attributes, so page MutationObservers see nothing.</li>
+        <li><strong><code>--humanize</code></strong>: curved mouse paths, in-element landing points and variable typing rhythm, switched on automatically on Akamai, PerimeterX and DataDome pages.</li>
+        <li><strong>CAPTCHAs</strong>: <code>solve-slider</code> for ordinary Yidun puzzles, screenshot-guided clicks for readable icon challenges, then a handoff to you if it fails; a Cloudflare <code>cf_clearance</code> is reused once earned.</li>
+        <li><strong>When you need a separate browser</strong>: <code>--launch</code> uses native overrides (<code>navigator.webdriver</code>, timezone, WebRTC and more) instead of JS getters that can be detected.</li>
+      </ul>
+      <p>
+        Measured on a real Chrome: CreepJS 0% bot and 0% headless; bot.incolumitas, sannysoft and BrowserScan all pass. Test conditions are in <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>.
+        These are measurements in a particular environment, not a promise of invisibility or account safety. The other tools' docs don't cover these points and we haven't benchmarked them, so we draw no conclusion about them.
+      </p>
 
       <h2>By how they connect</h2>
       <div class="cmp-cat">
@@ -229,7 +260,7 @@
       <table class="cmp-table">
         <thead><tr><th>Your situation</th><th>Pick</th></tr></thead>
         <tbody>
-          <tr class="me"><th>Any agent (Claude Code, Codex, Cursor…) working in your signed-in Chrome, without remote debugging, possibly several agents at once</th><td class="cmp-win">chrome-use</td></tr>
+          <tr class="me"><th>Any agent (Claude Code, Codex, Cursor…) working in your signed-in Chrome, without remote debugging, staying as invisible to anti-bot systems as possible, possibly several agents at once</th><td class="cmp-win">chrome-use</td></tr>
           <tr class="me"><th>No terminal: chat with a local agent in the browser side panel or from your phone</th><td class="cmp-win">chrome-use side panel / mobile remote</td></tr>
           <tr><th>You only use Claude and have a paid plan</th><td>Claude in Chrome</td></tr>
           <tr><th>Mostly turning popular sites into commands</th><td>OpenCLI (chrome-use's <code>site add</code> also loads OpenCLI adapters)</td></tr>
