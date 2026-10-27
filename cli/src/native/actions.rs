@@ -6719,6 +6719,8 @@ const UI_SCROLL_STEPS: usize = 60;
 /// Wheel steps in a row that leave the element where it was before
 /// `args.ui` / `scrollintoview` give up (the container cannot scroll further).
 const UI_SCROLL_STUCK: u32 = 2;
+/// Wall-clock cap on one wheel-into-view; the rest is a direct scroll.
+const UI_SCROLL_BUDGET: Duration = Duration::from_secs(10);
 
 /// One `args.ui` request from a site adapter, answered with trusted CDP input
 /// (`isTrusted` events, humanized motion and timing) instead of the synthetic
@@ -11222,7 +11224,13 @@ async fn wheel_into_view(state: &DaemonState, selector: &str) -> bool {
     };
     let mut last_off = f64::NAN;
     let mut stuck = 0;
+    let deadline = std::time::Instant::now() + UI_SCROLL_BUDGET;
     for _ in 0..UI_SCROLL_STEPS {
+        // A long page over a slow relay must not hold the session: past the
+        // budget the caller finishes with one direct scroll (#798).
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
         // Found and measured without the page's querySelector /
         // getBoundingClientRect / getComputedStyle being called.
         let Some(node) = quiet_node(state, &session_id, selector).await else {
@@ -16750,6 +16758,10 @@ async fn handle_selectall(cmd: &Value, state: &mut DaemonState) -> Result<Value,
     Ok(json!({ "selected": selector }))
 }
 
+/// Upper bound on the direct scroll, so a stalled page fails the command
+/// instead of leaving it running (#798).
+const SCROLL_INTO_VIEW_TIMEOUT: Duration = Duration::from_secs(15);
+
 async fn handle_scrollintoview(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
     let selector = cmd
         .get("selector")
@@ -16763,14 +16775,23 @@ async fn handle_scrollintoview(cmd: &Value, state: &mut DaemonState) -> Result<V
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
-    interaction::scroll_into_view(
-        &mgr.client,
-        &session_id,
-        &state.ref_map,
-        selector,
-        &state.iframe_sessions,
+    tokio::time::timeout(
+        SCROLL_INTO_VIEW_TIMEOUT,
+        interaction::scroll_into_view(
+            &mgr.client,
+            &session_id,
+            &state.ref_map,
+            selector,
+            &state.iframe_sessions,
+        ),
     )
-    .await?;
+    .await
+    .map_err(|_| {
+        format!(
+            "scrollintoview {selector} did not finish within {}s; the page or the Chrome debugger is not answering",
+            SCROLL_INTO_VIEW_TIMEOUT.as_secs()
+        )
+    })??;
     Ok(json!({ "scrolled": selector }))
 }
 
