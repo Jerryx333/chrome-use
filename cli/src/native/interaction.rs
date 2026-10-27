@@ -5500,7 +5500,7 @@ fn visibility_reply_is_hidden(reply: &Value) -> bool {
 /// One evaluate when the page is visible. Best-effort throughout: a failure
 /// here leaves the click as it was. `AGENT_BROWSER_KEEP_HIDDEN=1` opts out.
 pub(crate) async fn restore_rendering_if_hidden(client: &CdpClient, session_id: &str) -> bool {
-    restore_rendering(client, session_id, None).await
+    restore_rendering(client, session_id, Blur::None).await
 }
 
 /// [`restore_rendering_if_hidden`] before a mouse press at (x, y): a hidden
@@ -5522,27 +5522,41 @@ pub(crate) async fn restore_rendering_before_press(
     x: f64,
     y: f64,
 ) -> bool {
-    restore_rendering(client, session_id, Some((x, y))).await
+    restore_rendering(client, session_id, Blur::UnlessAt(x, y)).await
 }
 
-async fn restore_rendering(
-    client: &CdpClient,
-    session_id: &str,
-    press: Option<(f64, f64)>,
-) -> bool {
+/// [`restore_rendering_if_hidden`] that first takes the focus out of any
+/// field of a hidden page, for a command whose target is not known yet.
+pub(crate) async fn restore_rendering_blurring(client: &CdpClient, session_id: &str) -> bool {
+    restore_rendering(client, session_id, Blur::Any).await
+}
+
+/// Which focused field a hidden page loses before it is shown again.
+enum Blur {
+    None,
+    UnlessAt(f64, f64),
+    Any,
+}
+
+async fn restore_rendering(client: &CdpClient, session_id: &str, blur: Blur) -> bool {
     if std::env::var("AGENT_BROWSER_KEEP_HIDDEN").as_deref() == Ok("1") {
         return false;
     }
-    // Both expressions answer the visibility state.
-    let expression = match press {
-        None => "document.visibilityState".to_string(),
-        Some((x, y)) => format!(
+    // Every expression answers the visibility state.
+    let blur_unless = |keep: &str| {
+        format!(
             "(() => {{ const s = document.visibilityState; if (s === 'hidden') {{ \
              const a = document.activeElement; \
              if (a && a !== document.body && (a.matches?.('input, textarea, select') || a.isContentEditable)) {{ \
-             const u = document.elementFromPoint({x}, {y}); \
-             if (!u || (u !== a && !a.contains(u))) a.blur(); }} }} return s; }})()"
-        ),
+             {keep}a.blur(); }} }} return s; }})()"
+        )
+    };
+    let expression = match blur {
+        Blur::None => "document.visibilityState".to_string(),
+        Blur::UnlessAt(x, y) => blur_unless(&format!(
+            "const u = document.elementFromPoint({x}, {y}); if (!u || (u !== a && !a.contains(u))) "
+        )),
+        Blur::Any => blur_unless(""),
     };
     let probe = tokio::time::timeout(
         std::time::Duration::from_millis(1000),

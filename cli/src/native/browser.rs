@@ -7162,6 +7162,34 @@ impl BrowserManager {
         live.get("url").and_then(Value::as_str).map(str::to_string)
     }
 
+    /// Show a hidden pinned tab again before the block check of a click or key
+    /// press, so a password manager's menu opens before the check, not during
+    /// the press.
+    ///
+    /// Bitwarden starts opening its inline menu when a field gets the focus,
+    /// but on a hidden page the open waits until the page is shown. `fill`
+    /// focuses fields while the agent tab is hidden (behind the user's
+    /// full-screen window it turns hidden on that focus), so the menu came up
+    /// 10-80 ms after the click's own `restore_rendering_before_press` showed
+    /// the page, even with the field long blurred, and the press failed with
+    /// `action_outcome_unknown` or `debugger_access_denied` (measured in a real
+    /// Chrome with Bitwarden 2026.10). Shown here, the menu is in place when
+    /// [`Self::pinned_tab_blocked`] looks, and the recovery runs before the
+    /// press. `blur` takes the focus out of the field first, as the press would.
+    pub async fn wake_pinned_tab(&self, blur: bool) {
+        let Ok(session_id) = self.active_session_id().map(str::to_string) else {
+            return;
+        };
+        let shown = if blur {
+            super::interaction::restore_rendering_blurring(&self.client, &session_id).await
+        } else {
+            super::interaction::restore_rendering_if_hidden(&self.client, &session_id).await
+        };
+        if shown {
+            tokio::time::sleep(PENDING_MENU_WAIT).await;
+        }
+    }
+
     pub async fn pinned_tab_blocked(&self) -> bool {
         let Ok(session_id) = self.active_session_id().map(str::to_string) else {
             return false;
@@ -15244,3 +15272,7 @@ mod foreign_popup_tests {
         assert!(relay_popup_candidate(&unrelated, &before, &ours).is_none());
     }
 }
+
+/// How long a shown tab gets for a password manager's menu that waited for
+/// it (see `BrowserManager::wake_pinned_tab`): measured 10-80 ms.
+const PENDING_MENU_WAIT: std::time::Duration = std::time::Duration::from_millis(250);

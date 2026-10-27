@@ -17496,16 +17496,17 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
     // for the block before running it: a password manager's menu opens a moment
     // after `fill` focused a field, and the next command is usually the click
     // on the button next to it (#373). Only when such a manager is installed;
-    // the check is one no-op evaluate.
+    // the check is one no-op evaluate, after a hidden tab is shown (and its
+    // menu let open) first.
     let mut pre: Option<Result<Option<String>, String>> = None;
     if acts_on_page(action) && !safe_to_repeat(action) {
         if let Some(mgr) = state.browser.as_mut() {
-            if mgr.on_relay()
-                && super::browser::inline_menu_manager_installed()
-                && mgr.pinned_tab_blocked().await
-            {
+            if mgr.on_relay() && super::browser::inline_menu_manager_installed() {
                 let blur = !acts_at_focus(action);
-                pre = Some(Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await);
+                mgr.wake_pinned_tab(blur).await;
+                if mgr.pinned_tab_blocked().await {
+                    pre = Some(Box::pin(mgr.cycle_pinned_tab_visibility(blur)).await);
+                }
             }
         }
     }
