@@ -61,6 +61,15 @@ struct Page {
     front_tab: Option<i64>,
     temp_tabs: u32,
     blurs: u32,
+    /// Chrome is not the frontmost app: `windows.get` says unfocused, and
+    /// hiding the tab no longer closes the frame (every tab already counts
+    /// as hidden).
+    covered: bool,
+    /// The extension holds site access, so `ABExt.blurFocusedField` can
+    /// script the page; blurring the field closes the frame.
+    site_access: bool,
+    /// `ABExt.blurFocusedField` calls.
+    ext_blurs: u32,
     /// Every method called, for diagnostics.
     log: Vec<String>,
 }
@@ -143,6 +152,16 @@ impl Fake {
         self.0.lock().unwrap().stay_blocked = true;
     }
 
+    fn cover_chrome(&self, site_access: bool) {
+        let mut p = self.0.lock().unwrap();
+        p.covered = true;
+        p.site_access = site_access;
+    }
+
+    fn ext_blurs(&self) -> u32 {
+        self.0.lock().unwrap().ext_blurs
+    }
+
     /// `(tabs.update calls, temp tabs, blurs)` since the denial.
     fn recovery_footprint(&self) -> (u32, u32, u32) {
         let p = self.0.lock().unwrap();
@@ -219,6 +238,17 @@ impl Fake {
                 }
             }
             "ABExt.state" => json!({"ownedTabs": [11, 12]}),
+            "ABExt.blurFocusedField" => {
+                p.ext_blurs += 1;
+                if !p.site_access {
+                    return Err("blurFocusedField: no site access (Cannot access contents \
+                                of the page); grant it in the chrome-use extension options \
+                                (\"Allow element picking on all sites\")"
+                        .into());
+                }
+                p.blocked = false;
+                json!({"blurred": 1, "frames": 1})
+            }
             "ABExt.call" => {
                 let call = format!(
                     "{}.{}",
@@ -226,7 +256,9 @@ impl Fake {
                     params["method"].as_str().unwrap_or("")
                 );
                 match call.as_str() {
-                    "windows.get" => json!({"result": {"state": "normal", "focused": true}}),
+                    "windows.get" => {
+                        json!({"result": {"state": "normal", "focused": !p.covered}})
+                    }
                     // The profile has a window (#486 checks before a first tab).
                     "windows.getAll" => json!({"result": [{"id": 1, "type": "normal"}]}),
                     "tabs.query" => json!({"result": [{"id": p.front_tab.unwrap_or(11),
@@ -238,8 +270,11 @@ impl Fake {
                         if params["args"][1]["active"] == json!(true) {
                             p.front_tab = params["args"][0].as_i64();
                         }
-                        // Hiding the tab closes the blocking frame.
-                        p.blocked = false;
+                        // Hiding the tab closes the blocking frame, unless
+                        // the window is covered and already hidden.
+                        if !p.covered {
+                            p.blocked = false;
+                        }
                         json!({"result": {}})
                     }
                     _ => json!({"result": null}),
@@ -810,4 +845,45 @@ fn a_kept_ref_refusal_has_its_own_non_retryable_code_whatever_the_cause() {
         assert_eq!(fake.recovery_footprint(), (0, 0, 0), "{label}");
         assert_eq!(fake.typed(), vec!["me@example.test"], "{label}");
     }
+}
+
+/// #750 follow-up: Chrome is not the frontmost app, so hiding the tab closes
+/// nothing. With site access the extension blurs the field instead, and the
+/// recovery switches no tab at all; without it the error says what to grant.
+#[test]
+fn a_covered_window_closes_the_menu_by_blurring_the_field() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start_full("capfail-covered", &cdp, &[], true);
+    let snap = d.snapshot();
+    let email = ref_for(&snap, "Email");
+    fake.arm(false);
+    fake.stay_blocked();
+    fake.cover_chrome(true);
+    let out = d.cli(&["fill", &format!("@{email}"), "me@example.test", "--observe"]);
+    let all = text(&out);
+    assert_eq!(fake.denials(), 1, "{all}");
+    let out = d.cli(&["snapshot", "-i"]);
+    let all = text(&out);
+    assert!(out.status.success(), "{all}");
+    assert_eq!(fake.ext_blurs(), 1, "{all}");
+    let (tab_updates, temp_tabs, _) = fake.recovery_footprint();
+    assert_eq!((tab_updates, temp_tabs), (0, 0), "no tab switched: {all}");
+}
+
+#[test]
+fn a_covered_window_without_site_access_names_the_option() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start_full("capfail-covered-noaccess", &cdp, &[], true);
+    let snap = d.snapshot();
+    let email = ref_for(&snap, "Email");
+    fake.arm(false);
+    fake.stay_blocked();
+    fake.cover_chrome(false);
+    let _ = d.cli(&["fill", &format!("@{email}"), "me@example.test", "--observe"]);
+    let out = d.cli(&["snapshot", "-i"]);
+    let all = text(&out);
+    assert!(!out.status.success(), "{all}");
+    assert!(fake.ext_blurs() >= 1, "{all}");
+    assert!(all.contains("Chrome is not the window in front"), "{all}");
+    assert!(all.contains("Allow element picking on all sites"), "{all}");
 }

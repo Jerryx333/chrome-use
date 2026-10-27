@@ -7,6 +7,12 @@
 //   EXT_DIR=<ab-connect> [HEADED=1] [FRONT_APP=cft|<app>] [AGENT_FRONT=1] node live.mjs
 // AGENT_FRONT=1: instead of the login, fill and click on a sign-up form in an
 // agent tab that is in front of the user's window (the user watching, #750).
+// With HEADED=1 FRONT_APP=Finder the user is in another app, which covers
+// Chrome: hiding the tab closes nothing, and the menu closes only when the
+// field loses focus. SITE_ACCESS=1 grants the extension the optional
+// http(s) site access that needs (otherwise the run checks the tab flip
+// still runs as the fallback).
+// BASE_BIN runs first, recorded only.
 // HEADED=1 runs a visible Chrome (on the build host's screen); run windows.swift
 // beside it and screen-check.py afterwards to see what appeared on screen.
 // Chrome for Testing runs headless with its own profile, the unpacked
@@ -71,6 +77,12 @@ fs.writeFileSync(nm, `#!/bin/sh\nexport HOME='${home}'\nexport CHROME_USE_NO_UPD
 fs.mkdirSync(path.join(profile, 'NativeMessagingHosts'), { recursive: true });
 fs.writeFileSync(path.join(profile, 'NativeMessagingHosts', 'com.agent_browser.connect.json'), JSON.stringify({ name: 'com.agent_browser.connect', description: 'auth-menu-live host', path: nm, type: 'stdio', allowed_origins: [`chrome-extension://${EXT_ID}/`] }));
 // NO_FAKEPM=1: no password manager, to tell its effects from the rig's.
+if (process.env.SITE_ACCESS) {
+  const file = path.join(process.env.EXT_DIR, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+  manifest.host_permissions = ['http://*/*', 'https://*/*'];
+  fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
+}
 const exts = [process.env.EXT_DIR, ...(process.env.NO_FAKEPM ? [] : [path.join(dir, 'fakepm')])].join(',');
 const browser = await launch({ chrome: process.env.CHROME, port: 9433, userDataDir: profile, args: [...(process.env.HEADED ? [] : ['--headless=new']), `--load-extension=${exts}`, `--disable-extensions-except=${exts}`] });
 evidence.chrome = browser.version;
@@ -92,13 +104,18 @@ try {
   };
   // AGENT_FRONT=1 (#750): the agent tab in front of the user's window, fill
   // and click on a sign-up form while the menu keeps opening on each field.
-  const frontSignup = async (b, session) => {
+  const frontSignup = async (b, session, label) => {
     await inPm(`resetEvents().then(() => true)`);
     const opened = cli(b, ['--session', session, '--json', 'open', `${origin}/signup`, '--wait-until', 'none']);
     await waitFor(() => cli(b, ['--session', session, 'eval', 'document.readyState']).stdout.includes('complete'), { timeout: 20000, label: 'sign-up page loaded' });
     const agentTab = await inExt(`chrome.tabs.query({}).then((ts) => ts.find((t) => (t.url || t.pendingUrl || '').startsWith(${JSON.stringify(origin)})))`);
     await inExt(`chrome.tabs.update(${agentTab.id}, { active: true }).then(() => true)`);
     await sleep(500);
+    if (process.env.FRONT_APP && process.env.FRONT_APP !== 'cft') { spawnSync('open', ['-a', process.env.FRONT_APP]); await sleep(1000); }
+    // COVER=1: a Finder window over the whole screen, so Chrome's window is
+    // occluded, not only unfocused (macOS then reports its tabs hidden).
+    if (process.env.COVER) { spawnSync('osascript', ['-e', 'tell application "Finder" to activate', '-e', 'tell application "Finder" to make new Finder window', '-e', 'tell application "Finder" to set bounds of front window to {0, 0, 4000, 3000}']); await sleep(1500); }
+    const chromeFocused = await inExt(`chrome.windows.get(${agentTab.windowId}).then((w) => w.focused)`);
     await inPm(`resetEvents().then(() => true)`);
     const step = (args) => {
       const r = cli(b, ['--session', session, '--json', ...args]);
@@ -115,10 +132,22 @@ try {
     const title = step(['eval', 'document.title']);
     const events = (await inPm(`readEvents()`)).events || [];
     const front = await inExt(`chrome.tabs.query({ active: true, windowId: ${user.window} }).then(([t]) => t && t.id)`);
-    const run = { label: 'front', open: opened.code, agentTab: { id: agentTab.id, window: agentTab.windowId }, steps, title, events, front };
+    const run = { label: `front-${label}`, chromeFocused, open: opened.code, agentTab: { id: agentTab.id, window: agentTab.windowId }, steps, title, events, front };
     evidence.runs.push(run);
     save();
-    for (const s of steps) console.log(`[front] ${s.args.join(' ')}: ${JSON.stringify(s.json).slice(0, 400)}`);
+    for (const s of steps) console.log(`[front ${label}] ${s.args.join(' ')}: ${JSON.stringify(s.json).slice(0, 400)}`);
+    if (label !== 'new') { cli(b, ['--session', session, 'close']); return; }
+    if (process.env.FRONT_APP && process.env.FRONT_APP !== 'cft') {
+      check(chromeFocused === false, `Chrome was not the focused app (${process.env.FRONT_APP} in front)`);
+      const flips = events.filter((e) => e.kind === 'activated').length;
+      if (process.env.SITE_ACCESS) {
+        // Closed by taking focus out of the field: no tab switched at all.
+        check(flips === 0, `no tab was switched to close the menu (${flips} activations)`);
+      } else {
+        // The blur is refused without site access; the tab flip runs as before.
+        check(flips > 0, `without site access the tab flip ran as the fallback (${flips} activations)`);
+      }
+    }
     check(agentTab.windowId === user.window, 'the agent tab is in the user\'s window');
     check(events.some((e) => e.kind === 'open'), 'the password manager opened its menu on a field');
     check(events.some((e) => e.kind === 'close'), 'the menu was closed without the user');
@@ -128,14 +157,14 @@ try {
     check(!events.some((e) => e.kind === 'activated' && e.tab === user.tab), 'the user\'s own tab was never activated');
     cli(b, ['--session', session, 'close']);
   };
+  if (process.env.COVER) process.on('exit', () => spawnSync('osascript', ['-e', 'tell application "Finder" to close front window']));
   const runs = [['new', process.env.HOST_BIN]];
   if (process.env.BASE_BIN) runs.unshift(['base', process.env.BASE_BIN]);
   for (const [label, b] of runs) {
     const session = `aml-${label}`;
     const run0 = {};
     if (process.env.AGENT_FRONT) {
-      if (label !== 'new') continue;
-      await frontSignup(b, session);
+      await frontSignup(b, session, label);
       continue;
     }
     await inPm(`resetEvents().then(() => true)`);

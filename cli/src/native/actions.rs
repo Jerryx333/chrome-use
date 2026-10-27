@@ -17253,7 +17253,7 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
         let mut out = first;
         if let Some(Value::String(e)) = out.get_mut("error") {
             e.push_str(
-                "\nchrome-use closed the menu (it hid the tab for a moment), so the tab works \
+                "\nchrome-use closed the menu (it hid the tab for a moment or took focus out of the field), so the tab works \
                  again, but did not repeat this command: it may already have run in part. \
                  Check the page (`snapshot -i`), then run it again if it did not take effect. \
                  Do not close the tab or the session over this.",
@@ -17295,7 +17295,7 @@ async fn execute_command_recovering_inner(cmd: &Value, state: &mut DaemonState) 
 fn with_menu_warning(mut out: Value, what: &str, note: Option<String>) -> Value {
     let mut warning = format!(
         "a password manager's inline menu (another extension's frame) blocked this tab; \
-         chrome-use hid the tab for a moment to close it, {what}"
+         chrome-use closed it (it hid the tab for a moment or took focus out of the field), {what}"
     );
     if let Some(note) = note {
         warning.push_str(&format!(". {note}"));
@@ -17347,8 +17347,8 @@ async fn read_back_fill(
         return None;
     }
     let mut warning = "a password manager's inline menu opened on this field and blocked \
-                       the fill's follow-up; chrome-use hid the tab for a moment to close it \
-                       and confirmed the field holds the value. Focus has left the field, so \
+                       the fill's follow-up; chrome-use closed it (it hid the tab for a moment \
+                       or took focus out of the field) and confirmed the field holds the value. Focus has left the field, so \
                        `press Enter` needs `--selector` to reach it."
         .to_string();
     if let Some(note) = note {

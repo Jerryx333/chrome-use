@@ -38,6 +38,7 @@ import {
 import { attachTabById } from './attach-by-id.js';
 import { attachCreatedTab, createTabAttachmentQueue } from './tab-attachment.js';
 import { releaseTab } from './release-tab.js';
+import { blurFocusedField } from './menu-blur.js';
 import { DWELL_MS, UserTouchedTabs } from './user-touched.js';
 import { removeAgentTab } from './remove-agent-tab.js';
 import { shouldForwardEvent } from './cdp-event-filter.js';
@@ -1669,6 +1670,21 @@ async function handleForwardCdpCommand(msg) {
         getTab: (id) => chrome.tabs.get(id),
       },
     );
+  }
+
+  // A password manager's menu blocks the debugger on an agent tab and the tab
+  // flip cannot close it (Chrome is not the frontmost app): take focus out of
+  // the field it belongs to. See menu-blur.js.
+  if (method === 'ABExt.blurFocusedField') {
+    await loadOwnedTabs();
+    const tid = typeof params?.targetId === 'string' ? params.targetId : '';
+    const sid = typeof params?.sessionId === 'string' ? params.sessionId : sessionId;
+    const tabId = (sid ? resolveSessionTab(sid, sessionToTab, childSessionToTab) : null) ?? (tid ? tabForTarget(tid) : null);
+    return blurFocusedField(tabId, {
+      isOwned: (id) => ownedTabs.has(id),
+      getAllFrames: (id) => chrome.webNavigation.getAllFrames({ tabId: id }),
+      executeScript: (injection) => chrome.scripting.executeScript(injection),
+    });
   }
 
   if (method === 'ABExt.inspectTab') {
