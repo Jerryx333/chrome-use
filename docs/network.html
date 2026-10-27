@@ -108,6 +108,13 @@
 <span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--body</span> <span class="du-str">'{"vip":true}'</span> <span class="du-flag">--header</span> X-From=mock</code></pre>
       </div>
 
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 别 mock 页面本身</div>
+        mock 接口请求页面看不出来；但如果 fulfill 的是页面主文档（打开的那个 URL 本身），页面可以从
+        <code>performance.getEntriesByType('navigation')</code> 看到"没有网络协议却传了数据"，rebrowser 等检测器会据此判定为自动化。
+        在需要隐身的站点上，只 mock 接口，别 mock 页面 URL。
+      </div>
+
       <h2>改写发出去的请求</h2>
       <p>
         传入 <code>--method</code>、<code>--set-body</code>、<code>--set-header</code> 或 <code>--rewrite-url</code>，

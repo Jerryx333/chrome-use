@@ -25,7 +25,7 @@ import { InspectController } from './inspect-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
 import { cliSwitchPending, compareVersions } from './version-notice.js';
 import { t } from './i18n.js';
-import { STEALTH_DEFAULT, cursorAllowed } from './stealth-mode.js';
+import { STEALTH_DEFAULT, cursorAllowed, stealthBlockReason } from './stealth-mode.js';
 import { createCursorOverlay } from './cursor-overlay.js';
 import { extensionInstallIdentity } from './relay-identity.js';
 import { duplicateTab as runDuplicateTab } from './tab-duplicate.js';
@@ -1431,6 +1431,8 @@ function tabCommandDependencies() {
 }
 
 async function sendCdpToTab(tabId, method, params, childSessionId) {
+  const blocked = stealthBlockReason(cursorSettings, method);
+  if (blocked) throw new Error(blocked);
   return await observeDebuggerCommand(
     method,
     sendTabCommand(tabId, method, params, childSessionId, tabCommandDependencies()),
@@ -2228,6 +2230,8 @@ async function reattachTab(tabId, entry) {
     });
     for (const { method, params } of entry.replay.values()) {
       if (method === 'Page.enable' || method === 'Target.setAutoAttach') continue;
+      // A binding exposed with stealth off is not re-added once it is on again.
+      if (stealthBlockReason(cursorSettings, method)) continue;
       await arm(method, params);
     }
     return entry;

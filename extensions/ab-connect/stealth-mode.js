@@ -15,3 +15,15 @@ export function stealthOn(s) {
 export function cursorAllowed(s) {
   return !stealthOn(s) && !!(s && s.ab_cursor)
 }
+
+// CDP methods whose effect a page can see on its own, refused while stealth
+// mode is on. `Runtime.addBinding` (the `expose` command) adds an unnamed
+// native function to `window`, which bot detectors look for.
+const PAGE_VISIBLE_METHODS = new Set(['Runtime.addBinding'])
+
+/** Why a CDP method is refused under the current settings, or null. */
+export function stealthBlockReason(s, method) {
+  if (!stealthOn(s) || !PAGE_VISIBLE_METHODS.has(method)) return null
+  return `${method} is refused while stealth mode is on: it adds a global the page can detect. ` +
+    'Turn off Stealth mode on the chrome-use extension options page to use it.'
+}

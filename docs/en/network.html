@@ -110,6 +110,13 @@
 <span class="du-prompt">$</span> chrome-use network route <span class="du-str">"**/api/me"</span> <span class="du-flag">--body</span> <span class="du-str">'{"vip":true}'</span> <span class="du-flag">--header</span> X-From=mock</code></pre>
       </div>
 
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ Don't mock the page itself</div>
+        Pages can't tell that an API request was mocked, but if you fulfill the main document (the URL you opened), the page can see
+        "no network protocol, yet data transferred" in <code>performance.getEntriesByType('navigation')</code>, and detectors such as rebrowser's flag it as automation.
+        On sites where stealth matters, mock API requests only, never the page URL.
+      </div>
+
       <h2>Rewrite the outgoing request</h2>
       <p>
         Pass <code>--method</code>, <code>--set-body</code>, <code>--set-header</code>, or <code>--rewrite-url</code>,
