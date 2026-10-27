@@ -1066,7 +1066,10 @@ mod tests {
                 "core points at `core/{stem}`, which has no reference file"
             );
         }
-        assert!(pointers >= 10, "core lost its routing table ({pointers} pointers)");
+        assert!(
+            pointers >= 10,
+            "core lost its routing table ({pointers} pointers)"
+        );
     }
 
     #[test]
