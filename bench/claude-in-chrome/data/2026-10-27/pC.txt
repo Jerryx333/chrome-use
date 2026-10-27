@@ -1,0 +1,21 @@
+secs 30.742 turns 10 tool_calls 9 in 20 cache_create 11498 cache_read 288784 out 1478 cost 0.179
+  $ chrome-use skills get core
+  $ chrome-use open http://127.0.0.1:8711/price.html && chrome-use read
+  $ chrome-use extract --schema '{"rows":"tr","fields":{"c1":"td:nth-child(1)","c2":"td:nth-child(2)","c3":"td:nth-child(3)"}}'
+  $ chrome-use snapshot
+  $ chrome-use tab list; chrome-use get url
+  $ chrome-use open --new-tab http://127.0.0.1:8711/price.html && chrome-use get url && chrome-use snapshot
+  $ chrome-use open --new-tab http://127.0.0.1:8711/order.html && chrome-use get url && chrome-use snapshot -i
+  $ chrome-use batch "fill @e3 Q-4471" "fill @e4 107.50" "click @e2 --observe"
+  $ chrome-use done --keep
+The order page confirmed: **PO CREATED quote=Q-4471 total=107.50**
+
+The quote is #Q-4471 and adds up to 107.50:
+
+| Item | Qty × Unit | Line total |
+|---|---|---|
+| Widget A | 12 × 3.25 | 39.00 |
+| Widget B | 5 × 7.10 | 35.50 |
+| Widget C | 3 × 11.00 | 33.00 |
+
+After I opened the quote page, the browser tab switched to a different page (a checkout page, `frame.html`). I didn't change it; I opened the quote page again in a new tab. The order tab is still open for you.

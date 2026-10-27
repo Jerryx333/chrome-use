@@ -291,6 +291,39 @@
       </table>
       </div>
 
+      <h2 id="vs-claude-in-chrome">chrome-use vs Claude in Chrome, measured</h2>
+      <p>Measured 2026-10-27 on one Mac with Chrome 156 and two fresh, separate profiles. Claude in Chrome 1.0.102 ran in its own side panel with Opus 5.5 · Medium and the default "Automatically approve". chrome-use 1.5.271 was driven by Claude Code with Opus 5.5 · medium. Both got the same task text, word for word.</p>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>Test</th><th>Claude in Chrome</th><th>chrome-use</th></tr></thead>
+        <tbody>
+          <tr><th>botcheck.leeguoo.com (our own detector), its 4 on-page actions</th><td>14 pass, 5 fail: injected DOM node, no IME composition, ~0 ms key holds, untrusted select change, window geometry</td><td class="cmp-win">18 pass, 1 fail: window geometry (background tab)</td></tr>
+          <tr><th>Can a website detect the extension?</th><td>Yes: one <code>fetch()</code> of its public script returns 200</td><td class="cmp-win">No: same result as an extension that isn't installed</td></tr>
+          <tr><th>rebrowser bot-detector</th><td>16 green, 0 red</td><td>16 green, 0 red</td></tr>
+          <tr><th>Coupon in a cross-origin iframe</th><td>Done; read the result from a screenshot and returned a minus sign (U+2212) instead of a hyphen</td><td class="cmp-win">Done; the iframe's controls were in the snapshot and the result text was exact</td></tr>
+          <tr><th>9-field form</th><td>Correct, 22 s</td><td>Correct, 21 s</td></tr>
+          <tr><th>Copy data between two tabs</th><td class="cmp-win">Correct, 18 s</td><td>Correct, 29 s</td></tr>
+          <tr><th>Hacker News top 30 as JSON</th><td>30 items, 38 s</td><td class="cmp-win">30 items, valid JSON, 28 s</td></tr>
+          <tr><th>3 agents at once on one Chrome</th><td>Not documented</td><td class="cmp-win">All 3 correct, ~31 s total</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <h3>Where Claude in Chrome is ahead</h3>
+      <ul>
+        <li><b>Prompt-injection defense:</b> training, injection scanning and a per-action classifier, with published attack-success rates (0% for Opus 5 and Sonnet 5 in the GA post). chrome-use has no classifier, only opt-in content boundaries and domain and action policies.</li>
+        <li><b>Permissions:</b> per-site allow and decline with a permission history, default blocks on some high-risk categories, and admin allow and block lists for teams.</li>
+        <li><b>Setup:</b> install from the store, sign in, start. No terminal.</li>
+        <li><b>Teach by demonstration:</b> it can record a workflow while you do it yourself.</li>
+      </ul>
+      <h3>Where chrome-use is ahead</h3>
+      <ul>
+        <li><b>Websites can't tell it's there:</b> no scripts injected into pages, an extension that can't be probed, and clean behavioural checks. Claude in Chrome is built to be visible: it draws a glowing border and, by policy, won't handle CAPTCHAs.</li>
+        <li><b>Re-runnable automation:</b> <code>extract --schema</code>, <code>batch</code>, <code>script</code>, 197 site adapters, YAML tests, network mocking, HAR, MCP and an HTTP API.</li>
+        <li><b>Many agents on one Chrome:</b> each session gets its own tab group.</li>
+        <li><b>Your data stays local:</b> native messaging only, no Claude subscription; page content goes only to the model you chose. Claude in Chrome routes through Anthropic's relay and doesn't support zero data retention.</li>
+      </ul>
+      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">Measured on one machine and one network, one run per test; not a promise that no website can detect it. Tasks, test pages, scripts and raw logs are in <a href="https://github.com/leeguooooo/chrome-use/tree/main/bench/claude-in-chrome">bench/claude-in-chrome</a>, ready to rerun for each release.</p>
+
       <h2>chrome-use vs ego(lite): measured in 2026-10</h2>
       <p>
         ego(lite) is positioned close to us: both let agents use real sign-ins without fighting for your tabs. On 2026-10-27 we re-ran the comparison on one machine (190, M4) with current releases:

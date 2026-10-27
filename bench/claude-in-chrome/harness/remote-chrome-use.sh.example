@@ -1,0 +1,11 @@
+#!/bin/sh
+# Example wrapper: put this (renamed to `chrome-use`) in CHROME_USE_DIR to run
+# every command on a separate test machine over SSH, against an isolated
+# install whose HOME is a throw-away directory. Never point it at a real
+# profile. Edit HOST, RIG_HOME and BIN.
+HOST=user@test-mac
+RIG_HOME=/tmp/cvc/hb
+BIN=/tmp/cvc/rel/ChromeUse.app/Contents/MacOS/chrome-use
+q=""; for a in "$@"; do q="$q '$(printf %s "$a" | sed "s/'/'\\\\''/g")'"; done
+exec ssh -o ControlMaster=auto -o ControlPath=/tmp/cvc-ssh-%r@%h -o ControlPersist=600 "$HOST" \
+  "HOME=$RIG_HOME CHROME_USE_NO_UPDATE_CHECK=1 CHROME_USE_AUTO_UPGRADE=0 AGENT_BROWSER_SESSION=\${CVC_SESSION:-bench} $BIN $q"

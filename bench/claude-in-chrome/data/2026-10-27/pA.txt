@@ -1,0 +1,13 @@
+secs 22.591 turns 6 tool_calls 5 in 12 cache_create 2203 cache_read 174196 out 757 cost 0.068
+  $ chrome-use skills get core
+  $ chrome-use --session reg open http://127.0.0.1:8711/form.html && chrome-use --session reg snapshot -i -c
+  $ chrome-use --session reg batch "fill @e4 'Ada Lovelace'" "fill @e5 ada@example.com" "select @e6 Germany" "check @e9" "check @e10" "check @e12" "fill input[type=
+  $ chrome-use --session reg click @e3 --observe
+  $ chrome-use --session reg done
+I filled in the form with all the details you gave and submitted it. Afterwards the page showed this text:
+
+```
+SUBMITTED {"name":"Ada Lovelace","email":"ada@example.com","country":"Germany","ticket":"vip","topics":["ai","security"],"arrival":"2026-12-03","notes":"Vegetarian meal please","terms":"yes"}
+```
+
+The browser tab I opened for this is now closed.

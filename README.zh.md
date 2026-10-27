@@ -75,11 +75,11 @@ chrome-use 让**任意** agent（Claude Code、Cursor、Codex、你自己的脚�
 | 驱动你**真实、已登录**的 Chrome | 可配置；新上下文默认无登录态 | ✅ | ✅ | ✅ |
 | 连接方式 / **"Allow remote debugging?" 弹框** | —（自带浏览器） | `--remote-debugging-port` · 取决于版本和模式 | `chrome.debugger` · 无 | 原生消息 · **从不** ✅⁴ |
 | 真实浏览器指纹（CreepJS ~0%）¹ | ❌ 自动化特征 / headless | ✅ | ✅ | ✅ **已实测 0%** |
-| **无 `Runtime.enable` CDP 泄漏**（rebrowser）² | ❌ 泄漏 | ❌ 泄漏 | — | ✅ **默认关闭** |
+| **无 `Runtime.enable` CDP 泄漏**（rebrowser）² | ❌ 泄漏 | ❌ 泄漏 | ✅ 实测无泄漏（2026-10-27） | ✅ **默认关闭** |
 | 多 agent 共用**同一个**真实 Chrome、标签组隔离³ | ❌ 各开各的浏览器 | ⚠️ 共享 tab、无隔离 | ❌ 单 app | ✅ |
-| 权限面 | 完全控制 | 完整 CDP | 16 个，含 `<all_urls>` | **12 个，无 `<all_urls>`** |
+| 权限面 | 完全控制 | 完整 CDP | 16 个，含 `<all_urls>` | **15 个，不授予任何站点权限**（`http/https` 为可选） |
 
-<sub>¹ 三家「真实 Chrome」工具在 CreepJS 上都 ~0%（毕竟是真浏览器），我们的是实测过的。² rebrowser `runtimeEnableLeak`：我们的中继路径实测无泄漏；Claude in Chrome 未独立测试（—）。³ web-access 也能跑并行子 agent，但无每会话隔离；本工具每个 `--session` 拿到自己彩色、命令隔离的标签组。⁴ 不弹同意框，但扩展仍然用 `chrome.debugger`，所以 agent 标签页被 attach 时 Chrome 会显示「started debugging this browser」提示条，去掉方法见 [连接你的 Chrome](#连接你的-chrome)。实测数字见 [反检测](#反检测)。</sub>
+<sub>¹ 三家「真实 Chrome」工具在 CreepJS 上都 ~0%（毕竟是真浏览器），我们的是实测过的。² rebrowser `runtimeEnableLeak`：我们的中继路径实测无泄漏；Claude in Chrome 也实测无泄漏（2026-10-27，16 绿 0 红，见 [bench/claude-in-chrome](bench/claude-in-chrome/)）。³ web-access 也能跑并行子 agent，但无每会话隔离；本工具每个 `--session` 拿到自己彩色、命令隔离的标签组。⁴ 不弹同意框，但扩展仍然用 `chrome.debugger`，所以 agent 标签页被 attach 时 Chrome 会显示「started debugging this browser」提示条，去掉方法见 [连接你的 Chrome](#连接你的-chrome)。实测数字见 [反检测](#反检测)。</sub>
 
 ## 工作原理
 
