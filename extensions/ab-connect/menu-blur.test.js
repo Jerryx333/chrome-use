@@ -17,7 +17,7 @@ function deps(overrides = {}) {
     getAllFrames: async () => frames,
     executeScript: async (injection) => {
       calls.push(injection)
-      return injection.target.frameIds.map((frameId) => ({ frameId, result: frameId === 6 }))
+      return injection.target.frameIds.map((frameId) => ({ frameId, result: { blurred: frameId === 6, nudged: frameId === 0 && injection.args[0] === true } }))
     },
     ...overrides,
   }
@@ -25,11 +25,18 @@ function deps(overrides = {}) {
 
 test('blurs in the web frames of an agent tab, in the isolated world, skipping extension frames', async () => {
   const d = deps()
-  assert.deepEqual(await blurFocusedField(7, d), { blurred: 1, frames: 2 })
+  assert.deepEqual(await blurFocusedField(7, d), { blurred: 1, nudged: 1, frames: 2, stealth: false })
   assert.equal(d.calls.length, 1)
+  assert.deepEqual(d.calls[0].args, [true])
   assert.deepEqual(d.calls[0].target, { tabId: 7, frameIds: [0, 6] })
   assert.equal(d.calls[0].world, 'ISOLATED')
   assert.equal(d.calls[0].func, blurEditableField)
+})
+
+test('stealth mode sends no visibilitychange nudge', async () => {
+  const d = deps({ stealth: true })
+  assert.deepEqual(await blurFocusedField(7, d), { blurred: 1, nudged: 0, frames: 2, stealth: true })
+  assert.deepEqual(d.calls[0].args, [false])
 })
 
 test("never scripts the user's own tab", async () => {
@@ -48,14 +55,14 @@ test('missing site access names the option that grants it', async () => {
   const d = deps({
     executeScript: async () => { throw new Error('Cannot access contents of the page. Extension manifest must request permission to access the respective host.') },
   })
-  await assert.rejects(blurFocusedField(7, d), /no site access .*Allow element picking on all sites/)
+  await assert.rejects(blurFocusedField(7, d), /no site access .*Allow on all sites/)
 })
 
 test('the frame script blurs only an editable field', () => {
   const run = (activeElement) => {
     const saved = globalThis.document
     globalThis.document = { activeElement, body: { tag: 'body' } }
-    try { return blurEditableField() } finally { globalThis.document = saved }
+    try { return blurEditableField(false).blurred } finally { globalThis.document = saved }
   }
   let blurred = 0
   const field = (selector, extra = {}) => ({ matches: (s) => s.split(', ').includes(selector), isContentEditable: false, blur: () => blurred++, ...extra })
@@ -64,4 +71,19 @@ test('the frame script blurs only an editable field', () => {
   assert.equal(run(field('iframe')), false)
   assert.equal(run(null), false)
   assert.equal(blurred, 2)
+})
+
+test('the nudge fires only when asked, in the top frame of a hidden page', () => {
+  const run = (nudge, visibilityState, top = true) => {
+    const saved = [globalThis.document, globalThis.window, globalThis.top]
+    const events = []
+    globalThis.document = { activeElement: null, body: {}, visibilityState, dispatchEvent: (e) => events.push(e.type) }
+    globalThis.window = {}
+    globalThis.top = top ? globalThis.window : {}
+    try { return [blurEditableField(nudge).nudged, events] } finally { [globalThis.document, globalThis.window, globalThis.top] = saved }
+  }
+  assert.deepEqual(run(true, 'hidden'), [true, ['visibilitychange']])
+  assert.deepEqual(run(false, 'hidden'), [false, []])
+  assert.deepEqual(run(true, 'visible'), [false, []])
+  assert.deepEqual(run(true, 'hidden', false), [false, []])
 })

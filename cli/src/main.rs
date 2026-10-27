@@ -1627,6 +1627,7 @@ fn run_status(session: &str, json_mode: bool) {
                     "warnings": warnings,
                     "expectedVersion": env!("AB_CONNECT_VERSION"),
                     "liveVersion": extension_version,
+                    "siteAccess": health.site_access,
                     "profileId": profile_id,
                     "profileEmail": profile_email,
                     "update": update.as_ref().map(|n| json!({
@@ -1682,6 +1683,14 @@ fn run_status(session: &str, json_mode: bool) {
         extension_version.as_deref().unwrap_or("unknown"),
         env!("AB_CONNECT_VERSION")
     );
+    match health.site_access {
+        Some(true) => println!("  site access: on"),
+        Some(false) => {
+            println!("WARN {}", connect::SITE_ACCESS_OFF);
+            println!("  fix: {}", connect::SITE_ACCESS_FIX);
+        }
+        None => {}
+    }
     if let Some((id, email)) = profile {
         println!(
             "  profile: {}",

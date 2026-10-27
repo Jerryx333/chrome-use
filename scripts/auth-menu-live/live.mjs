@@ -55,7 +55,16 @@ const frameServer = await serve((req, res) => { res.setHeader('Content-Type', 't
 const framePort = frameServer.address().port;
 const topServer = await serve((req, res) => {
   res.setHeader('Content-Type', 'text/html');
-  if (req.url.startsWith('/signup')) {
+  if (req.url.startsWith('/form')) {
+    // FORM=1: a plain sign-in form, which logs its focus and visibility for
+    // the driver.
+    res.end(`<!doctype html><title>Sign in</title><form onsubmit="event.preventDefault(); document.title = 'signed:' + user.value + ':' + pass.value.length">
+<input id="user" type="text" autocomplete="username" aria-label="Email"> <input id="pass" type="password" autocomplete="current-password" aria-label="Password"> <button id="go">Sign in</button></form><script>
+window.__log = []; const t0 = performance.now(); const log = (k, x) => __log.push(Math.round(performance.now() - t0) + ' ' + k + ' ' + (x || ''));
+for (const id of ['user', 'pass']) { const e = document.getElementById(id); e.addEventListener('focus', () => log('focus', id)); e.addEventListener('blur', () => log('blur', id)); }
+document.addEventListener('visibilitychange', () => log('visibility', document.visibilityState));
+</script>`);
+  } else if (req.url.startsWith('/signup')) {
     // #750: a plain sign-up form in the top document; the password manager
     // opens its menu on each focused field.
     res.end(`<!doctype html><title>Sign up</title><form onsubmit="event.preventDefault(); document.title = 'created:' + handle.value + ':' + email.value">
@@ -157,6 +166,69 @@ try {
     check(!events.some((e) => e.kind === 'activated' && e.tab === user.tab), 'the user\'s own tab was never activated');
     cli(b, ['--session', session, 'close']);
   };
+  // FORM=1: the user's own case (a background agent tab in their window):
+  // fill, fill and click on a sign-in form while the menu opens on each
+  // field. With FULLSCREEN=1 the user's window is in macOS full screen and
+  // the user works in another app, so Chrome's Space is not on screen.
+  const backgroundForm = async (b, session, label) => {
+    await inPm(`resetEvents().then(() => true)`);
+    for (let i = 0; i < 2; i++) await inExt(`chrome.tabs.create({ windowId: ${user.window}, url: 'about:blank#user-${i}', active: false }).then(() => true)`);
+    if (process.env.FULLSCREEN) {
+      await inExt(`chrome.windows.update(${user.window}, { state: 'fullscreen' }).then(() => true)`);
+      await sleep(2500);
+      spawnSync('open', ['-a', 'Finder']);
+      await sleep(2500);
+    }
+    const frontApp = () => spawnSync('osascript', ['-e', 'tell application "System Events" to get name of first process whose frontmost is true'], { encoding: 'utf8' }).stdout.trim();
+    const timeline = [];
+    let watching = true;
+    const watch = (async () => {
+      let prev = '';
+      while (watching) {
+        const ws = await inExt(`chrome.windows.getAll({ populate: true }).then((ws) => ws.map((w) => ({ id: w.id, focused: w.focused, state: w.state, front: (w.tabs.find((t) => t.active) || {}).id, tabs: w.tabs.length })))`).catch(() => []);
+        const now = JSON.stringify({ app: frontApp(), ws });
+        if (now !== prev) { timeline.push({ at: Date.now(), ...JSON.parse(now) }); prev = now; }
+        await sleep(100);
+      }
+    })();
+    const step = (args) => {
+      const r = cli(b, ['--session', session, '--json', ...args]);
+      let json = null;
+      try { json = JSON.parse(r.stdout.trim().split('\n').pop()); } catch {}
+      return { at: Date.now(), args, code: r.code, json, stderr: r.stderr.slice(-800) };
+    };
+    const opened = step(['open', `${origin}/form`, '--wait-until', 'none']);
+    await waitFor(() => cli(b, ['--session', session, 'eval', 'document.readyState']).stdout.includes('complete'), { timeout: 20000, label: 'form loaded' });
+    const agentTab = await inExt(`chrome.tabs.query({}).then((ts) => ts.find((t) => (t.url || '').startsWith(${JSON.stringify(origin)})))`);
+    const before = await inExt(`chrome.windows.get(${user.window}).then((w) => ({ focused: w.focused, state: w.state }))`);
+    await inPm(`resetEvents().then(() => true)`);
+    const steps = [
+      step(['fill', '#user', 'leo@example.com']),
+      step(['fill', '#pass', 'not-a-password']),
+      step(['click', '#go']),
+    ];
+    await sleep(1000);
+    watching = false;
+    await watch;
+    const page = step(['eval', 'document.title + "\\n" + __log.join("\\n")']);
+    const events = (await inPm(`readEvents()`)).events || [];
+    const run = { label: `form-${label}`, before, agentTab: agentTab && { id: agentTab.id, window: agentTab.windowId, active: agentTab.active }, opened, steps, page, events, timeline };
+    evidence.runs.push(run);
+    save();
+    for (const s of steps) console.log(`[form ${label}] ${s.args.join(' ')}: ${JSON.stringify(s.json).slice(0, 400)}`);
+    console.log(`[form ${label}] page: ${JSON.stringify(page.json?.data?.result)}`);
+    if (label === 'new') {
+      if (process.env.FULLSCREEN) check(before.state === 'fullscreen' && before.focused === false, `the user's window is full screen and not focused (${JSON.stringify(before)})`);
+      check(agentTab && agentTab.windowId === user.window && !agentTab.active, 'the agent tab is a background tab in the user\'s window');
+      check(events.some((e) => e.kind === 'open'), 'the password manager opened its menu on a field');
+      check(steps.every((s) => s.json?.success === true), `fill, fill and click succeeded (${steps.map((s) => s.json?.error || 'ok').join(' | ').slice(0, 900)})`);
+      check(String(page.json?.data?.result || '').startsWith('signed:leo@example.com:14'), 'the form got both values');
+      check(!timeline.some((t) => /Chrome/.test(t.app)), `Chrome never came to the front (${[...new Set(timeline.map((t) => t.app))].join(', ')})`);
+      const sampled = timeline.filter((t) => t.ws.some((w) => w.id === user.window));
+      check(sampled.length > 0 && sampled.every((t) => t.ws.find((w) => w.id === user.window).front === user.tab), `the user's window kept its front tab throughout (${sampled.length} samples)`);
+    }
+    cli(b, ['--session', session, 'close']);
+  };
   if (process.env.COVER) process.on('exit', () => spawnSync('osascript', ['-e', 'tell application "Finder" to close front window']));
   const runs = [['new', process.env.HOST_BIN]];
   if (process.env.BASE_BIN) runs.unshift(['base', process.env.BASE_BIN]);
@@ -165,6 +237,10 @@ try {
     const run0 = {};
     if (process.env.AGENT_FRONT) {
       await frontSignup(b, session, label);
+      continue;
+    }
+    if (process.env.FORM) {
+      await backgroundForm(b, session, label);
       continue;
     }
     await inPm(`resetEvents().then(() => true)`);

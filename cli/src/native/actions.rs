@@ -19982,7 +19982,8 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         }
     };
 
-    super::interaction::restore_rendering_if_hidden(&mgr.client, &source_session_id).await;
+    super::interaction::restore_rendering_before_press(&mgr.client, &source_session_id, sx, sy)
+        .await;
     // Mouse down at source
     mgr.client
         .send_command(
@@ -25532,7 +25533,17 @@ async fn handle_input_mouse(cmd: &Value, state: &mut DaemonState) -> Result<Valu
             .map(|v| v as i32),
     );
 
-    super::interaction::restore_rendering_if_hidden(&mgr.client, &session_id).await;
+    if event_type == "mousePressed" {
+        super::interaction::restore_rendering_before_press(
+            &mgr.client,
+            &session_id,
+            params.x,
+            params.y,
+        )
+        .await;
+    } else {
+        super::interaction::restore_rendering_if_hidden(&mgr.client, &session_id).await;
+    }
     mgr.client
         .send_command_typed::<_, Value>("Input.dispatchMouseEvent", &params, Some(&session_id))
         .await?;
@@ -25665,7 +25676,13 @@ async fn handle_mousedown(cmd: &Value, state: &mut DaemonState) -> Result<Value,
         None,
     );
 
-    super::interaction::restore_rendering_if_hidden(&mgr.client, &session_id).await;
+    super::interaction::restore_rendering_before_press(
+        &mgr.client,
+        &session_id,
+        params.x,
+        params.y,
+    )
+    .await;
     mgr.client
         .send_command_typed::<_, Value>("Input.dispatchMouseEvent", &params, Some(&session_id))
         .await?;

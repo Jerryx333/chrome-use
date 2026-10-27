@@ -5500,14 +5500,55 @@ fn visibility_reply_is_hidden(reply: &Value) -> bool {
 /// One evaluate when the page is visible. Best-effort throughout: a failure
 /// here leaves the click as it was. `AGENT_BROWSER_KEEP_HIDDEN=1` opts out.
 pub(crate) async fn restore_rendering_if_hidden(client: &CdpClient, session_id: &str) -> bool {
+    restore_rendering(client, session_id, None).await
+}
+
+/// [`restore_rendering_if_hidden`] before a mouse press at (x, y): a hidden
+/// page first loses the focus of a field the press is not on.
+///
+/// Showing the page again gives the focused field a new `focus` event, the
+/// same as a user switching back to the tab. Bitwarden opens its inline menu
+/// on that event, and while the menu's frame is in the tab Chrome refuses
+/// every debugger command there: the press that follows failed with
+/// "Detached while handling command" (measured in a real Chrome with
+/// Bitwarden 2026.10, the agent tab behind the user's full-screen window).
+/// The page had closed the menu itself when it turned hidden. A press
+/// elsewhere takes the focus out of the field anyway; taking it out first,
+/// while the page is hidden, keeps the menu shut. A press on the field
+/// itself keeps its focus.
+pub(crate) async fn restore_rendering_before_press(
+    client: &CdpClient,
+    session_id: &str,
+    x: f64,
+    y: f64,
+) -> bool {
+    restore_rendering(client, session_id, Some((x, y))).await
+}
+
+async fn restore_rendering(
+    client: &CdpClient,
+    session_id: &str,
+    press: Option<(f64, f64)>,
+) -> bool {
     if std::env::var("AGENT_BROWSER_KEEP_HIDDEN").as_deref() == Ok("1") {
         return false;
     }
+    // Both expressions answer the visibility state.
+    let expression = match press {
+        None => "document.visibilityState".to_string(),
+        Some((x, y)) => format!(
+            "(() => {{ const s = document.visibilityState; if (s === 'hidden') {{ \
+             const a = document.activeElement; \
+             if (a && a !== document.body && (a.matches?.('input, textarea, select') || a.isContentEditable)) {{ \
+             const u = document.elementFromPoint({x}, {y}); \
+             if (!u || (u !== a && !a.contains(u))) a.blur(); }} }} return s; }})()"
+        ),
+    };
     let probe = tokio::time::timeout(
         std::time::Duration::from_millis(1000),
         client.send_command(
             "Runtime.evaluate",
-            Some(json!({ "expression": "document.visibilityState", "returnByValue": true })),
+            Some(json!({ "expression": expression, "returnByValue": true })),
             Some(session_id),
         ),
     )
@@ -5608,7 +5649,7 @@ async fn dispatch_click(
     // decelerating trajectory starting from where the cursor last landed, which
     // removes the "instant jump to exact centre, no prior movement" tell that
     // behavioural anti-bot systems flag.
-    restore_rendering_if_hidden(client, session_id).await;
+    restore_rendering_before_press(client, session_id, x, y).await;
     let level = humanize::active_level();
     let seed = humanize::next_seed();
     move_pointer_with(client, session_id, x, y, level, seed).await?;

@@ -3369,7 +3369,20 @@ pub struct RelayHealth {
     /// when the extension predates reporting it (before ab-connect 0.5.34).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extension_update: Option<serde_json::Value>,
+    /// Whether the extension holds its optional http(s) site access, which
+    /// closing a password manager's menu on an agent tab needs while Chrome
+    /// is behind another app; `None` before ab-connect 0.5.92.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_access: Option<bool>,
 }
+
+/// What `status` and `doctor` say while the extension lacks site access.
+pub const SITE_ACCESS_OFF: &str = "site access is off: when a password manager's menu \
+    (Bitwarden, 1Password...) covers a field on a chrome-use tab while Chrome is behind another \
+    app, chrome-use cannot close it and waits for the user to press Escape";
+/// How the user grants it: Chrome asks only after a click in the extension.
+pub const SITE_ACCESS_FIX: &str =
+    "click the chrome-use icon in Chrome's toolbar, then \"Allow on all sites\" (once)";
 
 impl Default for RelayHealth {
     fn default() -> Self {
@@ -3380,6 +3393,7 @@ impl Default for RelayHealth {
             debugger: "debugger: unknown (relay transport did not answer)".into(),
             extension_health: None,
             extension_update: None,
+            site_access: None,
         }
     }
 }
@@ -3735,6 +3749,7 @@ async fn probe_relay_health(url: &str, budget: std::time::Duration) -> RelayHeal
                     health.extension_health =
                         state.get("relayHealth").filter(|v| v.is_object()).cloned();
                     health.extension_update = extension_update_from_state(state);
+                    health.site_access = state.get("siteAccess").and_then(|v| v.as_bool());
                     health.debugger = debugger_summary(health.extension_health.as_ref());
                     return Some(());
                 }

@@ -70,6 +70,9 @@ struct Page {
     site_access: bool,
     /// `ABExt.blurFocusedField` calls.
     ext_blurs: u32,
+    /// The agent tab is a background tab of the user's window, whose front
+    /// tab (99) is the user's own.
+    background: bool,
     /// Every method called, for diagnostics.
     log: Vec<String>,
 }
@@ -158,6 +161,16 @@ impl Fake {
         p.site_access = site_access;
     }
 
+    fn grant_site_access(&self) {
+        self.0.lock().unwrap().site_access = true;
+    }
+
+    fn put_behind_user_tab(&self) {
+        let mut p = self.0.lock().unwrap();
+        p.background = true;
+        p.front_tab = Some(99);
+    }
+
     fn ext_blurs(&self) -> u32 {
         self.0.lock().unwrap().ext_blurs
     }
@@ -231,7 +244,7 @@ impl Fake {
                 let ours =
                     params["targetId"] == json!("T1") || params["sessionId"] == json!("S-T1");
                 if ours {
-                    json!({"chromeTabId": 11, "windowId": 1, "active": true,
+                    json!({"chromeTabId": 11, "windowId": 1, "active": !p.background,
                            "url": "https://form.test/", "title": "Form"})
                 } else {
                     json!({"chromeTabId": 12, "windowId": 1, "active": false})
@@ -242,8 +255,8 @@ impl Fake {
                 p.ext_blurs += 1;
                 if !p.site_access {
                     return Err("blurFocusedField: no site access (Cannot access contents \
-                                of the page); grant it in the chrome-use extension options \
-                                (\"Allow element picking on all sites\")"
+                                of the page); the user grants it once: the chrome-use icon \
+                                in Chrome's toolbar → \"Allow on all sites\""
                         .into());
                 }
                 p.blocked = false;
@@ -870,6 +883,29 @@ fn a_covered_window_closes_the_menu_by_blurring_the_field() {
     assert_eq!((tab_updates, temp_tabs), (0, 0), "no tab switched: {all}");
 }
 
+/// A background tab of the user's window, Chrome in front: the blur gets
+/// the first try there too, so neither window has a tab switched.
+#[test]
+fn a_background_tab_closes_the_menu_by_blurring_the_field() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start_full("capfail-bg", &cdp, &[], true);
+    let snap = d.snapshot();
+    let email = ref_for(&snap, "Email");
+    fake.arm(false);
+    fake.stay_blocked();
+    fake.grant_site_access();
+    fake.put_behind_user_tab();
+    let out = d.cli(&["fill", &format!("@{email}"), "me@example.test", "--observe"]);
+    let all = text(&out);
+    assert_eq!(fake.denials(), 1, "{all}");
+    let out = d.cli(&["snapshot", "-i"]);
+    let all = text(&out);
+    assert!(out.status.success(), "{all}");
+    assert_eq!(fake.ext_blurs(), 1, "{all}");
+    let (tab_updates, temp_tabs, _) = fake.recovery_footprint();
+    assert_eq!((tab_updates, temp_tabs), (0, 0), "no tab switched: {all}");
+}
+
 #[test]
 fn a_covered_window_without_site_access_names_the_option() {
     let (fake, cdp) = Fake::start();
@@ -885,5 +921,30 @@ fn a_covered_window_without_site_access_names_the_option() {
     assert!(!out.status.success(), "{all}");
     assert!(fake.ext_blurs() >= 1, "{all}");
     assert!(all.contains("Chrome is not the window in front"), "{all}");
-    assert!(all.contains("Allow element picking on all sites"), "{all}");
+    assert!(all.contains("Allow on all sites"), "{all}");
+}
+
+#[test]
+fn a_background_tab_without_site_access_names_the_option_too() {
+    // The agent tab behind the user's tab, Chrome covered: the recovery that
+    // leaves the user's window alone fails too, and its error still says why
+    // taking focus out of the field did not work.
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start_full("capfail-bg-noaccess", &cdp, &[], true);
+    let snap = d.snapshot();
+    let email = ref_for(&snap, "Email");
+    fake.arm(false);
+    fake.stay_blocked();
+    fake.cover_chrome(false);
+    fake.put_behind_user_tab();
+    let _ = d.cli(&["fill", &format!("@{email}"), "me@example.test", "--observe"]);
+    let out = d.cli(&["snapshot", "-i"]);
+    let all = text(&out);
+    assert!(!out.status.success(), "{all}");
+    assert!(fake.ext_blurs() >= 1, "{all}");
+    assert!(
+        all.contains("Taking focus out of the field did not close it either"),
+        "{all}"
+    );
+    assert!(all.contains("Allow on all sites"), "{all}");
 }
