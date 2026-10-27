@@ -12,26 +12,46 @@
 // Finder): the same events as the user clicking elsewhere. Nothing is added
 // to the page.
 //
+// The blur is not enough on a background tab of a real Chrome (Bitwarden
+// 2026.10, the agent tab behind the user's full-screen window): Bitwarden
+// opens its menu asynchronously, so a page that turned hidden right after
+// the focus gets the menu back after its hidden-close, and its blur path then
+// waits on menu frames that a hidden page never initializes. What closes it
+// at once is Bitwarden's `visibilitychange` handler, which reads the real
+// `document.visibilityState` and force-closes when it is `hidden` (measured:
+// closed within 10 ms, twice out of twice). Dispatching that event is visible
+// to the page (an untrusted event with no state change), so it is sent only
+// with stealth mode off (`nudge`), and only on a page that is hidden.
+//
 // Needs host access to the page: the extension holds only optional host
-// permissions, granted from the options page. Without them Chrome refuses the
-// script and the caller falls back to its other recoveries.
+// permissions, granted from the popup or the options page. Without them
+// Chrome refuses the script and the caller falls back to its other recoveries.
 
 // Runs in each frame (serialized by chrome.scripting, so self-contained).
 // Only an editable field is blurred: in a parent frame the focused element is
 // the <iframe> holding the field, and blurring that would move nothing.
-export function blurEditableField() {
+// Returns { blurred, nudged }.
+export function blurEditableField(nudge) {
   const el = document.activeElement
-  if (!el || el === document.body) return false
-  const editable = el.matches?.('input, textarea, select') || el.isContentEditable
-  if (!editable) return false
-  el.blur()
-  return true
+  let blurred = false
+  if (el && el !== document.body && (el.matches?.('input, textarea, select') || el.isContentEditable)) {
+    el.blur()
+    blurred = true
+  }
+  let nudged = false
+  if (nudge === true && window === top && document.visibilityState === 'hidden') {
+    document.dispatchEvent(new Event('visibilitychange'))
+    nudged = true
+  }
+  return { blurred, nudged }
 }
 
 /**
  * Blur the focused field in every web frame of `tabId`, an agent tab.
- * deps: { isOwned(tabId), getAllFrames(tabId), executeScript(injection) }
- * Returns { blurred, frames }; throws when nothing could be scripted.
+ * deps: { isOwned(tabId), getAllFrames(tabId), executeScript(injection),
+ * stealth (true: no visibilitychange nudge) }
+ * Returns { blurred, nudged, frames, stealth }; throws when nothing could be
+ * scripted.
  */
 export async function blurFocusedField(tabId, deps) {
   if (!Number.isInteger(tabId)) throw new Error('blurFocusedField: no tab for this session')
@@ -49,6 +69,7 @@ export async function blurFocusedField(tabId, deps) {
       target: { tabId, frameIds },
       world: 'ISOLATED',
       func: blurEditableField,
+      args: [deps.stealth !== true],
     })
   } catch (e) {
     const message = String(e?.message || e)
@@ -57,5 +78,6 @@ export async function blurFocusedField(tabId, deps) {
     }
     throw new Error(`blurFocusedField: ${message}`)
   }
-  return { blurred: (results || []).filter((r) => r?.result === true).length, frames: frameIds.length }
+  const count = (key) => (results || []).filter((r) => r?.result?.[key] === true).length
+  return { blurred: count('blurred'), nudged: count('nudged'), frames: frameIds.length, stealth: deps.stealth === true }
 }

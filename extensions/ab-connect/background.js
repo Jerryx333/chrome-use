@@ -1691,6 +1691,8 @@ async function handleForwardCdpCommand(msg) {
         isOwned: (id) => ownedTabs.has(id),
         getAllFrames: (id) => chrome.webNavigation.getAllFrames({ tabId: id }),
         executeScript: (injection) => chrome.scripting.executeScript(injection),
+        // The visibilitychange nudge is visible to the page: stealth mode off only.
+        stealth: cursorSettings.ab_stealth !== false,
       });
     } catch (e) {
       // The agent now waits for the user: say where the switch is.

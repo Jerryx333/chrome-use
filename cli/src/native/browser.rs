@@ -7296,9 +7296,13 @@ impl BrowserManager {
         // counts as hidden, so the flip below changes nothing (#449). Take
         // focus out of the field instead, which closes Bitwarden's menu the
         // way a click elsewhere does. Not when the key press must reach the
-        // field: focusing it again reopens the menu.
+        // field: focusing it again reopens the menu. A background tab is
+        // hidden whatever the window: Bitwarden can reopen its menu there
+        // after closing it, and the agent-window nudge below did not close
+        // that one in a real Chrome, so it gets the same first try.
         let mut blur_failure = None;
-        if blur_focused && window.get("focused").and_then(Value::as_bool) == Some(false) {
+        let unfocused = window.get("focused").and_then(Value::as_bool) == Some(false);
+        if blur_focused && (unfocused || !in_front) {
             match self.close_menu_by_blur(&session_id, &pinned).await {
                 Ok(()) => return Ok(None),
                 Err(e) => blur_failure = Some(e),
@@ -7514,9 +7518,11 @@ impl BrowserManager {
     /// Close a password manager's menu by blurring the focused field of the
     /// pinned tab from the extension (`ABExt.blurFocusedField`, 0.5.90): no
     /// debugger command, no tab switch. Bitwarden closes its menu when its
-    /// field blurs and none of its frames has the focus. Needs the
-    /// extension's optional site access; an older extension does not know
-    /// the method. Either way the error says why, for the caller's message.
+    /// field blurs and none of its frames has the focus; on a hidden page
+    /// that is not enough, and the extension also sends `visibilitychange`
+    /// (0.5.92, stealth mode off). Needs the extension's optional site
+    /// access; an older extension does not know the method. Either way the
+    /// error says why, for the caller's message.
     async fn close_menu_by_blur(&self, session_id: &str, target_id: &str) -> Result<(), String> {
         let out: Value = self
             .client
@@ -7526,8 +7532,19 @@ impl BrowserManager {
                 None,
             )
             .await?;
-        if out.get("blurred").and_then(Value::as_u64).unwrap_or(0) == 0 {
-            return Err("no field had the focus".to_string());
+        let count = |key: &str| out.get(key).and_then(Value::as_u64).unwrap_or(0);
+        // With stealth mode on the extension does not send the page the
+        // `visibilitychange` that makes Bitwarden close a menu it reopened
+        // on a hidden page (menu-blur.js, 0.5.92); older extensions never do.
+        let stealth = out.get("stealth").and_then(Value::as_bool) == Some(true);
+        let why_open = if stealth {
+            " (stealth mode is on, so chrome-use did not signal the page; with stealth mode \
+             off in the extension's settings it closes such a menu itself)"
+        } else {
+            ""
+        };
+        if count("blurred") == 0 && count("nudged") == 0 {
+            return Err(format!("no field had the focus{why_open}"));
         }
         // The menu closes after a message round trip inside the password manager.
         for _ in 0..6 {
@@ -7536,7 +7553,9 @@ impl BrowserManager {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        Err("the field lost the focus and the menu stayed open".to_string())
+        Err(format!(
+            "the field lost the focus and the menu stayed open{why_open}"
+        ))
     }
 
     /// Close a password manager's menu on a background tab of the user's

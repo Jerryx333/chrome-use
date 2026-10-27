@@ -161,6 +161,10 @@ impl Fake {
         p.site_access = site_access;
     }
 
+    fn grant_site_access(&self) {
+        self.0.lock().unwrap().site_access = true;
+    }
+
     fn put_behind_user_tab(&self) {
         let mut p = self.0.lock().unwrap();
         p.background = true;
@@ -868,6 +872,29 @@ fn a_covered_window_closes_the_menu_by_blurring_the_field() {
     fake.arm(false);
     fake.stay_blocked();
     fake.cover_chrome(true);
+    let out = d.cli(&["fill", &format!("@{email}"), "me@example.test", "--observe"]);
+    let all = text(&out);
+    assert_eq!(fake.denials(), 1, "{all}");
+    let out = d.cli(&["snapshot", "-i"]);
+    let all = text(&out);
+    assert!(out.status.success(), "{all}");
+    assert_eq!(fake.ext_blurs(), 1, "{all}");
+    let (tab_updates, temp_tabs, _) = fake.recovery_footprint();
+    assert_eq!((tab_updates, temp_tabs), (0, 0), "no tab switched: {all}");
+}
+
+/// A background tab of the user's window, Chrome in front: the blur gets
+/// the first try there too, so neither window has a tab switched.
+#[test]
+fn a_background_tab_closes_the_menu_by_blurring_the_field() {
+    let (fake, cdp) = Fake::start();
+    let d = Daemon::start_full("capfail-bg", &cdp, &[], true);
+    let snap = d.snapshot();
+    let email = ref_for(&snap, "Email");
+    fake.arm(false);
+    fake.stay_blocked();
+    fake.grant_site_access();
+    fake.put_behind_user_tab();
     let out = d.cli(&["fill", &format!("@{email}"), "me@example.test", "--observe"]);
     let all = text(&out);
     assert_eq!(fake.denials(), 1, "{all}");
