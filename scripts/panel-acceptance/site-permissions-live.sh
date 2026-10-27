@@ -1,6 +1,6 @@
 #!/bin/sh
 # Run site-permissions-live.mjs on the build host against a branch build:
-#   ./groups-live.sh <chrome-use binary> [extension git ref, default HEAD]
+#   ./site-permissions-live.sh <chrome-use binary> [extension git ref, default HEAD]
 # One browser run per host at a time.
 set -eu
 cd "$(dirname "$0")"
