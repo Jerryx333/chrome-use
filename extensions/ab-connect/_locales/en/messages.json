@@ -3780,5 +3780,20 @@
   "panel_onboard_status_missing": {"message": "chrome-use is not installed on this computer yet"},
   "panel_onboard_status_missing_detail": {"message": "Follow the steps below; this updates by itself."},
   "panel_onboard_already_installed": {"message": "Already installed the CLI? Register it for this Chrome:"},
-  "panel_onboard_agent_check_failed": {"message": "Could not read the sign-in state. If your first message fails, sign in once in a terminal:"}
+  "panel_onboard_agent_check_failed": {"message": "Could not read the sign-in state. If your first message fails, sign in once in a terminal:"},
+  "panel_teach_start": {"message": "Record a flow to replay (no model needed)"},
+  "panel_teach_stop": {"message": "Stop recording and review the steps"},
+  "panel_teach_failed": {"message": "Recording could not start on this page."},
+  "panel_teach_permission_denied": {"message": "Recording needs access to this site. Allow it when Chrome asks."},
+  "panel_teach_host_failed": {"message": "The chrome-use CLI did not answer. Update it (chrome-use upgrade) and try again."},
+  "panel_teach_review_title": {"message": "Recorded flow: review before saving"},
+  "panel_teach_name": {"message": "Name of the flow"},
+  "panel_teach_param_secret": {"message": "`$NAME$` is a secret you typed (never stored). Pass it when you run the script: --arg-env $NAME$=YOUR_ENV_VAR", "placeholders": {"name": {"content": "$1"}}},
+  "panel_teach_param_file": {"message": "`$NAME$` is the file you uploaded. Pass it when you run the script: --arg $NAME$=path/to/file", "placeholders": {"name": {"content": "$1"}}},
+  "panel_teach_edit": {"message": "Edit the script"},
+  "panel_teach_source": {"message": "Script (JSON op-list)"},
+  "panel_teach_save": {"message": "Save script"},
+  "panel_teach_discard": {"message": "Discard"},
+  "panel_teach_close": {"message": "Close"},
+  "panel_teach_saved": {"message": "Saved to $PATH$. Run it with:", "placeholders": {"path": {"content": "$1"}}}
 }

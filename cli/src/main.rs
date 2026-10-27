@@ -41,6 +41,7 @@ mod site;
 mod site_cover;
 mod skills;
 mod system_load;
+mod teach;
 mod test_runner;
 #[cfg(test)]
 mod test_utils;
@@ -2363,6 +2364,13 @@ fn main() {
         exit(agent_panel::run_inspect_cli(&clean[1..], flags.json));
     }
 
+    // `teach compile <recording.json>`: no browser, no daemon.
+    if clean.first().map(|s| s.as_str()) == Some("teach")
+        && clean.get(1).map(|s| s.as_str()) == Some("compile")
+    {
+        exit(teach::run_compile(flags.json, &clean[2..]));
+    }
+
     // Handle profiles command (doesn't need daemon)
     if clean.first().map(|s| s.as_str()) == Some("profiles") {
         run_profiles(flags.json);
@@ -4497,6 +4505,16 @@ fn main() {
         // ChooseBrowser check saw all of them.
         run_batch(&flags, bail, batch_steps.clone().unwrap_or_default());
         return;
+    }
+
+    // `teach start|stop|status|cancel`: the daemon records; `teach stop`
+    // compiles and writes the script here (see teach.rs).
+    if cmd
+        .get("action")
+        .and_then(|v| v.as_str())
+        .is_some_and(|a| a.starts_with("teach_"))
+    {
+        exit(teach::run_cli(flags.json, &flags.session, cmd.clone()));
     }
 
     // Handle single-pass `script`: load the JSON op-list (file arg or stdin), send

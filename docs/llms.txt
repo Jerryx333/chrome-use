@@ -7,6 +7,7 @@ chrome-use lets any AI agent (Claude Code, Cursor, Codex, or your own scripts) d
 - Works with any agent or CLI, not a single app.
 - Each `--session` gets its own colored Chrome tab group, so multiple agents share one real browser without conflict.
 - `chrome-use mcp` starts a stdio MCP server (13 core tools) for MCP-only hosts that can't run a shell command — Claude Desktop, ChatGPT connectors, n8n/Dify. Shell-capable coding agents should use the CLI directly instead.
+- `chrome-use teach start/stop` records a flow the user does once by hand and writes a `chrome-use script` (or site adapter) that replays it with no model; typed secrets become parameters and are never recorded.
 - `chrome-use a11y` runs an offline axe-core audit of the active page or a URL, including iframe findings; MCP clients get the same capability through `chrome_use_a11y` in the `all` profile.
 
 ## Why it is different
@@ -27,7 +28,7 @@ chrome-use lets any AI agent (Claude Code, Cursor, Codex, or your own scripts) d
 - Site: https://chrome-use.leeguoo.com/
 - Repo: https://github.com/leeguooooo/chrome-use
 - Author: 郭立 (Guo Li / Leo / leeguoo) — https://leeguoo.com
-- Family: chrome-use, iphone-use, cookie-use, profile-use, bitwarden-use, image-use, wechat-use.
+- Family: chrome-use, iphone-use (https://iphone-use.leeguoo.com/en/), cookie-use, profile-use, bitwarden-use, image-use, wechat-use.
 
 ## Guides and evidence
 - [Automate logged-in Chrome with Codex or Claude Code](https://chrome-use.leeguoo.com/en/logged-in-browser.html)

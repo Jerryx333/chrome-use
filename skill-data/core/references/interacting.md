@@ -516,7 +516,10 @@ JS
 ```
 
 Exit codes: 0 ok · 1 runtime failure / failed `assert` · 2 invalid program. `--dry-run`
-validates a JSON program without touching the browser; `--arg k=v` seeds a variable.
+validates a JSON program without touching the browser; `--arg k=v` seeds a variable and
+`--arg-env k=ENV_VAR` seeds one from the environment (keeps secrets off the command line).
+A `do` statement may carry `"or": [{"do": ...}, ...]`: alternatives tried in order only when
+the op before found nothing to act on (`chrome-use teach` writes these; see `core/teach`).
 
 Also try reading real state instead of pixels: `eval` runs in the page's main
 world, so for a framework/engine game you can often reach its globals (e.g. a

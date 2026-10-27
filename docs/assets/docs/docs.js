@@ -99,6 +99,7 @@
       { slug: "extract",     ico: "🧪", zh: "抓数据",  en: "Collect Data",     kw: "extract schema scrape json 提取 抓取" },
       { slug: "interacting", ico: "🖱️", zh: "填表与操作",  en: "Forms & Clicking",         kw: "click type fill scroll 点击 输入 交互" },
       { slug: "site-adapters", ico: "🧩", zh: "站点适配器", en: "Site Adapters",     kw: "site adapter bb-sites structured data github reddit bilibili 站点 适配器 结构化" },
+      { slug: "teach", ico: "🎓", zh: "示范录制", en: "Teach by Demonstration", kw: "teach record replay demonstration macro recorder script adapter 录制 示范 回放 重放 宏" },
       { slug: "testing",  ico: "🧷", zh: "测试与探索", en: "Testing & Dogfood", kw: "test dogfood qa expect 测试 探索" },
       { slug: "media",   ico: "🎬", zh: "截图·录像·视口", en: "Screenshots, Video & Viewport", kw: "screenshot video viewport record 截图 录像 视口" },
       { slug: "canvas",  ico: "🎨", zh: "Canvas / WebGL / 游戏", en: "Canvas / WebGL / Games", kw: "canvas webgl game figma capture 游戏" },

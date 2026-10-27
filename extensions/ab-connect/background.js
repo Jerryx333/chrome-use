@@ -22,6 +22,7 @@ import { ScheduleNotifications } from './schedule-notifications.js';
 import { TurnNotifications, openFromNotification } from './turn-notifications.js';
 import { AgentPanelBridge, isAgentPanelSender, pageOperationAllowed } from './agent-panel-bridge.js';
 import { InspectController } from './inspect-controller.js';
+import { TeachController } from './teach-controller.js';
 import { configureAgentPanel } from './sidepanel-entry.js';
 import { cliSwitchPending, compareVersions } from './version-notice.js';
 import { t } from './i18n.js';
@@ -154,6 +155,10 @@ const inspectController = new InspectController({
   repliesReady: () => hostConnection.snapshot().agentPanel?.inspectReplies >= 1,
 });
 inspectController.install();
+// The side panel's Record button (teach by demonstration); see
+// teach-controller.js. Records only while the user has it on.
+const teachController = new TeachController({ chrome });
+teachController.install();
 if (chrome.runtime.getManifest().key) globalThis.__chromeUseInspect = inspectController;
 const scheduleNotifications = new ScheduleNotifications({ storage: chrome.storage.local, notifications: chrome.notifications });
 function pollScheduleNotifications() {
@@ -1453,7 +1458,7 @@ function tabCommandDependencies() {
 }
 
 async function sendCdpToTab(tabId, method, params, childSessionId) {
-  const blocked = stealthBlockReason(cursorSettings, method);
+  const blocked = stealthBlockReason(cursorSettings, method, params);
   if (blocked) throw new Error(blocked);
   return await observeDebuggerCommand(
     method,
@@ -2283,7 +2288,7 @@ async function reattachTab(tabId, entry) {
     for (const { method, params } of entry.replay.values()) {
       if (method === 'Page.enable' || method === 'Target.setAutoAttach') continue;
       // A binding exposed with stealth off is not re-added once it is on again.
-      if (stealthBlockReason(cursorSettings, method)) continue;
+      if (stealthBlockReason(cursorSettings, method, params)) continue;
       await arm(method, params);
     }
     return entry;
@@ -3079,6 +3084,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sitePermissions.onMessage(msg).then(
       result => sendResponse({ success: true, ...result }),
       error => sendResponse({ success: false, error: String(error?.message || error) }),
+    );
+    return true;
+  }
+  if (msg?.type === 'teach:event') {
+    sendResponse({ ok: teachController.onEvent(msg, _sender) });
+    return false;
+  }
+  // The side panel's Record button: start or stop recording its own tab.
+  if (msg?.type === 'ab-teach-start' || msg?.type === 'ab-teach-stop' || msg?.type === 'ab-teach-status') {
+    if (!isAgentPanelSender(_sender, chrome.runtime) || !Number.isInteger(msg.tabId)) {
+      sendResponse({ success: false, error: 'Recording starts from the extension panel' });
+      return false;
+    }
+    const run = msg.type === 'ab-teach-start' ? teachController.start(msg.tabId)
+      : msg.type === 'ab-teach-stop' ? teachController.stop(msg.tabId)
+      : Promise.resolve({ recording: teachController.isRecording(msg.tabId) });
+    run.then(
+      result => sendResponse({ success: true, ...result }),
+      error => sendResponse({ success: false, error: String(error.message || error) }),
     );
     return true;
   }

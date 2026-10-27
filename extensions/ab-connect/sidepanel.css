@@ -552,3 +552,18 @@ html[data-mode="tab"] .conversation-menu { left:auto; right:auto; width:min(calc
 .onboarding .onboard-agent-head { display:flex; gap:8px; align-items:baseline; justify-content:space-between; }
 .onboarding .onboard-agent-state { color:var(--muted); font-size:11.5px; }
 .onboarding .onboard-agent.ready .onboard-agent-state { color:var(--ink); font-weight:600; }
+
+/* Record control (teach-panel.js): records a flow to replay without a model. */
+.tool.teach .teach-dot { opacity:.35; }
+.tool.teach.active { color:#d93025; }
+.tool.teach.active .teach-dot { opacity:1; }
+.teach-review { margin:0 0 8px; padding:8px 10px; border:1px solid var(--border, #ccc); border-radius:8px; font-size:12px; }
+.teach-review h3 { margin:0 0 6px; font-size:13px; }
+.teach-review input { width:100%; box-sizing:border-box; margin:0 0 6px; }
+.teach-steps { margin:0 0 6px; padding-left:20px; }
+.teach-steps li { margin:2px 0; overflow-wrap:anywhere; }
+.teach-note, .teach-status { margin:4px 0; overflow-wrap:anywhere; }
+.teach-error { margin:0; color:#d93025; }
+.teach-source { width:100%; box-sizing:border-box; font:11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.teach-actions { display:flex; gap:6px; margin-top:6px; }
+.teach-run { user-select:all; overflow-wrap:anywhere; }
