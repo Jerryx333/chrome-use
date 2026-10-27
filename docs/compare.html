@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>对比其他方案 · chrome-use 文档</title>
-  <meta name="description" content="chrome-use 与整个 AI 浏览器 / 自动化格局的对比：ego-lite、browser-relay、Playwright、Puppeteer、Selenium、browser-use、Stagehand、Browserbase、消费级 agent 浏览器。全景矩阵 + 最接近对手的实测（token、性能）+ 选型指南 + 持续对比的 workflow。" />
+  <title>和其他方案对比 · chrome-use 文档</title>
+  <meta name="description" content="chrome-use 与其他让 AI agent 用浏览器的方案对比：Claude in Chrome、OpenCLI、Playwright 扩展模式、Chrome DevTools MCP、agent-browser、ego(lite)、browser-relay、browser-use、云端浏览器和浏览器内置 agent。按连接方式、登录态和可用 agent 对比，附选型建议。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -18,10 +18,11 @@
   <link rel="stylesheet" href="/assets/docs/docs.css" />
   <style>
     .cmp-scroll { overflow-x: auto; margin: 14px 0; }
-    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 640px; }
+    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 760px; }
     .cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
     .cmp-table thead th { background: var(--paper-2); font-weight: 700; position: sticky; top: 0; }
-    .cmp-table tbody th { background: var(--paper-2); font-weight: 700; white-space: nowrap; }
+    .cmp-table tbody th { background: var(--paper-2); font-weight: 700; min-width: 128px; }
+    .cmp-table tbody th .cmp-mut { font-weight: 400; font-size: .82rem; }
     .cmp-table tr.me td, .cmp-table tr.me th { background: color-mix(in srgb, var(--green, #2a8a4a) 9%, transparent); }
     .cmp-win { color: var(--green, #2a8a4a); font-weight: 700; }
     .cmp-mut { color: var(--ink-faint); }
@@ -55,7 +56,7 @@
       <p class="du-eyebrow">对比 / Comparison</p>
 
       <div class="du-title-row">
-        <h1>对比其他方案</h1>
+        <h1>和其他方案对比</h1>
         <button class="du-copy-page" type="button" aria-label="复制页面">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
           <span class="du-copy-page-label">复制页面</span>
@@ -63,97 +64,122 @@
       </div>
 
       <p class="du-lede">
-        浏览器自动化 / AI 浏览器方案很多。这一页把传统框架、agent 浏览器、云端和消费级产品放在一起<span class="mark">诚实对比</span>。
-        数据能实测的就实测；结论随每一轮实测更新。
+        让 AI agent 用浏览器的方案很多，2026 年又多了一批能连你现有 Chrome 的工具。这一页把它们放在一起<span class="mark">按事实对比</span>：
+        能实测的写实测数字，别家的情况以对方官方文档为准，测不了的不硬写。
       </p>
+      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">各方案现状核对于 2026-10-27（官方 README、文档、发布记录）。下方 ego 和 browser-relay 两节的实测是 2026-07 做的，已注明。</p>
 
       <h2>一句话</h2>
       <p>
-        <strong>chrome-use 驱动你<span class="mark">现有的真 Chrome</span></strong>：你的 profile、扩展、登录都在，不用装新浏览器。
-        它是给 AI agent 用的<strong>原生 CLI</strong>，无障碍树快照 + 紧凑 <code>@ref</code>，能跑 shell 的 agent 都能用，自带隐身反检测。
-        别的方案要么另开一个浏览器，要么要你换浏览器；chrome-use 用你手上这个。
+        <strong>chrome-use 让<span class="mark">任意 AI agent</span> 用你正在用的 Chrome</strong>：通过商店扩展和原生消息连接，不开远程调试端口，不用换浏览器。
+        Claude Code、Codex、Cursor 这类能跑 shell 的 agent 用 CLI，只能接 MCP 的客户端用 MCP；不开终端时，也可以在 Chrome 侧栏或手机上直接跟本机 agent 对话。
+        多个 agent 各用各的标签组，连真实 Chrome 时不往页面注入补丁。
       </p>
 
       <h2>全景矩阵</h2>
-      <p>横轴是对 AI agent 最要紧的几个维度，纵轴是有代表性的方案。绿=在该维度更强。</p>
+      <p>同样是"让 agent 用浏览器"，关键差别在<strong>怎么连上浏览器</strong>、<strong>用的是谁的登录</strong>和<strong>哪些 agent 能用</strong>。</p>
       <div class="cmp-scroll">
       <table class="cmp-table">
         <thead>
           <tr>
-            <th>方案</th><th>形态</th><th>装什么</th><th>用谁的登录</th><th>接口</th><th>隐身</th><th>开源</th>
+            <th>方案</th><th>怎么连浏览器</th><th>用谁的登录</th><th>哪些 agent 能用</th><th>需要装 / 授权</th><th>许可</th>
           </tr>
         </thead>
         <tbody>
           <tr class="me">
             <th>chrome-use</th>
-            <td class="cmp-win">扩展 + CLI 驱动你现有的 Chrome</td>
-            <td class="cmp-win">零（用你已有的 Chrome）</td>
-            <td class="cmp-win">你真 Chrome 的登录</td>
-            <td>shell 命令（任意 agent）</td>
-            <td class="cmp-win">核心能力</td>
-            <td>是</td>
+            <td class="cmp-win">商店扩展 + 原生消息，不开远程调试</td>
+            <td class="cmp-win">你正在用的 Chrome，可选 profile</td>
+            <td class="cmp-win">任意 agent：CLI / MCP / HTTP；侧栏和手机里直接对话</td>
+            <td>一行安装 + 商店扩展</td>
+            <td>Apache-2.0</td>
           </tr>
           <tr>
-            <th>ego-lite</th>
-            <td>自建 Chromium 浏览器</td>
-            <td>装一个新浏览器</td>
-            <td class="cmp-win">Space 继承登录</td>
-            <td>页面内 JS 运行时</td>
-            <td class="cmp-mut">非重点</td>
-            <td>MIT</td>
+            <th>Claude in Chrome</th>
+            <td class="cmp-win">Anthropic 商店扩展</td>
+            <td class="cmp-win">你的 Chrome / Edge</td>
+            <td>只有 Claude：侧栏、Claude Code <code>--chrome</code>、Cowork</td>
+            <td>Claude Pro / Max / Team / Enterprise</td>
+            <td class="cmp-mut">闭源</td>
+          </tr>
+          <tr>
+            <th>OpenCLI</th>
+            <td class="cmp-win">Browser Bridge 扩展（商店或解压）+ 本地 daemon</td>
+            <td class="cmp-win">你的 Chrome，多 profile</td>
+            <td>任意 agent，以 CLI 为主；内置大量站点适配器</td>
+            <td>CLI 或桌面 app + 扩展</td>
+            <td>Apache-2.0</td>
+          </tr>
+          <tr>
+            <th>Playwright 扩展模式<br><span class="cmp-mut">(Playwright MCP <code>--extension</code> · playwright-cli)</span></th>
+            <td class="cmp-win">Playwright Extension（商店）</td>
+            <td class="cmp-win">你挑选的现有标签</td>
+            <td>任意 MCP 客户端，或 playwright-cli</td>
+            <td>每次连接需批准（可配 token 免批）</td>
+            <td>Apache-2.0</td>
+          </tr>
+          <tr>
+            <th>Chrome DevTools MCP</th>
+            <td>Chrome 144+ 远程调试开关（<code>--autoConnect</code>）</td>
+            <td>默认 profile 的所有窗口</td>
+            <td>任意 MCP 客户端，也有 CLI</td>
+            <td><code>chrome://inspect</code> 打开远程调试 + 弹窗允许；默认上报使用统计</td>
+            <td>Apache-2.0</td>
+          </tr>
+          <tr>
+            <th>agent-browser · browser-harness</th>
+            <td>同样走远程调试开关或 CDP；agent-browser 也可复制 profile 登录态</td>
+            <td>你的 Chrome（开关打开后）</td>
+            <td>任意能跑 shell 的 agent；browser-harness 另有 MCP</td>
+            <td>远程调试开关 + 弹窗允许</td>
+            <td>Apache-2.0 / MIT</td>
+          </tr>
+          <tr>
+            <th>ego(lite)</th>
+            <td>自己的 Chromium 浏览器，agent 在隔离 Space 里</td>
+            <td>一键导入 Chrome 配置后，在 ego 里的登录</td>
+            <td>通过 ego-browser 技能：Claude Code、Codex、Cursor 等</td>
+            <td>装一个新浏览器（macOS / Windows）</td>
+            <td class="cmp-mut">免费，闭源</td>
           </tr>
           <tr>
             <th>browser-relay</th>
-            <td class="cmp-win">扩展 + 本地 relay 驱动你现有的 Chrome</td>
-            <td>npm 全局 + 加载解压扩展（开发者模式）</td>
-            <td class="cmp-win">你真 Chrome 的登录</td>
+            <td>解压加载的扩展 + 本地 relay，可走托管远程 relay</td>
+            <td class="cmp-win">你的 Chrome</td>
             <td>CLI / MCP / HTTP</td>
-            <td class="cmp-mut">非重点</td>
+            <td>npm 全局 + 开发者模式加载扩展</td>
             <td>MIT</td>
           </tr>
           <tr>
-            <th>browser-use</th>
-            <td>Python 框架（底层 CDP，cdp-use）</td>
-            <td>框架 + 受控浏览器</td>
-            <td class="cmp-mut">默认另开，需重登</td>
-            <td>Python API</td>
-            <td class="cmp-mut">非重点</td>
+            <th>browser-use · Stagehand</th>
+            <td>Python / TS 框架，自己启动浏览器</td>
+            <td>默认独立浏览器；browser-use 可读系统 Chrome profile（需先关 Chrome），Stagehand 可指定 <code>userDataDir</code></td>
+            <td>写代码接入</td>
+            <td>框架 + 浏览器；各自有云服务</td>
             <td>MIT</td>
           </tr>
           <tr>
-            <th>Playwright / MCP</th>
-            <td>自动化框架（+ agent MCP）</td>
-            <td>框架 + 一个受控浏览器</td>
-            <td class="cmp-mut">全新 context，无登录</td>
-            <td>JS/Py/.NET/Java（MCP）</td>
-            <td class="cmp-mut">易被检测</td>
+            <th>Playwright · Puppeteer · Selenium</th>
+            <td>自动化库，启动受控浏览器</td>
+            <td class="cmp-mut">独立 profile；Chrome 136 起默认 profile 不接受远程调试端口</td>
+            <td>写代码接入</td>
+            <td>库 + 浏览器</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
-            <th>Puppeteer / Selenium</th>
-            <td>经典自动化框架</td>
-            <td>框架 + 一个受控浏览器</td>
-            <td class="cmp-mut">全新 profile，无登录</td>
-            <td>JS / 多语言</td>
-            <td class="cmp-mut">易被检测</td>
-            <td>Apache-2.0</td>
-          </tr>
-          <tr>
-            <th>Browserbase / Stagehand</th>
-            <td>云端 headless 浏览器（+ AI 动作）</td>
-            <td>云服务（付费）</td>
-            <td class="cmp-mut">云端会话，需自己带登录</td>
+            <th>云端浏览器<br><span class="cmp-mut">(Browserbase · Steel · Hyperbrowser · Browser Use Cloud)</span></th>
+            <td>浏览器跑在云上</td>
+            <td class="cmp-mut">云端会话，登录自己带</td>
             <td>SDK / API</td>
-            <td>反检测（付费）</td>
-            <td class="cmp-mut">SaaS / 部分开源</td>
+            <td>按浏览器小时计费；反检测多在付费档</td>
+            <td class="cmp-mut">商业服务，部分开源</td>
           </tr>
           <tr>
-            <th>消费级 agent 浏览器<br><span class="cmp-mut">(ChatGPT Atlas · Comet)</span></th>
-            <td>厂商自己的浏览器 / 内置 agent</td>
-            <td>换浏览器</td>
-            <td class="cmp-win">你在该浏览器里的登录</td>
-            <td>自然语言（无 API）</td>
-            <td class="cmp-mut">非重点</td>
+            <th>浏览器内置 agent<br><span class="cmp-mut">(Gemini in Chrome · ChatGPT · Comet)</span></th>
+            <td>厂商自己的浏览器或扩展</td>
+            <td class="cmp-win">你在那个浏览器里的登录</td>
+            <td class="cmp-mut">只能和厂商自己的助手对话，没有给第三方 agent 的接口</td>
+            <td>Gemini 自动浏览需 AI Pro / Ultra，目前限美国英文用户；ChatGPT Atlas 已停用，改为桌面 app 和 Chrome 扩展</td>
             <td class="cmp-mut">闭源</td>
           </tr>
         </tbody>
@@ -161,30 +187,40 @@
       </div>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 读法</div>
-        绿=在该维度更强，不代表整体赢。没有全能方案，选型看你更在意<strong>不装新浏览器 / 用真登录 / 隐身</strong>，还是<strong>纯云端 / 跨语言 / 内置对话</strong>。
+        绿色表示在这一列上对"让 agent 用你已登录的浏览器"更有利，不代表整体更好。表里别家的情况取自对方官方文档，没有逐个实测。
       </div>
 
-      <h2>按类型选</h2>
+      <h2>按连接方式分</h2>
       <div class="cmp-cat">
         <div class="du-card">
-          <h3>🌐 驱动你的真浏览器</h3>
-          <p class="tools">chrome-use · ego-lite · browser-relay</p>
-          <p>用你已登录的会话，不必重新登录。chrome-use 和 browser-relay 都用<strong>你现有的</strong> Chrome（扩展 + relay）；ego-lite 让你<strong>换成它的</strong>浏览器（结构性隔离）。chrome-use 与 browser-relay 的逐项对比见下。</p>
+          <h3>🧩 扩展连你正在用的 Chrome</h3>
+          <p class="tools">chrome-use · OpenCLI · Playwright 扩展 · Claude in Chrome · browser-relay</p>
+          <p>不打开远程调试，权限走扩展。差别在谁能用（Claude in Chrome 只给 Claude）、怎么装（browser-relay 要开发者模式），以及多 agent、侧栏对话、站点适配器这些上层功能。</p>
+        </div>
+        <div class="du-card">
+          <h3>🔓 远程调试开关连现有 Chrome</h3>
+          <p class="tools">Chrome DevTools MCP · agent-browser · browser-harness · playwright-cli <code>--cdp</code></p>
+          <p>Chrome 144 起可以在 <code>chrome://inspect</code> 打开远程调试，再在弹窗里允许。打开后这个 profile 的所有窗口都对工具开放，适合调试和短时任务。</p>
+        </div>
+        <div class="du-card">
+          <h3>🧭 换一个浏览器</h3>
+          <p class="tools">ego(lite) · Comet</p>
+          <p>装一个新浏览器，导入或重新登录。隔离干净，代价是要换浏览器。</p>
         </div>
         <div class="du-card">
           <h3>🧰 自动化框架</h3>
           <p class="tools">Playwright · Puppeteer · Selenium · browser-use · Stagehand</p>
-          <p>另开一个受控浏览器来驱动。成熟、跨语言，但登录搬不干净、默认易被反爬识别，需要自己拼 LLM 循环。</p>
+          <p>写代码驱动受控浏览器。成熟、跨语言，适合测试和固定流程；用你的登录态要另外处理。</p>
         </div>
         <div class="du-card">
           <h3>☁️ 云端浏览器</h3>
-          <p class="tools">Browserbase · Steel · Hyperbrowser</p>
-          <p>浏览器跑在云上，适合无状态大规模抓取。要按量付费，登录态要自己注入，本机的真实会话用不上。</p>
+          <p class="tools">Browserbase · Steel · Hyperbrowser · Browser Use Cloud</p>
+          <p>适合无状态、大规模并发。按小时付费，登录态自己注入，用不上本机的真实会话。</p>
         </div>
         <div class="du-card">
-          <h3>💬 消费级 agent 浏览器</h3>
-          <p class="tools">ChatGPT Atlas · Perplexity Comet · Gemini-in-Chrome</p>
-          <p>厂商把 agent 内建进浏览器，面向终端用户、对话驱动，没有给开发者的可编程 API，也不做隐身。</p>
+          <h3>💬 浏览器内置 agent</h3>
+          <p class="tools">Gemini in Chrome · ChatGPT 扩展 · Comet</p>
+          <p>面向终端用户，跟厂商自己的助手对话，你的 Claude Code、Codex 用不上。</p>
         </div>
       </div>
 
@@ -193,20 +229,27 @@
       <table class="cmp-table">
         <thead><tr><th>你的情况</th><th>选</th></tr></thead>
         <tbody>
-          <tr class="me"><th>要用你已登录的真账号、不想装新浏览器、要过反爬</th><td class="cmp-win">chrome-use</td></tr>
-          <tr><th>愿意换一个专为 agent 做的新浏览器、要最干净的隔离</th><td>ego-lite</td></tr>
-          <tr><th>也要用真登录的 Chrome，但需要从<strong>另一台机器</strong>远程驱动</th><td>browser-relay（跨机远程）</td></tr>
-          <tr><th>写传统自动化脚本、跨语言、CI 里跑</th><td>Playwright / Puppeteer</td></tr>
-          <tr><th>无状态大规模云抓取</th><td>Browserbase / Steel</td></tr>
-          <tr><th>只是终端用户想让浏览器帮点忙</th><td>ChatGPT Atlas / Comet</td></tr>
+          <tr class="me"><th>让 Claude Code、Codex、Cursor 等任意 agent 在你已登录的 Chrome 里干活，不想开远程调试，可能多个 agent 同时跑</th><td class="cmp-win">chrome-use</td></tr>
+          <tr class="me"><th>不想开终端，在浏览器侧栏或手机上跟本机 agent 对话</th><td class="cmp-win">chrome-use 侧栏对话 / 手机遥控</td></tr>
+          <tr><th>只用 Claude，并且有付费计划</th><td>Claude in Chrome</td></tr>
+          <tr><th>主要是把常用网站变成命令</th><td>OpenCLI（chrome-use 的 <code>site add</code> 也能直接加载 OpenCLI 适配器）</td></tr>
+          <tr><th>已经在用 Playwright 生态或 Playwright MCP</th><td>Playwright 扩展模式</td></tr>
+          <tr><th>前端调试、性能分析</th><td>Chrome DevTools MCP</td></tr>
+          <tr><th>想要独立的 agent 浏览器，不介意换浏览器</th><td>ego(lite)</td></tr>
+          <tr><th>写传统自动化脚本、在 CI 里跑</th><td>Playwright / Puppeteer</td></tr>
+          <tr><th>无状态、大规模云端抓取</th><td>Browserbase / Steel / Hyperbrowser</td></tr>
+          <tr><th>只是自己用，想让浏览器帮点忙</th><td>Gemini in Chrome / Comet / ChatGPT 扩展</td></tr>
         </tbody>
       </table>
       </div>
 
-      <h2>最接近的对手：chrome-use vs ego-lite（实测深挖）</h2>
+      <h2>chrome-use vs ego(lite)：2026-07 实测</h2>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ 这一节的数据是 2026-07 的</div>
+        下面的 token 和性能数字、以及引用的官网宣传语，来自 2026-07 对 ego(lite) 当时版本的实测。ego 现在已经到 0.6.x（Chromium 156），官网宣传也换成了自家的任务基准；结论可能已经变化，重测前仅供参考。
+      </div>
       <p>
-        ego-lite 的定位和我们最像（都用真登录、不抢用户标签），README 还<strong>直接点名 agent-browser</strong>。
-        我们两边各跑同一任务，实测性能和 token，核对它"更快、更省 token"的说法：<strong>一个半真，一个恰好相反</strong>。
+        ego(lite) 的定位和我们很像（都让 agent 用真登录、不抢你的标签）。当时我们两边各跑同一任务，核对它"更快、更省 token"的说法：<strong>一个半真，一个恰好相反</strong>。
       </p>
 
       <h3>Token（喂给大模型的观察，真正花钱的地方）</h3>
@@ -298,11 +341,11 @@
       <p>
         反超点在引擎位置：JS 引擎跑在<strong>守护进程里、不在页面里</strong>，<strong>扛得住硬跳转</strong>，
         而多页翻页正是 ego 赢、页面内运行时输的地方。实测 HN 翻 3 页收集 ≥100 分故事 = <strong>一次 tool call</strong>（旧 per-verb 要 13+），
-        跑在你<strong>已登录的真 Chrome</strong> + 隐身传输，<strong>跨平台</strong>（ego 仅 macOS）。
+        跑在你<strong>已登录的真 Chrome</strong> + 隐身传输，macOS / Linux / Windows 都能用。
         用法与两种写法详见 <a href="/script.html">单次成型脚本</a>。
       </p>
 
-      <h3>我们从 ego-lite 学到 &amp; 已搬的</h3>
+      <h3>我们从 ego(lite) 学到 &amp; 已搬的</h3>
       <p>逐项试用对比后，把真缺口用 chrome-use 原生的方式搬过来（进度在 <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>）：</p>
       <ul>
         <li><strong>所有权 + 交接</strong>（<span class="cmp-win">已实现</span>）：<code>session handoff/resume/status/list</code>，交接给用户后 agent 对该会话的驱动命令全被拒绝。这是<strong>逃生口</strong>，留给 agent 真做不了的一步（比如解不了的验证码）；<strong>不改变自主登录</strong>，默认 agent 自己登录、自己驱动，零影响。</li>
@@ -314,7 +357,7 @@
 
       <h2>另一个近亲：browser-relay</h2>
       <p>
-        <a href="https://github.com/reliefeai/browser-relay" target="_blank" rel="noopener">browser-relay</a>（<code>@linsoai/browser-relay</code>，MIT）架构上和我们几乎是同一个思路：
+        <a href="https://github.com/reliefeai/browser-relay" target="_blank" rel="noopener">browser-relay</a>（<code>@linsoai/browser-relay</code>，MIT；最新 1.5.4，2026-09-17 之后没有更新）架构上和我们几乎是同一个思路：
         <strong>扩展 + 本地 relay 驱动你真实已登录的 Chrome</strong>，走 <code>chrome.debugger</code> / CDP，本地绑 <code>127.0.0.1</code>，
         提供 CLI + MCP + HTTP，快照带交互元素标注，不开新浏览器、不用一次性 profile。核心理念持平。差异在这几处：
       </p>
@@ -322,9 +365,9 @@
       <table>
         <thead><tr><th>维度</th><th>browser-relay</th><th>chrome-use</th></tr></thead>
         <tbody>
-          <tr class="me"><th>跨机远程</th><td class="cmp-win">Remote Relay：浏览器往外连公共/自建（Cloudflare）relay，Device ID 鉴权，从另一台机器驱动</td><td>纯本地（127.0.0.1 relay + WebSocket 流）</td></tr>
+          <tr class="me"><th>跨机远程</th><td class="cmp-win">Remote Relay：浏览器往外连公共/自建（Cloudflare）relay，Device ID 鉴权，从另一台机器驱动</td><td>CLI 只连本机（127.0.0.1 relay）；侧栏对话可以用<a href="/mobile.html">手机遥控</a>（Tailscale / Cloudflare 隧道 / 局域网）</td></tr>
           <tr class="me"><th>安装</th><td>npm 全局 + <strong>开发者模式加载解压扩展</strong>（不走商店，不自动更新）</td><td class="cmp-win">一条 <code>curl … | sh</code> + <strong>Web Store 一键</strong>「添加至 Chrome」</td></tr>
-          <tr class="me"><th>调试横幅</th><td>会显示；靠 10 分钟空闲自动解绑缓解，或用 <code>--silent-debugger-extension-api</code> 启动（削弱<em>所有</em> debugger 扩展的安全防护）</td><td class="cmp-win">只 attach agent 自己的标签，<strong>你的标签永不弹横幅</strong>，无安全折衷</td></tr>
+          <tr class="me"><th>调试横幅</th><td>会显示；靠 10 分钟空闲自动解绑缓解，或用 <code>--silent-debugger-extension-api</code> 启动（削弱<em>所有</em> debugger 扩展的安全防护）</td><td class="cmp-win">默认只 attach agent 自己的标签，你的标签不弹横幅；侧栏对话借用你的标签时才显示，收回即消失；无安全折衷</td></tr>
           <tr class="me"><th>隐身 / 反检测</th><td>非重点</td><td class="cmp-win">核心能力：CreepJS 0% bot、<code>--humanize</code> 过行为检测、<code>--launch</code> 原生覆盖</td></tr>
           <tr class="me"><th>多 agent</th><td>按 <code>--tab</code> id 定位，无会话隔离模型</td><td class="cmp-win">每 <code>--session</code> 一个彩色标签组，多 agent 互不串</td></tr>
           <tr class="me"><th>复杂多步</th><td>逐条 verb + <code>eval</code> + stdin</td><td class="cmp-win"><a href="/script.html">单次成型脚本</a>：值总线 + 循环 + 断言，一次往返</td></tr>
@@ -341,7 +384,7 @@
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 诚实结论</div>
-        browser-relay 在<strong>跨机远程控制</strong>上确实领先（我们目前是纯本地）。其余维度——一键商店安装、无调试横幅、隐身/humanize、多 agent 隔离、单次成型脚本、AX 树定位、无 Node 单二进制——是 chrome-use 更强。两者血统不同：browser-relay 源自 openclaw-browser-relay，chrome-use 源自 <a href="/lineage.html">vercel-labs/agent-browser</a>。
+        browser-relay 在<strong>从另一台机器用 CLI 驱动</strong>上确实领先（我们的 CLI 只连本机，远程只有手机遥控侧栏对话）。其余维度——一键商店安装、无调试横幅、隐身/humanize、多 agent 隔离、单次成型脚本、AX 树定位、无 Node 单二进制——是 chrome-use 更强。两者血统不同：browser-relay 源自 openclaw-browser-relay，chrome-use 源自 <a href="/lineage.html">vercel-labs/agent-browser</a>。
       </div>
 
       <h2>对比 workflow</h2>

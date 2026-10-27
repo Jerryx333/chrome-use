@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>How chrome-use compares · chrome-use docs</title>
-  <meta name="description" content="chrome-use vs the whole AI-browser / automation landscape: ego-lite, browser-relay, Playwright, Puppeteer, Selenium, browser-use, Stagehand, Browserbase, and consumer agent browsers. A landscape matrix, firsthand benchmarks (tokens, performance) against the closest rival, a pick guide, and the living-comparison workflow." />
+  <meta name="description" content="chrome-use compared with other ways to give AI agents a browser: Claude in Chrome, OpenCLI, Playwright extension mode, Chrome DevTools MCP, agent-browser, ego(lite), browser-relay, browser-use, cloud browsers and built-in browser agents. Compared by how they connect, whose sign-ins they use and which agents can use them." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -18,10 +18,11 @@
   <link rel="stylesheet" href="/assets/docs/docs.css" />
   <style>
     .cmp-scroll { overflow-x: auto; margin: 14px 0; }
-    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 640px; }
+    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 760px; }
     .cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
     .cmp-table thead th { background: var(--paper-2); font-weight: 700; position: sticky; top: 0; }
-    .cmp-table tbody th { background: var(--paper-2); font-weight: 700; white-space: nowrap; }
+    .cmp-table tbody th { background: var(--paper-2); font-weight: 700; min-width: 128px; }
+    .cmp-table tbody th .cmp-mut { font-weight: 400; font-size: .82rem; }
     .cmp-table tr.me td, .cmp-table tr.me th { background: color-mix(in srgb, var(--green, #2a8a4a) 9%, transparent); }
     .cmp-win { color: var(--green, #2a8a4a); font-weight: 700; }
     .cmp-mut { color: var(--ink-faint); }
@@ -63,129 +64,163 @@
       </div>
 
       <p class="du-lede">
-        There are many browser-automation and AI-browser tools. This page puts them side by side and compares them
-        <span class="mark">honestly</span> — from classic frameworks to agent browsers to cloud and consumer products.
-        Where a number can be measured, we measure it. The comparison is living; verdicts update each round.
+        There are many ways to give an AI agent a browser, and 2026 brought a new wave of tools that attach to the Chrome you already use. This page puts them side by side <span class="mark">on the facts</span>:
+        our own measurements where we could run them, the other projects' official docs for everything else, and no numbers we couldn't measure.
       </p>
+      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">Checked against each project's README, docs and releases on 2026-10-27. The ego and browser-relay sections below were measured in 2026-07 and say so.</p>
 
-      <h2>In one line</h2>
+      <h2>In one sentence</h2>
       <p>
-        <strong>chrome-use drives your <span class="mark">existing, real Chrome</span></strong> — your profile, your extensions, your logins, no new browser to install.
-        It's a <strong>native CLI for AI agents</strong>: accessibility-tree snapshots + compact <code>@ref</code>s, usable by any agent that can run a shell, with stealth / anti-detection built in.
-        Most tools either spin up a separate browser or ask you to switch browsers; chrome-use uses the one you already have.
+        <strong>chrome-use lets <span class="mark">any AI agent</span> use the Chrome you're already using</strong>: it connects through a Web Store extension and native messaging, with no remote-debugging port and no new browser.
+        Agents that can run a shell (Claude Code, Codex, Cursor) use the CLI, MCP-only clients use the MCP server, and without a terminal you can chat with a local agent in Chrome's side panel or from your phone.
+        Each agent gets its own tab group, and nothing is injected into pages when driving your real Chrome.
       </p>
 
-      <h2>The landscape at a glance</h2>
-      <p>Columns are the dimensions that matter most for an AI agent; rows are representative tools. Green = stronger on that axis.</p>
+      <h2>Landscape matrix</h2>
+      <p>Every option here "lets an agent use a browser". The real differences are <strong>how it connects</strong>, <strong>whose sign-ins it uses</strong> and <strong>which agents can use it</strong>.</p>
       <div class="cmp-scroll">
       <table class="cmp-table">
         <thead>
           <tr>
-            <th>Tool</th><th>Form factor</th><th>Install</th><th>Whose logins</th><th>Interface</th><th>Stealth</th><th>Open source</th>
+            <th>Option</th><th>How it connects</th><th>Whose sign-ins</th><th>Which agents</th><th>Setup / permission</th><th>License</th>
           </tr>
         </thead>
         <tbody>
           <tr class="me">
             <th>chrome-use</th>
-            <td class="cmp-win">Extension + CLI driving your existing Chrome</td>
-            <td class="cmp-win">Zero (uses the Chrome you have)</td>
-            <td class="cmp-win">Your real Chrome's logins</td>
-            <td>Shell verbs (any agent)</td>
-            <td class="cmp-win">Core capability</td>
-            <td>Yes</td>
+            <td class="cmp-win">Web Store extension + native messaging, no remote debugging</td>
+            <td class="cmp-win">The Chrome you use, any profile</td>
+            <td class="cmp-win">Any agent: CLI / MCP / HTTP; plus side-panel and phone chat</td>
+            <td>One-line install + store extension</td>
+            <td>Apache-2.0</td>
           </tr>
           <tr>
-            <th>ego-lite</th>
-            <td>Purpose-built Chromium browser</td>
-            <td>Install a new browser</td>
-            <td class="cmp-win">Spaces inherit login</td>
-            <td>in-page JS runtime</td>
-            <td class="cmp-mut">Not a focus</td>
-            <td>MIT</td>
+            <th>Claude in Chrome</th>
+            <td class="cmp-win">Anthropic's store extension</td>
+            <td class="cmp-win">Your Chrome / Edge</td>
+            <td>Claude only: side panel, Claude Code <code>--chrome</code>, Cowork</td>
+            <td>Claude Pro / Max / Team / Enterprise</td>
+            <td class="cmp-mut">Proprietary</td>
+          </tr>
+          <tr>
+            <th>OpenCLI</th>
+            <td class="cmp-win">Browser Bridge extension (store or unpacked) + local daemon</td>
+            <td class="cmp-win">Your Chrome, multiple profiles</td>
+            <td>Any agent, CLI-first; many built-in site adapters</td>
+            <td>CLI or desktop app + extension</td>
+            <td>Apache-2.0</td>
+          </tr>
+          <tr>
+            <th>Playwright extension mode<br><span class="cmp-mut">(Playwright MCP <code>--extension</code> · playwright-cli)</span></th>
+            <td class="cmp-win">Playwright Extension (store)</td>
+            <td class="cmp-win">Existing tabs you pick</td>
+            <td>Any MCP client, or playwright-cli</td>
+            <td>Approve each connection (or set a token)</td>
+            <td>Apache-2.0</td>
+          </tr>
+          <tr>
+            <th>Chrome DevTools MCP</th>
+            <td>Chrome 144+ remote-debugging toggle (<code>--autoConnect</code>)</td>
+            <td>All windows of the default profile</td>
+            <td>Any MCP client, plus a CLI</td>
+            <td>Enable remote debugging at <code>chrome://inspect</code> + allow the dialog; usage stats on by default</td>
+            <td>Apache-2.0</td>
+          </tr>
+          <tr>
+            <th>agent-browser · browser-harness</th>
+            <td>The same remote-debugging toggle or CDP; agent-browser can also copy a profile's sign-ins</td>
+            <td>Your Chrome (once the toggle is on)</td>
+            <td>Any shell-capable agent; browser-harness also has MCP</td>
+            <td>Remote-debugging toggle + allow dialog</td>
+            <td>Apache-2.0 / MIT</td>
+          </tr>
+          <tr>
+            <th>ego(lite)</th>
+            <td>Its own Chromium browser; the agent works in an isolated Space</td>
+            <td>Sign-ins inside ego, after a one-click Chrome import</td>
+            <td>Via the ego-browser skill: Claude Code, Codex, Cursor and others</td>
+            <td>Install a new browser (macOS / Windows)</td>
+            <td class="cmp-mut">Free, proprietary</td>
           </tr>
           <tr>
             <th>browser-relay</th>
-            <td class="cmp-win">Extension + local relay driving your existing Chrome</td>
-            <td>npm global + load-unpacked extension (dev mode)</td>
-            <td class="cmp-win">Your real Chrome's logins</td>
+            <td>Load-unpacked extension + local relay, optional hosted remote relay</td>
+            <td class="cmp-win">Your Chrome</td>
             <td>CLI / MCP / HTTP</td>
-            <td class="cmp-mut">Not a focus</td>
+            <td>npm global + Developer-mode extension</td>
             <td>MIT</td>
           </tr>
           <tr>
-            <th>browser-use</th>
-            <td>Python framework (CDP under the hood, cdp-use)</td>
-            <td>Framework + a driven browser</td>
-            <td class="cmp-mut">Fresh by default, re-login</td>
-            <td>Python API</td>
-            <td class="cmp-mut">Not a focus</td>
+            <th>browser-use · Stagehand</th>
+            <td>Python / TS frameworks that launch a browser</td>
+            <td>A separate browser by default; browser-use can read the system Chrome profile (close Chrome first), Stagehand takes a <code>userDataDir</code></td>
+            <td>Integrate in code</td>
+            <td>Framework + browser; each also sells a cloud</td>
             <td>MIT</td>
           </tr>
           <tr>
-            <th>Playwright / MCP</th>
-            <td>Automation framework (+ agent MCP)</td>
-            <td>Framework + a driven browser</td>
-            <td class="cmp-mut">Fresh context, no login</td>
-            <td>JS/Py/.NET/Java (MCP)</td>
-            <td class="cmp-mut">Easily detected</td>
+            <th>Playwright · Puppeteer · Selenium</th>
+            <td>Automation libraries that launch a controlled browser</td>
+            <td class="cmp-mut">A separate profile; since Chrome 136 the default profile ignores the remote-debugging port</td>
+            <td>Integrate in code</td>
+            <td>Library + browser</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
-            <th>Puppeteer / Selenium</th>
-            <td>Classic automation frameworks</td>
-            <td>Framework + a driven browser</td>
-            <td class="cmp-mut">Fresh profile, no login</td>
-            <td>JS / many languages</td>
-            <td class="cmp-mut">Easily detected</td>
-            <td>Apache-2.0</td>
-          </tr>
-          <tr>
-            <th>Browserbase / Stagehand</th>
-            <td>Cloud headless browsers (+ AI actions)</td>
-            <td>Cloud service (paid)</td>
-            <td class="cmp-mut">Cloud sessions; bring your own login</td>
+            <th>Cloud browsers<br><span class="cmp-mut">(Browserbase · Steel · Hyperbrowser · Browser Use Cloud)</span></th>
+            <td>Browsers run in the cloud</td>
+            <td class="cmp-mut">Cloud sessions; bring your own sign-ins</td>
             <td>SDK / API</td>
-            <td>Anti-detection (paid)</td>
-            <td class="cmp-mut">SaaS / partly OSS</td>
+            <td>Billed per browser-hour; anti-detection mostly on paid tiers</td>
+            <td class="cmp-mut">Commercial, partly open source</td>
           </tr>
           <tr>
-            <th>Consumer agent browsers<br><span class="cmp-mut">(ChatGPT Atlas · Comet)</span></th>
-            <td>Vendor's own browser / built-in agent</td>
-            <td>Switch browsers</td>
-            <td class="cmp-win">Your logins in that browser</td>
-            <td>Natural language (no API)</td>
-            <td class="cmp-mut">Not a focus</td>
-            <td class="cmp-mut">Closed</td>
+            <th>Built-in browser agents<br><span class="cmp-mut">(Gemini in Chrome · ChatGPT · Comet)</span></th>
+            <td>The vendor's own browser or extension</td>
+            <td class="cmp-win">Your sign-ins in that browser</td>
+            <td class="cmp-mut">Only the vendor's assistant; no interface for third-party agents</td>
+            <td>Gemini auto browse needs AI Pro / Ultra and is US-English only for now; ChatGPT Atlas is retired in favor of the desktop app and Chrome extension</td>
+            <td class="cmp-mut">Proprietary</td>
           </tr>
         </tbody>
       </table>
       </div>
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ How to read this</div>
-        Green means "stronger on this axis," not an overall "win." No tool is best at everything — the choice comes down to whether you value <strong>zero-install / real logins / stealth</strong> or <strong>pure cloud / cross-language / built-in chat</strong>.
+        <div class="du-callout-title">ℹ️ How to read it</div>
+        Green means that column favors "let an agent use your signed-in browser", not that the option wins overall. Other projects' rows come from their official docs; we did not benchmark each one.
       </div>
 
-      <h2>Pick by category</h2>
+      <h2>By how they connect</h2>
       <div class="cmp-cat">
         <div class="du-card">
-          <h3>🌐 Drive your real browser</h3>
-          <p class="tools">chrome-use · ego-lite · browser-relay</p>
-          <p>Use your already-logged-in sessions, no re-login. chrome-use and browser-relay both use <strong>your existing</strong> Chrome (extension + relay); ego-lite has you <strong>switch to its</strong> browser (structural isolation). A point-by-point chrome-use vs browser-relay comparison is below.</p>
+          <h3>🧩 An extension in the Chrome you use</h3>
+          <p class="tools">chrome-use · OpenCLI · Playwright extension · Claude in Chrome · browser-relay</p>
+          <p>No remote debugging; permissions go through the extension. The differences are who can use it (Claude in Chrome is Claude-only), how it installs (browser-relay needs Developer mode), and what sits on top: multi-agent tab groups, side-panel chat, site adapters.</p>
+        </div>
+        <div class="du-card">
+          <h3>🔓 The remote-debugging toggle</h3>
+          <p class="tools">Chrome DevTools MCP · agent-browser · browser-harness · playwright-cli <code>--cdp</code></p>
+          <p>Since Chrome 144 you can enable remote debugging at <code>chrome://inspect</code> and allow it in a dialog. Once on, every window of that profile is open to the tool, which suits debugging and short tasks.</p>
+        </div>
+        <div class="du-card">
+          <h3>🧭 Switch browsers</h3>
+          <p class="tools">ego(lite) · Comet</p>
+          <p>Install a new browser and import or sign in again. Clean isolation, at the cost of changing browsers.</p>
         </div>
         <div class="du-card">
           <h3>🧰 Automation frameworks</h3>
           <p class="tools">Playwright · Puppeteer · Selenium · browser-use · Stagehand</p>
-          <p>Spin up a separate driven browser. Mature, cross-language — but logins don't carry, they're easily flagged by anti-bot, and you assemble the LLM loop yourself.</p>
+          <p>Drive a controlled browser from code. Mature and cross-language, good for tests and fixed flows; your sign-ins need separate handling.</p>
         </div>
         <div class="du-card">
           <h3>☁️ Cloud browsers</h3>
-          <p class="tools">Browserbase · Steel · Hyperbrowser</p>
-          <p>The browser runs in the cloud — great for stateless, large-scale scraping. You pay per usage, inject logins yourself, and your real local sessions don't apply.</p>
+          <p class="tools">Browserbase · Steel · Hyperbrowser · Browser Use Cloud</p>
+          <p>For stateless, high-concurrency work. Pay by the hour, inject sign-ins yourself; your local sessions don't come along.</p>
         </div>
         <div class="du-card">
-          <h3>💬 Consumer agent browsers</h3>
-          <p class="tools">ChatGPT Atlas · Perplexity Comet · Gemini-in-Chrome</p>
-          <p>The vendor builds the agent into a browser — aimed at end users, chat-driven, with no programmable developer API and no stealth.</p>
+          <h3>💬 Built-in browser agents</h3>
+          <p class="tools">Gemini in Chrome · ChatGPT extension · Comet</p>
+          <p>For end users chatting with the vendor's assistant. Your Claude Code or Codex can't use them.</p>
         </div>
       </div>
 
@@ -194,20 +229,27 @@
       <table class="cmp-table">
         <thead><tr><th>Your situation</th><th>Pick</th></tr></thead>
         <tbody>
-          <tr class="me"><th>Use your real logged-in accounts, install no new browser, beat anti-bot</th><td class="cmp-win">chrome-use</td></tr>
-          <tr><th>Willing to switch to an agent-native browser, want the cleanest isolation</th><td>ego-lite</td></tr>
-          <tr><th>Also want real-login Chrome, but need to drive it from <strong>another machine</strong></th><td>browser-relay (cross-machine)</td></tr>
-          <tr><th>Write classic automation scripts, cross-language, run in CI</th><td>Playwright / Puppeteer</td></tr>
-          <tr><th>Stateless large-scale cloud scraping</th><td>Browserbase / Steel</td></tr>
-          <tr><th>Just an end user who wants the browser to help</th><td>ChatGPT Atlas / Comet</td></tr>
+          <tr class="me"><th>Any agent (Claude Code, Codex, Cursor…) working in your signed-in Chrome, without remote debugging, possibly several agents at once</th><td class="cmp-win">chrome-use</td></tr>
+          <tr class="me"><th>No terminal: chat with a local agent in the browser side panel or from your phone</th><td class="cmp-win">chrome-use side panel / mobile remote</td></tr>
+          <tr><th>You only use Claude and have a paid plan</th><td>Claude in Chrome</td></tr>
+          <tr><th>Mostly turning popular sites into commands</th><td>OpenCLI (chrome-use's <code>site add</code> also loads OpenCLI adapters)</td></tr>
+          <tr><th>Already on Playwright or Playwright MCP</th><td>Playwright extension mode</td></tr>
+          <tr><th>Front-end debugging and performance analysis</th><td>Chrome DevTools MCP</td></tr>
+          <tr><th>Want a separate agent browser and don't mind switching</th><td>ego(lite)</td></tr>
+          <tr><th>Classic automation scripts, CI</th><td>Playwright / Puppeteer</td></tr>
+          <tr><th>Stateless, large-scale cloud scraping</th><td>Browserbase / Steel / Hyperbrowser</td></tr>
+          <tr><th>Just yourself, wanting the browser to help out</th><td>Gemini in Chrome / Comet / ChatGPT extension</td></tr>
         </tbody>
       </table>
       </div>
 
-      <h2>The closest rival: chrome-use vs ego-lite (measured)</h2>
+      <h2>chrome-use vs ego(lite): measured in 2026-07</h2>
+      <div class="du-callout warn">
+        <div class="du-callout-title">⚠️ This section's data is from 2026-07</div>
+        The token and timing numbers below, and the marketing lines quoted, come from testing the ego(lite) release of 2026-07. ego is now on 0.6.x (Chromium 156) and its site has moved to its own task benchmark, so the conclusions may have changed; treat them as historical until we re-run them.
+      </div>
       <p>
-        ego-lite is positioned closest to us (both "use real logins, don't fight for the user's tabs"), and its README <strong>names agent-browser directly</strong>.
-        So we ran the same task on both and measured performance and tokens. Fact-checking its "faster, fewer tokens" — <strong>one is half-true, the other is exactly backwards</strong>.
+        ego(lite) is positioned close to us (both let agents use real sign-ins without fighting for your tabs). We ran the same tasks on both and checked its "faster, fewer tokens" claims: <strong>one half true, one backwards</strong>.
       </p>
 
       <h3>Tokens (the observation fed to the model — what actually costs money)</h3>
@@ -302,10 +344,10 @@
         <strong>survives hard navigations</strong> — the multi-page flows that are exactly where ego wins and a page-world
         runtime breaks. Measured: crawl 3 HN pages collecting every ≥100-point story = <strong>one tool call</strong>
         (the old per-verb way needs 13+), on your <strong>already-logged-in real Chrome</strong> over the stealth transport,
-        <strong>cross-platform</strong> (ego is macOS-only). Full usage and both forms on <a href="/en/script.html">Single-pass Scripting</a>.
+        on macOS, Linux and Windows. Full usage and both forms on <a href="/en/script.html">Single-pass Scripting</a>.
       </p>
 
-      <h3>What we learned from ego-lite &amp; ported</h3>
+      <h3>What we learned from ego(lite) &amp; ported</h3>
       <p>After trialing each item, we ported the real gaps the chrome-use way (progress in <a href="https://github.com/leeguooooo/chrome-use/issues/89">issue #89</a>):</p>
       <ul>
         <li><strong>Ownership + handoff</strong> — <span class="cmp-win">implemented</span> <code>session handoff/resume/status/list</code>: once handed off, every browser-driving command on that session is refused. It's an <strong>escape hatch</strong> for the rare step the agent truly can't do (e.g. an unsolvable captcha) — it <strong>does not change autonomous login</strong>; by default the agent logs in and drives itself, zero-impact.</li>
@@ -317,7 +359,7 @@
 
       <h2>Another close cousin: browser-relay</h2>
       <p>
-        <a href="https://github.com/reliefeai/browser-relay" target="_blank" rel="noopener">browser-relay</a> (<code>@linsoai/browser-relay</code>, MIT) is architecturally almost the same idea as us:
+        <a href="https://github.com/reliefeai/browser-relay" target="_blank" rel="noopener">browser-relay</a> (<code>@linsoai/browser-relay</code>, MIT; latest 1.5.4, no updates since 2026-09-17) is architecturally almost the same idea as us:
         an <strong>extension + local relay driving your real, logged-in Chrome</strong> over <code>chrome.debugger</code> / CDP, bound to <code>127.0.0.1</code>,
         exposed via CLI + MCP + HTTP, with snapshots annotating interactive elements — no new browser, no throwaway profile. The core idea is at parity. The differences:
       </p>
@@ -325,9 +367,9 @@
       <table>
         <thead><tr><th>Dimension</th><th>browser-relay</th><th>chrome-use</th></tr></thead>
         <tbody>
-          <tr class="me"><th>cross-machine remote</th><td class="cmp-win">Remote Relay: the browser connects out to a public/self-hosted (Cloudflare) relay, Device-ID auth, drive it from another machine</td><td>local only (127.0.0.1 relay + WebSocket stream)</td></tr>
+          <tr class="me"><th>cross-machine remote</th><td class="cmp-win">Remote Relay: the browser connects out to a public/self-hosted (Cloudflare) relay, Device-ID auth, drive it from another machine</td><td>the CLI connects locally only (127.0.0.1 relay); side-panel chat can be driven from a <a href="/en/mobile.html">phone</a> over Tailscale, a Cloudflare tunnel or your LAN</td></tr>
           <tr class="me"><th>install</th><td>npm global + <strong>load-unpacked extension (Developer mode)</strong> (not the store, no auto-update)</td><td class="cmp-win">one <code>curl … | sh</code> + a <strong>one-click Web Store</strong> "Add to Chrome"</td></tr>
-          <tr class="me"><th>debug banner</th><td>shows; mitigated by 10-min idle soft-detach, or launch with <code>--silent-debugger-extension-api</code> (weakens the safeguard for <em>all</em> debugger extensions)</td><td class="cmp-win">attaches only agent-owned tabs, so <strong>your tabs never show the banner</strong>, no security tradeoff</td></tr>
+          <tr class="me"><th>debug banner</th><td>shows; mitigated by 10-min idle soft-detach, or launch with <code>--silent-debugger-extension-api</code> (weakens the safeguard for <em>all</em> debugger extensions)</td><td class="cmp-win">attaches only agent-owned tabs by default, so your tabs don&#39;t show the banner; it appears only while side-panel chat borrows one of your tabs and goes away when you take it back; no security tradeoff</td></tr>
           <tr class="me"><th>stealth / anti-detection</th><td>not a focus</td><td class="cmp-win">core capability: CreepJS 0% bot, <code>--humanize</code> for behavioral checks, <code>--launch</code> native overrides</td></tr>
           <tr class="me"><th>multi-agent</th><td>targets tabs by <code>--tab</code> id, no session isolation model</td><td class="cmp-win">a colored tab group per <code>--session</code>, agents never cross tabs</td></tr>
           <tr class="me"><th>complex multi-step</th><td>per-verb + <code>eval</code> + stdin</td><td class="cmp-win"><a href="/en/script.html">single-pass scripting</a>: value bus + loops + asserts, one round-trip</td></tr>
@@ -344,7 +386,7 @@
       </p>
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Honest verdict</div>
-        browser-relay is genuinely ahead on <strong>cross-machine remote control</strong> (we're local-only today). On the rest — one-click store install, no debug banner, stealth/humanize, multi-agent isolation, single-pass scripting, AX-tree locating, a Node-free single binary — chrome-use is stronger. Different lineage too: browser-relay descends from openclaw-browser-relay, chrome-use from <a href="/en/lineage.html">vercel-labs/agent-browser</a>.
+        browser-relay is genuinely ahead on <strong>driving the CLI from another machine</strong> (our CLI connects locally only; remote use is limited to driving side-panel chat from a phone). On the rest — one-click store install, no debug banner, stealth/humanize, multi-agent isolation, single-pass scripting, AX-tree locating, a Node-free single binary — chrome-use is stronger. Different lineage too: browser-relay descends from openclaw-browser-relay, chrome-use from <a href="/en/lineage.html">vercel-labs/agent-browser</a>.
       </div>
 
       <h2>The comparison workflow</h2>
