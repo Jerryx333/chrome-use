@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.268
+## 1.5.269
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.90.
+
+### Bug Fixes
+
+- **No popup-blocking switch in launched browsers.** `--launch` no longer passes `--disable-popup-blocking` (a Puppeteer/Playwright default), so a page script can't open a popup without a click, as in a normal Chrome. rebrowser-bot-detector now flags that (`popupBlocking`). Popups from chrome-use's own clicks still open (#763).
+- **`expose` is refused under stealth mode.** `Runtime.addBinding` adds an unnamed native function to `window`, which detectors look for (`cdpBindingGlobals`). The extension now refuses it while stealth mode is on, with an error pointing to the options page, and does not re-add a binding on idle re-attach once stealth mode is back on. Requires extension 0.5.90 (#763).
+- **Docs: don't mock the page itself.** `network route --body` on the main document is visible to the page through navigation timing (`documentInterception`); the network docs now say to mock API requests only on sites where stealth matters (#763).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.268
+
 Works with extension ab-connect 0.5.89.
 
 ### Bug Fixes
@@ -14,7 +29,6 @@ Works with extension ab-connect 0.5.89.
 ### Contributors
 
 - @euvoor
-<!-- release:end -->
 
 ## 1.5.267
 

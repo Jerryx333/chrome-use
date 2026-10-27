@@ -270,7 +270,6 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         "--disable-component-update".to_string(),
         "--disable-default-apps".to_string(),
         "--disable-hang-monitor".to_string(),
-        "--disable-popup-blocking".to_string(),
         "--disable-prompt-on-repost".to_string(),
         "--disable-sync".to_string(),
         format!("--disable-features={}", disabled_features.join(",")),
