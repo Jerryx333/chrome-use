@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Canvas / WebGL / Games · chrome-use</title>
-  <meta name="description" content="Drive canvas / WebGL / game UIs that have no DOM or accessibility nodes: coordinate clicks, press --hold, batch timed sequences, and a real-time WebSocket stream — capture canvas pixels, read engine globals, send 60fps live input." />
+  <meta name="description" content="Games, maps, 3D viewers and design canvases are drawn on a canvas with no elements to click. Your agent drives them by looking at pixels, using coordinates and reading engine state, and probes editors like Google Docs before typing. Underlying commands (canvas capture, click x y, batch, stream) follow." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -38,7 +38,7 @@
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
       </span>
 
-      <p class="du-eyebrow">Advanced</p>
+      <p class="du-eyebrow">What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>Canvas / WebGL / Games</h1>
@@ -49,6 +49,46 @@
       </div>
 
       <p class="du-lede">
+        Games, maps, 3D viewers and design canvases like Figma are drawn on a <code>&lt;canvas&gt;</code>, so the page structure has <span class="mark">no buttons to click</span>. Your agent drives them by looking at the picture and clicking or pressing keys at coordinates, and reads engine state directly when it can.
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>Ask your agent</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">In this browser game, hold D to walk right and jump over the first gap.</p>
+          <p>Hold durations are timed inside chrome-use, which is steadier than one command per key.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Export what&#39;s on this Figma canvas right now as a PNG.</p>
+          <p>You get the rendered picture, not the design source.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Add a paragraph of meeting notes at the end of this Google Doc.</p>
+          <p>It types a probe word first to confirm the cursor is in the body, then the text.</p>
+        </div>
+      </div>
+      <h2>What the agent does</h2>
+      <ol>
+        <li>It first checks with <code>snapshot -i</code> and <code>get text --pierce</code> that there really is nothing clickable; if it gets refs, it doesn&#39;t use coordinates.</li>
+        <li>It looks with <code>canvas capture</code> or <code>screenshot</code>, works out the position, then <code>click x y</code>; held keys use <code>press --hold</code>.</li>
+        <li>A fixed timed sequence goes out in one <code>batch</code>; real-time control uses <code>stream</code>, receiving frames and sending input over a WebSocket.</li>
+        <li>When a game engine exposes its state on a page global, <code>eval</code> reads position or score directly instead of guessing from a screenshot.</li>
+        <li>In editors like Google Docs or Notion it types a probe word to confirm where input lands, then the real text, then checks with a screenshot or export.</li>
+      </ol>
+      <h2>What you&#39;ll see</h2>
+      <ul>
+        <li>When working in your Chrome through the extension, coordinate clicks can land on your foreground tab. For tasks with many coordinate actions the agent should prefer a browser it launches itself (<code>--launch</code>) or its own tabs, or confirm state through the app&#39;s backend.</li>
+        <li><code>canvas capture</code> returns the rendered picture. Design source files and hidden game state come from the app&#39;s own API.</li>
+        <li>Before reporting done, the agent should have read the result back with a screenshot, export or API; ask to see the screenshot.</li>
+        <li>At the end the agent runs <code>done</code>: tabs it opened along the way close, and pages you need to see or keep using stay open.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Under the hood</h2>
+      <p>The commands and flags the agent runs. Read on if you write your own scripts, debug a run, or want the details.</p>
+      <p>
         Game screens, voice-room mic seats, map tiles, 3D viewers, design canvases (Figma / Modao) —
         these UIs paint everything onto a <code>&lt;canvas&gt;</code>, with
         <span class="mark">no DOM nodes and no accessibility nodes behind them</span>.

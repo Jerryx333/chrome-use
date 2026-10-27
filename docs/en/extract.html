@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>Extracting Data · chrome-use</title>
-  <meta name="description" content="Turn a page into clean structured data: snapshot --json, get text/attr, custom shapes with eval, site adapters, and the one-shot extract --schema." />
+  <title>Collect Data · chrome-use</title>
+  <meta name="description" content="Have your agent turn lists, tables and search results into structured data: site adapters for popular sites, one-call JSON extraction for any other page, multi-page runs in one go. Underlying commands (extract --schema, eval, snapshot --json) follow." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -39,10 +39,10 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">Core Usage</p>
+      <p class="du-eyebrow">What Agents Can Do</p>
 
       <div class="du-title-row">
-        <h1>Extracting Data</h1>
+        <h1>Collect Data</h1>
         <button class="du-copy-page" type="button" aria-label="Copy page">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
           <span class="du-copy-page-label">Copy page</span>
@@ -50,6 +50,47 @@
       </div>
 
       <p class="du-lede">
+        Have your agent turn <span class="mark">lists, tables and search results</span> into data. Popular sites have site adapters that call the site&#39;s own API; on any other page the fields you name come back as JSON in one call, and the agent converts them to the format you want.
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>Ask your agent</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">Put the title, price and link of the first 50 items in this list into a CSV.</p>
+          <p>The agent gets JSON and writes the CSV; it handles paging and infinite scroll.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">List every open issue in this GitHub repo, grouped by label.</p>
+          <p>GitHub has a ready-made site adapter, so there is no clicking through pages.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Go through three pages of search results and keep only items rated 4.5 or higher.</p>
+          <p>Paging, extraction and filtering run in one script.</p>
+        </div>
+      </div>
+      <h2>What the agent does</h2>
+      <ol>
+        <li>First it decides whether a browser is needed: public static pages are faster to fetch directly; pages that need sign-in, interaction or JavaScript rendering go through chrome-use.</li>
+        <li>If the site has an adapter (GitHub, Reddit, Bilibili and others), <code>site &lt;name&gt;/&lt;cmd&gt;</code> calls the site&#39;s own API from your signed-in tab.</li>
+        <li>Otherwise <code>extract --schema</code> takes the repeating row and the fields per row and returns JSON in one call; unusual shapes get a short <code>eval</code> script.</li>
+        <li>Multi-page data goes into one <code>script</code> loop (page, extract, merge).</li>
+        <li>Finally the agent turns the JSON into the CSV, table or summary you asked for.</li>
+      </ol>
+      <h2>What you&#39;ll see</h2>
+      <ul>
+        <li>Your tabs stay as they are: the agent opens background tabs in a <code>✦ &lt;project&gt;</code> tab group in your Chrome and does not take focus. Click over whenever you want to watch.</li>
+        <li>Sign-ins come from your Chrome&#39;s existing sessions. When there is a choice to make (such as whether to sign in from your password vault) or a step only you can do (scanning a QR code, confirming), the agent stops, asks you, and continues after you finish.</li>
+        <li>chrome-use returns JSON. The CSV or table file is written by the agent; tell it where to save it.</li>
+        <li>If a selector matches nothing, <code>extract</code> lists the repeating containers it did find instead of quietly returning an empty array, and a field that is empty on every row gets a warning. Check the row count and empty fields first.</li>
+        <li>At the end the agent runs <code>done</code>: tabs it opened along the way close, and pages you need to see or keep using stay open.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Under the hood</h2>
+      <p>The commands and flags the agent runs. Read on if you write your own scripts, debug a run, or want the details.</p>
+      <p>
         When what you want is the <span class="mark">data</span> on a page rather than to act on it, don't dump the whole
         HTML into your context. chrome-use offers a full ladder of extraction techniques from light to heavy: a structured
         snapshot, precise reads by ref, custom-shaped <code>eval</code>, community site adapters, all the way up to the

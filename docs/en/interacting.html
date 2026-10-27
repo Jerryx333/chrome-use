@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>Interacting · chrome-use</title>
-  <meta name="description" content="Drive a real browser with click, type, fill, check, select, upload, scroll and drag; understand @ref interactions, keyboard events, cross-origin iframes and slider CAPTCHAs." />
+  <title>Forms &amp; Clicking · chrome-use</title>
+  <meta name="description" content="Have your agent click buttons, fill forms, pick from dropdowns and upload files in your signed-in Chrome, checking the page after each step; sends and deletes wait for your OK. Underlying commands (click, fill, select, upload) follow." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -42,11 +42,10 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">Core Usage</p>
+      <p class="du-eyebrow">What Agents Can Do</p>
 
       <div class="du-title-row">
-        <h1>Interacting</h1>
-      <p>Custom comboboxes scroll instantly into view before trusted pointer input opens and selects an option. pick returns verified: false with a warning when the choice is unconfirmed; hidden form changes are reported as evidence, not proof, when selection clears the search input. Page/container scrolling is instant and reports scrolled: false with a warning when the position is unchanged.</p>
+        <h1>Forms &amp; Clicking</h1>
         <button class="du-copy-page" type="button" aria-label="Copy page">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
           <span class="du-copy-page-label">Copy page</span>
@@ -54,12 +53,54 @@
       </div>
 
       <p class="du-lede">
+        Have your agent <span class="mark">click buttons, fill in forms, pick options and upload files</span> on a web page. After each step it reads the page to confirm the result, not just the command&#39;s exit code.
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>Ask your agent</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">Update stock for these 20 products in the admin panel. Show me before you submit.</p>
+          <p>Each change is read back and checked, and it stops before submitting.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Attach this PDF to the expense form and fill in the amount and date from the invoice.</p>
+          <p>File inputs and drag-and-drop upload areas both work.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Fill in this sign-up form. Try the CAPTCHA yourself and call me if you can&#39;t get past it.</p>
+          <p>The agent tries common slider and click-in-order CAPTCHAs first.</p>
+        </div>
+      </div>
+      <h2>What the agent does</h2>
+      <ol>
+        <li>It reads the page and finds the controls with <code>snapshot -i</code>.</li>
+        <li>It acts with <code>click</code>, <code>fill</code>, <code>select</code>, <code>upload</code> and similar commands, and reads the field value back after typing.</li>
+        <li>Important clicks get <code>--observe</code>, which reports the messages that appeared, requests that went out and any tab that opened.</li>
+        <li>When a submit does nothing, it re-reads the validation messages on the page and fixes them instead of repeating the same action.</li>
+        <li>Sending, buying and deleting need your authorization. When an outcome is unclear it checks the page instead of replaying the action.</li>
+      </ol>
+      <h2>What you&#39;ll see</h2>
+      <ul>
+        <li>Your tabs stay as they are: the agent opens background tabs in a <code>✦ &lt;project&gt;</code> tab group in your Chrome and does not take focus. Click over whenever you want to watch. Clicks in a background tab still land.</li>
+        <li>CAPTCHAs: the agent first tries the page&#39;s normal controls, up to three fresh puzzles. If it can&#39;t read one or keeps failing, it hands it to you and continues once you&#39;re done. Steps only you can do, like a QR scan or SMS code, work the same way.</li>
+        <li>Values such as card numbers and passwords are kept out of output and error messages.</li>
+        <li>Judge the result by the page&#39;s receipt or success message. A field showing the new value does not prove it was saved.</li>
+        <li>At the end the agent runs <code>done</code>: tabs it opened along the way close, and pages you need to see or keep using stay open.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Under the hood</h2>
+      <p>The commands and flags the agent runs. Read on if you write your own scripts, debug a run, or want the details.</p>
+      <p>
         Once you've read the page, it's time to act. This page covers every interaction verb for driving a
         real browser—<span class="mark">click, type, check, select, upload, scroll, drag</span>.
         The first argument to most commands is the <code>@ref</code> you got from
         <code>snapshot -i</code> (e.g. <code>@e42</code>); first <a href="/en/finding.html">find the element</a>,
         then act on it with the commands here.
       </p>
+      <p>Custom comboboxes scroll instantly into view before trusted pointer input opens and selects an option. pick returns verified: false with a warning when the choice is unconfirmed; hidden form changes are reported as evidence, not proof, when selection clears the search input. Page/container scrolling is instant and reports scrolled: false with a warning when the position is unchanged.</p>
 
       <!-- ============ Clicking &amp; pointer ============ -->
       <h2>Clicking &amp; pointer</h2>

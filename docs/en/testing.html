@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Testing &amp; Dogfood · chrome-use docs</title>
-  <meta name="description" content="Use chrome-use test to turn repetitive manual browser checks into rerunnable YAML regression suites; use dogfood for exploratory testing, QA, and bug hunting with complete reproduction evidence." />
+  <meta name="description" content="Have your agent test your web app: turn repeated manual checks into rerunnable YAML suites for CI, or explore the app like a user and get back an issue report with screenshots, video and repro steps. Underlying commands for chrome-use test and the dogfood workflow follow." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -42,7 +42,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">Advanced / Workflow</p>
+      <p class="du-eyebrow">What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>Testing &amp; Dogfood</h1>
@@ -53,6 +53,50 @@
       </div>
 
       <p class="du-lede">
+        Your agent can test a web app in two ways: turn the checks you keep doing by hand into a <span class="mark">rerunnable test suite</span> you run after every change, or explore the app like a user, find problems, and leave screenshots, video and repro steps for each one.
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>Ask your agent</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">Go through the sign-up flow and screenshot every error and layout problem.</p>
+          <p>Each issue comes with screenshots and repro steps.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Turn &quot;the settings page is visible after sign-in&quot; into a test case and run it after every change.</p>
+          <p>It becomes a YAML suite whose exit code plugs into CI.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Test with an admin account and a member account and confirm members can&#39;t see the settings page.</p>
+          <p>Needs cookie-use with both sign-ins saved.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Run an exploratory test on staging and write up 5 to 10 issues.</p>
+          <p>Fewer issues are fine as long as each one reproduces.</p>
+        </div>
+      </div>
+      <h2>What the agent does</h2>
+      <ol>
+        <li>Regression tests: the agent walks through the flow once to learn the selectors, writes it into a <code>*.yaml</code> suite and runs it with <code>chrome-use test</code>. Exit code 0 when every case passes, 1 if any fails.</li>
+        <li>Exploratory tests: the agent opens the target URL in a named session, works through each top-level section from the main navigation (clicking buttons, filling forms, trying edge-case input), and takes a screenshot and checks console errors on each page.</li>
+        <li>Before recording an issue it retries to confirm it reproduces. Interactive issues get a video plus step-by-step screenshots; static ones get one annotated screenshot.</li>
+        <li>Each issue is appended to the report as soon as it is found, with severity counts at the top. The agent does not read the app&#39;s source code; every finding comes from what it saw in the browser.</li>
+      </ol>
+      <h2>What you&#39;ll see</h2>
+      <ul>
+        <li><code>chrome-use test</code> launches a fresh isolated browser by default and closes it afterwards, leaving your Chrome alone. To use your sign-ins, have the agent add <code>--session</code> to run against a connected session.</li>
+        <li>Failing cases save a screenshot to <code>cu-test-artifacts/&lt;case&gt;.png</code>.</li>
+        <li>Exploratory results land in <code>dogfood-output/</code>: <code>report.md</code>, <code>screenshots/</code>, <code>videos/</code>. Each issue in the report lists repro steps and the paths of its evidence files, so you can open them and check.</li>
+        <li>If sign-in needs an SMS or email code, the agent asks you and waits for your reply.</li>
+        <li>Console errors are not captured by default; capture has to be turned on when the session starts (see the dogfood section below).</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Under the hood</h2>
+      <p>The commands and flags the agent runs. Read on if you write your own scripts, debug a run, or want the details.</p>
+      <p>
         Even though both drive a browser, testing comes in two very different flavors: one
         <span class="mark">freezes repetitive manual checks into a rerunnable regression suite</span>,
         like frontend unit tests; the other
