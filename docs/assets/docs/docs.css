@@ -629,7 +629,21 @@ img { max-width: 100%; }
   .du-main { padding: 28px 20px 80px; }
   .du-repo-tag { display: none; }
   .du-lang { display: none; }
+  /* phone width: icon-only GitHub button and a tighter login so the bar fits */
+  .du-topbar { gap: 10px; padding: 0 12px; }
+  .du-topbar-right { gap: 6px; }
+  .du-gh span { display: none; }
+  .du-gh { padding: 0 8px; }
+  .du-account-login { padding: 5px 10px; font-size: 12px; }
+  /* long inline code (e.g. cu.snapshot/eval/click/…) wraps instead of widening the page */
+  .du-main :not(pre) > code { overflow-wrap: anywhere; }
+  .du-title-row { flex-wrap: wrap; }
+  .du-main table { display: block; max-width: 100%; overflow-x: auto; }
 }
+/* grid/flex children default to min-width:auto, so one wide <pre> could widen
+   the whole content column; keep the column at the viewport and scroll the block */
+.du-main { min-width: 0; overflow-wrap: break-word; }
+.du-main pre { max-width: 100%; overflow-x: auto; }
 
 /* reduced motion: kill doodle float + card lift transitions */
 @media (prefers-reduced-motion: reduce) {

@@ -53,7 +53,7 @@
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
       </span>
 
-      <p class="du-eyebrow">对比 / Comparison</p>
+      <p class="du-eyebrow">开始 / Getting Started</p>
 
       <div class="du-title-row">
         <h1>和其他方案对比</h1>
@@ -92,7 +92,7 @@
             <td class="cmp-win">你正在用的 Chrome，可选 profile</td>
             <td class="cmp-win">任意 agent：CLI / MCP / HTTP；侧栏和手机里直接对话</td>
             <td>一行安装 + 商店扩展</td>
-            <td class="cmp-win">核心能力：连真实 Chrome 零注入、默认不开 <code>Runtime.enable</code>、<code>--humanize</code> 行为模拟、可尝试普通验证码；CreepJS 0% bot（实测）</td>
+            <td class="cmp-win">核心能力：连真实 Chrome 零注入、默认不开 <code>Runtime.enable</code>、<code>--humanize</code> 行为模拟、可尝试普通验证码；CreepJS 0% bot（自测）</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -217,7 +217,7 @@
         <li><strong>需要独立浏览器时</strong>：<code>--launch</code> 用原生覆盖（<code>navigator.webdriver</code>、时区、WebRTC 等），不靠可被反查的 JS getter。</li>
       </ul>
       <p>
-        实测（连真实 Chrome）：CreepJS 0% bot、0% headless；bot.incolumitas、sannysoft、BrowserScan 全部通过。测试条件见<a href="/stealth.html">反检测与隐身</a>。
+        我们自测（连真实 Chrome）：CreepJS 0% bot、0% headless；bot.incolumitas、sannysoft、BrowserScan 全部通过，2026-10-27 起 rebrowser-bot-detector 新加的弹窗、绑定全局函数、文档拦截检测也通过（1.5.269）。要注意：第三方 2026 年的测试发现，有头模式下这类指纹检测页已经很难区分不同工具，连原版 Playwright 都能过；真正拉开差距的是行为检测和运行环境（机器、GPU、IP）。chrome-use 跑在你自己的电脑上，环境这一项天然是真的。测试条件见<a href="/stealth.html">反检测与隐身</a>。
         这是特定环境下的测量，不保证不被检测或账号不被封。表里其他方案的文档没有讲这些点，我们也没有逐个实测它们，所以不下结论。
       </p>
 

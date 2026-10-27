@@ -53,7 +53,7 @@
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
       </span>
 
-      <p class="du-eyebrow">Comparison</p>
+      <p class="du-eyebrow">Getting Started</p>
 
       <div class="du-title-row">
         <h1>How chrome-use compares</h1>
@@ -92,7 +92,7 @@
             <td class="cmp-win">The Chrome you use, any profile</td>
             <td class="cmp-win">Any agent: CLI / MCP / HTTP; plus side-panel and phone chat</td>
             <td>One-line install + store extension</td>
-            <td class="cmp-win">Core capability: nothing injected into your real Chrome, <code>Runtime.enable</code> off by default, <code>--humanize</code> behavior, attempts ordinary CAPTCHAs; CreepJS 0% bot (measured)</td>
+            <td class="cmp-win">Core capability: nothing injected into your real Chrome, <code>Runtime.enable</code> off by default, <code>--humanize</code> behavior, attempts ordinary CAPTCHAs; CreepJS 0% bot (self-measured)</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -217,7 +217,7 @@
         <li><strong>When you need a separate browser</strong>: <code>--launch</code> uses native overrides (<code>navigator.webdriver</code>, timezone, WebRTC and more) instead of JS getters that can be detected.</li>
       </ul>
       <p>
-        Measured on a real Chrome: CreepJS 0% bot and 0% headless; bot.incolumitas, sannysoft and BrowserScan all pass. Test conditions are in <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>.
+        Our own runs on a real Chrome: CreepJS 0% bot and 0% headless; bot.incolumitas, sannysoft and BrowserScan all pass, and since 1.5.269 so do rebrowser-bot-detector&#39;s new popup, binding-global and document-interception checks (added 2026-10-17/19). Keep in mind that independent 2026 tests found these fingerprint pages barely separate tools in headed mode (even plain Playwright passes); behavior checks and the environment (machine, GPU, IP) are what separate them. chrome-use runs on your own computer, so the environment is genuine by construction. Test conditions are in <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>.
         These are measurements in a particular environment, not a promise of invisibility or account safety. The other tools' docs don't cover these points and we haven't benchmarked them, so we draw no conclusion about them.
       </p>
 

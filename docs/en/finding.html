@@ -40,7 +40,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">Core Usage</p>
+      <p class="du-eyebrow">Under the Hood</p>
 
       <div class="du-title-row">
         <h1>Finding Elements</h1>
@@ -165,7 +165,7 @@
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ Don't retry a flaky locator three times</div>
         When you hit a stale ref, a hidden state, or an occluded click, don't keep retrying the same structured locator — go straight to <code>eval</code>
-        against the DOM; it's the fastest way to find out "why it failed." See <a href="/en/extract.html">Extracting Data</a> for more.
+        against the DOM; it's the fastest way to find out "why it failed." See <a href="/en/extract.html">Collect Data</a> for more.
       </div>
 
       <hr class="du-divider" />
@@ -229,7 +229,7 @@
         <div class="du-callout-title">⚠️ Use snapshot's @ref for these two kinds</div>
         For elements inside a closed shadow root or a cross-origin iframe, locate them by their <code>@ref</code> from <code>snapshot</code>
         rather than <code>find</code>. When you need a coordinate fallback, <code>box @ref</code> gives the element's coordinate box.
-        See the notes on cross-origin iframes in <a href="/en/interacting.html">Interacting</a>.
+        See the notes on cross-origin iframes in <a href="/en/interacting.html">Forms & Clicking</a>.
       </div>
 
       <hr class="du-divider" />
@@ -241,11 +241,11 @@
           <p>snapshot gives a structured @ref view.</p>
         </a>
         <a class="du-card" href="/en/interacting.html">
-          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Interacting</div>
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Forms & Clicking</div>
           <p>click, fill, type drive a real browser.</p>
         </a>
         <a class="du-card" href="/en/extract.html">
-          <div class="du-card-title"><span class="du-card-ico">🧪</span> Extracting Data</div>
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> Collect Data</div>
           <p>eval and --schema scrape the page into clean JSON.</p>
         </a>
       </div>

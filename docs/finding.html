@@ -40,7 +40,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">核心用法 / Core Usage</p>
+      <p class="du-eyebrow">底层命令 / Under the Hood</p>
 
       <div class="du-title-row">
         <h1>定位元素</h1>
@@ -162,7 +162,7 @@
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ 别把一个不稳的定位器重试三遍</div>
         遇到 ref 失效、隐藏状态、被遮挡的点击时，不要反复重试同一个结构化定位器——直接 <code>eval</code>
-        对 DOM 下手，这是查清「为什么失败」最快的路子。更多用法见 <a href="/extract.html">提取数据</a>。
+        对 DOM 下手，这是查清「为什么失败」最快的路子。更多用法见 <a href="/extract.html">抓数据</a>。
       </div>
 
       <hr class="du-divider" />
@@ -226,7 +226,7 @@
         <div class="du-callout-title">⚠️ 这两类元素改用 snapshot 的 @ref</div>
         对闭合 shadow root 或跨源 iframe 里的元素，用它在 <code>snapshot</code> 里的 <code>@ref</code> 来定位，
         而不是 <code>find</code>。需要坐标回退时，<code>box @ref</code> 会给出元素的坐标盒子。
-        参见 <a href="/interacting.html">交互操作</a> 里对跨源 iframe 的说明。
+        参见 <a href="/interacting.html">填表与操作</a> 里对跨源 iframe 的说明。
       </div>
 
       <hr class="du-divider" />
@@ -234,15 +234,15 @@
       <h2>下一步</h2>
       <div class="du-cards cols-3">
         <a class="du-card" href="/reading.html">
-          <div class="du-card-title"><span class="du-card-ico">📖</span> 读取页面</div>
+          <div class="du-card-title"><span class="du-card-ico">📖</span> 读网页、查资料</div>
           <p>snapshot 拿到结构化的 @ref 视图。</p>
         </a>
         <a class="du-card" href="/interacting.html">
-          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 交互操作</div>
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> 填表与操作</div>
           <p>click、fill、type 驱动真实浏览器。</p>
         </a>
         <a class="du-card" href="/extract.html">
-          <div class="du-card-title"><span class="du-card-ico">🧪</span> 提取数据</div>
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> 抓数据</div>
           <p>eval 与 --schema 把页面抓成干净 JSON。</p>
         </a>
       </div>
