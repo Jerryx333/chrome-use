@@ -1,8 +1,22 @@
 # Changelog
 
-## 1.5.273
+## 1.5.274
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.96.
+
+### Features
+
+- **Teach by demonstration.** `chrome-use teach start` records what you do by hand in the session's tab; `teach stop` writes a `chrome-use script` that replays it with no model (`--adapter` writes a site-adapter skeleton instead), and `teach replay` runs it. Each step tries a label or role+name first with CSS fallbacks (a new `"or"` option in the script engine runs a fallback only when the previous locator found nothing). Keystrokes collapse into one fill, focus-only clicks are dropped, and page changes get a wait. Password, card and one-time-code values are never recorded: they become parameters passed with `script --arg-env name=ENV_VAR`, and recorded URLs are scrubbed too. The side panel has a **Record** button that shows the steps for review and editing before saving. The recorder runs in a per-recording isolated world and leaves no page globals; under stealth mode the extension allows only a binding limited to a named isolated world, and `expose` is still refused. Requires extension 0.5.96 (#794).
+- **Set up from the extension, no terminal (macOS).** When the side panel or popup can't find the CLI, a setup guide offers a signed, notarized `chrome-use-darwin-<arch>.dmg`: open it, double-click ChromeUse, choose Open, and the panel connects by itself within seconds. Windows and Linux show the install command with a copy button. Once connected, the panel lists Codex, Claude Code, OpenCode and Pi with how to sign in or install each. Release builds now attach the dmg. Requires extension 0.5.96 (#795).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.273
+
 Works with extension ab-connect 0.5.93.
 
 ### Features
@@ -18,7 +32,6 @@ All checks run in the CLI and extension pages; pages see nothing new.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.272
 
