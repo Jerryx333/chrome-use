@@ -119,9 +119,10 @@ the rule applies whether or not the flag is set.
 
 On the user's own Chrome (the extension relay), the CLI itself holds some
 actions for the user: every action on banking, brokerage, crypto exchange
-and government ID sites (until the user allows the site), downloads, typing
-into password or payment fields, and clicks on purchase buttons, plus
-whatever the user or their organization configured. The command does not
+and government ID sites (until the user allows the site), typing into
+payment card fields, and clicks on purchase buttons, plus whatever the user
+or their organization turned on (password fields and downloads are off by
+default, so `auth login` and `fill --from-env` into a password field run). The command does not
 run; it prints `Confirmation required:` with a `Site:` line and a
 confirmation id, and exits with code 3 (`--json`: `confirmation_required`,
 `site`, `reason`, `approval`).

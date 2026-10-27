@@ -26,7 +26,7 @@
     },
     "ask": {
       "title": "Always ask before",
-      "description": "Any of download, sensitive_input (password and payment fields), purchase. Pins the setting; unset leaves it to the user.",
+      "description": "Any of payment_input (card number, CVV, expiry), purchase, password_input (password and one-time-code fields), download. Pins the setting; unset leaves it to the user (default: payment_input and purchase).",
       "type": "array",
       "items": { "type": "string" }
     },

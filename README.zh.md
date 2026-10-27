@@ -539,7 +539,7 @@ CDP 的 IME 路径会产生 composition 事件，但 Chrome 可能将 `compositi
 
 ## 权限与安全
 
-驱动你自己的 Chrome 时，chrome-use 在执行每个 agent 操作前会按它落在的站点检查一次。默认情况下，在银行、券商、加密货币交易所和政府证件站点上（见[维护中的列表](cli/src/native/sensitive_sites.json)），以及下载、在密码或支付字段里输入、购买之前，会先问你。你在侧栏、通知或选项页里选择**仅允许这一次**、**始终允许此站点**或**拒绝**；选项页保存已允许和已屏蔽的站点以及权限记录。被拦下的命令以退出码 3 结束，agent 运行 `chrome-use confirm <id>` 等你选择。可以在选项页、用 `CHROME_USE_SENSITIVE_SITES=0`，或在 `--action-policy` 文件的 `sites` 段里关闭这些默认规则。组织可以通过 Chrome 企业策略（`chrome.storage.managed`）锁定允许和屏蔽的域名、操作策略和停用的 agent。检查在 CLI 里完成，页面看不到任何新东西。详见[权限与安全](https://chrome-use.leeguoo.com/permissions.html)。
+驱动你自己的 Chrome 时，chrome-use 在执行每个 agent 操作前会按它落在的站点检查一次。默认情况下，在银行、券商、加密货币交易所和政府证件站点上（见[维护中的列表](cli/src/native/sensitive_sites.json)），以及在支付卡字段里输入、购买之前，会先问你。密码字段和下载默认不问（agent 经常自己登录和下载），可按类别打开。你在侧栏、通知或选项页里选择**仅允许这一次**、**始终允许此站点**或**拒绝**；选项页保存已允许和已屏蔽的站点以及权限记录。被拦下的命令以退出码 3 结束，agent 运行 `chrome-use confirm <id>` 等你选择。可以在选项页、用 `CHROME_USE_SENSITIVE_SITES=0`，或在 `--action-policy` 文件的 `sites` 段里关闭这些默认规则。组织可以通过 Chrome 企业策略（`chrome.storage.managed`）锁定允许和屏蔽的域名、操作策略和停用的 agent。检查在 CLI 里完成，页面看不到任何新东西。详见[权限与安全](https://chrome-use.leeguoo.com/permissions.html)。
 
 ## 文档里还有
 

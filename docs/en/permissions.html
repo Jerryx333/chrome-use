@@ -69,13 +69,14 @@
       <p class="du-lede">Agents act in your signed-in Chrome, so they can do anything you can. chrome-use checks every action against the <strong>site</strong> it lands on: sensitive sites and risky actions stop and wait for you. The check runs in the CLI and leaves nothing a page can see.</p>
 
       <h2 id="what-asks">When chrome-use asks first</h2>
-      <p>While it drives your own Chrome through the extension, these wait for your decision by default:</p>
+      <p>While it drives your own Chrome through the extension, the first three wait for your decision by default; the last three are off until you turn them on:</p>
       <table>
         <tr><th>Case</th><th>Default</th><th>How it is detected</th></tr>
         <tr><td>Sensitive sites: banking, brokerage, crypto exchanges, government ID</td><td>Every action there (opening, clicking, typing, uploading, downloading) asks until you choose "Always allow on this site"</td><td>A maintained list in the repo, <a href="https://github.com/leeguooooo/chrome-use/blob/main/cli/src/native/sensitive_sites.json"><code>cli/src/native/sensitive_sites.json</code></a>. A domain covers its subdomains</td></tr>
-        <tr><td>Downloads</td><td>Ask every time</td><td><code>download</code>, <code>download url</code></td></tr>
-        <tr><td>Typing into a password or payment field</td><td>Ask every time, even on allowed sites</td><td>The same rules that mask sensitive values: <code>type=password</code>, <code>autocomplete</code> <code>cc-*</code> / <code>*-password</code> / <code>one-time-code</code>, names or ids with card, cvv, password and so on, accessible names such as "Password" or "Card number"; <code>fill --from-env</code> always counts</td></tr>
-        <tr><td>Purchases</td><td>Ask every time, even on allowed sites</td><td>The clicked control is named like a purchase button: Buy now, Place order, Pay, Complete purchase, 立即购买, 提交订单, 購入する and similar</td></tr>
+        <tr><td>Typing into a payment card field (<code>payment_input</code>)</td><td>Ask every time, even on allowed sites</td><td><code>autocomplete</code> <code>cc-*</code>, names or ids with card number, cvv, cvc, expiry and so on, accessible names such as "Card number" or "Security code". <code>fill --from-env</code> is judged by its target field and does not count by itself</td></tr>
+        <tr><td>Purchases (<code>purchase</code>)</td><td>Ask every time, even on allowed sites</td><td>The clicked control is named like a purchase button: Buy now, Place order, Pay, Complete purchase, 立即购买, 提交订单, 購入する and similar</td></tr>
+        <tr><td>Typing into a password or one-time-code field (<code>password_input</code>)</td><td>Off by default, because agents sign in on their own (<code>auth login</code>, <code>fill --from-env</code>, Bitwarden fills). Turn it on on the options page or in a policy's <code>ask</code></td><td><code>type=password</code>, <code>autocomplete</code> <code>*-password</code> / <code>one-time-code</code>, names or accessible names with password, passcode, verification code and so on</td></tr>
+        <tr><td>Downloads (<code>download</code>)</td><td>Off by default, because download automations run unattended. Turn it on on the options page or in a policy's <code>ask</code></td><td><code>download</code>, <code>download url</code></td></tr>
         <tr><td>First action on a new site</td><td>Off by default; turn it on per category on the options page</td><td>A site with no "always allow" or block decision</td></tr>
       </table>
       <p>The detection is heuristic. Typing without a ref or selector (focus, then <code>keyboard type</code>) or a pay button with an unusual name can slip through. It is a gate for a person to look, not a sandbox.</p>
@@ -106,7 +107,7 @@ Confirmation required:
       <h2 id="history">Approved sites and permission history</h2>
       <p>The "Permissions &amp; safety" card on the extension's options page lets you:</p>
       <ul>
-        <li>turn the sensitive-site list on or off, and pick which actions always ask (downloads, password and payment fields, purchases) and which categories ask the first time on a new site;</li>
+        <li>turn the sensitive-site list on or off, and pick which actions always ask (payment card fields and purchases, plus password fields and downloads, which are off by default) and which categories ask the first time on a new site;</li>
         <li>see, add and remove approved and blocked sites (an agent may not act on a blocked site at all);</li>
         <li>read the last 200 permission events: each choice, requests the agent withdrew, and list changes.</li>
       </ul>
@@ -130,7 +131,7 @@ Confirmation required:
     &quot;confirm&quot;: [&quot;payroll.example.com&quot;],
     &quot;sensitiveSites&quot;: true,
     &quot;firstVisit&quot;: [&quot;navigation&quot;, &quot;upload&quot;],
-    &quot;ask&quot;: [&quot;download&quot;, &quot;sensitive_input&quot;, &quot;purchase&quot;]
+    &quot;ask&quot;: [&quot;payment_input&quot;, &quot;purchase&quot;, &quot;download&quot;]
   }
 }</code></pre>
       </div>
@@ -163,7 +164,7 @@ Confirmation required:
         &quot;blockedDomains&quot;: [&quot;mail.example.com&quot;],
         &quot;confirmDomains&quot;: [&quot;payroll.example.com&quot;],
         &quot;sensitiveSites&quot;: true,
-        &quot;ask&quot;: [&quot;download&quot;, &quot;sensitive_input&quot;, &quot;purchase&quot;],
+        &quot;ask&quot;: [&quot;payment_input&quot;, &quot;purchase&quot;, &quot;download&quot;],
         &quot;actionPolicy&quot;: { &quot;deny&quot;: [&quot;upload&quot;, &quot;eval&quot;], &quot;confirm&quot;: [&quot;download_url&quot;] },
         &quot;disabledAgents&quot;: [&quot;opencode&quot;]
       }

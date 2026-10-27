@@ -69,13 +69,14 @@
       <p class="du-lede">agent 用的是你已登录的 Chrome，所以它能做的事和你一样多。chrome-use 在每个操作前按<strong>站点</strong>检查一次：敏感站点和高风险操作会先停下来等你决定。检查发生在 CLI 里，页面看不到任何痕迹。</p>
 
       <h2 id="what-asks">什么时候会先问你</h2>
-      <p>通过扩展驱动你自己的 Chrome 时，下面这些默认会停下来等你确认：</p>
+      <p>通过扩展驱动你自己的 Chrome 时，前三行默认会停下来等你确认，后三行默认关闭、可按需打开：</p>
       <table>
         <tr><th>情况</th><th>默认</th><th>判断方式</th></tr>
         <tr><td>敏感站点：银行、券商、加密货币交易所、政府证件站点</td><td>该站点上的每个操作（打开、点击、输入、上传、下载）都先问，直到你选“始终允许此站点”</td><td>仓库里维护的列表 <a href="https://github.com/leeguooooo/chrome-use/blob/main/cli/src/native/sensitive_sites.json"><code>cli/src/native/sensitive_sites.json</code></a>，一个域名包含它的子域名</td></tr>
-        <tr><td>下载</td><td>每次都问</td><td><code>download</code>、<code>download url</code></td></tr>
-        <tr><td>在密码或支付字段里输入</td><td>每次都问，已允许的站点也问</td><td>和遮蔽敏感值用的是同一套规则：<code>type=password</code>、<code>autocomplete</code> 的 <code>cc-*</code> / <code>*-password</code> / <code>one-time-code</code>，名字或 id 里有 card、cvv、password 等，无障碍名里有“密码”“卡号”等；<code>fill --from-env</code> 一律算</td></tr>
-        <tr><td>购买</td><td>每次都问，已允许的站点也问</td><td>点击的元素名称像购买按钮：Buy now、Place order、Pay、Complete purchase、立即购买、提交订单、去支付、購入する等</td></tr>
+        <tr><td>在支付卡字段里输入（<code>payment_input</code>）</td><td>每次都问，已允许的站点也问</td><td><code>autocomplete</code> 为 <code>cc-*</code>，名字或 id 里有 card number、cvv、cvc、expiry 等，无障碍名里有“卡号”“安全码”“有效期”等。<code>fill --from-env</code> 按目标字段判断，本身不算</td></tr>
+        <tr><td>购买（<code>purchase</code>）</td><td>每次都问，已允许的站点也问</td><td>点击的元素名称像购买按钮：Buy now、Place order、Pay、Complete purchase、立即购买、提交订单、去支付、購入する等</td></tr>
+        <tr><td>在密码或一次性验证码字段里输入（<code>password_input</code>）</td><td>默认关闭：agent 经常自己登录（<code>auth login</code>、<code>fill --from-env</code>、Bitwarden 填充）。可在选项页或策略的 <code>ask</code> 里打开</td><td><code>type=password</code>、<code>autocomplete</code> 为 <code>*-password</code> / <code>one-time-code</code>，名字或无障碍名里有 password、“密码”“验证码”等</td></tr>
+        <tr><td>下载（<code>download</code>）</td><td>默认关闭：常有无人值守的下载任务。可在选项页或策略的 <code>ask</code> 里打开</td><td><code>download</code>、<code>download url</code></td></tr>
         <tr><td>第一次在新站点上操作</td><td>默认关闭，可在选项页按类别打开</td><td>没有“始终允许”或屏蔽记录的站点</td></tr>
       </table>
       <p>这些判断是启发式的：没走 ref 或选择器的输入（例如先聚焦再 <code>keyboard type</code>）、名称不像购买的支付按钮，可能不会被识别。它是一道让人看一眼的闸，不是沙箱。</p>
@@ -106,7 +107,7 @@ Confirmation required:
       <h2 id="history">已允许站点与权限记录</h2>
       <p>扩展选项页的“权限与安全”卡片里可以：</p>
       <ul>
-        <li>开关敏感站点列表，勾选“每次都问”的操作（下载、密码和支付字段、购买）和“第一次在新站点上问”的类别；</li>
+        <li>开关敏感站点列表，勾选“每次都问”的操作（支付卡字段、购买，以及默认关闭的密码字段和下载）和“第一次在新站点上问”的类别；</li>
         <li>查看、添加、移除已允许和已屏蔽的站点（屏蔽的站点上 agent 不能做任何操作）；</li>
         <li>查看最近 200 条权限记录：每次选择、谁撤回了请求、列表改动。</li>
       </ul>
@@ -130,7 +131,7 @@ Confirmation required:
     &quot;confirm&quot;: [&quot;payroll.example.com&quot;],
     &quot;sensitiveSites&quot;: true,
     &quot;firstVisit&quot;: [&quot;navigation&quot;, &quot;upload&quot;],
-    &quot;ask&quot;: [&quot;download&quot;, &quot;sensitive_input&quot;, &quot;purchase&quot;]
+    &quot;ask&quot;: [&quot;payment_input&quot;, &quot;purchase&quot;, &quot;download&quot;]
   }
 }</code></pre>
       </div>
@@ -163,7 +164,7 @@ Confirmation required:
         &quot;blockedDomains&quot;: [&quot;mail.example.com&quot;],
         &quot;confirmDomains&quot;: [&quot;payroll.example.com&quot;],
         &quot;sensitiveSites&quot;: true,
-        &quot;ask&quot;: [&quot;download&quot;, &quot;sensitive_input&quot;, &quot;purchase&quot;],
+        &quot;ask&quot;: [&quot;payment_input&quot;, &quot;purchase&quot;, &quot;download&quot;],
         &quot;actionPolicy&quot;: { &quot;deny&quot;: [&quot;upload&quot;, &quot;eval&quot;], &quot;confirm&quot;: [&quot;download_url&quot;] },
         &quot;disabledAgents&quot;: [&quot;opencode&quot;]
       }

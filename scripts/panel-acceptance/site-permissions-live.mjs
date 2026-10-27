@@ -8,8 +8,9 @@
 //      the request waits in the extension (storage.session);
 //   2. the user allows it once from the options page; `confirm <id>` runs the
 //      click (the page shows its effect);
-//   3. typing into a password field asks by default (sensitive_input); the
-//      agent withdraws it with `deny <id>` and the history says so;
+//   3. typing into a password field does not ask by default (agents sign
+//      in on their own); typing into a card field does (payment_input), and
+//      the agent withdraws it with `deny <id>` and the history says so;
 //   4. a click the user declines is not run by `confirm`;
 //   5. "Always allow on this site" lets the next click through with no
 //      question; a blocked site refuses outright;
@@ -89,13 +90,18 @@ try {
   check(pageText('#done') === 'Acted on B', `click effect: ${pageText('#done')}`);
   check((await allowList()).length === 0, 'allow once remembers nothing');
 
-  // 3. Password field asks by default; the agent withdraws.
+  // 3. A password fill runs by default; a payment field asks, and the agent
+  //    withdraws it.
   await store({});
   await sleep(2500);
   ok(cu(['open', `${rig.site}/login`]), 'open /login');
-  const pw = cu(['fill', '#password', 'not-a-real-password']);
-  step('password fill', { code: pw.code, data: pw.json?.data });
-  check(pw.code === 3 && pw.json?.data?.reason === 'sensitive_input', 'password field asks');
+  const login = cu(['fill', '#password', 'not-a-real-password']);
+  step('password fill', { code: login.code, data: login.json?.data });
+  check(login.code === 0 && login.json?.data?.confirmation_required !== true, `a password fill does not ask by default: ${login.stdout}`);
+  ok(cu(['open', `${rig.site}/pay`]), 'open /pay');
+  const pw = cu(['fill', '#cc', '4242424242424242']);
+  step('card fill', { code: pw.code, data: pw.json?.data });
+  check(pw.code === 3 && pw.json?.data?.reason === 'payment_input', 'a payment field asks by default');
   const withdrawn = cu(['deny', pw.json.data.confirmation_id]);
   check(withdrawn.code === 0 && withdrawn.json?.data?.denied === true, 'deny withdraws');
   check((await history()).some(h => h.decision === 'withdrawn'), 'history records the withdrawal');

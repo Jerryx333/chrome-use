@@ -16,8 +16,12 @@
 export const SITE_PERMISSIONS_KEY = 'ab_site_permissions';
 export const SITE_REQUESTS_KEY = 'ab_site_requests';
 export const CATEGORIES = Object.freeze(['navigation', 'click', 'typing', 'upload', 'download']);
-export const KINDS = Object.freeze(['download', 'sensitive_input', 'purchase']);
-export const DEFAULT_SETTINGS = Object.freeze({ sensitiveSites: true, ask: [...KINDS], firstVisit: [] });
+export const KINDS = Object.freeze(['payment_input', 'purchase', 'password_input', 'download']);
+// Payment fields and purchases ask by default. Password / one-time-code
+// fields and downloads are opt-in: agents sign in (`auth login`,
+// `fill --from-env`) and run download automations unattended.
+export const DEFAULT_ASK = Object.freeze(['payment_input', 'purchase']);
+export const DEFAULT_SETTINGS = Object.freeze({ sensitiveSites: true, ask: [...DEFAULT_ASK], firstVisit: [] });
 export const HISTORY_LIMIT = 200;
 export const DECISIONS = Object.freeze(['once', 'always', 'decline']);
 /** An unanswered request is dropped after this long; an answered one sooner. */

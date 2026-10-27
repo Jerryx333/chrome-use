@@ -25571,17 +25571,18 @@ async fn site_policy_layers(
     (on_relay, extension)
 }
 
-/// `download`, `sensitive_input` or `purchase` for the actions that always
-/// deserve a look. Reads only what the daemon already holds (the ref map, the
-/// command) plus, for a typed-into ref, `DOM.describeNode` (a CDP read that
-/// runs nothing in the page).
+/// `download`, `payment_input`, `password_input` or `purchase` for the
+/// actions that may deserve a look. Reads only what the daemon already holds
+/// (the ref map, the command) plus, for a typed-into ref, `DOM.describeNode`
+/// (a CDP read that runs nothing in the page). `fill --from-env` is judged by
+/// its target field like any other fill: a secret is not a payment by itself.
 async fn site_gate_kind(
     action: &str,
     category: &str,
     cmd: &Value,
     state: &DaemonState,
 ) -> Option<&'static str> {
-    use super::site_policy::is_purchase_name;
+    use super::site_policy::{field_kind_from_attributes, field_kind_from_text, is_purchase_name};
     if category == "download" {
         return Some("download");
     }
@@ -25590,42 +25591,72 @@ async fn site_gate_kind(
     match category {
         "typing" => {
             if action == "form_fill" {
+                // The field names a form-fill map writes to; payment wins.
                 let fields = cmd.get("map").map(|m| m.to_string()).unwrap_or_default();
-                return super::sensitive::sensitive_reference(&fields).then_some("sensitive_input");
+                return field_kind_from_text(&fields);
             }
-            // `fill --from-env`: the value is a secret by declaration.
-            if cmd.get("secret").and_then(|v| v.as_bool()) == Some(true) {
-                return Some("sensitive_input");
+            let by_selector = field_kind_from_text(selector);
+            if by_selector == Some("payment_input") {
+                return by_selector;
             }
-            if super::sensitive::sensitive_reference(selector) {
-                return Some("sensitive_input");
+            let by_name = entry.as_ref().and_then(|e| field_kind_from_text(&e.name));
+            if by_name == Some("payment_input") {
+                return by_name;
             }
-            let entry = entry?;
-            if super::sensitive::sensitive_by_name(&entry.name) {
-                return Some("sensitive_input");
+            // The field's attributes, read over CDP: by the ref's node, or a
+            // CSS selector resolved in the top document. Nothing runs in the
+            // page.
+            let by_dom = async {
+                let mgr = state.browser.as_ref()?;
+                let session = mgr.active_session_id().ok()?.to_string();
+                let target = match entry.as_ref() {
+                    Some(e) => json!({ "backendNodeId": e.backend_node_id? }),
+                    None if !selector.is_empty() && !selector.starts_with('@') => {
+                        let doc = mgr
+                            .client
+                            .send_command(
+                                "DOM.getDocument",
+                                Some(json!({ "depth": 0 })),
+                                Some(&session),
+                            )
+                            .await
+                            .ok()?;
+                        let root = doc.pointer("/root/nodeId")?.as_i64()?;
+                        let found = mgr
+                            .client
+                            .send_command(
+                                "DOM.querySelector",
+                                Some(json!({ "nodeId": root, "selector": selector })),
+                                Some(&session),
+                            )
+                            .await
+                            .ok()?;
+                        let node = found.get("nodeId")?.as_i64().filter(|n| *n > 0)?;
+                        json!({ "nodeId": node })
+                    }
+                    None => return None,
+                };
+                let described = mgr
+                    .client
+                    .send_command("DOM.describeNode", Some(target), Some(&session))
+                    .await
+                    .ok()?;
+                let attrs: Vec<String> = described
+                    .pointer("/node/attributes")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|s| s.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                field_kind_from_attributes(&attrs)
             }
-            let backend = entry.backend_node_id?;
-            let mgr = state.browser.as_ref()?;
-            let session = mgr.active_session_id().ok()?.to_string();
-            let described = mgr
-                .client
-                .send_command(
-                    "DOM.describeNode",
-                    Some(json!({ "backendNodeId": backend })),
-                    Some(&session),
-                )
-                .await
-                .ok()?;
-            let attrs: Vec<String> = described
-                .pointer("/node/attributes")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|s| s.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-            super::sensitive::sensitive_by_attributes(&attrs).then_some("sensitive_input")
+            .await;
+            match by_dom {
+                Some("payment_input") => Some("payment_input"),
+                other => other.or(by_name).or(by_selector),
+            }
         }
         "click" => {
             let name = match entry {

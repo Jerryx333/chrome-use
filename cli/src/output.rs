@@ -5000,9 +5000,10 @@ Usage:
   chrome-use deny <confirmation-id>
 
 When --confirm-actions or --action-policy asks for it, or a per-site
-permission does (sensitive sites, downloads, password and payment fields,
-purchases; see "Permissions & safety" in the docs), the action returns a
-confirmation_required response with a confirmation ID instead of running.
+permission does (sensitive sites, payment card fields and purchases by
+default; password fields and downloads when turned on; see "Permissions &
+safety" in the docs), the action returns a confirmation_required response
+with a confirmation ID instead of running.
 Use confirm/deny to approve or reject it.
 
 When the response says `approval: user`, the request is waiting in the

@@ -8,7 +8,7 @@ import { i18nReady, t } from './i18n.js';
 import { mountSiteApprovals } from './site-approvals-view.js';
 import { CATEGORIES, KINDS, SITE_PERMISSIONS_KEY, effectiveSettings, lockedSettings, managedPolicy, normalizeStore } from './site-permissions.js';
 
-const KIND_KEYS = { download: 'options_perm_kind_download', sensitive_input: 'options_perm_kind_sensitive_input', purchase: 'options_perm_kind_purchase' };
+const KIND_KEYS = { download: 'options_perm_kind_download', payment_input: 'options_perm_kind_payment_input', password_input: 'options_perm_kind_password_input', purchase: 'options_perm_kind_purchase' };
 const CATEGORY_KEYS = { navigation: 'options_perm_cat_navigation', click: 'options_perm_cat_click', typing: 'options_perm_cat_typing', upload: 'options_perm_cat_upload', download: 'options_perm_cat_download' };
 const DECISION_KEYS = { once: 'options_perm_decision_once', always: 'options_perm_decision_always', decline: 'options_perm_decision_decline', withdrawn: 'options_perm_decision_withdrawn' };
 

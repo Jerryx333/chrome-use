@@ -4,8 +4,11 @@
 //! `--action-policy` and `--confirm-actions` decide by action name alone. This
 //! module adds *where*: an action is classified into a category (navigation,
 //! click, typing, upload, download) and, for a few cases that always deserve a
-//! person's look, a kind (`download`, `sensitive_input` for password and
-//! payment fields, `purchase` for buy / pay / place-order buttons). The site is
+//! person's look, a kind: `payment_input` (card number, CVV, expiry),
+//! `purchase` (buy / pay / place-order buttons), `password_input` (password
+//! and one-time-code fields) and `download`. Only the first two ask by
+//! default: agents routinely sign in (`auth login`, `fill --from-env`) and
+//! run download automations unattended, so the other two are opt-in. The site is
 //! the host the action lands on: the URL argument for a navigation, else the
 //! page the session drives (the daemon's tracked URL, never a page read).
 //!
@@ -34,8 +37,128 @@ use std::sync::OnceLock;
 /// The maintained list of sites that ask first by default.
 const SENSITIVE_SITES_JSON: &str = include_str!("sensitive_sites.json");
 
-/// Kinds that ask every time by default (on the relay).
-pub const DEFAULT_ASK: &[&str] = &["download", "sensitive_input", "purchase"];
+/// Kinds that ask every time by default (on the relay). `password_input` and
+/// `download` are opt-in.
+pub const DEFAULT_ASK: &[&str] = &["payment_input", "purchase"];
+
+/// Lowercased `name` / `id` fragments of a payment field.
+const PAYMENT_IDENTIFIERS: &[&str] = &[
+    "cardnumber",
+    "card-number",
+    "card_number",
+    "ccnumber",
+    "cc-number",
+    "cc_number",
+    "cvc",
+    "cvv",
+    "csc",
+    "securitycode",
+    "security-code",
+    "security_code",
+    "exp-date",
+    "expdate",
+    "expiry",
+    "expiration",
+    "cc-exp",
+    "cc_exp",
+];
+/// Lowercased accessible-name fragments of a payment field.
+const PAYMENT_NAMES: &[&str] = &[
+    "card number",
+    "credit card",
+    "debit card",
+    "security code",
+    "cvc",
+    "cvv",
+    "csc",
+    "expiration",
+    "expiry",
+    "卡号",
+    "信用卡",
+    "安全码",
+    "有效期",
+];
+/// Lowercased `name` / `id` fragments of a password or one-time-code field.
+const PASSWORD_IDENTIFIERS: &[&str] = &["password", "passwd", "passcode", "otp", "one-time-code"];
+/// Lowercased accessible-name fragments of a password or one-time-code field.
+const PASSWORD_NAMES: &[&str] = &[
+    "password",
+    "passcode",
+    "one-time code",
+    "one time code",
+    "verification code",
+    "密码",
+    "验证码",
+    "口令",
+];
+
+fn has_word(haystack: &str, word: &str) -> bool {
+    haystack
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|w| w == word)
+}
+
+/// `payment_input` or `password_input` for a selector, label or accessible
+/// name, judged by its words. Payment wins when both match.
+pub fn field_kind_from_text(text: &str) -> Option<&'static str> {
+    let t = text.to_lowercase();
+    if t.trim().is_empty() {
+        return None;
+    }
+    if PAYMENT_IDENTIFIERS
+        .iter()
+        .chain(PAYMENT_NAMES)
+        .any(|p| t.contains(p))
+    {
+        return Some("payment_input");
+    }
+    if t.contains("type=password")
+        || t.contains("type=\"password\"")
+        || PASSWORD_IDENTIFIERS
+            .iter()
+            .chain(PASSWORD_NAMES)
+            .any(|p| t.contains(p))
+        || has_word(&t, "pin")
+    {
+        return Some("password_input");
+    }
+    None
+}
+
+/// `payment_input` or `password_input` from a field's DOM attributes (a flat
+/// `[name, value, ...]` list, as CDP `DOM.describeNode` returns them).
+pub fn field_kind_from_attributes(attrs: &[String]) -> Option<&'static str> {
+    let mut password = false;
+    for pair in attrs.chunks(2) {
+        let [key, value] = pair else { continue };
+        let value = value.to_lowercase();
+        match key.as_str() {
+            "autocomplete" => {
+                for token in value.split_whitespace() {
+                    if token.starts_with("cc-") {
+                        return Some("payment_input");
+                    }
+                    if matches!(token, "current-password" | "new-password" | "one-time-code") {
+                        password = true;
+                    }
+                }
+            }
+            "type" if value == "password" => password = true,
+            "name"
+            | "id"
+            | "data-elements-stable-field-name"
+            | "aria-label"
+            | "placeholder"
+            | "title" => match field_kind_from_text(&value) {
+                Some("payment_input") => return Some("payment_input"),
+                Some(_) => password = true,
+                None => {}
+            },
+            _ => {}
+        }
+    }
+    password.then_some("password_input")
+}
 
 /// The category of a daemon action, or `None` for actions that only read
 /// (snapshot, get, screenshot ...), manage the session, or are not tied to a
@@ -357,8 +480,8 @@ impl SitePolicy {
             && !self.defaults
     }
 
-    /// Decide one action on `host`. `kind` is `download`, `sensitive_input`
-    /// or `purchase` when the action is one of those.
+    /// Decide one action on `host`. `kind` is `download`, `payment_input`,
+    /// `password_input` or `purchase` when the action is one of those.
     pub fn decide(&self, host: &str, category: &str, kind: Option<&str>) -> SiteGate {
         let m = &self.managed;
         if any_match(&m.blocked_domains, host) {
@@ -388,14 +511,16 @@ impl SitePolicy {
             if self.ask().iter().any(|k| k == kind) {
                 let what = match kind {
                     "download" => "download a file",
-                    "sensitive_input" => "type into a password or payment field",
+                    "payment_input" => "type into a payment card field",
+                    "password_input" => "type into a password or one-time-code field",
                     "purchase" => "press what looks like a purchase button",
                     _ => "act",
                 };
                 return SiteGate::Ask {
                     reason: match kind {
                         "download" => "download",
-                        "sensitive_input" => "sensitive_input",
+                        "payment_input" => "payment_input",
+                        "password_input" => "password_input",
                         _ => "purchase",
                     },
                     detail: format!("chrome-use wants to {what} on {host}"),
@@ -557,17 +682,19 @@ mod tests {
             }
         ));
         assert_eq!(p.decide("example.com", "click", None), SiteGate::Allow);
-        assert!(matches!(
+        // Agents sign in and download unattended: both are opt-in.
+        assert_eq!(
             p.decide("example.com", "download", Some("download")),
-            SiteGate::Ask {
-                reason: "download",
-                ..
-            }
-        ));
+            SiteGate::Allow
+        );
+        assert_eq!(
+            p.decide("example.com", "typing", Some("password_input")),
+            SiteGate::Allow
+        );
         assert!(matches!(
-            p.decide("example.com", "typing", Some("sensitive_input")),
+            p.decide("example.com", "typing", Some("payment_input")),
             SiteGate::Ask {
-                reason: "sensitive_input",
+                reason: "payment_input",
                 ..
             }
         ));
@@ -578,6 +705,60 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn opting_in_to_password_fields_and_downloads() {
+        let mut p = relay();
+        p.user.ask = Some(vec!["password_input".into(), "download".into()]);
+        assert!(matches!(
+            p.decide("a.test", "typing", Some("password_input")),
+            SiteGate::Ask {
+                reason: "password_input",
+                ..
+            }
+        ));
+        assert!(matches!(
+            p.decide("a.test", "download", Some("download")),
+            SiteGate::Ask {
+                reason: "download",
+                ..
+            }
+        ));
+        assert_eq!(
+            p.decide("a.test", "typing", Some("payment_input")),
+            SiteGate::Allow
+        );
+    }
+
+    #[test]
+    fn fields_are_told_apart_payment_first() {
+        let attrs = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            field_kind_from_attributes(&attrs(&["type", "password", "name", "pw"])),
+            Some("password_input")
+        );
+        assert_eq!(
+            field_kind_from_attributes(&attrs(&["autocomplete", "one-time-code"])),
+            Some("password_input")
+        );
+        assert_eq!(
+            field_kind_from_attributes(&attrs(&["autocomplete", "billing cc-number"])),
+            Some("payment_input")
+        );
+        assert_eq!(
+            field_kind_from_attributes(&attrs(&["type", "password", "name", "cvv"])),
+            Some("payment_input")
+        );
+        assert_eq!(
+            field_kind_from_attributes(&attrs(&["type", "text", "name", "email"])),
+            None
+        );
+        assert_eq!(field_kind_from_text("Card number"), Some("payment_input"));
+        assert_eq!(field_kind_from_text("#password"), Some("password_input"));
+        assert_eq!(field_kind_from_text("PIN"), Some("password_input"));
+        assert_eq!(field_kind_from_text("Spinner"), None);
+        assert_eq!(field_kind_from_text("Search"), None);
     }
 
     #[test]
@@ -597,7 +778,7 @@ mod tests {
         p.user.allow = vec!["chase.com".into()];
         assert_eq!(p.decide("secure.chase.com", "click", None), SiteGate::Allow);
         assert!(matches!(
-            p.decide("secure.chase.com", "typing", Some("sensitive_input")),
+            p.decide("secure.chase.com", "typing", Some("payment_input")),
             SiteGate::Ask { .. }
         ));
     }

@@ -9,7 +9,8 @@ import { SITE_REQUESTS_KEY, pruneRequests } from './site-permissions.js';
 const REASON_KEYS = {
   sensitive_site: 'panel_site_reason_sensitive_site',
   download: 'panel_site_reason_download',
-  sensitive_input: 'panel_site_reason_sensitive_input',
+  payment_input: 'panel_site_reason_payment_input',
+  password_input: 'panel_site_reason_password_input',
   purchase: 'panel_site_reason_purchase',
   first_visit: 'panel_site_reason_first_visit',
   confirm_site: 'panel_site_reason_confirm_site',

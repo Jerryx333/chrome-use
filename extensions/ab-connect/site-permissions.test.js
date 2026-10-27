@@ -36,8 +36,9 @@ test('the managed policy keeps only well-formed values and locks what it sets', 
   assert.deepEqual(updateSettings({}, { firstVisit: ['click'] }, m).settings, { firstVisit: ['click'] });
 });
 
-test('defaults: sensitive list on, always ask on downloads, sensitive fields and purchases, no first-visit gate', () => {
-  assert.deepEqual(effectiveSettings({}, {}), { sensitiveSites: true, ask: ['download', 'sensitive_input', 'purchase'], firstVisit: [] });
+test('defaults: sensitive list on, payment fields and purchases ask; password fields, downloads and first visits are opt-in', () => {
+  assert.deepEqual(effectiveSettings({}, {}), { sensitiveSites: true, ask: ['payment_input', 'purchase'], firstVisit: [] });
+  assert.deepEqual(normalizeStore({ settings: { ask: ['password_input', 'download', 'sensitive_input'] } }).settings.ask, ['password_input', 'download']);
 });
 
 test('the policy reply carries only what the person set, so the CLI can apply its own defaults', () => {

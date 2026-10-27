@@ -537,7 +537,7 @@ fn core_tools() -> Vec<Value> {
         }),
         json!({
             "name": TOOL_CONFIRM,
-            "description": "Answer an action the CLI held with confirmation_required (a sensitive site, a download, a password or payment field, a purchase, or a policy rule). Tell the user what you were about to do and where first. With approval: user, only the user can allow it in the chrome-use extension; this call then waits up to 40s for their choice and runs the action if they allowed it. decline: true withdraws the request.",
+            "description": "Answer an action the CLI held with confirmation_required (a sensitive site, a payment card field, a purchase, or a rule the user or their organization set, such as downloads or password fields). Tell the user what you were about to do and where first. With approval: user, only the user can allow it in the chrome-use extension; this call then waits up to 40s for their choice and runs the action if they allowed it. decline: true withdraws the request.",
             "inputSchema": build_schema(obj(&[
                 ("id", json!({ "type": "string", "description": "The confirmation_id from the held action." })),
                 ("decline", json!({ "type": "boolean", "description": "Withdraw the request instead (chrome-use deny)." })),
