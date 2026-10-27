@@ -116,7 +116,7 @@ JSON</code></pre>
       <h2>JS program form</h2>
       <p>
         The second form is a real JavaScript program that drives your already-logged-in Chrome through <code>cu.*</code> helpers.
-        This is ego-lite's "code base" idiom; control flow is just JS's own <code>for</code> / <code>if</code> / <code>break</code>.
+        This is ego(lite)'s "code base" idiom; control flow is just JS's own <code>for</code> / <code>if</code> / <code>break</code>.
         <strong>No <code>await</code></strong>: every <code>cu.*</code> call blocks until the browser returns, so the script is synchronous.
       </p>
       <div class="du-code">
@@ -157,7 +157,7 @@ JS</code></pre>
       </p>
       <p>
         <strong>Pure-Rust engine, every platform.</strong> The JS engine is boa, a pure-Rust implementation compiled into the chrome-use binary itself — no Node, no system V8.
-        macOS / Linux / Windows all run it; ego is macOS-only.
+        macOS / Linux / Windows all run it.
       </p>
       <p>
         <strong>Every op goes through the same front door.</strong> Each step of a script (both forms) re-enters the daemon's <code>execute_command</code>,
@@ -215,7 +215,7 @@ chrome-use script --drop repl      # release one</code></pre>
       </div>
       <p>
         The "≥100 points" decision is one <code>if</code> in the script; the old way carries every story's score back to the model to judge.
-        The more steps and the denser the decisions, the wider the gap. Full landscape and the item-by-item ego-lite measurements are on <a href="/en/compare.html">how chrome-use compares</a>.
+        The more steps and the denser the decisions, the wider the gap. Full landscape and the item-by-item ego(lite) measurements are on <a href="/en/compare.html">how chrome-use compares</a>.
       </p>
 
       <h2>Which layer to use</h2>
@@ -241,7 +241,7 @@ chrome-use script --drop repl      # release one</code></pre>
         </a>
         <a class="du-card" href="/en/compare.html">
           <div class="du-card-title"><span class="du-card-ico">⚖️</span> How chrome-use compares</div>
-          <p>chrome-use script vs ego-lite's code-base idiom, measured item by item.</p>
+          <p>chrome-use script vs ego(lite)'s code-base idiom, measured item by item.</p>
         </a>
         <a class="du-card" href="/en/waiting.html">
           <div class="du-card-title"><span class="du-card-ico">⏳</span> Waiting &amp; Asserting</div>

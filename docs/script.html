@@ -115,7 +115,7 @@ JSON</code></pre>
       <h2>JS 程序形式</h2>
       <p>
         第二种写法是一段真正的 JavaScript，用 <code>cu.*</code> 助手函数直接驱动你已登录的真 Chrome。
-        这是 ego-lite 的 code base 写法，控制流就是 JS 本身的 <code>for</code> / <code>if</code> / <code>break</code>。
+        这是 ego(lite) 的 code base 写法，控制流就是 JS 本身的 <code>for</code> / <code>if</code> / <code>break</code>。
         <strong>不用 <code>await</code></strong>：每个 <code>cu.*</code> 调用会阻塞到浏览器返回，脚本是同步的。
       </p>
       <div class="du-code">
@@ -156,7 +156,7 @@ JS</code></pre>
       </p>
       <p>
         <strong>纯 Rust 引擎，全平台。</strong>JS 引擎是 boa，纯 Rust 实现，编译进 chrome-use 二进制本体，
-        不依赖 Node 也不依赖系统 V8。macOS / Linux / Windows 都能跑；ego 只有 macOS。
+        不依赖 Node 也不依赖系统 V8。macOS / Linux / Windows 都能跑。
       </p>
       <p>
         <strong>每个 op 走同一条正门。</strong>script 的每一步（两种形式都是）重新进入守护进程的
@@ -211,7 +211,7 @@ chrome-use script --drop repl      # 释放一个</code></pre>
       </div>
       <p>
         「≥100 分」这类判断在脚本里用一行 <code>if</code> 解决，旧写法里每条故事都要把分数带回模型判一次。
-        步数越多、判断越密，差距越大。全景对比和 ego-lite 逐项实测见 <a href="/compare.html">对比其他方案</a>。
+        步数越多、判断越密，差距越大。全景对比和 ego(lite) 逐项实测见 <a href="/compare.html">和其他方案对比</a>。
       </p>
 
       <h2>该用哪一层</h2>
@@ -237,7 +237,7 @@ chrome-use script --drop repl      # 释放一个</code></pre>
         </a>
         <a class="du-card" href="/compare.html">
           <div class="du-card-title"><span class="du-card-ico">⚖️</span> 对比其他方案</div>
-          <p>chrome-use script vs ego-lite 的 code base 写法，逐项实测。</p>
+          <p>chrome-use script vs ego(lite) 的 code base 写法，逐项实测。</p>
         </a>
         <a class="du-card" href="/waiting.html">
           <div class="du-card-title"><span class="du-card-ico">⏳</span> 等待与断言</div>
