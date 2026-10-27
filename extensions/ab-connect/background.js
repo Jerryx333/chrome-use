@@ -66,7 +66,7 @@ import {
 } from './reload-loop.js';
 import { targetInfoForTab } from './target-info.js';
 import { isMissingTabError, targetPresence } from './tab-presence.js';
-import { ungroupRestoredAgentGroups } from './restored-groups.js';
+import { isAgentGroupTitle, ungroupRestoredAgentGroups } from './restored-groups.js';
 import {
   announceVerdict,
   createRemovedTabs,
@@ -613,11 +613,26 @@ async function unmarkOwned(tabId) {
   if (ownedTabs.delete(tabId)) persistOwnedTabs();
 }
 
+// A tab in a group chrome-use titled is the agent's even when the owned set no
+// longer says so: an install or update clears it (settleOwnershipAfterInstall),
+// and the tabs a running session still drives would close still grouped.
+// Anything unreadable answers false, so a user's own group is never taken apart.
+async function tabInAgentGroup(tabId) {
+  try {
+    const groupId = (await chrome.tabs.get(tabId))?.groupId;
+    if (!Number.isInteger(groupId) || groupId < 0) return false;
+    return isAgentGroupTitle((await chrome.tabGroups.get(groupId))?.title);
+  } catch {
+    return false;
+  }
+}
+
 // Closing an agent tab ungroups it first so Chrome keeps no saved tab group;
 // a user's own tab (`tab close --force`) keeps its group (see remove-agent-tab.js).
 // Agent pop-ups join their opener's group, so they are ungrouped too.
 const agentTabRemoval = {
   isAgentTab: (tabId) => ownedTabs.has(tabId) || agentPopups.has(tabId),
+  inAgentGroup: (tabId) => tabInAgentGroup(tabId),
   ungroup: (tabId) => chrome.tabs.ungroup(tabId),
   remove: (tabId) => chrome.tabs.remove(tabId),
 };

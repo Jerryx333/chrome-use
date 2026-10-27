@@ -992,6 +992,8 @@ async fn sweep_unrecorded_groups(browser: &Browser, opts: SweepOptions, report: 
                 continue;
             }
             let row = browser.row(tab_id, None);
+            // Out of the group first, so the close leaves no saved group.
+            browser.ungroup(tab_id).await;
             match chrome(&browser.client, "tabs", "remove", json!([tab_id])).await {
                 Ok(_) => report.closed.push(row),
                 Err(e) => report
