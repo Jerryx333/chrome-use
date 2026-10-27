@@ -68,9 +68,9 @@ run_ok "$RUN" -R "$REPO" || { echo "error: release build $RUN failed" >&2; retry
 echo "released https://github.com/$REPO/releases/tag/v$V"
 
 # A release prepared as "(Unreleased)" gets its publication date now, as the repo does by hand.
-if grep -q "v$V</strong>（未发布）" docs/changelog.html || grep -q "v$V</strong> (Unreleased)" docs/en/changelog.html; then
+if grep -q "v$V</strong>（未发布）" docs/changelog.html || grep -qi "v$V</strong> (unreleased)" docs/en/changelog.html; then
   sed -i.bak "s|v$V</strong>（未发布）|v$V</strong>（$(date +%F)）|" docs/changelog.html && rm docs/changelog.html.bak
-  sed -i.bak "s|v$V</strong> (Unreleased)|v$V</strong> ($(LC_ALL=C date '+%B %-d, %Y'))|" docs/en/changelog.html && rm docs/en/changelog.html.bak
+  sed -i.bak -E "s#v$V</strong> \\([Uu]nreleased\\)#v$V</strong> ($(LC_ALL=C date '+%B %-d, %Y'))#" docs/en/changelog.html && rm docs/en/changelog.html.bak
   git commit -qam "docs: record v$V publication date"
 fi
 # main may have moved while the build ran. Merge, never rebase: the tag must stay an ancestor of main.
