@@ -76,7 +76,8 @@ pub fn finder_launch_now() -> bool {
 }
 
 /// install.sh's choice: `AGENT_BROWSER_BIN_DIR`, else `/usr/local/bin` when
-/// writable, else `~/.local/bin`. Returns `(bin dir, bundle path)`.
+/// it and `/usr/local/share/chrome-use` are writable (`usr_local_writable`),
+/// else `~/.local/bin`. Returns `(bin dir, bundle path)`.
 pub fn install_layout(
     bin_dir_env: Option<&Path>,
     usr_local_bin_writable: bool,
@@ -216,11 +217,14 @@ fn setup(extra_install_args: &[String], log: &mut Log) -> Result<Done, String> {
         .to_path_buf();
     let home = dirs::home_dir().ok_or("no home directory")?;
     let bin_env = std::env::var_os("AGENT_BROWSER_BIN_DIR").map(PathBuf::from);
-    let (bin_dir, app) = install_layout(
-        bin_env.as_deref(),
-        dir_writable(Path::new("/usr/local/bin")),
-        &home,
-    );
+    // install.sh uses /usr/local only when its bin is writable AND the
+    // bundle's share directory can be made and written (Homebrew owns
+    // /usr/local/bin on Intel Macs, not always /usr/local/share).
+    let usr_local = bin_env.is_none() && dir_writable(Path::new("/usr/local/bin")) && {
+        let share = Path::new("/usr/local/share/chrome-use");
+        std::fs::create_dir_all(share).is_ok() && dir_writable(share)
+    };
+    let (bin_dir, app) = install_layout(bin_env.as_deref(), usr_local, &home);
     log.line(&format!("from {} to {}", src_app.display(), app.display()));
 
     let same = app.canonicalize().ok().as_deref() == Some(src_app.as_path());
