@@ -33,6 +33,33 @@ async fn exercise(mode: &str, value: Option<&str>) -> (Result<Option<String>, St
                     }
                     // The synthetic mirror advertises getEditors, but only the
                     // real API binding may be used as a callable namespace.
+                    "module" if mode.starts_with("amd") => {
+                        json!({"result":[{"name":"globalDefine","value":{"type":"function","objectId":"define"}}]})
+                    }
+                    "define" => {
+                        json!({"internalProperties":[{"name":"[[Scopes]]","value":{"objectId":"loader-scopes","description":"Scopes[3]"}}]})
+                    }
+                    "loader-scopes" => {
+                        json!({"result":[{"name":"0","value":{"objectId":"loader-closure","description":"Closure"}}]})
+                    }
+                    "loader-closure" => {
+                        // Captured Monaco 0.52 min/vs shape: the binding name
+                        // is minified and the table is outside the preview.
+                        json!({"result":[{"name":"m","value":{"type":"object","objectId":"manager","preview":{"overflow":true,"properties":[
+                            {"name":"_env","type":"object"},
+                            {"name":"_scriptLoader","type":"object"},
+                            {"name":"_loaderAvailableTimestamp","type":"number"},
+                            {"name":"_defineFunc","type":"function"},
+                            {"name":"_requireFunc","type":"function"}
+                        ]}}}]})
+                    }
+                    "manager" => {
+                        json!({"result":[
+                            {"name":"_modules2","value":{"type":"object","subtype":"array"}},
+                            {"name":"_defineFunc","value":{"type":"function"}},
+                            {"name":"_requireFunc","value":{"type":"function"}}
+                        ]})
+                    }
                     "module" => {
                         json!({"result":[{"name":"getEditors","value":{"type":"function"}},{"name":"minified_name","value":{"objectId":"api","preview":{"properties":[{"name":"getEditors","type":"accessor"}]}}}]})
                     }
@@ -42,10 +69,20 @@ async fn exercise(mode: &str, value: Option<&str>) -> (Result<Option<String>, St
                 "Runtime.callFunctionOn" => match p["objectId"].as_str().unwrap() {
                     "element" => json!({"result":{"objectId":"input"}}),
                     "api" => json!({"result":{"objectId":"model"}}),
+                    "manager" => {
+                        assert_eq!(p["arguments"][1]["value"], true);
+                        if mode == "amd-missing" {
+                            json!({"result":{"type":"object","subtype":"null","value":null}})
+                        } else {
+                            json!({"result":{"objectId":"model"}})
+                        }
+                    }
                     "model" => {
                         let script = p["functionDeclaration"].as_str().unwrap();
-                        if script.contains("checkFocus") && mode == "focus-lost" {
+                        if script.contains("checkSelection") && mode == "focus-lost" {
                             json!({"exceptionDetails":{"text":"editor lost focus"}})
+                        } else if script.contains("checkSelection") && mode == "selection-lost" {
+                            json!({"exceptionDetails":{"text":"full model not selected; input refused"}})
                         } else if script.contains("read()") {
                             json!({"result":{"value":if mode=="mismatch" {"different"} else {"expected"}}})
                         } else {
@@ -121,8 +158,8 @@ async fn model_read_and_unavailable_discovery_perform_no_input() {
 }
 
 #[tokio::test]
-async fn focus_loss_refuses_insert_and_mismatch_does_not_retry() {
-    for mode in ["focus-lost", "mismatch"] {
+async fn focus_or_selection_loss_refuses_insert_and_mismatch_does_not_retry() {
+    for mode in ["focus-lost", "selection-lost", "mismatch"] {
         let (result, commands) = exercise(mode, Some("expected")).await;
         assert!(result.is_err());
         let inserts = commands
@@ -132,4 +169,48 @@ async fn focus_loss_refuses_insert_and_mismatch_does_not_retry() {
         assert_eq!(inserts, usize::from(mode == "mismatch"));
         assert_cleanup(&commands);
     }
+}
+
+#[tokio::test]
+async fn amd_loader_discovery_uses_completed_exports_within_existing_budget() {
+    for value in [None, Some("expected")] {
+        let (result, commands) = exercise("amd", value).await;
+        assert_eq!(result.unwrap().as_deref(), Some("expected"));
+        assert!(
+            commands
+                .iter()
+                .filter(|c| c["method"] == "Runtime.getProperties")
+                .count()
+                <= MAX_OBJECTS
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|c| c["method"] == "Input.insertText")
+                .count(),
+            usize::from(value.is_some())
+        );
+        assert_cleanup(&commands);
+    }
+    let (result, commands) = exercise("amd-missing", Some("expected")).await;
+    assert_eq!(result.unwrap(), None);
+    assert!(commands
+        .iter()
+        .all(|c| !c["method"].as_str().unwrap().starts_with("Input.")));
+    assert_cleanup(&commands);
+}
+
+#[test]
+fn amd_manager_requires_data_descriptors_not_getters() {
+    let functions = [
+        json!({"name":"_defineFunc","value":{"type":"function"}}),
+        json!({"name":"_requireFunc","value":{"type":"function"}}),
+    ];
+    let mut descriptors = functions.to_vec();
+    descriptors.push(json!({"name":"_modules2","get":{"type":"function"}}));
+    assert!(!has_amd_modules(&descriptors));
+    descriptors[2] = json!({"name":"_modules2","value":{"subtype":"array"}});
+    assert!(has_amd_modules(&descriptors));
+    descriptors[0] = json!({"name":"_defineFunc","get":{"type":"function"}});
+    assert!(!has_amd_modules(&descriptors));
 }
