@@ -3674,5 +3674,8 @@
   },
   "panel_open_initial_page": { "message": "初始网页" },
   "panel_open_final_page": { "message": "最终网页" },
-  "panel_window_no_initial_page": { "message": "这个会话没有记录初始网页。" }
+  "panel_window_no_initial_page": { "message": "这个会话没有记录初始网页。" },
+  "panel_taint_title": { "message": "这条命令里有来自网页的内容" },
+  "panel_taint_remote_exec": { "message": "这条命令会下载并运行网页指向的代码" },
+  "panel_taint_body": { "message": "下面这些字符串是智能体在网页上读到的，不是你发的消息里的。网页可能埋了给智能体的指令。确认是你要运行的再允许；它没有被自动批准。" }
 }

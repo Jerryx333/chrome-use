@@ -267,6 +267,13 @@ URL: https://example.com/login
         When you don't need a ref and just want to read text, use <code>get text</code>. It can read the whole page, a single element,
         skip navigation boilerplate, and even pierce closed shadow DOM.
       </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">Text a person can't see is left out</div>
+        <code>snapshot</code>, <code>get text</code> and <code>read</code> (active tab) drop text that is off-screen, transparent, clipped,
+        zero-size or the same colour as its background, and say how much they dropped (<code>hiddenText</code>). Pages hide instructions
+        for agents there. Add <code>--include-hidden</code> when you need it. <code>get text --pierce</code> and <code>read &lt;url&gt;</code>
+        have no style information and are not filtered. See <a href="/en/stealth.html#prompt-injection">Prompt injection</a>.
+      </div>
 
       <div class="du-code">
         <div class="du-code-head">

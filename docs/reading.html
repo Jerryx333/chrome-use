@@ -265,6 +265,12 @@ URL: https://example.com/login
         不需要 ref、只想读文字时用 <code>get text</code>。它可以读整页、读单个元素、
         跳过导航样板、甚至穿透 closed shadow DOM。
       </p>
+      <div class="du-callout note">
+        <div class="du-callout-title">人看不见的文字默认不输出</div>
+        <code>snapshot</code>、<code>get text</code>、<code>read</code>（当前标签页）会去掉移出屏幕、透明、裁剪、零尺寸或和背景同色的文字，
+        并注明去掉了多少（<code>hiddenText</code>）。网页常把写给 agent 的指令藏在这里。需要时加 <code>--include-hidden</code>。
+        <code>get text --pierce</code> 和 <code>read &lt;url&gt;</code> 没有样式信息，不做这层过滤。见<a href="/stealth.html#prompt-injection">提示注入防护</a>。
+      </div>
 
       <div class="du-code">
         <div class="du-code-head">

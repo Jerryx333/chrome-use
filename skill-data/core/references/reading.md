@@ -15,7 +15,10 @@ chrome-use snapshot -i --dom           # list actionable elements from a DOM wal
                                           # when the AX tree yields no refs at all
 chrome-use snapshot -i --json          # machine-readable output
 chrome-use snapshot -i --reveal-values # print card / password / code values
+chrome-use snapshot --include-hidden   # keep text a person can't see (off by default)
 ```
+
+Text a person can't see (off-screen, transparent, clipped, zero-size, same colour as its background) is left out of `snapshot`, `get text` and `read` by default, and a note says how much. Hidden controls stay, marked `hidden`, so their refs work. See [trust-boundaries.md](trust-boundaries.md).
 
 Valid incremental snapshots return JSON `refs` only for nodes in the delta. A no-change delta has empty `refs`; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.
 
