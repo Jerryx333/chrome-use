@@ -79,8 +79,10 @@ async fn exercise(mode: &str, value: Option<&str>) -> (Result<Option<String>, St
                     }
                     "model" => {
                         let script = p["functionDeclaration"].as_str().unwrap();
-                        if script.contains("checkFocus") && mode == "focus-lost" {
+                        if script.contains("checkSelection") && mode == "focus-lost" {
                             json!({"exceptionDetails":{"text":"editor lost focus"}})
+                        } else if script.contains("checkSelection") && mode == "selection-lost" {
+                            json!({"exceptionDetails":{"text":"full model not selected; input refused"}})
                         } else if script.contains("read()") {
                             json!({"result":{"value":if mode=="mismatch" {"different"} else {"expected"}}})
                         } else {
@@ -156,8 +158,8 @@ async fn model_read_and_unavailable_discovery_perform_no_input() {
 }
 
 #[tokio::test]
-async fn focus_loss_refuses_insert_and_mismatch_does_not_retry() {
-    for mode in ["focus-lost", "mismatch"] {
+async fn focus_or_selection_loss_refuses_insert_and_mismatch_does_not_retry() {
+    for mode in ["focus-lost", "selection-lost", "mismatch"] {
         let (result, commands) = exercise(mode, Some("expected")).await;
         assert!(result.is_err());
         let inserts = commands

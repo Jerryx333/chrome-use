@@ -50,9 +50,26 @@ function (input, amd = false) {
         }
         return true;
     };
+    const checkSelection = () => {
+        checkFocus();
+        // A focused DOM input does not prove that the browser delivered the
+        // select-all chord. Refuse before inserting into a partial selection.
+        if (typeof editor.getSelection !== 'function' || typeof model.getFullModelRange !== 'function') {
+            throw Error('Monaco cannot verify native selection; input refused');
+        }
+        const selection = editor.getSelection();
+        const range = model.getFullModelRange();
+        const fields = ['startLineNumber', 'startColumn', 'endLineNumber', 'endColumn'];
+        if (!selection || !range || fields.some(key =>
+            !Number.isInteger(range[key]) || range[key] < 1 || selection[key] !== range[key])) {
+            throw Error('Monaco select-all did not select the full model; input refused');
+        }
+        return true;
+    };
     return {
         focus() { check(); input.focus(); return checkFocus(); },
         checkFocus,
+        checkSelection,
         read() { check(); return model.getValue(); },
     };
 }

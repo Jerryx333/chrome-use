@@ -127,7 +127,8 @@ rich editors (DraftJS/Monaco/CodeMirror) fill those fields with `fill` instead â
 it handles them and verifies the exact editor-model readback before reporting
 success. A hidden Monaco API matched to the exact editor, including completed
 Monaco 0.52 AMD exports retained by its loader, uses native input and direct
-model readback without the clipboard. If discovery finds no usable API before
+model readback without the clipboard. Insertion requires a verified full-model
+selection. If discovery finds no usable API before
 input, the fallback uses trusted paste and editor-generated copy readback,
 with verified clipboard restoration; concurrent clipboard use is not atomic.
 A discovered model's failure does not retry through the clipboard. `form fill`

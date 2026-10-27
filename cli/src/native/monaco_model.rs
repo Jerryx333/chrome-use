@@ -277,7 +277,7 @@ async fn operate(
         )
         .await?;
         // Use the existing per-process cadence between selection and insertion,
-        // then recheck focus/model identity after the gap before sending input.
+        // then verify focus, model identity and the full selection before insertion.
         let gap = super::humanize::keystroke_delays(
             1,
             super::humanize::active_level(),
@@ -286,7 +286,7 @@ async fn operate(
         if !gap.is_zero() {
             tokio::time::sleep(gap).await;
         }
-        call(client, session, model, "checkFocus").await?;
+        call(client, session, model, "checkSelection").await?;
         if text.is_empty() {
             super::interaction::press_key(client, session, "Backspace").await?;
         } else {

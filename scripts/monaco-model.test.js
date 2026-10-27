@@ -10,8 +10,9 @@ function fixture() {
   const root = { isConnected: true, contains: node => node === input };
   const input = { isConnected: true, ownerDocument: document, closest: () => root,
     focus() { document.activeElement = this; } };
-  const model = { getValue: () => 'authoritative value', isDisposed: () => false };
-  const editor = { getDomNode: () => root, getModel: () => model };
+  const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 20 };
+  const model = { getValue: () => 'authoritative value', isDisposed: () => false, getFullModelRange: () => range };
+  const editor = { getDomNode: () => root, getModel: () => model, getSelection: () => ({ ...range }) };
   const other = { getDomNode: () => ({}), getModel: () => { throw Error('wrong model read'); } };
   const api = { getEditors: () => [other, editor] };
   return { document, root, input, model, editor, api };
@@ -99,3 +100,15 @@ for (const fault of ['wrong-module', 'incomplete', 'failed', 'too-large',
     assert.equal(create.call(f.manager, f.input, true), null);
   });
 }
+
+test('native fill requires the complete live selection before inserting', () => {
+  const f = fixture(), handle = create.call(f.api, f.input);
+  handle.focus();
+  assert.equal(handle.checkSelection(), true);
+  for (const selection of [null, {}, { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 }]) {
+    f.editor.getSelection = () => selection;
+    assert.throws(() => handle.checkSelection(), /full model/);
+  }
+  f.editor.getSelection = undefined;
+  assert.throws(() => handle.checkSelection(), /cannot verify/);
+});
