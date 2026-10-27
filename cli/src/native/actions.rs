@@ -25432,7 +25432,20 @@ async fn handle_confirm(cmd: &Value, state: &mut DaemonState) -> Result<Value, S
     let policy = state.policy.take();
     let confirm_actions = state.confirm_actions.take();
     state.gates_bypassed = true;
-    let result = Box::pin(execute_command(&pending.cmd, state)).await;
+    // A held `fill --from-env` keeps its secret handling when it finally
+    // runs: every field masked while it runs, the value scrubbed from the
+    // reply, as `execute_command_recovering_scrubbed` does for a direct one.
+    let secrets = command_secrets(&pending.cmd);
+    let mut result = if secrets.is_empty() {
+        Box::pin(execute_command(&pending.cmd, state)).await
+    } else {
+        super::sensitive::SECRET_COMMAND
+            .scope(true, Box::pin(execute_command(&pending.cmd, state)))
+            .await
+    };
+    for secret in &secrets {
+        super::sensitive::scrub_value(&mut result, secret);
+    }
     state.gates_bypassed = false;
     state.policy = policy;
     state.confirm_actions = confirm_actions;

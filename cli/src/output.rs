@@ -5446,10 +5446,10 @@ delegates to this same binary in `--json` mode, so behavior matches the
 normal CLI surface.
 
 Profiles (--tools, default core):
-  core   ~12 tools: chrome_use_open, chrome_use_read, chrome_use_snapshot,
+  core   ~13 tools: chrome_use_open, chrome_use_read, chrome_use_snapshot,
          chrome_use_click, chrome_use_fill, chrome_use_type, chrome_use_press,
          chrome_use_eval, chrome_use_wait, chrome_use_back, chrome_use_forward,
-         chrome_use_reload
+         chrome_use_reload, chrome_use_confirm
   all    core + an extended set: chrome_use_hover, chrome_use_select,
          chrome_use_screenshot, chrome_use_scroll, chrome_use_tabs,
          chrome_use_extract, chrome_use_expect, chrome_use_find,

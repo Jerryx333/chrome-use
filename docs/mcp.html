@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>chrome-use MCP 服务器：接入 Claude Desktop、ChatGPT、n8n · chrome-use</title>
-  <meta name="description" content="chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；12 个核心工具，每次调用都转发给同一个二进制。" />
+  <meta name="description" content="chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；13 个核心工具，每次调用都转发给同一个二进制。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -23,7 +23,7 @@
   <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/mcp.html" />
   <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/mcp.html" />
   <meta property="og:title" content="chrome-use MCP 服务器：接入 Claude Desktop、ChatGPT、n8n · chrome-use" />
-  <meta property="og:description" content="chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；12 个核心工具，每次调用都转发给同一个二进制。" />
+  <meta property="og:description" content="chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；13 个核心工具，每次调用都转发给同一个二进制。" />
   <meta property="og:url" content="https://chrome-use.leeguoo.com/mcp.html" />
   <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
   <meta property="og:image:width" content="1200" />
@@ -33,10 +33,10 @@
   <meta property="og:locale:alternate" content="en_US" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="chrome-use MCP 服务器：接入 Claude Desktop、ChatGPT、n8n · chrome-use" />
-  <meta name="twitter:description" content="chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；12 个核心工具，每次调用都转发给同一个二进制。" />
+  <meta name="twitter:description" content="chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；13 个核心工具，每次调用都转发给同一个二进制。" />
   <meta name="twitter:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"chrome-use","item":"https://chrome-use.leeguoo.com/"},{"@type":"ListItem","position":2,"name":"MCP 服务器","item":"https://chrome-use.leeguoo.com/mcp.html"}]}</script>
-  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"MCP 服务器","description":"chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；12 个核心工具，每次调用都转发给同一个二进制。","inLanguage":"zh-Hans","url":"https://chrome-use.leeguoo.com/mcp.html","mainEntityOfPage":"https://chrome-use.leeguoo.com/mcp.html","image":"https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg","dateModified":"2026-10-27","author":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"publisher":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"isPartOf":{"@type":"WebSite","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"},"about":{"@type":"SoftwareApplication","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"}}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"MCP 服务器","description":"chrome-use mcp 起一个 stdio MCP 服务器，给 Claude Desktop、ChatGPT connector、n8n/Dify 这类不能跑 shell 命令的宿主用；13 个核心工具，每次调用都转发给同一个二进制。","inLanguage":"zh-Hans","url":"https://chrome-use.leeguoo.com/mcp.html","mainEntityOfPage":"https://chrome-use.leeguoo.com/mcp.html","image":"https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg","dateModified":"2026-10-27","author":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"publisher":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"isPartOf":{"@type":"WebSite","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"},"about":{"@type":"SoftwareApplication","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"}}</script>
   <!-- /seo:head -->
 </head>
 
@@ -99,9 +99,9 @@
       <hr class="du-divider" />
 
       <p><code>read --filter</code> 按字面文本匹配，忽略 ASCII 大小写，不支持正则；优先返回匹配标题及其子章节，否则按正文内容筛选章节。可先用 <code>read --outline</code> 找标题。<code>snapshot --filter</code> 则支持正则。读取选项见 <code>read --help</code>。</p>
-      <h2>12 个核心工具</h2>
+      <h2>13 个核心工具</h2>
       <p>
-        MCP 服务器暴露一套精简的<strong>核心 profile</strong>：12 个有类型的工具，覆盖打开页面、
+        MCP 服务器暴露一套精简的<strong>核心 profile</strong>：13 个有类型的工具，覆盖打开页面、
         读取、快照、交互和导航。每一次工具调用都会转发给同一个 <code>chrome-use</code> 二进制的
         <code>--json</code> 模式——底层能力和用 CLI 是完全一样的一套。
       </p>
@@ -123,13 +123,14 @@
           <tr><td><code>chrome_use_back</code></td><td>后退一页</td></tr>
           <tr><td><code>chrome_use_forward</code></td><td>前进一页</td></tr>
           <tr><td><code>chrome_use_reload</code></td><td>刷新当前页</td></tr>
+          <tr><td><code>chrome_use_confirm</code></td><td>回应被拦下的操作（<code>confirmation_required</code>）：<code>id</code>，<code>decline: true</code> 撤回。<code>approval: user</code> 时等用户在扩展里选择，见<a href="/permissions.html">权限与安全</a></td></tr>
         </tbody>
       </table>
 
       <h2>扩展 profile：--tools all</h2>
       <p>
-        默认的 12 个工具够大多数任务用了。需要更多能力时加 <code>--tools all</code>，
-        把 profile 从 12 个扩到<strong>27 个工具</strong>。核心 12 个之外，再加上下面这些：
+        默认的 13 个工具够大多数任务用了。需要更多能力时加 <code>--tools all</code>，
+        把 profile 从 13 个扩到<strong>28 个工具</strong>。核心 13 个之外，再加上下面这些：
         （仍不是完整的 CLI 全集）：
       </p>
 
@@ -314,7 +315,7 @@ mcp</code></pre>
         </a>
         <a class="du-card" href="/commands.html">
           <div class="du-card-title"><span class="du-card-ico">📚</span> 命令参考</div>
-          <p>MCP 的 12 个工具是完整命令集的一个精简 profile。</p>
+          <p>MCP 的 13 个工具是完整命令集的一个精简 profile。</p>
         </a>
       </div>
 
