@@ -1,8 +1,37 @@
 # Changelog
 
-## 1.5.271
+## 1.5.272
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.92.
+
+### Bug Fixes
+
+- **Password-manager menus on background agent tabs (real Chrome, full-screen window).** Measured in a real Chrome with Bitwarden 2026.10, the agent tab behind the user's full-screen window:
+  - Before a click, chrome-use shows a hidden page again so the click lands. That gave the still-focused field a new focus event, and Bitwarden reopened its menu mid-click. Now a click, `mouse down` or drag on a hidden page first takes the focus out of a field the press is not on (#784).
+  - Bitwarden can also reopen its menu on a page that turned hidden, and a blur no longer closes it there. With stealth mode **off**, the extension now sends that page a `visibilitychange`, which makes Bitwarden close the menu at once. The event is visible to the page, so with stealth mode on it is not sent, and the error says that turning stealth mode off lets chrome-use close such menus itself (#784).
+  - For any background agent tab, the blur gets the first try, not only while Chrome is behind another app. It switches no tab in either window (#784).
+  - The error from the recovery that leaves the user's window alone now says why the blur did not work, including missing site access (#784).
+- **Site access is easy to find.** The setting these recoveries need used to be *Allow element picking on all sites* under Inspect & Ask.
+  - It is now *Allow chrome-use on all sites* in its own **Site access** section of the extension's settings.
+  - The toolbar popup shows an **Allow on all sites** button while it is off.
+  - A menu left open for want of it raises one notification a day that opens the setting.
+  - `chrome-use status` and `chrome-use doctor` warn when it is off and say how to turn it on (#784).
+
+### Features
+
+- **`read` keeps tables.** Data tables come out as Markdown tables instead of run-together cell text. Layout and single-column tables are left as text (#785).
+- **`tab select 0`.** A bare number is a 0-based position in `tab list` order, and the CLI names the stable id it picked. `--tab`, `tab close` and `tab inspect` still refuse bare numbers (#785).
+- **`record start --gif`** (or a `.gif` path) writes a looping animated GIF, with no ffmpeg needed (#785).
+- **Smaller core skill.** `skills get core` is about 7.5 KB instead of 26 KB. The rest moved to `core/loop`, `core/tabs` and `core/agent-panel` (#783).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.271
+
 Works with extension ab-connect 0.5.91.
 
 ### Bug Fixes
@@ -19,7 +48,6 @@ Stealth fixes from live tests against Clearcote's input audit, rebrowser-bot-det
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.270
 
