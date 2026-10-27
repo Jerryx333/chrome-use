@@ -1,8 +1,28 @@
 # Changelog
 
-## 1.5.270
+## 1.5.271
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.91.
+
+### Bug Fixes
+
+Stealth fixes from live tests against Clearcote's input audit, rebrowser-bot-detector and our own botcheck (now 0.3) on 2026-10-27.
+
+- **Mouse presses carry pressure.** Clicks, double-clicks, drags, `mouse down/move/up` and the Yidun slider now send `force` 0.5 while a button is held and 0 on release, like a real mouse; before, every press reported `pressure` 0 (#772).
+- **Keys are held like a person's.** With humanize on, each key stays down about 30–70 ms (`fast`) or 50–140 ms (`human`) instead of ~2 ms, in `type`, `press` and IME keys. The hold comes out of the next gap, so `human` typing keeps its speed; `fast` typing is about twice as slow as before (#772).
+- **`select` fires trusted events.** On http(s) pages a single native `<select>` is focused and driven with letter type-ahead, so the page gets browser-trusted `input`/`change` instead of `dispatchEvent`. `--json` reports the `engine`. Options typing can't reach (e.g. non-ASCII labels) fall back to the old path with a warning. Typing several letters can pass through options in between, each firing a trusted `change`; a jump menu that navigates on change returns an error rather than a false success (#772).
+- **No page-visible reads after navigation.** The adaptive humanize probe no longer reads `document.cookie`, `document.scripts` or `Object.getOwnPropertyNames(window)` from the page's own world. It reads cookies and script URLs in an isolated world and lists globals through CDP without running page code; detected vendors are unchanged (#773).
+- **`--launch`: real fullscreen.** A tab that is visible when chrome-use attaches no longer gets focus emulation, so `requestFullscreen` fills the screen instead of staying inside the tab (a known automation tell). Background tabs keep it (#773).
+- **`--launch`: Widevine works.** `--disable-component-update` is no longer passed, so branded Chrome's bundled Widevine CDM is available, as in a normal Chrome (#773).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.270
+
 Works with extension ab-connect 0.5.91.
 
 ### Bug Fixes
@@ -12,7 +32,6 @@ Works with extension ab-connect 0.5.91.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.269
 
