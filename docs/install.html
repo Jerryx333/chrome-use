@@ -83,7 +83,7 @@
         <li><strong>Linux：</strong>向导显示 <code>install.sh</code> 那行命令和复制按钮。</li>
       </ul>
       <p>
-        CLI 一响应，侧栏就检查它能对话的编程 agent（Codex、Claude Code、OpenCode、Pi），逐个说明还差什么：「可用」；「未登录」并给出在终端里跑一次的登录命令（<code>codex login</code>、<code>claude</code>、<code>opencode auth login</code>、<code>pi</code>）；或「未安装」并链接到该 agent 的安装页。回到侧栏时会再查一次。有 agent 可用后，直接在侧栏里输入要做的事。向导全部在扩展自己的页面里运行，不往你访问的网页里加任何东西，隐身模式开或关都一样。
+        CLI 一响应，侧栏就列出它能对话的编程 agent（Codex、Claude Code、OpenCode、Pi）：已安装的给出在终端里跑一次的登录命令（<code>codex login</code>、<code>claude</code>、<code>opencode auth login</code>、<code>pi</code>），没装的链接到该 agent 的安装页。点「检查登录」会逐个询问已安装的 agent 是否已登录，标成「可用」或「未登录」；只有点了它，侧栏才会启动 agent CLI。回到侧栏时会再查一次。有 agent 可用后，直接在侧栏里输入要做的事。向导全部在扩展自己的页面里运行，不往你访问的网页里加任何东西，隐身模式开或关都一样。
       </p>
       <p>
         <code>~/.local/bin</code> 可能不在 shell 的 <code>PATH</code> 里。侧栏不需要它（host 清单里写的是完整路径）；想在终端里用 <code>chrome-use</code>，把 <code>export PATH="$HOME/.local/bin:$PATH"</code> 加进 shell 配置。
