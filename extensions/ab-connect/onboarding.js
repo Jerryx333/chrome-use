@@ -256,7 +256,8 @@ export function renderAgentSetup(container, steps, { document, t, chrome, connec
     head.append(el(document, 'strong', step.name), el(document, 'span', t(AGENT_STATE_KEYS[step.state]), 'onboard-agent-state'))
     item.append(head)
     if (step.state === 'signIn' || step.state === 'unverified') {
-      item.append(el(document, 'p', t(step.state === 'signIn' ? 'panel_onboard_agent_sign_in_how' : 'panel_onboard_agent_unverified_how'), 'onboard-agent-how'), commandBlock(document, t, step.command))
+      const how = step.state === 'signIn' ? 'panel_onboard_agent_sign_in_how' : step.failed ? 'panel_onboard_agent_check_failed' : 'panel_onboard_agent_unverified_how'
+      item.append(el(document, 'p', t(how), 'onboard-agent-how'), commandBlock(document, t, step.command))
     } else if (step.state === 'install') {
       const link = el(document, 'a', t('panel_onboard_agent_install_link', step.name), 'onboard-link')
       link.href = step.url
@@ -308,7 +309,7 @@ export function createPanelOnboarding({ document, t, chrome, storage, hostBox, a
   const read = async () => { try { return (await storage?.local?.get?.([AGENTS_OK_KEY, AGENTS_HIDDEN_KEY])) || {} } catch { return {} } }
   const write = values => { try { void Promise.resolve(storage?.local?.set?.(values)).catch(() => {}) } catch {} }
 
-  async function checkAgents({ inspect = inspected, auto = false } = {}) {
+  async function checkAgents({ inspect = inspected, auto = false, retried = false } = {}) {
     if (!agentBox || !support) return
     const epoch = ++agentEpoch
     const ids = onboardingAgents(support.chatAgents)
@@ -322,6 +323,11 @@ export function createPanelOnboarding({ document, t, chrome, storage, hostBox, a
     }))
     if (epoch !== agentEpoch) return
     if (inspect) inspected = true
+    // A service that is still starting answers the first read with an error;
+    // look once more before telling the user it could not be read.
+    if (inspect && !retried && steps.some(step => step?.failed)) {
+      schedule(() => void checkAgents({ inspect: true, retried: true }).catch(() => {}), 3000)
+    }
     const summary = agentSummary(steps)
     if (summary.anyInstalled) write({ [AGENTS_OK_KEY]: true })
     if (auto && summary.anyInstalled && !tracker.completed) { agentBox.hidden = true; return }

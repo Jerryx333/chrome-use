@@ -3779,5 +3779,6 @@
   "panel_onboard_hide": {"message": "隐藏"},
   "panel_onboard_status_missing": {"message": "这台电脑上还没装 chrome-use"},
   "panel_onboard_status_missing_detail": {"message": "按下面的步骤做，这里会自己更新。"},
-  "panel_onboard_already_installed": {"message": "已经装过 CLI？为这个 Chrome 重新注册："}
+  "panel_onboard_already_installed": {"message": "已经装过 CLI？为这个 Chrome 重新注册："},
+  "panel_onboard_agent_check_failed": {"message": "没能读到登录状态。如果第一条消息失败，在终端里登录一次："}
 }

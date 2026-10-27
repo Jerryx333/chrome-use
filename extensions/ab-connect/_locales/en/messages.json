@@ -3779,5 +3779,6 @@
   "panel_onboard_hide": {"message": "Hide"},
   "panel_onboard_status_missing": {"message": "chrome-use is not installed on this computer yet"},
   "panel_onboard_status_missing_detail": {"message": "Follow the steps below; this updates by itself."},
-  "panel_onboard_already_installed": {"message": "Already installed the CLI? Register it for this Chrome:"}
+  "panel_onboard_already_installed": {"message": "Already installed the CLI? Register it for this Chrome:"},
+  "panel_onboard_agent_check_failed": {"message": "Could not read the sign-in state. If your first message fails, sign in once in a terminal:"}
 }
