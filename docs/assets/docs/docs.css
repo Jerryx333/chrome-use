@@ -635,3 +635,85 @@ img { max-width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* ========================================================= CHANGELOG ==== */
+/* docs.js turns each flat <li> in .du-changelog into a release card. */
+.du-cl-filter {
+  position: sticky; top: calc(var(--topbar-h) + 8px); z-index: 5;
+  display: flex; align-items: center; gap: 12px;
+  margin: 28px 0 8px; padding: 8px 10px 8px 14px;
+  background: var(--paper); border: 1.5px solid var(--line-ink); border-radius: var(--radius);
+  box-shadow: 3px 3px 0 var(--line-ink);
+}
+.du-cl-filter input {
+  flex: 1; min-width: 0; border: 0; background: transparent; outline: none;
+  font: 15px/1.5 var(--font-body); color: var(--ink);
+}
+.du-cl-filter input::placeholder { color: var(--ink-faint); }
+.du-cl-count { flex: none; font: 12px var(--font-mono); color: var(--ink-faint); }
+
+.du-main ul.du-changelog {
+  list-style: none; margin: 0 0 24px; padding: 0 0 0 22px;
+  border-left: 2px dashed var(--line);
+}
+.du-main ul.du-changelog > li.du-cl-entry {
+  position: relative; margin: 0 0 18px; padding: 14px 18px 12px;
+  background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  scroll-margin-top: calc(var(--topbar-h) + 72px);
+}
+.du-main ul.du-changelog > li.du-cl-entry::before {
+  content: ""; position: absolute; left: -30px; top: 20px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--paper); border: 2px solid var(--ink-faint);
+}
+.du-main ul.du-changelog > li.du-cl-entry:target { border-color: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+.du-main ul.du-changelog > li.du-cl-entry:target::before,
+.du-main ul.du-changelog > li.du-cl-entry:has(.du-cl-latest)::before { border-color: var(--red); background: var(--red); }
+
+.du-cl-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 6px; }
+.du-main a.du-cl-ver {
+  font: 700 16px var(--font-mono); color: var(--ink); text-decoration: none;
+}
+.du-main a.du-cl-ver:hover { color: var(--red); }
+.du-cl-date { font: 13px var(--font-mono); color: var(--ink-soft); }
+.du-cl-status, .du-cl-latest, .du-cl-ext {
+  font-size: 12px; line-height: 1; padding: 4px 8px; border-radius: 999px; white-space: nowrap;
+}
+.du-cl-status { background: var(--yellow); color: var(--ink); }
+.du-cl-latest { background: var(--red); color: #fff; font-weight: 600; }
+.du-cl-ext { margin-left: auto; background: var(--blue-soft); color: var(--blue); font-family: var(--font-mono); }
+
+.du-main .du-cl-body { margin: 0 0 4px; }
+.du-main ul.du-cl-items { margin: 0 0 4px; padding-left: 20px; }
+.du-main ul.du-cl-items > li { margin: 4px 0; padding-left: 2px; }
+.du-main ul.du-cl-items > li::marker { color: var(--ink-faint); }
+
+.du-main a.du-cl-ref {
+  font: 12.5px var(--font-mono); text-decoration: none;
+  padding: 0 4px; border-radius: 4px; background: var(--paper-2); color: var(--ink-soft);
+}
+.du-main a.du-cl-ref:hover { background: var(--blue-soft); color: var(--blue); }
+
+.du-cl-by {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line);
+}
+.du-cl-by-label { font-size: 12px; color: var(--ink-faint); margin-right: 2px; }
+.du-main a.du-cl-user {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 9px 2px 3px; border: 1px solid var(--line); border-radius: 999px;
+  font-size: 13px; color: var(--ink-soft); text-decoration: none; background: var(--paper);
+}
+.du-main a.du-cl-user:hover { border-color: var(--ink); color: var(--ink); }
+.du-cl-user img { width: 18px; height: 18px; border-radius: 50%; }
+.du-cl-user:not(:has(img)) { padding-left: 9px; }
+
+@media (max-width: 620px) {
+  .du-main ul.du-changelog { padding-left: 0; border-left: 0; }
+  .du-main ul.du-changelog > li.du-cl-entry { padding: 12px 14px 10px; }
+  .du-main ul.du-changelog > li.du-cl-entry::before { display: none; }
+  .du-cl-ext { margin-left: 0; }
+}
+.du-cl-entry { overflow-wrap: anywhere; }
+.du-cl-entry code { overflow-wrap: anywhere; word-break: break-word; }
