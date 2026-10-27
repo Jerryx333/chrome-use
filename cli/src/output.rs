@@ -2695,6 +2695,44 @@ fn print_warning(resp: &Response) {
 /// Print command-specific help. Returns true if help was printed, false if command unknown.
 pub fn print_command_help(command: &str) -> bool {
     let help = match command {
+        "teach" => {
+            r##"
+chrome-use teach - Record a flow you do by hand, replay it with no model
+
+Usage:
+  chrome-use teach start [--name <flow>]
+  chrome-use teach stop [--out <file>] [--format script|adapter] [--force] [--print]
+  chrome-use teach status | cancel
+  chrome-use teach replay <file> [--arg k=v] [--arg-env k=ENV_VAR] [--timeout ms]
+  chrome-use teach compile <file.recording.json> [--format script|adapter] [--out <file>]
+
+Open the page the flow starts on, run `teach start`, do the flow by hand in
+that tab (click, type, choose, upload, press Enter), then `teach stop`.
+
+stop writes a `chrome-use script` JSON op-list (default
+~/.chrome-use/teach/<flow>.json) and prints its steps for review. Each element
+step leads with a semantic locator (label or role + name) and lists CSS
+selectors in `or`, tried only when the one before found nothing. Navigations
+become waits for the next page. Keystrokes collapse into one fill.
+`--format adapter` (or `--adapter`) writes a site adapter skeleton to
+~/.chrome-use/my-sites/<site>/<flow>.js instead; it uses args.ui (trusted
+input) and runs one page per call, so run it with --until-done.
+
+Values typed into password, card and one-time-code fields are never
+recorded: they become parameters (`--arg-env password=MY_VAR` on replay).
+Uploads become `--arg file=<path>`. The raw recording is kept next to the
+output as <name>.recording.json for `teach compile`.
+
+Stealth: the recorder runs in an isolated world made for this recording and
+reports through a binding added only to that world. Nothing is added to the
+page's own world; stop removes the listeners and the binding.
+
+Examples:
+  chrome-use open https://shop.example/cart && chrome-use teach start --name checkout
+  chrome-use teach stop
+  chrome-use teach replay ~/.chrome-use/teach/checkout.json --arg-env password=SHOP_PW
+"##
+        }
         "read" => {
             r##"
 chrome-use read - Read a URL or the active page as text
@@ -6699,6 +6737,8 @@ Init scripts:
 Batch:
   batch [--bail] ["cmd" ...]  Execute multiple commands sequentially (args or stdin)
   script <file|->             Run JSON or JS steps in one daemon round trip.
+                              --arg k=v / --arg-env k=ENV_VAR seed variables;
+                              a do step's "or": [...] lists fallbacks.
                               Script ok:false fails even if transport succeeded.
                               CLI JSON prints bare program data; advisories retains
                               up to 20 hints (daemon: data.advisories), including
@@ -6706,6 +6746,12 @@ Batch:
                               Batch JSON is a result array; script/batch omit
                               top-level timing.
                               --bail stops on first error (default: continue all)
+
+Teach by demonstration:
+  teach start [--name <flow>]  Record what you do by hand in the session's tab
+  teach stop [--out <file>] [--format script|adapter]
+                              Stop and write a replayable script (or adapter)
+  teach replay <file>         Same as `script <file>`
 
 Agent loop (experimental):
   jev run --goal <text> [--url <url>] [--terminal-shadow]

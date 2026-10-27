@@ -244,6 +244,17 @@ Press **Alt+Shift+C** (or **Inspect element** in the toolbar popup), click an el
 
 Details: [Inspect & Ask docs](https://chrome-use.leeguoo.com/en/inspect.html).
 
+### Teach by demonstration: do it once, replay it with no model
+
+```bash
+chrome-use open https://shop.example/cart && chrome-use teach start --name checkout
+# ...do the flow by hand in that tab...
+chrome-use teach stop                       # ~/.chrome-use/teach/checkout.json + the steps, for review
+chrome-use teach replay ~/.chrome-use/teach/checkout.json --arg-env password=SHOP_PW
+```
+
+`teach stop` writes a `chrome-use script` op-list: semantic locators first with CSS fallbacks in `or`, keystrokes merged into one fill, waits after page changes, and a final URL check. `--adapter` writes a site adapter skeleton instead (`args.ui` input, `--until-done`). Passwords, card numbers and one-time codes are never recorded; they become `--arg-env` parameters. The side panel's **Record** button does the same for its tab and shows the steps before saving. The recorder runs in an isolated world with a binding only that world has, so pages see nothing, stealth mode included. Details: [Teach by Demonstration](https://chrome-use.leeguoo.com/en/teach.html).
+
 ## Setup: connect to your Chrome
 
 Install the [**chrome-use** extension from the Chrome Web Store](https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk), then register the local bridge once:

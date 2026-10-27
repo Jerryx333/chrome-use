@@ -21,9 +21,21 @@ export function cursorAllowed(s) {
 // native function to `window`, which bot detectors look for.
 const PAGE_VISIBLE_METHODS = new Set(['Runtime.addBinding'])
 
+/**
+ * Whether a binding goes only to a named isolated world. `executionContextName`
+ * limits it to contexts with that name; the page's main world has none, so the
+ * page never sees it (`chrome-use teach` reports through one while recording).
+ */
+export function isolatedOnly(method, params) {
+  return method === 'Runtime.addBinding' &&
+    typeof params?.executionContextName === 'string' && params.executionContextName.length > 0 &&
+    params.executionContextId === undefined
+}
+
 /** Why a CDP method is refused under the current settings, or null. */
-export function stealthBlockReason(s, method) {
+export function stealthBlockReason(s, method, params) {
   if (!stealthOn(s) || !PAGE_VISIBLE_METHODS.has(method)) return null
+  if (isolatedOnly(method, params)) return null
   return `${method} is refused while stealth mode is on: it adds a global the page can detect. ` +
     'Turn off Stealth mode on the chrome-use extension options page to use it.'
 }

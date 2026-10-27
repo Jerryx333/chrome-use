@@ -18,13 +18,21 @@ export const REPLAYABLE_METHOD =
 /**
  * Record a state-setting command on a tab entry's replay map (insertion
  * order = replay order; a repeat of the same method moves to the end with its
- * latest params). `X.disable` forgets `X.enable`.
+ * latest params). `X.disable` forgets `X.enable`; `Runtime.removeBinding`
+ * forgets the bindings of that name.
  */
 export function rememberReplayable(replay, method, params) {
   if (!replay) return
   const m = /^([A-Za-z]+)\.disable$/.exec(method)
   if (m) {
     replay.delete(`${m[1]}.enable`)
+    return
+  }
+  // A removed binding (`teach stop`) must not come back on re-attach.
+  if (method === 'Runtime.removeBinding') {
+    for (const [key, entry] of replay) {
+      if (entry.method === 'Runtime.addBinding' && entry.params?.name === params?.name) replay.delete(key)
+    }
     return
   }
   if (!REPLAYABLE_METHOD.test(method)) return

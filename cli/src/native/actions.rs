@@ -572,6 +572,8 @@ pub struct DaemonState {
     pub gates_bypassed: bool,
     pub har_recording: bool,
     pub har_entries: Vec<HarEntry>,
+    /// `teach start` .. `teach stop`: the user's actions being recorded.
+    pub teach: Option<super::teach::Recording>,
     pub confirm_actions: Option<ConfirmActions>,
     pub inspect_server: Option<InspectServer>,
     pub routes: Arc<RwLock<Vec<RouteEntry>>>,
@@ -743,6 +745,7 @@ impl DaemonState {
             gates_bypassed: false,
             har_recording: false,
             har_entries: Vec::new(),
+            teach: None,
             confirm_actions: ConfirmActions::from_env(),
             inspect_server: None,
             routes: Arc::new(RwLock::new(Vec::new())),
@@ -2118,6 +2121,8 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             | "close"
             | "upgrade_handoff"
             | "har_stop"
+            | "teach_stop"
+            | "teach_status"
             | "credentials_set"
             | "credentials_get"
             | "credentials_delete"
@@ -2790,6 +2795,9 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
             "video_start" => handle_video_start(cmd, state).await,
             "video_stop" => handle_video_stop(state).await,
             "har_start" => handle_har_start(state).await,
+            "teach_start" => super::teach::handle_start(cmd, state).await,
+            "teach_stop" => super::teach::handle_stop(cmd, state).await,
+            "teach_status" => super::teach::handle_status(state),
             "har_stop" => handle_har_stop(cmd, state).await,
             "route" => handle_route(cmd, state).await,
             "unroute" => handle_unroute(cmd, state).await,

@@ -232,6 +232,17 @@ Chrome 拒绝显示侧栏任务通知时，同一次扩展后台运行期间的�
 
 详见 [点选改代码文档](https://chrome-use.leeguoo.com/inspect.html)。
 
+### 示范录制：做一遍，之后不用模型就能重放
+
+```bash
+chrome-use open https://shop.example/cart && chrome-use teach start --name checkout
+# ……在这个标签页里亲手做一遍……
+chrome-use teach stop                       # 写到 ~/.chrome-use/teach/checkout.json，并列出步骤供检查
+chrome-use teach replay ~/.chrome-use/teach/checkout.json --arg-env password=SHOP_PW
+```
+
+`teach stop` 生成 `chrome-use script` 步骤列表：优先用语义定位，CSS 选择器作为 `or` 备选，连续按键合成一次 fill，换页后自动等待，最后检查结束的网址。加 `--adapter` 则生成站点适配器骨架（`args.ui` 输入，配合 `--until-done`）。密码、卡号、一次性验证码不会被记录，变成 `--arg-env` 参数。侧边栏的**录制**按钮对当前标签页做同样的事，保存前先列出步骤。录制器运行在隔离环境里，只有那个环境有回传用的绑定，页面看不到任何东西，隐身模式下也一样。详见[示范录制](https://chrome-use.leeguoo.com/teach.html)。
+
 ## 连接你的 Chrome
 
 从 Chrome 应用商店安装 [**chrome-use** 扩展](https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk)，再注册一次本地桥：

@@ -119,6 +119,7 @@ waits for that choice, and your own `confirm` never approves it.
 | `status`/`doctor`, extension, profiles, launch, stealth | `core/connection` |
 | Repeated steps, output reading, verification | `core/behaviour` |
 | Site adapters | `core/site-adapters` |
+| User shows a flow once; replay it with no model (`teach`) | `core/teach` |
 | Login, cookies, vault, passkeys, OAuth | `core/authentication` |
 | CAPTCHA, slider, icon clicks | `core/captcha` |
 | Sensitive actions, untrusted instructions | `core/trust-boundaries` |

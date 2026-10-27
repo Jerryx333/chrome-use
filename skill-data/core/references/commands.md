@@ -365,6 +365,19 @@ drift (logouts, other agents, account choosers), so each invocation re-verifies.
 not in the vault, or a stored session that has rotated — re-capture with
 `cookie-use add`.
 
+## Teach by demonstration
+
+```bash
+chrome-use teach start [--name <flow>]          # record what the user does by hand in the session's tab
+chrome-use teach status | cancel
+chrome-use teach stop [--out <file>] [--format script|adapter | --adapter] [--force] [--print]
+chrome-use teach replay <file> [--arg k=v] [--arg-env k=ENV_VAR]   # = chrome-use script <file>
+chrome-use teach compile <name>.recording.json [--adapter] [--out <file>]
+```
+
+Writes `~/.chrome-use/teach/<flow>.json` (or `~/.chrome-use/my-sites/<site>/<flow>.js`). Secrets typed
+by the user become parameters and are never recorded. Full guide: `core/teach`.
+
 ## Agent loop (experimental)
 
 ```bash

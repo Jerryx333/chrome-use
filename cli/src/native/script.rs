@@ -9,7 +9,8 @@
 //! `push` / `return` give real control flow without the LLM back in the loop.
 //!
 //! A statement is one of:
-//!   { "do": "<action>", ...params, "bind"?: "name", "optional"?: bool }
+//!   { "do": "<action>", ...params, "bind"?: "name", "optional"?: bool,
+//!     "or"?: [ { "do": ... }, ... ] }   // alternatives if it found nothing to act on
 //!   { "waitUntil": <cond>, "timeoutMs"?: n, "pollMs"?: n }
 //!   { "forEach": "{{list}}", "as"?: "item", "max": n, "body": [ ...stmts ] }
 //!   { "assert": <cond>, "msg"?: "..." }
@@ -199,7 +200,9 @@ fn run_block<'a>(
                 .ok_or("each statement must be a JSON object")?;
 
             if obj.contains_key("do") {
-                run_action(obj, ctx, state).await?;
+                if let Err(e) = run_action(obj, ctx, state).await {
+                    run_fallbacks(obj, e, ctx, state).await?;
+                }
             } else if let Some(ret) = obj.get("return") {
                 return Ok(Flow::Return(resolve(ret, &ctx.vars)));
             } else if let Some(name) = obj.get("set").and_then(|v| v.as_str()) {
@@ -259,7 +262,7 @@ async fn run_action(
 
     let mut sub = Map::new();
     for (k, v) in obj {
-        if matches!(k.as_str(), "do" | "bind" | "optional") {
+        if matches!(k.as_str(), "do" | "bind" | "optional" | "or") {
             continue;
         }
         sub.insert(normalize_key(k), resolve(v, &ctx.vars));
@@ -337,6 +340,53 @@ async fn run_action(
         ));
     }
     Ok(())
+}
+
+/// `"or": [<do statement>, ...]` on a `do`: alternatives tried in order when
+/// the primary op found nothing to act on (`chrome-use teach` writes a
+/// semantic locator first and a CSS selector after it). Only a failure that
+/// dispatched nothing falls back, so an action is never done twice.
+async fn run_fallbacks(
+    obj: &Map<String, Value>,
+    err: String,
+    ctx: &mut Ctx,
+    state: &mut DaemonState,
+) -> Result<(), String> {
+    let Some(alts) = obj.get("or").and_then(Value::as_array) else {
+        return Err(err);
+    };
+    if !nothing_dispatched(&err) {
+        return Err(err);
+    }
+    let mut last = err;
+    for alt in alts {
+        let Some(alt) = alt.as_object() else { continue };
+        let mut alt = alt.clone();
+        alt.remove("or");
+        if let Some(bind) = obj.get("bind") {
+            alt.insert("bind".into(), bind.clone());
+        }
+        match run_action(&alt, ctx, state).await {
+            Ok(()) => {
+                ctx.steps
+                    .push(json!({ "fallback": alt.get("do"), "after": last }));
+                return Ok(());
+            }
+            Err(e) if nothing_dispatched(&e) => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
+/// The op failed before acting: its target was missing or ambiguous.
+fn nothing_dispatched(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("nothing was dispatched")
+        || e.contains("no element")
+        || e.contains("not found")
+        || e.contains("selector_ambiguous")
+        || e.contains("matched ")
 }
 
 async fn run_wait_until(
@@ -583,6 +633,18 @@ fn validate_block(block: &[Value]) -> Result<(), String> {
         if !recognized.iter().any(|k| obj.contains_key(*k)) {
             return Err(format!("unrecognized statement (no known key): {}", stmt));
         }
+        if let Some(alts) = obj.get("or") {
+            let ok = obj.contains_key("do")
+                && alts.as_array().is_some_and(|a| {
+                    a.iter()
+                        .all(|x| x.as_object().is_some_and(|o| o.contains_key("do")))
+                });
+            if !ok {
+                return Err(
+                    "`or` belongs on a `do` statement and lists `do` statements".to_string()
+                );
+            }
+        }
         if obj.contains_key("forEach") {
             if obj.get("max").and_then(|v| v.as_u64()).is_none() {
                 return Err("forEach requires a numeric `max`".to_string());
@@ -607,6 +669,22 @@ mod tests {
         m.insert("n".into(), json!(3));
         m.insert("rows".into(), json!([{ "ref": "e1" }, { "ref": "e2" }]));
         m
+    }
+
+    #[test]
+    fn or_alternatives_must_be_do_statements_on_a_do() {
+        assert!(validate_block(&[
+            json!({"do": "click", "selector": "#a", "or": [{"do": "click", "selector": "#b"}]})
+        ])
+        .is_ok());
+        assert!(validate_block(&[json!({"do": "click", "or": [{"set": "x"}]})]).is_err());
+        assert!(validate_block(&[json!({"log": "x", "or": []})]).is_err());
+        assert!(nothing_dispatched(
+            "semantic locator has no visible match in its scope; nothing was dispatched"
+        ));
+        assert!(!nothing_dispatched(
+            "click landed but the page did not change"
+        ));
     }
 
     #[test]

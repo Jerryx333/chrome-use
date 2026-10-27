@@ -3741,5 +3741,20 @@
   "panel_window_no_initial_page": { "message": "这个会话没有记录初始网页。" },
   "panel_taint_title": { "message": "这条命令里有来自网页的内容" },
   "panel_taint_remote_exec": { "message": "这条命令会下载并运行网页指向的代码" },
-  "panel_taint_body": { "message": "下面这些字符串是智能体在网页上读到的，不是你发的消息里的。网页可能埋了给智能体的指令。确认是你要运行的再允许；它没有被自动批准。" }
+  "panel_taint_body": { "message": "下面这些字符串是智能体在网页上读到的，不是你发的消息里的。网页可能埋了给智能体的指令。确认是你要运行的再允许；它没有被自动批准。" },
+  "panel_teach_start": {"message": "录制一个流程，之后不用模型就能重放"},
+  "panel_teach_stop": {"message": "停止录制并检查步骤"},
+  "panel_teach_failed": {"message": "无法在这个页面开始录制。"},
+  "panel_teach_permission_denied": {"message": "录制需要访问这个网站的权限。Chrome 询问时请允许。"},
+  "panel_teach_host_failed": {"message": "chrome-use 命令行没有响应。请先更新（chrome-use upgrade）再试。"},
+  "panel_teach_review_title": {"message": "录制的流程：保存前请检查"},
+  "panel_teach_name": {"message": "流程名称"},
+  "panel_teach_param_secret": {"message": "`$NAME$` 是你输入的密码类内容（不会保存）。运行脚本时传入：--arg-env $NAME$=你的环境变量", "placeholders": {"name": {"content": "$1"}}},
+  "panel_teach_param_file": {"message": "`$NAME$` 是你上传的文件。运行脚本时传入：--arg $NAME$=文件路径", "placeholders": {"name": {"content": "$1"}}},
+  "panel_teach_edit": {"message": "编辑脚本"},
+  "panel_teach_source": {"message": "脚本（JSON 步骤列表）"},
+  "panel_teach_save": {"message": "保存脚本"},
+  "panel_teach_discard": {"message": "放弃"},
+  "panel_teach_close": {"message": "关闭"},
+  "panel_teach_saved": {"message": "已保存到 $PATH$。运行命令：", "placeholders": {"path": {"content": "$1"}}}
 }

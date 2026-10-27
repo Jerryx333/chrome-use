@@ -258,7 +258,7 @@
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/privacy.html</loc>
-    <lastmod>2026-10-15</lastmod>
+    <lastmod>2026-10-27</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/en/react.html</loc>
@@ -314,6 +314,13 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/stealth.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/stealth.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/stealth.html" />
+    <lastmod>2026-10-27</lastmod>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/en/teach.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/teach.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/teach.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/teach.html" />
     <lastmod>2026-10-27</lastmod>
   </url>
   <url>
@@ -444,7 +451,7 @@
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/mobile-privacy.html</loc>
-    <lastmod>2026-10-20</lastmod>
+    <lastmod>2026-10-27</lastmod>
   </url>
   <url>
     <loc>https://chrome-use.leeguoo.com/mobile.html</loc>
@@ -521,6 +528,13 @@
     <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/stealth.html" />
     <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/stealth.html" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/stealth.html" />
+    <lastmod>2026-10-27</lastmod>
+  </url>
+  <url>
+    <loc>https://chrome-use.leeguoo.com/teach.html</loc>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/teach.html" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/teach.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/teach.html" />
     <lastmod>2026-10-27</lastmod>
   </url>
   <url>

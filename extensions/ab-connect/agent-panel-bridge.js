@@ -15,6 +15,9 @@ export const INSPECT_OPERATIONS = ['inspectStatus', 'inspectResolve', 'inspectCl
 // conversation. Delivery, binding to a session and status belong to the
 // authenticated input frame only.
 export const PAGE_INSPECT_OPERATIONS = ['inspectBindings', 'inspectUnbind', 'inspectConsent', 'inspectClaimDecide', 'inspectReplies', 'inspectProject', 'inspectProjectBind'];
+// The side panel's Record button (teach by demonstration): compiling a
+// recording into a script and saving the reviewed script.
+export const TEACH_OPERATIONS = ['teachCompile', 'teachSave'];
 /** Whether an extension page's request may reach the host. */
 export function pageOperationAllowed(operation) {
   return !INSPECT_OPERATIONS.includes(operation) || PAGE_INSPECT_OPERATIONS.includes(operation);
@@ -34,7 +37,7 @@ export class AgentPanelBridge {
   }
 
   request(operation, params = {}) {
-    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationSessionList', 'conversationResume', 'conversationProjectList', 'conversationProjectChoose', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationTabGrant', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'imageConvert', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
+    if (!['discover', 'agentInspect', 'configRead', 'configPlan', 'configApply', 'configRestore', 'serviceHealth', 'serviceStop', 'conversationList', 'conversationCreate', 'conversationSessionList', 'conversationResume', 'conversationProjectList', 'conversationProjectChoose', 'conversationRead', 'conversationSend', 'conversationSendDirect', 'conversationMessageStatus', 'conversationQueueEdit', 'conversationQueueMessageRead', 'conversationQueueRemove', 'conversationStop', 'conversationResumeQueue', 'conversationRespond', 'conversationDelete', 'conversationSetAccess', 'conversationTabGrant', 'conversationSetOptions', 'conversationAttachmentPut', 'conversationAttachmentRead', 'imageConvert', 'conversationArtifactRead', 'conversationRecoveryReview', 'conversationRecoveryTerminate', 'conversationRecoveryFork', 'skillList', 'skillRead', 'skillSave', 'skillSetEnabled', 'skillImport', 'conversationSkillSelect', 'scheduleList', 'scheduleSave', 'scheduleDelete', 'scheduleRun', ...TEACH_OPERATIONS, ...INSPECT_OPERATIONS].includes(operation)) return Promise.reject(new Error(`Unsupported agent panel operation: ${operation}`));
     if (this.pending.size >= this.maxPending) return Promise.reject(new Error('Too many pending agent panel requests'));
     const requestId = `${this.identity}:${this.generation}:${++this.sequence}`;
     return new Promise((resolve, reject) => {
@@ -122,6 +125,8 @@ function validResult({ operation, agentId, planId, conversationId, messageId, re
   if (['scheduleSave','scheduleRun'].includes(operation)) return typeof result.schedule?.id === 'string' && (!id || result.schedule.id === id) && (operation !== 'scheduleRun' || result.run?.dispatched === true && result.run.completed === false);
   if (operation === 'scheduleDelete') return result.deleted?.id === id;
   if (operation === 'discover') return Array.isArray(result.agents);
+  if (operation === 'teachCompile') return Array.isArray(result.steps) && Array.isArray(result.program) && Array.isArray(result.params);
+  if (operation === 'teachSave') return typeof result.path === 'string' && typeof result.run === 'string';
   if (operation === 'imageConvert') return result.mediaType === 'image/jpeg' && typeof result.data === 'string' && result.data.length > 0;
   if (operation === 'inspectResolve') return ['bound', 'needsConfirm', 'unbound'].includes(result.state) && Array.isArray(result.pendingClaims) && typeof result.ocs?.installed === 'boolean';
   if (operation === 'inspectClaimDecide') return ['accepted', 'rejected'].includes(result.decided);

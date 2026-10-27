@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>示范一次，chrome-use 学会浏览器流程 · chrome-use</title>
+  <meta name="description" content="在 Chrome 里亲手做一遍流程，chrome-use 把它录成脚本或站点适配器，之后不用模型就能重放，密码不会被记下。" />
+
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <!-- seo:fonts --><link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" onload="this.onload=null;this.rel='stylesheet'" /><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" /></noscript><!-- /seo:fonts -->
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+  <!-- seo:head -->
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/teach.html" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/teach.html" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/teach.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/teach.html" />
+  <meta property="og:title" content="示范一次，chrome-use 学会浏览器流程 · chrome-use" />
+  <meta property="og:description" content="在 Chrome 里亲手做一遍流程，chrome-use 把它录成脚本或站点适配器，之后不用模型就能重放，密码不会被记下。" />
+  <meta property="og:url" content="https://chrome-use.leeguoo.com/teach.html" />
+  <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="800" />
+  <meta property="og:image:alt" content="chrome-use：让 AI agent 用你已登录的 Chrome" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:locale:alternate" content="en_US" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="示范一次，chrome-use 学会浏览器流程 · chrome-use" />
+  <meta name="twitter:description" content="在 Chrome 里亲手做一遍流程，chrome-use 把它录成脚本或站点适配器，之后不用模型就能重放，密码不会被记下。" />
+  <meta name="twitter:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"chrome-use","item":"https://chrome-use.leeguoo.com/"},{"@type":"ListItem","position":2,"name":"让 agent 做事","item":"https://chrome-use.leeguoo.com/reading.html"},{"@type":"ListItem","position":3,"name":"示范录制","item":"https://chrome-use.leeguoo.com/teach.html"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"示范录制","description":"在 Chrome 里亲手做一遍流程，chrome-use 把它录成脚本或站点适配器，之后不用模型就能重放，密码不会被记下。","inLanguage":"zh-Hans","url":"https://chrome-use.leeguoo.com/teach.html","mainEntityOfPage":"https://chrome-use.leeguoo.com/teach.html","image":"https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg","dateModified":"2026-10-27","author":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"publisher":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"isPartOf":{"@type":"WebSite","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"},"about":{"@type":"SoftwareApplication","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"}}</script>
+  <!-- /seo:head -->
+</head>
+
+<body data-page="teach" data-lang="zh">
+
+  <div id="du-topbar" class="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <nav id="du-sidebar" class="du-sidebar" aria-label="文档"><div class="du-nav-group"><div class="du-nav-label">开始</div><a class="du-nav-item" href="/"><span class="du-nav-ico">🧭</span><span class="du-nav-text">概览</span></a><a class="du-nav-item" href="/install.html"><span class="du-nav-ico">📦</span><span class="du-nav-text">安装</span></a><a class="du-nav-item" href="/compare.html"><span class="du-nav-ico">⚖️</span><span class="du-nav-text">和其他方案对比</span></a></div><div class="du-nav-group"><div class="du-nav-label">不开终端</div><a class="du-nav-item" href="/agent-panel.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">侧栏对话</span></a><a class="du-nav-item" href="/mobile.html"><span class="du-nav-ico">📱</span><span class="du-nav-text">手机遥控</span></a><a class="du-nav-item" href="/inspect.html"><span class="du-nav-ico">🎯</span><span class="du-nav-text">点选改代码</span></a></div><div class="du-nav-group"><div class="du-nav-label">让 agent 做事</div><a class="du-nav-item" href="/reading.html"><span class="du-nav-ico">📖</span><span class="du-nav-text">读网页、查资料</span></a><a class="du-nav-item" href="/extract.html"><span class="du-nav-ico">🧪</span><span class="du-nav-text">抓数据</span></a><a class="du-nav-item" href="/interacting.html"><span class="du-nav-ico">🖱️</span><span class="du-nav-text">填表与操作</span></a><a class="du-nav-item" href="/site-adapters.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">站点适配器</span></a><a class="du-nav-item active" aria-current="page" href="/teach.html"><span class="du-nav-ico">🎓</span><span class="du-nav-text">示范录制</span></a><a class="du-nav-item" href="/testing.html"><span class="du-nav-ico">🧷</span><span class="du-nav-text">测试与探索</span></a><a class="du-nav-item" href="/media.html"><span class="du-nav-ico">🎬</span><span class="du-nav-text">截图·录像·视口</span></a><a class="du-nav-item" href="/canvas.html"><span class="du-nav-ico">🎨</span><span class="du-nav-text">Canvas / WebGL / 游戏</span></a><a class="du-nav-item" href="/electron.html"><span class="du-nav-ico">🖥️</span><span class="du-nav-text">Electron 桌面应用</span></a><a class="du-nav-item" href="/slack.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">Slack 自动化</span></a></div><div class="du-nav-group"><div class="du-nav-label">账号与登录态</div><a class="du-nav-item" href="/real-chrome.html"><span class="du-nav-ico">🌐</span><span class="du-nav-text">驱动真实 Chrome</span></a><a class="du-nav-item" href="/login-auth.html"><span class="du-nav-ico">🔐</span><span class="du-nav-text">登录与凭证</span></a><a class="du-nav-item" href="/sessions.html"><span class="du-nav-ico">💾</span><span class="du-nav-text">多个 agent 与会话</span></a><a class="du-nav-item" href="/choosebrowser.html"><span class="du-nav-ico">🧭</span><span class="du-nav-text">多 profile 路由：ChooseBrowser</span></a><a class="du-nav-item" href="/stealth.html"><span class="du-nav-ico">🥷</span><span class="du-nav-text">反检测与隐身</span></a><a class="du-nav-item" href="/permissions.html"><span class="du-nav-ico">🛡️</span><span class="du-nav-text">权限与安全</span></a></div><div class="du-nav-group"><div class="du-nav-label">接入方式</div><a class="du-nav-item" href="/mcp.html"><span class="du-nav-ico">🔌</span><span class="du-nav-text">MCP 服务器</span></a><a class="du-nav-item" href="/http-api.html"><span class="du-nav-ico">🔗</span><span class="du-nav-text">本地 HTTP API</span></a><a class="du-nav-item" href="/cloud.html"><span class="du-nav-ico">☁️</span><span class="du-nav-text">云端浏览器</span></a><a class="du-nav-item" href="/script.html"><span class="du-nav-ico">⚡</span><span class="du-nav-text">单次成型脚本</span></a></div><div class="du-nav-group"><div class="du-nav-label">底层命令</div><a class="du-nav-item" href="/core-loop.html"><span class="du-nav-ico">🔁</span><span class="du-nav-text">核心循环</span></a><a class="du-nav-item" href="/how-it-works.html"><span class="du-nav-ico">⚙️</span><span class="du-nav-text">它怎么工作</span></a><a class="du-nav-item" href="/finding.html"><span class="du-nav-ico">🔎</span><span class="du-nav-text">定位元素</span></a><a class="du-nav-item" href="/waiting.html"><span class="du-nav-ico">⏳</span><span class="du-nav-text">等待与断言</span></a><a class="du-nav-item" href="/network.html"><span class="du-nav-ico">🛰️</span><span class="du-nav-text">网络拦截与改写</span></a><a class="du-nav-item" href="/react.html"><span class="du-nav-ico">⚛️</span><span class="du-nav-text">React / Web Vitals</span></a><a class="du-nav-item" href="/commands.html"><span class="du-nav-ico">📚</span><span class="du-nav-text">命令参考</span></a></div><div class="du-nav-group"><div class="du-nav-label">参考</div><a class="du-nav-item" href="/troubleshooting.html"><span class="du-nav-ico">🩹</span><span class="du-nav-text">故障排查</span></a><a class="du-nav-item" href="/changelog.html"><span class="du-nav-ico">📝</span><span class="du-nav-text">更新日志</span></a><a class="du-nav-item" href="/extension-changelog.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">插件更新日志</span></a><a class="du-nav-item" href="/family.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">*-use 家族</span></a><a class="du-nav-item" href="/lineage.html"><span class="du-nav-ico">🌱</span><span class="du-nav-text">血统与上游</span></a></div></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <p class="du-eyebrow">Agent 能做什么</p>
+
+      <div class="du-title-row">
+        <h1>示范录制</h1>
+        <button class="du-copy-page" type="button" aria-label="复制本页">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制本页</span>
+        </button>
+      </div>
+
+      <p class="du-lede">
+        有些流程演示一遍比描述清楚更快。在 Chrome 里亲手做一遍，chrome-use 就把它写成一个
+        <a href="script.html"><code>chrome-use script</code></a> 脚本（或者一个<a href="site-adapters.html">站点适配器</a>），之后重放
+        <strong>不需要模型</strong>：同样的步骤、同样的等待，一条命令跑完。
+      </p>
+
+      <h2 id="cli">在终端里用</h2>
+<pre><code>chrome-use open https://shop.example/cart          # 流程开始的页面
+chrome-use teach start --name checkout             # 然后在这个标签页里亲手做一遍
+chrome-use teach stop                              # 写到 ~/.chrome-use/teach/checkout.json，并列出步骤
+chrome-use teach replay ~/.chrome-use/teach/checkout.json --arg-env password=SHOP_PW</code></pre>
+      <p>
+        会记下点击、输入、下拉选择、复选框和单选框、回车和 Esc、上传以及页面跳转。连续按键合成一次 <code>fill</code>；只是把光标点进输入框的点击会去掉；
+        点了之后打开新页面的，后面会加一步等待新页面。滚动只有在让页面加载了更多内容时才保留。
+        <code>teach status</code> 看目前录到什么，<code>teach cancel</code> 放弃这次录制。
+      </p>
+      <p>
+        <code>teach replay</code> 就是 <code>chrome-use script</code>：一次往返跑完，哪一步失败就以退出码 1 停下并指出是哪一步，最后检查是否停在你结束时的页面。
+        依赖脚本之前先看一遍 <code>teach stop</code> 打印的步骤；文件就是普通的 JSON 步骤列表，可以直接改。
+      </p>
+
+      <h2 id="locators">怎么再次找到元素</h2>
+      <p>
+        每一步优先用人看到的东西定位（输入框的标签，或者角色加名字，比如按钮“Place order”），CSS 选择器作为备选放在 <code>"or"</code> 里。
+        只有前一个找不到可操作的目标时才试下一个，所以同一个动作不会做两次。
+      </p>
+<pre><code>{"do": "getbylabel", "label": "Email", "subaction": "fill", "value": "ada@example.com",
+ "or": [{"do": "getbyrole", "role": "textbox", "name": "Email", "subaction": "fill", "value": "ada@example.com"},
+        {"do": "fill", "selector": "#email", "value": "ada@example.com"}]}</code></pre>
+
+      <h2 id="secrets">密码和文件</h2>
+      <p>
+        在密码、银行卡、一次性验证码这类输入框里输入的内容<strong>不会被记录</strong>，录制器只记下“这里输入过一个密码”。它变成脚本参数，没传参数脚本就不会开始。
+        建议从环境变量传入，免得留在命令历史里：<code>--arg-env password=SHOP_PW</code>。上传的文件变成 <code>--arg file=./invoice.pdf</code>。
+        表单如果把密码放进下一页的网址，录下来的网址里也会抹掉。
+      </p>
+
+      <h2 id="adapter">生成站点适配器</h2>
+<pre><code>chrome-use teach stop --adapter                     # ~/.chrome-use/my-sites/&lt;site&gt;/&lt;flow&gt;.js
+chrome-use site add ~/.chrome-use/my-sites &amp;&amp; chrome-use site update
+chrome-use site &lt;site&gt;/&lt;flow&gt; --until-done</code></pre>
+      <p>
+        生成的适配器通过 <code>args.ui</code>（真实输入）点击和输入，一次运行处理一个页面，所以要带 <code>--until-done</code>。
+        录制时输入的内容变成可选参数（<code>--text1 …</code>），默认值是录到的值。像对待其他适配器一样检查一遍。
+      </p>
+
+      <h2 id="panel">在侧边栏里用</h2>
+      <p>
+        <a href="agent-panel.html">侧边栏</a>在“选择元素”旁边有一个<strong>录制</strong>按钮。按下，在这个标签页里做一遍，再按一次：
+        侧边栏列出步骤，可以改名、编辑脚本，保存到 <code>~/.chrome-use/teach/</code>，并给出运行命令。
+      </p>
+
+      <h2 id="stealth">页面能看到什么</h2>
+      <p>
+        什么都看不到。录制器运行在为这次录制单独创建的隔离环境里（侧边栏用扩展的内容脚本环境），命令行通过一个只加在这个环境里的绑定接收事件，
+        页面自己的环境里没有。页面里不会多出全局变量、元素、属性或事件监听，停止后录制器和绑定都会移除。打开<a href="stealth.html">隐身模式</a>时也是这样。
+      </p>
+      <p>
+        代价是：Chrome 只有在开启 <code>Runtime.enable</code> 时才会把绑定带到新页面，而页面能察觉这个开关，所以 chrome-use 改为每次换页后重新装上录制器。
+        新页面刚出现的一瞬间里的操作可能漏掉，步骤列表会显示实际录到的内容。旧版扩展在隐身模式下会拒绝这个绑定，录制器就改为轮询，<code>teach start</code> 会提示。
+      </p>
+
+      <h2 id="measured">实测</h2>
+      <p>Mac，Chrome for Testing 155，用真实（可信）输入录制，在新浏览器、新配置文件里重放：</p>
+      <table>
+        <tr><th>流程</th><th>步骤</th><th>脚本重放</th><th>适配器重放</th></tr>
+        <tr><td>httpbin.org 订单表单（文本、单选、复选、多行文本、提交）</td><td>10</td><td>通过，2.4 秒</td><td>通过</td></tr>
+        <tr><td>维基百科搜索后打开一个结果</td><td>6</td><td>通过，2.8 秒</td><td>通过</td></tr>
+        <tr><td>Sauce Demo：登录、加入购物车、三步结账（密码作为参数）</td><td>17</td><td>通过，2.3 秒</td><td>通过</td></tr>
+      </table>
+
+      <div class="du-cards">
+        <a class="du-card" href="script.html"><h3>⚡ 单次成型脚本</h3><p>示范录制生成的步骤列表格式，以及循环、断言和 <code>or</code>。</p></a>
+        <a class="du-card" href="site-adapters.html"><h3>🧩 站点适配器</h3><p>把录下的流程变成适配器并分享。</p></a>
+      </div><!-- seo:footer --><nav class="du-static-footer" aria-label="更多"><a href="/">chrome-use</a> · <a href="/logged-in-browser.html">让 agent 用已登录 Chrome</a> · <a href="/debugger-banner-silence.html">静音调试提示条</a> · <a href="/privacy.html">隐私政策</a> · <a href="/mobile-privacy.html">手机 App 隐私政策</a> · <a href="https://github.com/leeguooooo/chrome-use">GitHub</a> · <a href="https://github.com/leeguooooo/chrome-use/releases">下载 / Releases</a> · <a href="https://iphone-use.leeguoo.com/">iphone-use（让 agent 操作 iPhone）</a> · <a href="https://blog.leeguoo.com">博客</a> · <a href="/en/teach.html" hreflang="en">English</a></nav><!-- /seo:footer --></main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>
