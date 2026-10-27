@@ -1,8 +1,21 @@
 # Changelog
 
-## 1.5.269
+## 1.5.270
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.91.
+
+### Bug Fixes
+
+- **Password-manager menus while Chrome is behind another app.** When Chrome is not the frontmost app, briefly hiding the tab does not always close a Bitwarden-style inline menu on an agent tab, so commands stayed blocked until someone pressed Escape. chrome-use now takes the focus out of the field from the extension instead, which closes the menu the way a click elsewhere does, without switching any tab. This needs the extension's site access (*Allow element picking on all sites* in its options); without it chrome-use falls back to the tab flip as before, and the error names the option. Key presses still need the field focused, so they keep the old behaviour. Requires extension 0.5.91 (#762).
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.269
+
 Works with extension ab-connect 0.5.90.
 
 ### Bug Fixes
@@ -14,7 +27,6 @@ Works with extension ab-connect 0.5.90.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.268
 
