@@ -341,7 +341,9 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
       <p>
         说明：9 月那次演练里旧版 Haiku 9/9 执行了 <code>curl … | sh</code>；这次「前」也是 0/9，模型本身变了，所以这一行测不出本 PR 的效果。
         可见的注入不在隐藏文字过滤的范围内，只能靠边界提示、侧栏检查和模型本身。侧栏执行前检查由单元测试覆盖，这次没有在侧栏里实跑演练。
-        <code>read &lt;url&gt;</code>（不渲染）和 <code>get text --pierce</code>（没有样式）不能区分隐藏文字。
+        <code>read &lt;url&gt;</code>（不渲染）和 <code>get text --pierce</code>（没有样式）不能区分隐藏文字；<code>snapshot</code> 不过滤同进程的子 iframe。
+        淡入中的元素（<code>opacity:0</code> 加 opacity 过渡或动画）和 <code>background-clip: text</code> 的渐变标题按可见处理。侧栏记录的页面字符串只在内存里，服务重启后清空。
+        额外开销：在 Wikipedia 长页面上 <code>snapshot</code> 约多 40 ms，<code>get text</code> 约多 70 ms。
       </p>
       <p><a href="evidence/injection-drill-20261027/results.json">逐次结果（JSON）</a></p>
 

@@ -3821,7 +3821,7 @@ async fn eval_frame_text(
         params["contextId"] = serde_json::json!(ctx);
     }
     let value = client
-        .send_command("Runtime.evaluate", Some(params), Some(session_id))
+        .send_command("Runtime.evaluate", Some(params.clone()), Some(session_id))
         .await
         .ok()
         .and_then(|v| v.get("result").and_then(|r| r.get("value")).cloned())
@@ -3832,6 +3832,18 @@ async fn eval_frame_text(
             value["text"].as_str().unwrap_or_default().to_string(),
             super::visibility::HiddenStats::from_scan(&value),
         ),
+        _ if filter => {
+            // The filtered read failed outright: read the frame plain and
+            // say so, rather than return an empty frame.
+            params["expression"] = serde_json::json!(FRAME_INNERTEXT_JS);
+            let text = client
+                .send_command("Runtime.evaluate", Some(params), Some(session_id))
+                .await
+                .ok()
+                .and_then(|v| v["result"]["value"].as_str().map(String::from))
+                .unwrap_or_default();
+            (text, super::visibility::HiddenStats::failed())
+        }
         _ => (String::new(), Default::default()),
     }
 }
@@ -4057,7 +4069,8 @@ fn main_content_visible_js() -> String {
   }}
   var root=(best&&bestLen>200)?best:document.body;
   if(!root)return {{text:''}};
-  var r=({scan}).call(root,'text');r.text=(r.text||'').trim();return r;
+  try{{var r=({scan}).call(root,'text');r.text=(r.text||'').trim();return r;}}
+  catch(e){{return {{text:txt(root),scanError:String(e)}};}}
 }})()"#,
         scan = super::visibility::SCAN_FN
     )
@@ -4078,6 +4091,11 @@ pub async fn get_main_content_visible_text(
             Some(session_id),
         )
         .await?;
+    if res.get("exceptionDetails").is_some() {
+        // Never an empty page in place of a failed filter: read it plain.
+        let text = get_main_content_text(client, session_id).await?;
+        return Ok((text, super::visibility::HiddenStats::failed()));
+    }
     let value = res
         .get("result")
         .and_then(|r| r.get("value"))

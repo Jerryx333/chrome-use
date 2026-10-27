@@ -16435,8 +16435,10 @@ async fn e2e_reads_leave_out_text_a_person_cannot_see() {
         <div style="height:0;overflow:hidden"><p>COLLAPSED text</p></div>
         <label><input type="checkbox" style="opacity:0"> Agree to terms</label>
         <div style="position:relative;height:120px"><canvas style="position:absolute;inset:0;width:100%;height:100%"></canvas><h2 style="color:#fff">HERO visible</h2></div>
+        <h2 style="background:linear-gradient(90deg,#f00,#00f);-webkit-background-clip:text;background-clip:text;color:transparent">GRADIENT visible</h2>
         <div style="height:3000px"></div>
         <p>BELOWFOLD visible</p>
+        <p style="opacity:0;transition:opacity .4s">FADEIN visible</p>
         <script>window.__muts=0;new MutationObserver(function(m){window.__muts+=m.length}).observe(document,{subtree:true,attributes:true,childList:true,characterData:true});</script>
         </body></html>"##}), &mut state).await;
     assert_success(&page);
@@ -16460,7 +16462,16 @@ async fn e2e_reads_leave_out_text_a_person_cannot_see() {
         "SAMECOLOR",
         "COLLAPSED",
     ];
-    const VISIBLE: &[&str] = &["Price: $49.00", "HERO visible", "BELOWFOLD visible"];
+    // A gradient headline (`color: transparent` + `background-clip: text`)
+    // and a scroll-reveal block (opacity 0 with an opacity transition) are
+    // seen by a person and must stay.
+    const VISIBLE: &[&str] = &[
+        "Price: $49.00",
+        "HERO visible",
+        "BELOWFOLD visible",
+        "GRADIENT visible",
+        "FADEIN visible",
+    ];
 
     let snap = execute_command(&json!({"id":"3","action":"snapshot"}), &mut state).await;
     assert_success(&snap);

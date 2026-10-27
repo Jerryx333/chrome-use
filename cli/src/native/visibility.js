@@ -63,8 +63,11 @@ function (mode) {
   function textHidden(el, cs) {
     if (parseFloat(cs.fontSize) < 2) return 'font-size';
     if (parseFloat(cs.textIndent) <= -999) return 'text-indent';
-    // A shadow or stroke draws the glyphs whatever their fill colour.
+    // A shadow or stroke draws the glyphs whatever their fill colour, and
+    // `background-clip: text` paints them with the background (gradient
+    // headlines are `color: transparent`).
     if ((cs.textShadow && cs.textShadow !== 'none') || parseFloat(cs.webkitTextStrokeWidth) > 0) return null;
+    if (cs.webkitBackgroundClip === 'text' || cs.backgroundClip === 'text') return null;
     var c = rgba(cs.color);
     if (c && c[3] <= 0.01) return 'transparent';
     if (c) {
@@ -74,8 +77,20 @@ function (mode) {
     return null;
   }
   function clipped(v) { return v === 'hidden' || v === 'clip'; }
+  // An element fading in (scroll-reveal, entrance animations) is about to
+  // be seen: opacity 0 with an opacity transition or a running animation.
+  function fading(cs) {
+    if (cs.animationName && cs.animationName !== 'none') return true;
+    var props = (cs.transitionProperty || '').split(',');
+    var times = (cs.transitionDuration || '').split(',');
+    for (var i = 0; i < props.length; i++) {
+      var prop = props[i].trim();
+      if ((prop === 'opacity' || prop === 'all') && parseFloat(times[i % times.length]) > 0) return true;
+    }
+    return false;
+  }
   function boxHidden(el, cs, r, clip) {
-    if (parseFloat(cs.opacity) <= 0.01) return 'opacity';
+    if (parseFloat(cs.opacity) <= 0.01 && !fading(cs)) return 'opacity';
     if (/^matrix\(0, 0, 0, 0,|^matrix3d\(0, 0, 0, 0,/.test(cs.transform || '')) return 'scale-0';
     var cp = cs.clipPath || '';
     if (/inset\(\s*(50|100)%/.test(cp) || /circle\(\s*0(px)?\s*(at|\))/.test(cp)) return 'clip-path';

@@ -618,9 +618,7 @@ async fn take_snapshot_at_depth(
     let scan_hidden = !options.include_hidden && (depth == 0 || effective_session_id != session_id);
     let hidden_future = async {
         if scan_hidden {
-            super::visibility::hidden_ax_nodes(client, effective_session_id)
-                .await
-                .ok()
+            Some(super::visibility::hidden_ax_nodes(client, effective_session_id).await)
         } else {
             None
         }
@@ -630,19 +628,26 @@ async fn take_snapshot_at_depth(
         &ax_params,
         Some(effective_session_id),
     );
-    let (ax_tree, hidden) = tokio::join!(ax_future, hidden_future);
+    let (ax_tree, scanned) = tokio::join!(ax_future, hidden_future);
     let mut ax_tree = ax_tree?;
-    let hidden_stats = hidden.as_ref().map(|hidden| {
-        let present: std::collections::HashSet<i64> = match &selector_backend_ids {
-            Some(ids) => ids.clone(),
-            None => ax_tree
-                .nodes
-                .iter()
-                .filter_map(|n| n.backend_d_o_m_node_id)
-                .collect(),
-        };
-        super::visibility::snapshot_stats(hidden, &present)
-    });
+    // A scan that fails leaves the tree unfiltered and says so in the note.
+    let scan_failed = matches!(scanned, Some(Err(_)));
+    let hidden = scanned.and_then(Result::ok);
+    let hidden_stats = if scan_failed {
+        Some(super::visibility::HiddenStats::failed())
+    } else {
+        hidden.as_ref().map(|hidden| {
+            let present: std::collections::HashSet<i64> = match &selector_backend_ids {
+                Some(ids) => ids.clone(),
+                None => ax_tree
+                    .nodes
+                    .iter()
+                    .filter_map(|n| n.backend_d_o_m_node_id)
+                    .collect(),
+            };
+            super::visibility::snapshot_stats(hidden, &present)
+        })
+    };
     if let Some(hidden) = &hidden {
         hide_ax_nodes(&mut ax_tree.nodes, &hidden.ids);
     }

@@ -5823,13 +5823,16 @@ async fn handle_read(cmd: &Value, state: &DaemonState) -> Result<Value, String> 
     let visible = match state.browser.as_ref() {
         Some(mgr) if !include_hidden => {
             let session_id = mgr.active_session_id()?.to_string();
-            Some(super::visibility::visible_html(&mgr.client, &session_id).await?)
+            // A scan that fails is reported, never turned into a refusal or
+            // an empty page: the page is read unfiltered and the note says so.
+            Some(super::visibility::visible_html(&mgr.client, &session_id).await)
         }
         _ => None,
     };
+    let failed = matches!(visible, Some(Err(_)));
     let (origin, html, stats) = match visible {
-        Some((html, stats)) => (active_url.to_string(), html, Some(stats)),
-        None => {
+        Some(Ok((html, stats))) => (active_url.to_string(), html, Some(stats)),
+        Some(Err(_)) | None => {
             let content_data = handle_content(state).await?;
             let origin = content_data
                 .get("origin")
@@ -5842,7 +5845,11 @@ async fn handle_read(cmd: &Value, state: &DaemonState) -> Result<Value, String> 
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Active tab content is unavailable".to_string())?
                 .to_string();
-            (origin, html, None)
+            (
+                origin,
+                html,
+                failed.then(super::visibility::HiddenStats::failed),
+            )
         }
     };
     let mut value = crate::read::read_json_from_active_html(&origin, html, &options);

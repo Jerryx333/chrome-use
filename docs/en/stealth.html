@@ -379,7 +379,10 @@ Cloudflare managed challenge (scrapingcourse.com)  passed</code></pre>
         Notes: in the September drill an older Haiku ran the <code>curl … | sh</code> 9/9 times; today's "before" was 0/9 too, so the model changed and that row cannot show this PR's effect.
         Visible injections are outside what hidden-text filtering can do; they rely on the content boundary, the panel check and the model.
         The panel pre-exec check is covered by unit tests and was not run live in the panel for this drill.
-        <code>read &lt;url&gt;</code> (not rendered) and <code>get text --pierce</code> (no styles) cannot tell hidden text from visible text.
+        <code>read &lt;url&gt;</code> (not rendered) and <code>get text --pierce</code> (no styles) cannot tell hidden text from visible text, and <code>snapshot</code> does not filter same-process child iframes.
+        Elements fading in (<code>opacity:0</code> with an opacity transition or animation) and <code>background-clip: text</code> gradient headlines count as visible.
+        The panel keeps its record of page strings in memory; a service restart clears it.
+        Cost: on a long Wikipedia article <code>snapshot</code> took about 40 ms longer and <code>get text</code> about 70 ms longer.
       </p>
       <p><a href="../evidence/injection-drill-20261027/results.json">Per-run results (JSON)</a></p>
 
