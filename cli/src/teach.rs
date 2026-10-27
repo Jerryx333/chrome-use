@@ -162,7 +162,7 @@ pub fn redact_recording(recording: &mut Value) {
     };
     if let Some(events) = recording["events"].as_array_mut() {
         for e in events {
-            if let Some(u) = e["url"].as_str().and_then(&redact) {
+            if let Some(u) = e["url"].as_str().and_then(redact) {
                 e["url"] = json!(u);
             }
         }
