@@ -18,7 +18,7 @@
   <link rel="stylesheet" href="/assets/docs/docs.css" />
   <style>
     .cmp-scroll { overflow-x: auto; margin: 14px 0; }
-    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 760px; }
+    .cmp-table { width: 100%; border-collapse: collapse; font-size: .9rem; min-width: 900px; }
     .cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
     .cmp-table thead th { background: var(--paper-2); font-weight: 700; position: sticky; top: 0; }
     .cmp-table tbody th { background: var(--paper-2); font-weight: 700; min-width: 128px; }
@@ -82,7 +82,7 @@
       <table class="cmp-table">
         <thead>
           <tr>
-            <th>方案</th><th>怎么连浏览器</th><th>用谁的登录</th><th>哪些 agent 能用</th><th>需要装 / 授权</th><th>许可</th>
+            <th>方案</th><th>怎么连浏览器</th><th>用谁的登录</th><th>哪些 agent 能用</th><th>需要装 / 授权</th><th>隐身 / 反检测</th><th>许可</th>
           </tr>
         </thead>
         <tbody>
@@ -92,6 +92,7 @@
             <td class="cmp-win">你正在用的 Chrome，可选 profile</td>
             <td class="cmp-win">任意 agent：CLI / MCP / HTTP；侧栏和手机里直接对话</td>
             <td>一行安装 + 商店扩展</td>
+            <td class="cmp-win">核心能力：连真实 Chrome 零注入、默认不开 <code>Runtime.enable</code>、<code>--humanize</code> 行为模拟、可尝试普通验证码；CreepJS 0% bot（实测）</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -100,6 +101,7 @@
             <td class="cmp-win">你的 Chrome / Edge</td>
             <td>只有 Claude：侧栏、Claude Code <code>--chrome</code>、Cowork</td>
             <td>Claude Pro / Max / Team / Enterprise</td>
+            <td class="cmp-mut">文档未提反检测；遇到登录或验证码暂停，交给你处理</td>
             <td class="cmp-mut">闭源</td>
           </tr>
           <tr>
@@ -108,6 +110,7 @@
             <td class="cmp-win">你的 Chrome，多 profile</td>
             <td>任意 agent，以 CLI 为主；内置大量站点适配器</td>
             <td>CLI 或桌面 app + 扩展</td>
+            <td class="cmp-mut">README 未提反检测</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -116,6 +119,7 @@
             <td class="cmp-win">你挑选的现有标签</td>
             <td>任意 MCP 客户端，或 playwright-cli</td>
             <td>每次连接需批准（可配 token 免批）</td>
+            <td class="cmp-mut">README 未提反检测</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -124,6 +128,7 @@
             <td>默认 profile 的所有窗口</td>
             <td>任意 MCP 客户端，也有 CLI</td>
             <td><code>chrome://inspect</code> 打开远程调试 + 弹窗允许；默认上报使用统计</td>
+            <td class="cmp-mut">README 未提反检测</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -132,6 +137,7 @@
             <td>你的 Chrome（开关打开后）</td>
             <td>任意能跑 shell 的 agent；browser-harness 另有 MCP</td>
             <td>远程调试开关 + 弹窗允许</td>
+            <td>agent-browser 靠 stealth 插件或实验性 Obscura 引擎；browser-harness 本地不提供，放在云端版</td>
             <td>Apache-2.0 / MIT</td>
           </tr>
           <tr>
@@ -140,6 +146,7 @@
             <td>一键导入 Chrome 配置后，在 ego 里的登录</td>
             <td>通过 ego-browser 技能：Claude Code、Codex、Cursor 等</td>
             <td>装一个新浏览器（macOS / Windows）</td>
+            <td>宣称"更少验证码"（来自复用登录），未说明反检测手段</td>
             <td class="cmp-mut">免费，闭源</td>
           </tr>
           <tr>
@@ -148,6 +155,7 @@
             <td class="cmp-win">你的 Chrome</td>
             <td>CLI / MCP / HTTP</td>
             <td>npm 全局 + 开发者模式加载扩展</td>
+            <td class="cmp-mut">README 未提反检测</td>
             <td>MIT</td>
           </tr>
           <tr>
@@ -156,6 +164,7 @@
             <td>默认独立浏览器；browser-use 可读系统 Chrome profile（需先关 Chrome），Stagehand 可指定 <code>userDataDir</code></td>
             <td>写代码接入</td>
             <td>框架 + 浏览器；各自有云服务</td>
+            <td>开源库未内置，各自的云服务提供</td>
             <td>MIT</td>
           </tr>
           <tr>
@@ -164,6 +173,7 @@
             <td class="cmp-mut">独立 profile；Chrome 136 起默认 profile 不接受远程调试端口</td>
             <td>写代码接入</td>
             <td>库 + 浏览器</td>
+            <td class="cmp-mut">库本身不处理；社区 stealth 插件靠 JS 补丁</td>
             <td>Apache-2.0</td>
           </tr>
           <tr>
@@ -172,6 +182,7 @@
             <td class="cmp-mut">云端会话，登录自己带</td>
             <td>SDK / API</td>
             <td>按浏览器小时计费；反检测多在付费档</td>
+            <td>Browserbase 按档提供（基础 / 高级）；Steel 仅企业版；Hyperbrowser、Browser Use Cloud 提供</td>
             <td class="cmp-mut">商业服务，部分开源</td>
           </tr>
           <tr>
@@ -180,6 +191,7 @@
             <td class="cmp-win">你在那个浏览器里的登录</td>
             <td class="cmp-mut">只能和厂商自己的助手对话，没有给第三方 agent 的接口</td>
             <td>Gemini 自动浏览需 AI Pro / Ultra，目前限美国英文用户；ChatGPT Atlas 已停用，改为桌面 app 和 Chrome 扩展</td>
+            <td class="cmp-mut">不适用：只能和厂商助手对话</td>
             <td class="cmp-mut">闭源</td>
           </tr>
         </tbody>
@@ -189,6 +201,25 @@
         <div class="du-callout-title">ℹ️ 读法</div>
         绿色表示在这一列上对"让 agent 用你已登录的浏览器"更有利，不代表整体更好。表里别家的情况取自对方官方文档，没有逐个实测。
       </div>
+
+
+      <h2>隐身：连上真实 Chrome 之后还差什么</h2>
+      <p>
+        凡是驱动你真实 Chrome 的方案，浏览器指纹都是真的，这一点各家一样。网站还能从<strong>自动化本身留下的痕迹</strong>和<strong>操作行为</strong>里认出 agent，
+        差别在这里。chrome-use 把这部分当核心能力来做：
+      </p>
+      <ul>
+        <li><strong>不往页面注入补丁</strong>：连真实 Chrome 时注入的 JS 补丁数量为零，CreepJS 测不出覆盖痕迹。</li>
+        <li><strong>默认不开 <code>Runtime.enable</code></strong>：活跃的 Runtime 域是可被检测的 CDP 信号，只有你主动要 console / 错误捕获时才打开。</li>
+        <li><strong>不在 DOM 里留标记</strong>：定位和观察都用节点句柄，不写临时属性，页面的 MutationObserver 看不到。</li>
+        <li><strong><code>--humanize</code> 行为模拟</strong>：曲线鼠标轨迹、元素内落点、可变打字节奏；遇到 Akamai、PerimeterX、DataDome 的页面自动启用。</li>
+        <li><strong>验证码</strong>：普通易盾拼图用 <code>solve-slider</code>，可读的图标点选由 agent 看图操作，失败再交给你；Cloudflare 通过一次后复用 <code>cf_clearance</code>。</li>
+        <li><strong>需要独立浏览器时</strong>：<code>--launch</code> 用原生覆盖（<code>navigator.webdriver</code>、时区、WebRTC 等），不靠可被反查的 JS getter。</li>
+      </ul>
+      <p>
+        实测（连真实 Chrome）：CreepJS 0% bot、0% headless；bot.incolumitas、sannysoft、BrowserScan 全部通过。测试条件见<a href="/stealth.html">反检测与隐身</a>。
+        这是特定环境下的测量，不保证不被检测或账号不被封。表里其他方案的文档没有讲这些点，我们也没有逐个实测它们，所以不下结论。
+      </p>
 
       <h2>按连接方式分</h2>
       <div class="cmp-cat">
@@ -229,7 +260,7 @@
       <table class="cmp-table">
         <thead><tr><th>你的情况</th><th>选</th></tr></thead>
         <tbody>
-          <tr class="me"><th>让 Claude Code、Codex、Cursor 等任意 agent 在你已登录的 Chrome 里干活，不想开远程调试，可能多个 agent 同时跑</th><td class="cmp-win">chrome-use</td></tr>
+          <tr class="me"><th>让 Claude Code、Codex、Cursor 等任意 agent 在你已登录的 Chrome 里干活，不想开远程调试，要尽量不被反爬识别，可能多个 agent 同时跑</th><td class="cmp-win">chrome-use</td></tr>
           <tr class="me"><th>不想开终端，在浏览器侧栏或手机上跟本机 agent 对话</th><td class="cmp-win">chrome-use 侧栏对话 / 手机遥控</td></tr>
           <tr><th>只用 Claude，并且有付费计划</th><td>Claude in Chrome</td></tr>
           <tr><th>主要是把常用网站变成命令</th><td>OpenCLI（chrome-use 的 <code>site add</code> 也能直接加载 OpenCLI 适配器）</td></tr>
