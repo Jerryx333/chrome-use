@@ -128,6 +128,12 @@ export class HostReconnectScheduler {
     this.cancel()
   }
 
+  // A page showing the setup guide asks for a prompt retry: the CLI may have
+  // just been installed, and a 30s backoff would leave the guide waiting.
+  reset() {
+    this.confirmed()
+  }
+
   cancel() {
     if (this.timer !== null) this.clearTimer(this.timer)
     this.timer = null

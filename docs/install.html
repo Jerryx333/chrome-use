@@ -73,6 +73,22 @@
 
       <!-- ============ 1. INSTALL CLI ============ -->
       <p>扩展图标打开本机 agent 侧栏。macOS、Linux 和 Windows 支持 Codex、Claude Code、OpenCode 和 Pi，提供当前页面标签、CLI 模型下拉、按 agent 区分的权限开关和会话删除。旧 Windows 主机需升级 CLI，完整侧栏功能不需要管理员权限。操作与隐私说明见 <a href="/agent-panel.html">本机 agent 侧栏</a>。</p>
+      <h2 id="from-the-extension">先装了 Chrome 应用商店的扩展？在侧栏里装好</h2>
+      <p>
+        先装了扩展的话，点工具栏上的图标。电脑上还没有 CLI 时，侧栏（和弹窗）显示安装向导而不是报错，并且每隔几秒检查一次 CLI 装好没有，装好就自己接着往下走，不用刷新。
+      </p>
+      <ul>
+        <li><strong>macOS：</strong>点「下载 Mac 版」，从最新的 GitHub Release 下载 <code>chrome-use-darwin-arm64.dmg</code> 或 <code>chrome-use-darwin-x64.dmg</code>（按你的 Mac 芯片选）。在 Chrome 下载栏里打开它，双击 <strong>ChromeUse</strong>，macOS 问是否打开从网上下载的 App 时选「打开」。这个 App 用 Developer ID 签名并经过 Apple 公证。它把自己装到 <code>install.sh</code> 会装的位置（<code>~/.local/share/chrome-use/ChromeUse.app</code>，并把 <code>~/.local/bin/chrome-use</code> 链接过去；<code>/usr/local</code> 可写时装在那里），用 <code>extension install --no-profile</code> 注册 native messaging host（不装配置描述文件，Chrome 不会变成「由组织管理」），装好 agent 技能，最后弹窗告诉你结果。不用终端，也不用管理员密码。已经装了更新版本的 CLI 时保留新版本。日志在 <code>~/.chrome-use/gui-setup.log</code>。</li>
+        <li><strong>Windows：</strong>没有签名的安装程序。向导显示下面那行 PowerShell 命令和复制按钮：打开 PowerShell，粘贴，回车。</li>
+        <li><strong>Linux：</strong>向导显示 <code>install.sh</code> 那行命令和复制按钮。</li>
+      </ul>
+      <p>
+        CLI 一响应，侧栏就列出它能对话的编程 agent（Codex、Claude Code、OpenCode、Pi）：已安装的给出在终端里跑一次的登录命令（<code>codex login</code>、<code>claude</code>、<code>opencode auth login</code>、<code>pi</code>），没装的链接到该 agent 的安装页。点「检查登录」会逐个询问已安装的 agent 是否已登录，标成「可用」或「未登录」；只有点了它，侧栏才会启动 agent CLI。回到侧栏时会再查一次。有 agent 可用后，直接在侧栏里输入要做的事。向导全部在扩展自己的页面里运行，不往你访问的网页里加任何东西，隐身模式开或关都一样。
+      </p>
+      <p>
+        <code>~/.local/bin</code> 可能不在 shell 的 <code>PATH</code> 里。侧栏不需要它（host 清单里写的是完整路径）；想在终端里用 <code>chrome-use</code>，把 <code>export PATH="$HOME/.local/bin:$PATH"</code> 加进 shell 配置。
+      </p>
+
       <h2>一行装好 CLI</h2>
       <p>
         从最新的 <a href="https://github.com/leeguooooo/chrome-use/releases">GitHub Release</a>

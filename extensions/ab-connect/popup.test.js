@@ -8,36 +8,40 @@ import { versionNotices } from './version-notice.js'
 import { renderVersionNotices } from './version-banner.js'
 import { missingHostHint } from './native-host-hint.js'
 import { SITE_ACCESS, hasSiteAccess } from './site-access.js'
+import { HostSetupTracker, HOST_POLL_MS, hostSetupPlan, renderHostSetup, readArchitecture, currentPlatform } from './onboarding.js'
 
 // popup.js is a module; vm runs it as a script with its i18n import supplied.
 const source = readFileSync(new URL('./popup.js', import.meta.url), 'utf8')
   .replace(/^import .*\n/gm, '')
 
 function popup(initial, extensionAvailable = true, deferred = false, permissions = undefined) {
-  const callbacks = [], timers = []
+  const callbacks = [], timers = [], intervals = []
   const nodes = new Map()
   let changed
   const context = {
     document: {
       getElementById(id) {
         if (!nodes.has(id)) nodes.set(id, { textContent: '', style: {}, children: [], listeners: {},
-          classList: { add() {}, remove() {} }, replaceChildren(...c) { this.children = c },
+          classList: { add() {}, remove() {} }, replaceChildren(...c) { this.children = c }, append(...c) { this.children.push(...c) },
           addEventListener(type, fn) { this.listeners[type] = fn } })
         return nodes.get(id)
       },
       querySelectorAll() { return [] },
-      createElement: tag => ({ tag, children: [], dataset: {}, textContent: '', append(...c) { this.children.push(...c) }, addEventListener() {} }),
+      createElement: tag => ({ tag, children: [], dataset: {}, textContent: '', append(...c) { this.children.push(...c) }, addEventListener() {}, setAttribute() {} }),
     },
     chrome: { runtime: {
       sendMessage(_request, callback) { if (deferred) callbacks.push(callback); else callback(initial) },
       onMessage: { addListener(fn) { changed = fn } },
     }, permissions },
     setTimeout(callback, delay) { timers.push({ callback, delay }) },
+    setInterval(callback, delay) { intervals.push({ callback, delay }); return intervals.length },
+    clearInterval() {},
     t, applyI18n, versionNotices, renderVersionNotices, missingHostHint, SITE_ACCESS, hasSiteAccess,
+    HostSetupTracker, HOST_POLL_MS, hostSetupPlan, renderHostSetup, currentPlatform, readArchitecture: async () => 'arm',
   }
   if (!extensionAvailable) delete context.chrome
   vm.runInNewContext(source, context)
-  return { nodes, change(state) { changed({ type: 'ab-host-state', ...state }) },
+  return { nodes, intervals, change(state) { changed({ type: 'ab-host-state', ...state }) },
     reply(index, state) { callbacks[index](state) }, pollAgain() { timers.find(t => t.delay === 700).callback() } }
 }
 
@@ -53,8 +57,15 @@ test('native host failure updates an open popup with the actual error', () => {
   const p = popup({ connected: false, connectionState: 'connecting' })
   p.change({ connected: false, connectionState: 'disconnected',
     connectionError: 'Specified native messaging host not found.' })
-  assert.equal(p.nodes.get('statusLabel').textContent, 'Not paired')
-  assert.equal(p.nodes.get('statusSub').textContent, 'Specified native messaging host not found.')
+  // No CLI on the computer: the setup guide takes over (onboarding.js).
+  assert.equal(p.nodes.get('statusLabel').textContent, 'chrome-use is not installed on this computer yet')
+  assert.equal(p.nodes.get('setup').hidden, false)
+  assert.equal(p.nodes.get('hint').style.display, 'none')
+  assert.equal(p.intervals.length, 1)
+  p.change({ connected: true, connectionState: 'connected', tabCount: 0 })
+  assert.equal(p.nodes.get('statusLabel').textContent, 'Connected')
+  assert.equal(p.nodes.get('setup').hidden, true)
+  assert.equal(p.nodes.get('setupDone').hidden, false)
 })
 
 

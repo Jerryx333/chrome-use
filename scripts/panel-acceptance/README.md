@@ -117,3 +117,16 @@ worker exceptions and treat an unresponsive panel as a failure.
 HOST_BIN=<chrome-use> CHROME=<Chrome for Testing> EXT_DIR=<0.5.58 dir> node compat-058-live.mjs
 OLD_BIN=<old> NEW_BIN=<new> CHROME=<Chrome for Testing> EXT_DIR=<0.5.58 dir> node compat-upgrade-live.mjs
 ```
+
+## First-run setup timing (`onboarding-live.mjs`)
+
+`node onboarding-live.mjs <chrome-use-darwin-<arch>.dmg> [--real-codex]` times a
+user who starts from the extension (#781 G4): a fresh profile with no native
+host must show the setup guide, the disk image's ChromeUse.app runs the same
+setup a Finder double-click runs (`__gui-setup`) into a private HOME
+(`AGENT_BROWSER_BIN_DIR`, `CHROME_USE_NO_BROWSER_SCAN`, so nothing outside
+`/tmp/ob/<stamp>` is touched), and the panel must connect without a reload.
+`--real-codex` also checks the agent step and times one real Codex turn with the
+host's own Codex login (`REAL_CODEX_HOME`; never copy `auth.json`, a refresh in
+the copy can rotate the real token). Download, Gatekeeper's Open click and the
+agent sign-in are manual steps it does not time.

@@ -32,6 +32,26 @@
   .hint code { display: block; margin-top: 6px; padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
     font: 11.5px var(--font-mono); user-select: all; }
 
+  /* First-run setup (onboarding.js) */
+  .setup { margin: 12px 0 0; padding: 12px; background: var(--page); border: 1px solid var(--line); border-radius: 12px; font-size: 12.5px; }
+  .setup[hidden] { display: none; }
+  .setup p { margin: 0 0 6px; }
+  .setup .onboard-title { font-weight: 600; font-size: 13px; }
+  .setup .onboard-intro, .setup .onboard-waiting { color: var(--muted); }
+  .setup .onboard-steps { margin: 6px 0 10px; padding-left: 18px; }
+  .setup .onboard-steps li { margin: 2px 0; }
+  .setup .onboard-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .setup button { font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 8px; padding: 5px 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .setup button.onboard-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); padding: 7px 12px; }
+  .setup button:disabled { opacity: .5; cursor: default; }
+  .setup .onboard-status:empty { display: none; }
+  .setup details { margin: 6px 0; }
+  .setup summary { cursor: pointer; color: var(--muted); }
+  .setup .onboard-command { display: grid; gap: 6px; margin-top: 6px; }
+  .setup code { padding: 6px 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; font: 11px var(--font-mono); user-select: all; overflow-wrap: anywhere; }
+  .setup .onboard-command button { justify-self: start; }
+  .setup a { color: var(--accent); cursor: pointer; font-weight: 600; text-decoration: none; }
+
   .versions { display: grid; gap: 8px; margin-top: 10px; }
   .versions[hidden] { display: none; }
   .version-notice { display: grid; gap: 6px; padding: 10px 12px; border-radius: 12px; font-size: 12px; background: var(--accent-soft); }
@@ -82,6 +102,12 @@
       <span id="hintText" data-i18n="popup_hint_check">Check the local CLI connection:</span>
       <code id="hintCommand">chrome-use status</code>
     </div>
+
+    <section class="setup" id="setup" hidden></section>
+    <section class="setup" id="setupDone" hidden>
+      <p class="onboard-title" data-i18n="panel_onboard_connected">Connected</p>
+      <p class="onboard-intro" data-i18n="panel_onboard_popup_next">Open the chrome-use side panel to pick an agent and ask your first question.</p>
+    </section>
 
     <div class="versions" id="versionNotices" hidden></div>
     <p class="desc" id="versionError" hidden></p>

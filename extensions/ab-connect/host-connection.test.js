@@ -227,3 +227,13 @@ test('a host whose first pong carries cli is never legacy, even if a later one l
   state.receive(port, { method: 'pong' })
   assert.equal(state.snapshot().legacyCli, false)
 })
+
+test('the setup guide skips the backoff once the CLI may have been installed', () => {
+  const f = reconnectFixture()
+  for (let i = 0; i < 6; i++) { f.scheduler.failed(); f.elapse(60000) }
+  f.scheduler.failed()
+  assert.equal(f.scheduler.canAttempt(), false)
+  f.scheduler.reset()
+  assert.equal(f.scheduler.canAttempt(), true)
+  assert.equal(f.timers.size, 0)
+})

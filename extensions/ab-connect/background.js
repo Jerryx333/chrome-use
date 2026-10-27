@@ -3192,6 +3192,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     return false;
   }
+  // The setup guide (onboarding.js) polls this while the CLI is missing:
+  // retry the native host now instead of after the backoff.
+  if (msg?.type === 'ab-host-retry') {
+    const popup = _sender?.id === chrome.runtime.id && !_sender.tab && _sender.url === chrome.runtime.getURL('popup.html');
+    if (!popup && !isAgentPanelSender(_sender, chrome.runtime)) {
+      sendResponse({ success: false, error: 'Host retries start from the extension popup or panel' });
+      return false;
+    }
+    if (!port) {
+      hostReconnect.reset();
+      try { connectHost(); } catch (e) {}
+    }
+    sendResponse({ success: true, ...hostStatusForUi() });
+    return false;
+  }
   if (msg && msg.type === 'ab-status') {
     if (!port) {
       try {
