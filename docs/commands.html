@@ -300,7 +300,9 @@
 <pre><code><span class="du-prompt">$</span> chrome-use record start ./demo.webm    <span class="du-cmt"># 开始录制</span>
 <span class="du-prompt">$</span> chrome-use click @e1                   <span class="du-cmt"># 执行操作</span>
 <span class="du-prompt">$</span> chrome-use record stop                 <span class="du-cmt"># 停止并保存</span>
-<span class="du-prompt">$</span> chrome-use record restart ./take2.webm <span class="du-cmt"># 停止当前 + 开始新录制</span></code></pre>
+<span class="du-prompt">$</span> chrome-use record restart ./take2.webm <span class="du-cmt"># 停止当前 + 开始新录制</span>
+<span class="du-prompt">$</span> chrome-use record start ./demo.gif     <span class="du-cmt"># 录成循环 GIF（每秒 5 帧，宽 ≤800px，不需要 ffmpeg）</span>
+<span class="du-prompt">$</span> chrome-use record start <span class="du-flag">--gif</span>          <span class="du-cmt"># 同上，存为 ./recording.gif</span></code></pre>
       </div>
 
       <!-- ============================================================ -->
@@ -452,7 +454,8 @@
       <p>
         标签 id 是形如 <code>t1</code>、<code>t2</code> 的稳定字符串，会话内不重用。
         重新连接后（例如 relay 重启）每个 id 仍绑定到同一个 Chrome 标签页；找不到原标签页的 id 会被拒绝，不会转给其他标签页，它的标签名也继续保留给那个标签页。如果正在操作的标签页不见了，作用于当前标签页的命令会被拒绝，直到用 <code>tab &lt;id&gt;</code>、<code>tab new &lt;url&gt;</code> 或 <code>--tab &lt;id&gt;</code> 选定一个标签页。
-        位置整数<strong>不</strong>被接受 —— <code>tab 2</code> 会报错，请用 <code>t2</code>。
+        <code>tab select &lt;n&gt;</code> 和 <code>tab &lt;n&gt;</code> 也接受纯数字：按 <code>tab list</code> 的顺序从 0 数的位置，<code>tab select 0</code> 就是第一行。
+        回复会写明选中的是哪个稳定 id，之后请用那个 id，因为开关标签页后位置会变。其他地方（<code>--tab</code>、<code>tab close</code>、<code>tab inspect</code>）纯数字仍会报错，请用 <code>t2</code>。
         你也可以给标签起可读的 label（<code>docs</code>、<code>app</code>），与 id 通用。
       </p>
       <div class="du-code">
@@ -469,6 +472,8 @@
 <span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># 按 id 切换</span>
 <span class="du-prompt">$</span> chrome-use tab select t2                    <span class="du-cmt"># 显式切换语法</span>
 <span class="du-prompt">$</span> chrome-use tab select t2 <span class="du-flag">--activate</span>         <span class="du-cmt"># 存活探针之前激活标签</span>
+<span class="du-prompt">$</span> chrome-use tab select 0                     <span class="du-cmt"># tab list 里的第一行（从 0 数），回复写明对应的 id</span>
+<span class="du-prompt">$</span> chrome-use read <span class="du-flag">--tab</span> t1                     <span class="du-cmt"># 在 t1 里执行（read/extract/snapshot/get 都行），之后停在 t1</span>
 <span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com/stuck"</span> <span class="du-cmt"># 接管现有标签，不导航</span>
 <span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com"</span> <span class="du-flag">--activate</span> <span class="du-cmt"># 接管并保留在前台</span>
 <span class="du-prompt">$</span> chrome-use tab inspect t2                   <span class="du-cmt"># 不运行页面 JS，读取浏览器级状态</span>

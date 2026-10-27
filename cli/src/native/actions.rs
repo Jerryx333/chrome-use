@@ -14947,15 +14947,39 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
         .get("tabId")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'tabId' parameter (expected `t<N>`, a label, or a targetId)")?;
+    let mut positional_note = None;
     let (result, old_target, new_target) = {
         let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
+        // `tab select 0` (#781): a bare integer is a 0-based position in `tab
+        // list` order. Resync first so the position counts the rows `tab
+        // list` would print now.
+        let positional = if mgr.tab_id_at_position(tab_ref_str).is_some() {
+            mgr.resync_targets().await.ok();
+            match mgr.tab_id_at_position(tab_ref_str) {
+                Some(Ok(id)) => {
+                    let stable = super::browser::format_tab_id(id);
+                    positional_note = Some(format!(
+                        "`{}` is a position (0-based, `tab list` order): selected {stable}. \
+                         Use `{stable}` next time; positions shift when tabs open or close",
+                        tab_ref_str.trim()
+                    ));
+                    Some(id)
+                }
+                Some(Err(e)) => return Err(e),
+                None => None,
+            }
+        } else {
+            None
+        };
         // Try resolving locally first. Only resync targets if the target is unknown,
         // avoiding an unnecessary duplicate discovery round-trip on every switch.
-        let resolved = mgr.tab_id_for_target(tab_ref_str).or_else(|| {
-            super::browser::TabRef::parse(tab_ref_str)
-                .ok()
-                .and_then(|r| mgr.resolve_tab_ref(&r).ok())
-        });
+        let resolved = positional
+            .or_else(|| mgr.tab_id_for_target(tab_ref_str))
+            .or_else(|| {
+                super::browser::TabRef::parse(tab_ref_str)
+                    .ok()
+                    .and_then(|r| mgr.resolve_tab_ref(&r).ok())
+            });
         let tab_id = match resolved {
             Some(id) => id,
             None => {
@@ -14993,6 +15017,9 @@ async fn handle_tab_switch(cmd: &Value, state: &mut DaemonState) -> Result<Value
     }
 
     let mut result = result?;
+    if let (Some(note), Some(obj)) = (positional_note, result.as_object_mut()) {
+        obj.insert("tabNote".to_string(), json!(note));
+    }
     finish_pending_tab_setup(state).await?;
     let mgr = state.browser.as_mut().ok_or("Browser not launched")?;
 

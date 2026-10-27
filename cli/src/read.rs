@@ -1,3 +1,5 @@
+mod tables;
+
 use futures_util::StreamExt;
 use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
 use reqwest::Client;
@@ -1651,7 +1653,7 @@ fn note_links_unavailable(value: &mut Value, source: &str) {
 }
 
 fn html_to_markdownish(html: &str) -> String {
-    let stripped = strip_ignored_html_blocks(html);
+    let stripped = tables::render_tables(&strip_ignored_html_blocks(html));
     let mut out = String::new();
     let mut chars = stripped.chars().peekable();
     let mut in_pre = false;
@@ -1673,11 +1675,12 @@ fn html_to_markdownish(html: &str) -> String {
     }
 
     let decoded = decode_html_entities(&out);
-    if in_pre {
+    let text = if in_pre {
         normalize_markdownish(&format!("{}\n```", decoded))
     } else {
         normalize_markdownish(&decoded)
-    }
+    };
+    text.replace(tables::CELL_SEP, "\t")
 }
 
 fn strip_ignored_html_blocks(html: &str) -> String {

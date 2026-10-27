@@ -3560,12 +3560,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
             const VALID: &[&str] = &["start", "stop", "restart"];
             match rest.first().copied() {
                 Some("start") => {
-                    let path = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
-                        context: "record start".to_string(),
-                        usage: "record start <output.webm> [url]",
-                    })?;
-                    // Optional URL parameter
-                    let url = rest.get(2);
+                    let (path, url) = record_path_and_url(&rest, "start")?;
                     let mut cmd = json!({ "id": id, "action": "recording_start", "path": path });
                     if let Some(u) = url {
                         // Add https:// prefix if needed (preserve special schemes)
@@ -3594,12 +3589,7 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     Ok(cmd)
                 }
                 Some("restart") => {
-                    let path = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
-                        context: "record restart".to_string(),
-                        usage: "record restart <output.webm> [url]",
-                    })?;
-                    // Optional URL parameter
-                    let url = rest.get(2);
+                    let (path, url) = record_path_and_url(&rest, "restart")?;
                     let mut cmd = json!({ "id": id, "action": "recording_restart", "path": path });
                     if let Some(u) = url {
                         // Add https:// prefix if needed (preserve special schemes)
@@ -4734,6 +4724,40 @@ fn parse_form(rest: &[&str], id: &str) -> Result<Value, ParseError> {
 /// one like `{"items":[{"title":"…","url":"…"}]}` — the array element's object
 /// is the field map, the outer key is just a human label, and `rows` is
 /// auto-detected at extraction time (#96). Returns the canonical form.
+/// `record start|restart [--gif] <path> [url]`. A `.gif` path records an
+/// animated GIF (#781); `--gif` says so explicitly, defaults the path to
+/// `recording.gif`, and refuses a path with another extension rather than
+/// writing a GIF under a video's name.
+fn record_path_and_url<'a>(
+    rest: &[&'a str],
+    sub: &str,
+) -> Result<(String, Option<&'a str>), ParseError> {
+    let usage: &'static str = if sub == "start" {
+        "record start [--gif] <output.webm|output.gif> [url]"
+    } else {
+        "record restart [--gif] <output.webm|output.gif> [url]"
+    };
+    let gif = rest.iter().skip(1).any(|a| *a == "--gif");
+    let mut positional = rest.iter().skip(1).copied().filter(|a| *a != "--gif");
+    let path = match positional.next() {
+        Some(path) => path.to_string(),
+        None if gif => "recording.gif".to_string(),
+        None => {
+            return Err(ParseError::MissingArguments {
+                context: format!("record {sub}"),
+                usage,
+            })
+        }
+    };
+    if gif && !crate::native::recording::is_gif_path(&path) {
+        return Err(ParseError::InvalidValue {
+            message: format!("record {sub} --gif: the output path must end in .gif, got {path}"),
+            usage,
+        });
+    }
+    Ok((path, positional.next()))
+}
+
 fn normalize_extract_schema(schema: Value) -> Result<Value, String> {
     if schema.get("fields").map(|f| f.is_object()).unwrap_or(false) {
         return Ok(schema);
@@ -7127,6 +7151,17 @@ mod tests {
         let snap_cmd = parse_command(&args("snapshot -i"), &flags).unwrap();
         assert_eq!(snap_cmd["action"], "snapshot");
         assert_eq!(snap_cmd["tabId"], "t2");
+
+        // #781: the read-only commands an agent uses on a second tab.
+        for line in [
+            "read",
+            r#"extract --schema {"rows":"tr","fields":{"a":"td"}}"#,
+            "get text h1",
+            "get url",
+        ] {
+            let cmd = parse_command(&args(line), &flags).unwrap();
+            assert_eq!(cmd["tabId"], "t2", "{line}: {cmd}");
+        }
     }
 
     #[test]
@@ -8554,6 +8589,27 @@ mod tests {
             result.unwrap_err(),
             ParseError::MissingArguments { .. }
         ));
+    }
+
+    #[test]
+    fn record_gif_takes_a_gif_path_or_defaults_one() {
+        let cmd = parse_command(&args("record start demo.gif"), &default_flags()).unwrap();
+        assert_eq!(cmd["path"], "demo.gif");
+        let cmd = parse_command(
+            &args("record start --gif demo.gif example.com"),
+            &default_flags(),
+        )
+        .unwrap();
+        assert_eq!(cmd["path"], "demo.gif");
+        assert_eq!(cmd["url"], "https://example.com");
+        let cmd = parse_command(&args("record start --gif"), &default_flags()).unwrap();
+        assert_eq!(cmd["path"], "recording.gif");
+        let cmd = parse_command(&args("record restart out.gif --gif"), &default_flags()).unwrap();
+        assert_eq!(cmd["action"], "recording_restart");
+        assert_eq!(cmd["path"], "out.gif");
+        let err =
+            parse_command(&args("record start --gif demo.webm"), &default_flags()).unwrap_err();
+        assert!(matches!(err, ParseError::InvalidValue { .. }), "{err:?}");
     }
 
     #[test]

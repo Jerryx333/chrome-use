@@ -312,7 +312,9 @@
 <pre><code><span class="du-prompt">$</span> chrome-use record start ./demo.webm    <span class="du-cmt"># start recording</span>
 <span class="du-prompt">$</span> chrome-use click @e1                   <span class="du-cmt"># perform actions</span>
 <span class="du-prompt">$</span> chrome-use record stop                 <span class="du-cmt"># stop and save</span>
-<span class="du-prompt">$</span> chrome-use record restart ./take2.webm <span class="du-cmt"># stop the current one + start a new recording</span></code></pre>
+<span class="du-prompt">$</span> chrome-use record restart ./take2.webm <span class="du-cmt"># stop the current one + start a new recording</span>
+<span class="du-prompt">$</span> chrome-use record start ./demo.gif     <span class="du-cmt"># looping GIF (5 fps, ≤800px wide, no ffmpeg)</span>
+<span class="du-prompt">$</span> chrome-use record start <span class="du-flag">--gif</span>          <span class="du-cmt"># same, to ./recording.gif</span></code></pre>
       </div>
 
       <!-- ============================================================ -->
@@ -465,7 +467,8 @@
       <p>
         Tab ids are stable strings like <code>t1</code>, <code>t2</code> and are not reused within a session.
         After a reconnect (a relay restart, for example) each id stays bound to the same Chrome tab; an id whose tab cannot be found again is refused rather than given to another tab, and its label stays reserved for that tab. If the tab you were driving is gone, commands on the current tab are refused until you pick one with <code>tab &lt;id&gt;</code>, <code>tab new &lt;url&gt;</code> or <code>--tab &lt;id&gt;</code>.
-        Positional integers are <strong>not</strong> accepted — <code>tab 2</code> errors; use <code>t2</code>.
+        <code>tab select &lt;n&gt;</code> and <code>tab &lt;n&gt;</code> also take a bare number: a position in <code>tab list</code> order, counted from 0, so <code>tab select 0</code> is the first row.
+        The reply names the stable id it picked; use that id from then on, since positions shift when tabs open or close. Everywhere else (<code>--tab</code>, <code>tab close</code>, <code>tab inspect</code>) a bare number errors; use <code>t2</code>.
         You can also give a tab a readable label (<code>docs</code>, <code>app</code>), interchangeable with the id.
       </p>
       <div class="du-code">
@@ -482,6 +485,8 @@
 <span class="du-prompt">$</span> chrome-use tab t2                           <span class="du-cmt"># switch by id</span>
 <span class="du-prompt">$</span> chrome-use tab select t2                    <span class="du-cmt"># explicit switch syntax</span>
 <span class="du-prompt">$</span> chrome-use tab select t2 <span class="du-flag">--activate</span>         <span class="du-cmt"># activate before the liveness probe</span>
+<span class="du-prompt">$</span> chrome-use tab select 0                     <span class="du-cmt"># first row of tab list (counted from 0); the reply names its id</span>
+<span class="du-prompt">$</span> chrome-use read <span class="du-flag">--tab</span> t1                     <span class="du-cmt"># run in t1 (read/extract/snapshot/get alike); the session stays on t1</span>
 <span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com/stuck"</span> <span class="du-cmt"># adopt without navigating</span>
 <span class="du-prompt">$</span> chrome-use tab adopt <span class="du-str">"example.com"</span> <span class="du-flag">--activate</span> <span class="du-cmt"># adopt and leave in the foreground</span>
 <span class="du-prompt">$</span> chrome-use tab inspect t2                   <span class="du-cmt"># browser state without page JavaScript</span>

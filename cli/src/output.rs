@@ -888,6 +888,10 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
             if let Some(w) = data.get("warning").and_then(|v| v.as_str()) {
                 eprintln!("⚠ navigation: {w}");
             }
+            // `tab select 0`: which stable id the position named (#781).
+            if let Some(note) = data.get("tabNote").and_then(|v| v.as_str()) {
+                eprintln!("note: {note}");
+            }
             return;
         }
         if let Some(cdp_url) = data.get("cdpUrl").and_then(|v| v.as_str()) {
@@ -2667,8 +2671,13 @@ chrome-use read - Read a URL or the active page as text
 Usage: chrome-use read [url] [options]
 
 With a URL, prefers Markdown and falls back to extracted page text.
-Without a URL, reads the rendered active tab. Check source, finalUrl,
-contentType and truncated in JSON before treating the result as complete.
+Without a URL, reads the rendered active tab (`--tab <ref>`: another tab).
+Check source, finalUrl, contentType and truncated in JSON before treating the
+result as complete.
+
+Tables come out as Markdown tables (`| Widget A | 12 | 3.25 |`), cell text
+unchanged. A table with a cell spanning rows comes out one row per line,
+cells separated by tabs. Single-column and layout tables read as text.
 
 Options:
   --filter <text>     Literal, ASCII-case-insensitive filter, not a regex.
@@ -2696,6 +2705,7 @@ Examples:
   chrome-use read https://example.com/docs --outline
   chrome-use read https://example.com/docs --llms index
   chrome-use read --links
+  chrome-use read --tab t1          # the quote in t1, while working in t2
 "##
         }
         // === Navigation ===
@@ -4674,6 +4684,9 @@ Operations:
   duplicate [ref] --label <name>
                              Natively duplicate and label a tab
   select <ref> [--activate]  Switch tabs (external: created or adopted only)
+  select <n>                 A bare number is a position in `tab list` order,
+                             counted from 0; the reply names the stable id it
+                             picked. Prefer the id: positions shift
   adopt <url|targetId> [--activate]
                              Attach an existing tab without navigating it
   --force                    With --activate: bring the tab forward even though
@@ -4700,6 +4713,11 @@ Every tab (`tab list --all`):
   up to 1000); the reply says how many were left out. Urls are as Chrome
   reports them and may carry tokens; titles over 300 and urls over 2048
   characters are cut. Over the relay it needs ab-connect 0.5.25+.
+
+Reading another tab without selecting it first:
+  read --tab t1, extract --tab t1 ..., snapshot --tab t1, get text h1 --tab t1
+  `--tab <ref>` works on any page command: the command runs in that tab, and
+  the session stays on it afterwards (a later command without --tab acts there).
 
 Acting on a tab the session does not own (`--force`):
   --tab <handle> --force     Run any page command (snapshot, click, fill, open/
@@ -5046,11 +5064,15 @@ The output file can be viewed in:
             r##"
 chrome-use record - Record browser session to video
 
-Usage: chrome-use record start <path.webm> [url]
+Usage: chrome-use record start [--gif] <path.webm|path.mp4|path.gif> [url]
        chrome-use record stop [--expect-path <path>]
-       chrome-use record restart <path.webm> [url]
+       chrome-use record restart [--gif] <path> [url]
 
-Record the browser to a WebM video file.
+Record the browser to a WebM (or MP4) video file, through ffmpeg.
+A .gif path (or --gif) writes a looping animated GIF instead, encoded in
+process with no ffmpeg needed: 5 frames a second, at most 800 px wide,
+unchanged frames merged. Small enough to attach to an issue or a chat.
+--gif alone writes ./recording.gif.
 In a launched browser, creates a fresh context while preserving cookies.
 In extension-connected real Chrome, records the current session-owned tab
 directly because Chrome does not permit creating browser contexts there.
@@ -5081,6 +5103,11 @@ Examples:
 
   # Restart recording with a new file (stops previous, starts new)
   chrome-use record restart ./take2.webm
+
+  # A shareable animated GIF of the same flow
+  chrome-use record start ./demo.gif
+  chrome-use click @e3
+  chrome-use record stop
 "##
         }
 

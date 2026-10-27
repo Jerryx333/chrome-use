@@ -10,13 +10,15 @@ Capture browser automation as video for debugging, documentation, or verificatio
 - [Recording Commands](#recording-commands)
 - [Use Cases](#use-cases)
 - [Best Practices](#best-practices)
+- [Shareable GIF](#shareable-gif)
 - [Output Format](#output-format)
 - [Limitations](#limitations)
 
 ## Basic Recording
 
-Recording needs `ffmpeg` on `PATH`. Without it, `record start` fails with
-`ffmpeg not found or failed to execute`.
+Video recording needs `ffmpeg` on `PATH`. Without it, `record start` fails with
+`ffmpeg not found or failed to execute`. A `.gif` recording does not (see
+[Shareable GIF](#shareable-gif)).
 
 When connected through the Chrome extension relay, recording captures the
 current session-owned real-Chrome tab directly. It does not create a browser
@@ -170,10 +172,31 @@ chrome-use screenshot ./screenshots/step2-after-click.png
 chrome-use record stop
 ```
 
+## Shareable GIF
+
+A `.gif` path records a looping animated GIF you can drop into an issue, a PR
+or a chat:
+
+```bash
+chrome-use record start ./bug.gif      # or: record start --gif  (writes ./recording.gif)
+chrome-use click @e3
+chrome-use record stop                 # ✓ path + frame count
+```
+
+- Encoded inside chrome-use, frame by frame as it records: no `ffmpeg`, and
+  memory stays flat however long it runs.
+- 5 frames a second, scaled to at most 800 px wide (the first frame's size is
+  kept for the whole GIF). Frames where nothing changed are merged into one
+  longer frame, so an idle page costs almost nothing.
+- 256 colours per frame: fine for UI, grainy for photos and video. Use `.webm`
+  when quality matters.
+- `--gif` with a path that does not end in `.gif` is refused.
+
 ## Output Format
 
 The file extension picks the encoder:
 
+- `.gif`: animated GIF, encoded in process (no `ffmpeg`)
 - `.webm`: WebM with VP8 (`libvpx`)
 - anything else, such as `.mp4`: H.264 (`libx264`)
 
@@ -185,4 +208,4 @@ Your `ffmpeg` build must include the matching encoder.
 
 - Recording adds slight overhead to automation
 - Large recordings can consume significant disk space
-- Requires `ffmpeg`; minimal builds may lack `libvpx` or `libx264`
+- Video requires `ffmpeg`; minimal builds may lack `libvpx` or `libx264`

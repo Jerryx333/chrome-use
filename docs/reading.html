@@ -321,8 +321,34 @@ URL: https://example.com/login
 <pre><code><span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide         <span class="du-cmt"># 读一个 URL</span>
 <span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide <span class="du-flag">--outline</span>  <span class="du-cmt"># 只要标题大纲</span>
 <span class="du-prompt">$</span> chrome-use read                                        <span class="du-cmt"># 读当前活动标签页</span>
-<span class="du-prompt">$</span> chrome-use read https://news.ycombinator.com <span class="du-flag">--links</span>   <span class="du-cmt"># 正文后附「## Links」：[文字](绝对 URL)</span></code></pre>
+<span class="du-prompt">$</span> chrome-use read https://news.ycombinator.com <span class="du-flag">--links</span>   <span class="du-cmt"># 正文后附「## Links」：[文字](绝对 URL)</span>
+<span class="du-prompt">$</span> chrome-use read <span class="du-flag">--tab</span> <span class="du-str">t1</span>                                 <span class="du-cmt"># 读 t1，不用先 tab select</span></code></pre>
       </div>
+
+      <p>
+        <strong>表格保持表格。</strong>页面里的 <code>&lt;table&gt;</code> 输出成 Markdown 表格，单元格文字原样保留：
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">read 输出</span>
+        </div>
+<pre><code>| Item | Qty | Unit |
+| --- | --- | --- |
+| Widget A | 12 | 3.25 |
+| Widget B | 5 | 7.10 |</code></pre>
+      </div>
+
+      <p>
+        有单元格跨行（<code>rowspan</code>）的表格 Markdown 表达不了，改成一行一条、单元格之间用 Tab 分隔；
+        跨列（<code>colspan</code>）用空单元格补齐，列仍然对得上。只有一列的表格、<code>role="presentation"</code>
+        的表格和套着别的表格的外层表格是排版用的，照普通正文输出。
+      </p>
+      <p>
+        <code>--tab &lt;id|label&gt;</code> 对任何页面命令都有效（<code>read</code>、<code>extract</code>、
+        <code>snapshot</code>、<code>get text</code>…）：命令在那个标签页里执行，执行完 session 停在那个标签页上。
+      </p>
 
       <p>
         常用 flag：<code>--raw</code>（原样返回响应体，不做任何加工）、<code>--require-md</code>

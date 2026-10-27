@@ -188,6 +188,8 @@ chrome-use get cdp-url         # Get CDP WebSocket URL
 chrome-use get count ".item"   # Count matching elements
 chrome-use get box @e1         # Get bounding box
 chrome-use get styles @e1      # Get computed styles (font, color, bg, etc.)
+chrome-use read --tab t1       # Any of these on another tab: --tab <id|label> runs the
+                               # command there (no `tab select` first) and leaves the session on it
 ```
 
 ## Check State
@@ -229,6 +231,8 @@ chrome-use record start ./demo.webm    # Start recording
 chrome-use click @e1                   # Perform actions
 chrome-use record stop                 # Stop and save video
 chrome-use record restart ./take2.webm # Stop current + start new
+chrome-use record start ./demo.gif     # Shareable looping GIF (5 fps, ≤800 px wide, no ffmpeg)
+chrome-use record start --gif          # Same, to ./recording.gif
 ```
 
 ## Wait
@@ -424,6 +428,7 @@ chrome-use tab duplicate docs --label copy  # Duplicate by ref and label the cop
 chrome-use tab t2                           # Switch to tab by id
 chrome-use tab select t2                    # Explicit switch syntax
 chrome-use tab select t2 --activate         # Activate before the liveness probe
+chrome-use tab select 0                     # Position in `tab list` order (0-based); names the id it picked
 chrome-use tab adopt "example.com/stuck"   # Adopt without navigating
 chrome-use tab adopt "example.com" --activate # Adopt and leave in the foreground
 chrome-use tab inspect t2                   # Browser metadata without page JS
@@ -578,8 +583,12 @@ re-bound by Chrome tab, not by list order, and an id whose tab cannot be found
 again is refused with an error rather than given to another tab, and its label
 stays reserved for that tab. If the tab you
 were driving is the one that is gone, commands that act on "the current tab" are
-refused until you pick one (`tab <id>`, `tab new <url>` or `--tab <id>`). Positional integers are **not** accepted — `tab 2` errors with a
-teaching message; use `t2`.
+refused until you pick one (`tab <id>`, `tab new <url>` or `--tab <id>`).
+`tab select <n>` / `tab <n>` also take a bare number: a 0-based position in
+`tab list` order, so `tab select 0` is the first row. The reply names the stable
+id it picked (`note: \`0\` is a position ... selected t1`); use that id from then
+on, since positions shift when tabs open or close. Everywhere else (`--tab`,
+`tab close`, `tab inspect`) a bare number is refused: use `t2`.
 
 User-assigned labels (`docs`, `app`, `admin`) are interchangeable with ids
 everywhere a tab ref is accepted. Labels are the agent-friendly way to write
