@@ -46,9 +46,9 @@ EXTRA = {
            ('/en/privacy.html', 'Privacy policy'), ('/mobile-privacy.html', 'Mobile app privacy policy')],
 }
 OUT = {
-    'zh': [(GH, 'GitHub'), (GH + '/releases', '下载 / Releases'), ('https://github.com/leeguooooo/iphone-use', 'iphone-use（让 agent 操作 iPhone）'),
+    'zh': [(GH, 'GitHub'), (GH + '/releases', '下载 / Releases'), ('https://iphone-use.leeguoo.com/', 'iphone-use（让 agent 操作 iPhone）'),
            ('https://blog.leeguoo.com', '博客')],
-    'en': [(GH, 'GitHub'), (GH + '/releases', 'Releases'), ('https://github.com/leeguooooo/iphone-use', 'iphone-use (drive an iPhone)'),
+    'en': [(GH, 'GitHub'), (GH + '/releases', 'Releases'), ('https://iphone-use.leeguoo.com/en/', 'iphone-use (drive an iPhone)'),
            ('https://blog.leeguoo.com/en', 'Blog')],
 }
 
