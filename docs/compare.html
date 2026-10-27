@@ -67,7 +67,7 @@
         让 AI agent 用浏览器的方案很多，2026 年又多了一批能连你现有 Chrome 的工具。这一页把它们放在一起<span class="mark">按事实对比</span>：
         能实测的写实测数字，别家的情况以对方官方文档为准，测不了的不硬写。
       </p>
-      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">各方案现状核对于 2026-10-27（官方 README、文档、发布记录）。下方 ego 和 browser-relay 两节的实测是 2026-07 做的，已注明。</p>
+      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">各方案现状核对于 2026-10-27（官方 README、文档、发布记录）。ego 一节于 2026-10-27 用双方当前版本重测；browser-relay 一节的对照是 2026-07 做的，已注明。</p>
 
       <h2>一句话</h2>
       <p>
@@ -274,104 +274,70 @@
       </table>
       </div>
 
-      <h2>chrome-use vs ego(lite)：2026-07 实测</h2>
-      <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ 这一节的数据是 2026-07 的</div>
-        下面的 token 和性能数字、以及引用的官网宣传语，来自 2026-07 对 ego(lite) 当时版本的实测。ego 现在已经到 0.6.x（Chromium 156），官网宣传也换成了自家的任务基准；结论可能已经变化，重测前仅供参考。
-      </div>
+      <h2>chrome-use vs ego(lite)：2026-10 实测</h2>
       <p>
-        ego(lite) 的定位和我们很像（都让 agent 用真登录、不抢你的标签）。当时我们两边各跑同一任务，核对它"更快、更省 token"的说法：<strong>一个半真，一个恰好相反</strong>。
+        ego(lite) 的定位和我们很像：都让 agent 用真登录、不抢你的标签。2026-10-27 我们在同一台机器（190，M4）上用两边当前版本重测了一遍：
+        chrome-use 1.5.269（Chrome 155，<code>--launch</code> 有头），ego(lite) 0.6.1.13（Chromium 156，ego-browser 技能 2.1.0）。每个数字取 5 轮交替运行的中位数。
+        7 月那次的两条结论现在都不成立了，下面写的是新结果。
       </p>
+      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">ego 无需注册即可安装使用，未导入 Chrome 数据。GitHub 页面两边都是未登录状态（7 月是登录状态），所以和 7 月的数字不能直接比。</p>
 
-      <h3>Token（喂给大模型的观察，真正花钱的地方）</h3>
+      <h3>Token（每次快照喂给模型的字节数）</h3>
       <div class="cmp-scroll">
       <table class="cmp-table">
-        <thead><tr><th>页面</th><th>chrome-use <code>snapshot -i</code></th><th>ego <code>snapshotText</code></th><th>谁更省</th></tr></thead>
+        <thead><tr><th>页面</th><th>chrome-use <code>snapshot -i</code></th><th>ego 默认 <code>page.snapshot()</code>（只拍当前视口）</th><th>ego 整页 <code>full_page</code></th><th>结论</th></tr></thead>
         <tbody>
-          <tr class="me"><th>example.com</th><td class="cmp-win">102 字节</td><td>438 字节</td><td>省 ~4.3×</td></tr>
-          <tr class="me"><th>Hacker News</th><td class="cmp-win">12.6 KB</td><td>46.7 KB</td><td>省 ~3.7×</td></tr>
-          <tr class="me"><th>GitHub 仓库页<br><span class="cmp-mut">（两边都登录态）</span></th><td class="cmp-win">26.6 KB</td><td>112 KB</td><td>省 ~4.2×</td></tr>
+          <tr><th>Hacker News</th><td class="cmp-win">15.5 KB</td><td>37.7 KB</td><td>46.5 KB</td><td>默认对默认，chrome-use 少约 2.4×（对整页少 3.0×）</td></tr>
+          <tr><th>GitHub 仓库页（未登录）</th><td>40.3 KB</td><td class="cmp-win">18.8 KB</td><td>177 KB</td><td>ego 默认只拍视口，单次少约 2.1×；要看到同样多的内容需要滚动再拍或用整页，整页时 chrome-use 少约 4.4×</td></tr>
         </tbody>
       </table>
       </div>
-      <p class="cmp-mut" style="font-size:.82rem; margin-top:6px;">两边在同一时刻、同一登录态、各自默认设置下实测（2026-07 复现）：example.com / HN 登出态，GitHub 两边登录同一账号。旧数字（456 / 33.6K 等）来自旧版本或登录态错配，已替换为独立复现值。</p>
-      <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ "更省 token" 恰好说反了</div>
-        chrome-use 默认 <code>snapshot -i</code> 只列交互元素，比 ego 默认的全结构树 <strong>省 ~3.7–4.3×</strong>（同登录态独立复现）。token 才是 agent 花钱的地方，更省的是我们。
-      </div>
+      <p>
+        ego 现在的默认快照只覆盖当前屏幕，chrome-use 的 <code>snapshot -i</code> 覆盖整页的可交互元素，两者范围不同。短页面 chrome-use 更省，长页面单次调用 ego 更省，按整页算 chrome-use 更省。
+        7 月写的"我们省 3.7–4.3×"已不准确。（example.com 页面本身改了版，这一行不再有可比性，已去掉。）
+      </p>
 
-      <h3>性能（墙钟时间）</h3>
+      <h3>速度（墙钟时间）</h3>
       <div class="cmp-scroll">
       <table class="cmp-table">
         <thead><tr><th>场景</th><th>chrome-use</th><th>ego</th></tr></thead>
         <tbody>
-          <tr><th>导航 / 单次快照</th><td class="cmp-win">≈ 持平</td><td>≈ 持平（受页面加载 + CDP 限制）</td></tr>
-          <tr><th>6 微操作 · 每条一个 CLI 进程</th><td>1.00s（0.17s/op 启动开销）</td><td>—</td></tr>
-          <tr class="me"><th>6 微操作 · chrome-use <code>batch</code></th><td class="cmp-win">0.19s</td><td>—</td></tr>
-          <tr><th>6 微操作 · ego 常驻运行时</th><td>—</td><td class="cmp-win">≈0.00s</td></tr>
+          <tr><th>空命令的进程开销</th><td class="cmp-win">0.016 s</td><td>0.151 s（每次起一个 Node 进程）</td></tr>
+          <tr><th>6 个小操作，每个一条命令</th><td class="cmp-win">0.077 s</td><td>0.72 s</td></tr>
+          <tr><th>6 个小操作，合在一次调用里</th><td class="cmp-win"><code>batch</code> 0.017 s</td><td>脚本内 22 ms，加进程共 0.152 s</td></tr>
+          <tr><th>打开 + 快照：Hacker News</th><td class="cmp-win">0.36 s</td><td>0.61 s</td></tr>
+          <tr><th>打开 + 快照：GitHub 仓库页</th><td>1.62 s</td><td class="cmp-win">0.89 s</td></tr>
         </tbody>
       </table>
       </div>
       <p>
-        原始浏览器操作两边一样快。ego 赢在<strong>常驻运行时</strong>，省掉每条命令的进程启动；chrome-use 默认「一命令一进程」，每条约 0.15–0.17s。
-        <strong>微操作密集</strong>的任务里 ego 更快（"快 3 倍"多半来自这类任务）。典型任务（open+快照+抽取）实测两边都 ~3s；chrome-use 用 <code>batch</code>（一个进程复用常驻守护进程）6 操作 0.19s 追平，另有 WebSocket 流做实时驱动。
+        7 月的结论是"ego 的常驻运行时省掉了每条命令的进程开销"，现在反过来了：chrome-use 每条命令约 13–16 ms，ego 每次调用都要起一个约 0.15 s 的 Node 进程。
+        GitHub 上 ego 更快，原因是 chrome-use 的 <code>snapshot -i</code> 默认会等页面安静下来，GitHub 一直有动静，要等满约 1 秒；加 <code>--no-settle</code> 后快照只要 0.09 s。
       </p>
 
-      <h3>他们官网的宣传语 vs 我们的证据</h3>
-      <p>取自 <a href="https://lite.ego.app/">lite.ego.app</a> 的原文（英文照录），逐条给证据。方法见页末 workflow，可复现。</p>
+      <h3>他们官网现在的说法（2026-10-27）</h3>
       <div class="cmp-scroll">
       <table class="cmp-table">
-        <thead><tr><th>ego 官网原文</th><th>我们的证据</th><th>结论</th></tr></thead>
+        <thead><tr><th>ego 官网原文</th><th>我们的看法</th></tr></thead>
         <tbody>
-          <tr>
-            <td>"<strong>3.45x faster</strong>" · "Fastest browser for AI agents"</td>
-            <td>HN 抽取任务两边都 ~3s；6 微操作：chrome-use 各自进程 1.00s，<code>batch</code> 0.19s，ego 常驻运行时 ≈0s。</td>
-            <td><span class="cmp-mut">半真</span>：只在<strong>微操作密集</strong>时成立（常驻运行时省进程启动）；典型任务持平，<code>batch</code>/流即可追平。</td>
-          </tr>
-          <tr class="me">
-            <td>"<strong>Same automation, fewer tokens</strong>"</td>
-            <td>同页默认快照体量（同登录态独立复现）：chrome-use <code>snapshot -i</code> <strong>102 B / 12.6K / 26.6K</strong> vs ego <code>snapshotText</code> 438 B / 46.7K / 112K。</td>
-            <td><span class="cmp-win">反了</span>：默认工作流下<strong>我们省 ~3.7–4.3×</strong>。</td>
-          </tr>
-          <tr>
-            <td>"not a JS shim on stock Chrome … reach into <strong>cross-origin iframes, shadow DOM, third-party SDK widgets</strong> like Stripe, Salesforce, Intercom, React portals … <strong>JS shims usually give up</strong> … burning tokens for nothing"</td>
-            <td>chrome-use 走 <strong>CDP</strong>（非 JS shim）。reCAPTCHA demo 实测：<code>frames</code> 列出全部 5 个跨域 frame；<code>eval --frame 1</code> 读到勾选框 <code>role=checkbox</code>「I'm not a robot」。默认 <code>snapshot -i</code> 此前没把它并进顶层，<strong>现已修复</strong>（<a href="https://github.com/leeguooooo/chrome-use/issues/92">#92</a> 已合并 presentation-role / AX-stripped 跨域 iframe）。</td>
-            <td><span class="cmp-win">已追平</span>：我们<strong>不是 JS shim、能触达</strong> OOPIF/SDK widget，默认快照现在也把它们并入了（#92 已修）。ego 说的是通用 JS shim 的毛病，套不到我们头上。</td>
-          </tr>
-          <tr>
-            <td>"your AI agents will <strong>never get stuck on captchas, 2FA, and SSO redirects</strong>"（因为你登录态用它）</td>
-            <td>chrome-use 也驱动你<strong>真实已登录</strong>的 Chrome → SSO/2FA 天然已完成。普通易盾拼图有 <code>solve-slider</code>，可读的图标点选由 agent 看图并操作；尝试失败时用 <code>session handoff</code> 兜底。</td>
-            <td><span class="cmp-mut">持平</span>：同样的登录态优势（我们直接用你现有的 Chrome）。</td>
-          </tr>
-          <tr>
-            <td>"<strong>Zero cost, zero config</strong> (yes, free)"</td>
-            <td>chrome-use 也免费开源，一条 <code>curl … | sh</code> 装好 + 一次扩展安装。</td>
-            <td><span class="cmp-mut">持平</span>：都免费；它要你下一个新浏览器，我们用你现有的。</td>
-          </tr>
-          <tr>
-            <td>交接 / 接管 UI（用户可随时从 agent 手里接管 Space）</td>
-            <td>chrome-use 已实现 <code>session handoff</code> / <code>resume</code> / <code>status</code> / <code>list</code>。<span class="cmp-mut">（注：ego 该功能确有，但未见 "Take over/Stop" 逐字标签，故不作原文引用。）</span></td>
-            <td><span class="cmp-mut">持平</span>，已对齐。</td>
-          </tr>
-          <tr>
-            <td>"installs as a skill in <strong>every agent</strong>（Claude Code / Codex / Cursor / Kiro / Hermes / OpenClaw）"</td>
-            <td>chrome-use 是原生 CLI/skill，<strong>任何能跑 shell 的 agent</strong> 都能用（Claude Code / Cursor / Codex / Continue / Windsurf…）。</td>
-            <td><span class="cmp-mut">持平</span>。</td>
-          </tr>
+          <tr><td>"Fastest browser for AI agents to run web automation"；任务基准：平均 398 s/任务（其他工具 587–648 s），成功率 93.5%，$1.64/任务</td><td>对比对象是 chrome-devtools-cli、agent-browser、browser-harness、playwright-cli，没有 chrome-use；官网没有公开任务列表、模型和方法，我们无法复核。7 月的"3.45x faster"已经撤下。</td></tr>
+          <tr><td>"The snapshots cost fewer tokens than HTML"</td><td>比的是原始 HTML，不是其他工具。和我们的对比见上面的 token 表。</td></tr>
+          <tr><td>快照在自研 Chromium 内核里生成，能进跨域 iframe、shadow DOM、Stripe 等第三方组件</td><td>chrome-use 走 CDP，同样能进跨进程 iframe（三层以内）和 shadow DOM，快照默认并入。</td></tr>
+          <tr><td>"Zero cost, zero config"</td><td>属实：免费，安装和使用不需要账号。区别是它要你装一个新浏览器，chrome-use 用你现有的 Chrome。</td></tr>
+          <tr><td>"You can watch the agent in its Space and take over at any time"</td><td>持平：chrome-use 有 <code>session handoff / resume</code>，侧栏对话也能随时收回标签。</td></tr>
+          <tr><td>一次安装，Claude Code、Codex、Cursor、Kiro 等都能用</td><td>持平：chrome-use 以技能 / CLI / MCP 接入任意 agent。</td></tr>
         </tbody>
       </table>
       </div>
 
-
-      <h3>反超的一项：单次成型脚本（chrome-use script）</h3>
+      <h3>单次成型脚本（chrome-use script）</h3>
       <p>
-        ego 的核心卖点是 “code base, not CLI base”：写一段 JS 把整个任务一次跑完。这一项我们<span class="cmp-win">已 ship 并反超</span>：
+        ego 的核心卖点是 “code base, not CLI base”：写一段 JS 把整个任务一次跑完。chrome-use 也有这种写法：
         <code>chrome-use script</code> 同样写一段 JS（ego 原样 idiom），用 <code>cu.snapshot/eval/click/fill/find/waitFor/extract</code>
         直接驱动，带控制流，一次往返返回结构化结果；JSON op-list 形式亦可（可 dry-run、可机器生成）。
       </p>
       <p>
-        反超点在引擎位置：JS 引擎跑在<strong>守护进程里、不在页面里</strong>，<strong>扛得住硬跳转</strong>，
-        而多页翻页正是 ego 赢、页面内运行时输的地方。实测 HN 翻 3 页收集 ≥100 分故事 = <strong>一次 tool call</strong>（旧 per-verb 要 13+），
+        JS 引擎跑在<strong>守护进程里、不在页面里</strong>，<strong>扛得住硬跳转</strong>，适合多页翻页。实测 HN 翻 3 页收集 ≥100 分故事 = <strong>一次 tool call</strong>（旧 per-verb 要 13+），
         跑在你<strong>已登录的真 Chrome</strong> + 隐身传输，macOS / Linux / Windows 都能用。
         用法与两种写法详见 <a href="/script.html">单次成型脚本</a>。
       </p>
@@ -381,7 +347,7 @@
       <ul>
         <li><strong>所有权 + 交接</strong>（<span class="cmp-win">已实现</span>）：<code>session handoff/resume/status/list</code>，交接给用户后 agent 对该会话的驱动命令全被拒绝。这是<strong>逃生口</strong>，留给 agent 真做不了的一步（比如解不了的验证码）；<strong>不改变自主登录</strong>，默认 agent 自己登录、自己驱动，零影响。</li>
         <li><strong>富文本 write-probe 纪律</strong>（<span class="cmp-win">已搬</span>）：见 <a href="/canvas.html">Canvas / WebGL</a> 页末。</li>
-        <li><strong>登录继承 / 隔离上下文 / 按名复用 / token 经济</strong>（<span class="cmp-win">已具备</span>）：relay 天然带登录、每会话标签组隔离、<code>session list</code>、<code>--session-name</code>、更省 token。</li>
+        <li><strong>登录继承 / 隔离上下文 / 按名复用 / token 经济</strong>（<span class="cmp-win">已具备</span>）：relay 天然带登录、每会话标签组隔离、<code>session list</code>、<code>--session-name</code>；token 对比见上面的实测表。</li>
         <li><strong>定位（locating）</strong>（<span class="cmp-win">持平</span>）：<code>@ref</code>（backendNodeId 跨调用稳定）+ CSS + XPath + 坐标 + 语义 <code>find role button --name</code> + <code>box</code> 几何 + <code>-s</code> 作用域，对齐 ego 的 <code>loc=</code> / <code>@N</code>。</li>
         <li><strong>群组（groups）</strong>（<span class="cmp-win">持平</span>）：每个 <code>--session</code> 一个彩色 Chrome 标签组、group-scoped 隔离（<a href="https://github.com/leeguooooo/chrome-use/issues/40">#40</a>）、多 agent 互不串、只拥有自己建的标签。等价 ego 的 Task Space，只是发生在你的真 Chrome 里，不用换浏览器。</li>
       </ul>
