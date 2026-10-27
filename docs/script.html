@@ -148,7 +148,7 @@ JS</code></pre>
       <p>程序结果与传输成功分开判断：daemon envelope 中嵌套 <code>script</code> 的 <code>data.ok:false</code> 会使父脚本失败，即使 <code>success:true</code>。JS 失败仍保留 <code>ok:false</code>、<code>return:null</code>、<code>error</code> 和 <code>logs</code>。两种脚本都在 <code>advisories</code>（CLI <code>script --json</code> 顶层；daemon envelope 中为 <code>data.advisories</code>） 中保留观察提示，最多 20 条，嵌套和失败运行也保留；JSON op-list 的 <code>steps</code> 另带对应动作的 <code>noProgress</code>。文字输出只打印汇总提示一次。这些提示不改变动作 success，也不重试动作。</p>
 
       <h2>引擎跑在守护进程里</h2>
-      <p>ego 也能写一段 JS 跑完整个任务，chrome-use script 反超它的点在<strong>引擎的位置</strong>。</p>
+      <p>ego 也能写一段 JS 跑完整个任务（它在单独的 Node 进程里驱动页面）。chrome-use script 的特点在<strong>引擎的位置</strong>。</p>
       <p>
         <strong>扛得住硬跳转。</strong>注入到页面世界的运行时，页面一跳转整个执行环境就没了，多页流程正好死在翻页那一下。
         chrome-use 的 JS 引擎跑在守护进程里、页面外面：上面例子里 <code>cu.click('a.morelink')</code> 触发整页导航，
