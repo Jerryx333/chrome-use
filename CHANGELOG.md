@@ -1,8 +1,23 @@
 # Changelog
 
-## 1.5.267
+## 1.5.268
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.89.
+
+### Bug Fixes
+
+- **Hidden Monaco editors without the clipboard.** When a page keeps Monaco's API out of `window`, `fill` and `get value` now find the editor's public API through its input handlers, match it to the exact editor element, and read or write its model directly (`engine: monaco-native`). The shared clipboard is no longer touched on that path; it stays as the fallback only when no API can be found (#754).
+- **Slow screenshots over the extension relay.** A native screenshot after a viewport or device-pixel-ratio change can take 12–24 seconds; the relay gave it 8. Screenshot capture now gets up to 25 seconds, still inside the CLI's 30-second deadline, and is never replayed. Requires extension 0.5.89 (#756).
+- **Relay timeout messages no longer guess the cause.** A timeout used to blame blocking page JavaScript and call the connection fine whenever Chrome still listed the tab. It now reports the tab's status, discarded and frozen state, says the cause is unconfirmed, and warns against overlapping retries or replaying an action without checking its effect (#755).
+
+### Contributors
+
+- @euvoor
+<!-- release:end -->
+
+## 1.5.267
+
 Works with extension ab-connect 0.5.88.
 
 ### Bug Fixes
@@ -17,7 +32,6 @@ Works with extension ab-connect 0.5.88.
 
 - @leeguooooo
 - @euvoor
-<!-- release:end -->
 
 ## 1.5.266
 
