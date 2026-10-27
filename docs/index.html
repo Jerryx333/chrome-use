@@ -28,7 +28,8 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- seo:fonts --><link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" onload="this.onload=null;this.rel='stylesheet'" /><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" /></noscript><!-- /seo:fonts -->
 
   <link rel="stylesheet" href="/assets/docs/docs.css" />
 
@@ -42,10 +43,34 @@
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "macOS, Linux, Windows",
     "description": "chrome-use 让任意 AI agent —— Claude Code、Cursor、Codex、你自己的脚本 —— 直接驱动你已登录的真实 Chrome。复用现成会话，保留现有浏览器配置，公开检测结果及适用条件见文档。",
-    "url": "https://chrome-use.leeguoo.com",
+    "url": "https://chrome-use.leeguoo.com/",
     "downloadUrl": "https://github.com/leeguooooo/chrome-use/releases",
-    "author": { "@id": "https://leeguoo.com/about#person" },
-    "creator": { "@id": "https://leeguoo.com/about#person" }
+    "author": {
+      "@id": "https://leeguoo.com/about#person"
+    },
+    "creator": {
+      "@id": "https://leeguoo.com/about#person"
+    },
+    "applicationSubCategory": "Browser automation for AI agents",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "isAccessibleForFree": true,
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "image": "https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg",
+    "screenshot": "https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg",
+    "softwareHelp": {
+      "@type": "CreativeWork",
+      "url": "https://chrome-use.leeguoo.com/install.html"
+    },
+    "sameAs": [
+      "https://github.com/leeguooooo/chrome-use",
+      "https://chromewebstore.google.com/detail/chrome-use/knfcmbamhjmaonkfnjhldjedeobeafmk"
+    ],
+    "inLanguage": "zh-Hans",
+    "alternateName": "chrome-use by leeguoo"
   }
   </script>
   <script type="application/ld+json">
@@ -64,23 +89,28 @@
     ]
   }
   </script>
-
+  <!-- seo:head -->
   <link rel="canonical" href="https://chrome-use.leeguoo.com/" />
   <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/" />
   <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/" />
-  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/" />
+  <meta property="og:locale:alternate" content="en_US" />
+  <meta name="twitter:title" content="chrome-use：让 AI agent 用你已登录的 Chrome" />
+  <meta name="twitter:description" content="chrome-use 是给 AI agent 用的浏览器工具：Claude Code、Codex、Cursor 等 agent 在你已登录的真实 Chrome 里看网页、抓数据、填表、发内容，你随时接手。也可在 Chrome 侧栏直接和本机 agent 对话。" />
+  <meta name="twitter:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <!-- /seo:head -->
 </head>
 
 <body data-page="overview" data-lang="zh">
 
-  <div id="du-topbar"></div>
+  <div id="du-topbar" class="du-topbar"></div>
 
   <div class="du-shell">
 
-    <nav id="du-sidebar"></nav>
+    <nav id="du-sidebar" class="du-sidebar" aria-label="文档"><div class="du-nav-group"><div class="du-nav-label">开始</div><a class="du-nav-item active" aria-current="page" href="/"><span class="du-nav-ico">🧭</span><span class="du-nav-text">概览</span></a><a class="du-nav-item" href="/install.html"><span class="du-nav-ico">📦</span><span class="du-nav-text">安装</span></a><a class="du-nav-item" href="/compare.html"><span class="du-nav-ico">⚖️</span><span class="du-nav-text">和其他方案对比</span></a></div><div class="du-nav-group"><div class="du-nav-label">不开终端</div><a class="du-nav-item" href="/agent-panel.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">侧栏对话</span></a><a class="du-nav-item" href="/mobile.html"><span class="du-nav-ico">📱</span><span class="du-nav-text">手机遥控</span></a><a class="du-nav-item" href="/inspect.html"><span class="du-nav-ico">🎯</span><span class="du-nav-text">点选改代码</span></a></div><div class="du-nav-group"><div class="du-nav-label">让 agent 做事</div><a class="du-nav-item" href="/reading.html"><span class="du-nav-ico">📖</span><span class="du-nav-text">读网页、查资料</span></a><a class="du-nav-item" href="/extract.html"><span class="du-nav-ico">🧪</span><span class="du-nav-text">抓数据</span></a><a class="du-nav-item" href="/interacting.html"><span class="du-nav-ico">🖱️</span><span class="du-nav-text">填表与操作</span></a><a class="du-nav-item" href="/site-adapters.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">站点适配器</span></a><a class="du-nav-item" href="/testing.html"><span class="du-nav-ico">🧷</span><span class="du-nav-text">测试与探索</span></a><a class="du-nav-item" href="/media.html"><span class="du-nav-ico">🎬</span><span class="du-nav-text">截图·录像·视口</span></a><a class="du-nav-item" href="/canvas.html"><span class="du-nav-ico">🎨</span><span class="du-nav-text">Canvas / WebGL / 游戏</span></a><a class="du-nav-item" href="/electron.html"><span class="du-nav-ico">🖥️</span><span class="du-nav-text">Electron 桌面应用</span></a><a class="du-nav-item" href="/slack.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">Slack 自动化</span></a></div><div class="du-nav-group"><div class="du-nav-label">账号与登录态</div><a class="du-nav-item" href="/real-chrome.html"><span class="du-nav-ico">🌐</span><span class="du-nav-text">驱动真实 Chrome</span></a><a class="du-nav-item" href="/login-auth.html"><span class="du-nav-ico">🔐</span><span class="du-nav-text">登录与凭证</span></a><a class="du-nav-item" href="/sessions.html"><span class="du-nav-ico">💾</span><span class="du-nav-text">多个 agent 与会话</span></a><a class="du-nav-item" href="/choosebrowser.html"><span class="du-nav-ico">🧭</span><span class="du-nav-text">多 profile 路由：ChooseBrowser</span></a><a class="du-nav-item" href="/stealth.html"><span class="du-nav-ico">🥷</span><span class="du-nav-text">反检测与隐身</span></a></div><div class="du-nav-group"><div class="du-nav-label">接入方式</div><a class="du-nav-item" href="/mcp.html"><span class="du-nav-ico">🔌</span><span class="du-nav-text">MCP 服务器</span></a><a class="du-nav-item" href="/http-api.html"><span class="du-nav-ico">🔗</span><span class="du-nav-text">本地 HTTP API</span></a><a class="du-nav-item" href="/cloud.html"><span class="du-nav-ico">☁️</span><span class="du-nav-text">云端浏览器</span></a><a class="du-nav-item" href="/script.html"><span class="du-nav-ico">⚡</span><span class="du-nav-text">单次成型脚本</span></a></div><div class="du-nav-group"><div class="du-nav-label">底层命令</div><a class="du-nav-item" href="/core-loop.html"><span class="du-nav-ico">🔁</span><span class="du-nav-text">核心循环</span></a><a class="du-nav-item" href="/how-it-works.html"><span class="du-nav-ico">⚙️</span><span class="du-nav-text">它怎么工作</span></a><a class="du-nav-item" href="/finding.html"><span class="du-nav-ico">🔎</span><span class="du-nav-text">定位元素</span></a><a class="du-nav-item" href="/waiting.html"><span class="du-nav-ico">⏳</span><span class="du-nav-text">等待与断言</span></a><a class="du-nav-item" href="/network.html"><span class="du-nav-ico">🛰️</span><span class="du-nav-text">网络拦截与改写</span></a><a class="du-nav-item" href="/react.html"><span class="du-nav-ico">⚛️</span><span class="du-nav-text">React / Web Vitals</span></a><a class="du-nav-item" href="/commands.html"><span class="du-nav-ico">📚</span><span class="du-nav-text">命令参考</span></a></div><div class="du-nav-group"><div class="du-nav-label">参考</div><a class="du-nav-item" href="/troubleshooting.html"><span class="du-nav-ico">🩹</span><span class="du-nav-text">故障排查</span></a><a class="du-nav-item" href="/changelog.html"><span class="du-nav-ico">📝</span><span class="du-nav-text">更新日志</span></a><a class="du-nav-item" href="/extension-changelog.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">插件更新日志</span></a><a class="du-nav-item" href="/family.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">*-use 家族</span></a><a class="du-nav-item" href="/lineage.html"><span class="du-nav-ico">🌱</span><span class="du-nav-text">血统与上游</span></a></div></nav>
 
     <!-- ============================ PAGE CONTENT ============================ -->
-    <main class="du-main"><nav aria-label="文档"><a href="/">chrome-use</a> · <a href="/install.html">安装</a> · <a href="/logged-in-browser.html">已登录浏览器指南</a> · <a href="/mcp.html">MCP</a> · <a href="/compare.html">选型</a></nav>
+    <main class="du-main">
 
       <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -300,9 +330,7 @@
       </p>
       <p class="du-small" style="margin-top:6px; color:var(--ink-faint); font-size:.85rem;">
         最初基于 <a href="https://github.com/vercel-labs/agent-browser" target="_blank" rel="noopener">vercel-labs/agent-browser</a>（Apache-2.0），现已独立演进 · <a href="/lineage.html">血统与上游</a> · <a href="/privacy.html">隐私</a>
-      </p>
-
-    </main>
+      </p><!-- seo:footer --><nav class="du-static-footer" aria-label="更多"><a href="/">chrome-use</a> · <a href="/logged-in-browser.html">让 agent 用已登录 Chrome</a> · <a href="/debugger-banner-silence.html">静音调试提示条</a> · <a href="/privacy.html">隐私政策</a> · <a href="/mobile-privacy.html">手机 App 隐私政策</a> · <a href="https://github.com/leeguooooo/chrome-use">GitHub</a> · <a href="https://github.com/leeguooooo/chrome-use/releases">下载 / Releases</a> · <a href="https://github.com/leeguooooo/iphone-use">iphone-use（让 agent 操作 iPhone）</a> · <a href="https://blog.leeguoo.com">博客</a> · <a href="/en/" hreflang="en">English</a></nav><!-- /seo:footer --></main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 
     <aside id="du-toc"></aside>

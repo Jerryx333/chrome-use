@@ -53,6 +53,11 @@
   --focus:      0 0 0 3px rgba(59,91,219,.35);
 }
 
+/* English pages do not load the CJK web font (see docs/_tools/seo.py). */
+html[lang="en"] {
+  --font-body:  -apple-system, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
 /* ------------------------------------------------------------------ reset */
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -233,6 +238,17 @@ img { max-width: 100%; }
 }
 .du-btn-ghost:hover, .du-btn-primary:hover { filter: brightness(1.04); text-decoration: none; }
 @media (max-width: 620px) { .du-account-name { display: none; } }
+
+/* reserve the bar before docs.js fills it, so injection does not shift content */
+#du-topbar { min-height: var(--topbar-h); }
+
+/* static link row written by docs/_tools/seo.py (crawlable without JS) */
+.du-static-footer {
+  margin-top: 28px; padding-top: 14px;
+  border-top: 1px dashed var(--line);
+  font-size: 12.5px; line-height: 1.9; color: var(--ink-faint);
+}
+.du-static-footer a { color: var(--ink-soft); }
 
 /* ============================================================ LAYOUT ===== */
 .du-shell {

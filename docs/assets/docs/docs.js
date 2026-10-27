@@ -80,7 +80,7 @@
   "use strict";
 
   /* -------------------------------------------------- information architecture
-     slug 'overview' maps to index.html (and /en/index.html).
+     slug 'overview' maps to / (and /en/).
      Every other slug maps to /<slug>.html  (en mirror /en/<slug>.html).
      kw = extra search keywords (space separated, any language). ico = doodle. */
   var NAV = [
@@ -155,10 +155,10 @@
   function lang() {
     return (document.documentElement.lang || "zh").toLowerCase().indexOf("en") === 0 ? "en" : "zh";
   }
-  // Build an href for a slug in a given language. overview -> index.html.
+  // Build an href for a slug in a given language. overview -> / or /en/.
   function hrefFor(slug, lng) {
     var base = lng === "en" ? "/en/" : "/";
-    return slug === "overview" ? base + "index.html" : base + slug + ".html";
+    return slug === "overview" ? base : base + slug + ".html";
   }
   function currentSlug() {
     return (document.body && document.body.dataset.page) || "overview";
@@ -243,6 +243,9 @@
     var slug = currentSlug();
     host.classList.add("du-sidebar");
     host.setAttribute("role", "navigation");
+    // docs/_tools/seo.py pre-renders the same links for crawlers and first
+    // paint; rebuild from NAV so handlers and the active state stay in one place.
+    host.textContent = "";
 
     NAV.forEach(function (group) {
       var g = el("div", "du-nav-group");
@@ -515,40 +518,6 @@
     });
   }
 
-  /* ============================================ SEO: canonical + hreflang == */
-  // Canonical is hand-written on only one page (index.html) — everywhere else
-  // it's missing, so there's no established per-file convention to match.
-  // NAV already knows every slug and both zh/en hrefs (hrefFor), so it's the
-  // single source of truth for canonical + hreflang alternates on every page,
-  // the same way it already drives the topbar/sidebar/lang-toggle links.
-  var ORIGIN = "https://chrome-use.leeguoo.com";
-  function setSeoLink(rel, href, hreflang) {
-    var sel = 'link[rel="' + rel + '"]' + (hreflang ? '[hreflang="' + hreflang + '"]' : ":not([hreflang])");
-    var node = document.head.querySelector(sel);
-    if (!node) {
-      node = document.createElement("link");
-      node.rel = rel;
-      if (hreflang) node.hreflang = hreflang;
-      document.head.appendChild(node);
-    }
-    node.href = href;
-  }
-  // hrefFor() points the overview slug at /index.html (fine for nav links),
-  // but the canonical/SEO-facing URL should be the clean directory root
-  // ("/" / "/en/") to match og:url and how the homepage canonical already
-  // read before this pass — GitHub Pages serves index.html for either.
-  function seoHrefFor(slug, lng) {
-    if (slug === "overview") return ORIGIN + (lng === "en" ? "/en/" : "/");
-    return ORIGIN + hrefFor(slug, lng);
-  }
-  function addSeoLinks() {
-    var slug = currentSlug(), lng = lang();
-    setSeoLink("canonical", seoHrefFor(slug, lng));
-    setSeoLink("alternate", seoHrefFor(slug, "zh"), "zh-Hans");
-    setSeoLink("alternate", seoHrefFor(slug, "en"), "en");
-    setSeoLink("alternate", seoHrefFor(slug, "zh"), "x-default");
-  }
-
   /* ================================================== PAGE FOOTER ========= */
   // Social / outbound links + author byline, injected once at the end of
   // <main> on every page — there's no static per-page footer to match, so
@@ -605,7 +574,8 @@
     byline.appendChild(a);
     footer.appendChild(byline);
 
-    main.appendChild(footer);
+    // keep seo.py's static link row (.du-static-footer) as the last thing in <main>
+    main.insertBefore(footer, main.querySelector(".du-static-footer"));
   }
 
   /* ================================================= GLOBAL KEYBINDINGS == */
@@ -805,7 +775,6 @@
 
   /* ============================================================= BOOT ===== */
   function init() {
-    try { addSeoLinks(); } catch (e) { console.error("[docs] seo links", e); }
     try { enhanceChangelog(); } catch (e) { console.error("[docs] changelog", e); }
     try { buildTopbar(); } catch (e) { console.error("[docs] topbar", e); }
     try { buildSidebar(); } catch (e) { console.error("[docs] sidebar", e); }

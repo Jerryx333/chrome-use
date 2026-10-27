@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>插件对话 · chrome-use 文档</title>
+  <title>插件对话 · chrome-use</title>
   <meta name="description" content="在 Chrome 扩展侧栏里使用本机 Codex、Claude Code、OpenCode 或 Pi 对话，了解页面上下文、模型、审批、队列、技能、图片和定时提示。" />
 
   <meta name="theme-color" content="#fcfbf4" />
@@ -13,28 +13,45 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- seo:fonts --><link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" onload="this.onload=null;this.rel='stylesheet'" /><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" /></noscript><!-- /seo:fonts -->
 
   <link rel="stylesheet" href="/assets/docs/docs.css" />
-
+  <!-- seo:head -->
   <link rel="canonical" href="https://chrome-use.leeguoo.com/agent-panel.html" />
   <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/agent-panel.html" />
   <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/agent-panel.html" />
-  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/agent-panel.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/agent-panel.html" />
+  <meta property="og:title" content="插件对话 · chrome-use" />
+  <meta property="og:description" content="在 Chrome 扩展侧栏里使用本机 Codex、Claude Code、OpenCode 或 Pi 对话，了解页面上下文、模型、审批、队列、技能、图片和定时提示。" />
+  <meta property="og:url" content="https://chrome-use.leeguoo.com/agent-panel.html" />
+  <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="800" />
+  <meta property="og:image:alt" content="chrome-use：让 AI agent 用你已登录的 Chrome" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:locale:alternate" content="en_US" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="插件对话 · chrome-use" />
+  <meta name="twitter:description" content="在 Chrome 扩展侧栏里使用本机 Codex、Claude Code、OpenCode 或 Pi 对话，了解页面上下文、模型、审批、队列、技能、图片和定时提示。" />
+  <meta name="twitter:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"chrome-use","item":"https://chrome-use.leeguoo.com/"},{"@type":"ListItem","position":2,"name":"插件对话","item":"https://chrome-use.leeguoo.com/agent-panel.html"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"插件对话","description":"在 Chrome 扩展侧栏里使用本机 Codex、Claude Code、OpenCode 或 Pi 对话，了解页面上下文、模型、审批、队列、技能、图片和定时提示。","inLanguage":"zh-Hans","url":"https://chrome-use.leeguoo.com/agent-panel.html","mainEntityOfPage":"https://chrome-use.leeguoo.com/agent-panel.html","image":"https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg","dateModified":"2026-10-27","author":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"publisher":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"isPartOf":{"@type":"WebSite","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"},"about":{"@type":"SoftwareApplication","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"}}</script>
+  <!-- /seo:head -->
 </head>
 
 <body data-page="agent-panel" data-lang="zh">
 
   <!-- injected: sticky top bar -->
-  <div id="du-topbar"></div>
+  <div id="du-topbar" class="du-topbar"></div>
 
   <div class="du-shell">
 
     <!-- injected: left grouped sidebar nav -->
-    <nav id="du-sidebar"></nav>
+    <nav id="du-sidebar" class="du-sidebar" aria-label="文档"><div class="du-nav-group"><div class="du-nav-label">开始</div><a class="du-nav-item" href="/"><span class="du-nav-ico">🧭</span><span class="du-nav-text">概览</span></a><a class="du-nav-item" href="/install.html"><span class="du-nav-ico">📦</span><span class="du-nav-text">安装</span></a><a class="du-nav-item" href="/compare.html"><span class="du-nav-ico">⚖️</span><span class="du-nav-text">和其他方案对比</span></a></div><div class="du-nav-group"><div class="du-nav-label">不开终端</div><a class="du-nav-item active" aria-current="page" href="/agent-panel.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">侧栏对话</span></a><a class="du-nav-item" href="/mobile.html"><span class="du-nav-ico">📱</span><span class="du-nav-text">手机遥控</span></a><a class="du-nav-item" href="/inspect.html"><span class="du-nav-ico">🎯</span><span class="du-nav-text">点选改代码</span></a></div><div class="du-nav-group"><div class="du-nav-label">让 agent 做事</div><a class="du-nav-item" href="/reading.html"><span class="du-nav-ico">📖</span><span class="du-nav-text">读网页、查资料</span></a><a class="du-nav-item" href="/extract.html"><span class="du-nav-ico">🧪</span><span class="du-nav-text">抓数据</span></a><a class="du-nav-item" href="/interacting.html"><span class="du-nav-ico">🖱️</span><span class="du-nav-text">填表与操作</span></a><a class="du-nav-item" href="/site-adapters.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">站点适配器</span></a><a class="du-nav-item" href="/testing.html"><span class="du-nav-ico">🧷</span><span class="du-nav-text">测试与探索</span></a><a class="du-nav-item" href="/media.html"><span class="du-nav-ico">🎬</span><span class="du-nav-text">截图·录像·视口</span></a><a class="du-nav-item" href="/canvas.html"><span class="du-nav-ico">🎨</span><span class="du-nav-text">Canvas / WebGL / 游戏</span></a><a class="du-nav-item" href="/electron.html"><span class="du-nav-ico">🖥️</span><span class="du-nav-text">Electron 桌面应用</span></a><a class="du-nav-item" href="/slack.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">Slack 自动化</span></a></div><div class="du-nav-group"><div class="du-nav-label">账号与登录态</div><a class="du-nav-item" href="/real-chrome.html"><span class="du-nav-ico">🌐</span><span class="du-nav-text">驱动真实 Chrome</span></a><a class="du-nav-item" href="/login-auth.html"><span class="du-nav-ico">🔐</span><span class="du-nav-text">登录与凭证</span></a><a class="du-nav-item" href="/sessions.html"><span class="du-nav-ico">💾</span><span class="du-nav-text">多个 agent 与会话</span></a><a class="du-nav-item" href="/choosebrowser.html"><span class="du-nav-ico">🧭</span><span class="du-nav-text">多 profile 路由：ChooseBrowser</span></a><a class="du-nav-item" href="/stealth.html"><span class="du-nav-ico">🥷</span><span class="du-nav-text">反检测与隐身</span></a></div><div class="du-nav-group"><div class="du-nav-label">接入方式</div><a class="du-nav-item" href="/mcp.html"><span class="du-nav-ico">🔌</span><span class="du-nav-text">MCP 服务器</span></a><a class="du-nav-item" href="/http-api.html"><span class="du-nav-ico">🔗</span><span class="du-nav-text">本地 HTTP API</span></a><a class="du-nav-item" href="/cloud.html"><span class="du-nav-ico">☁️</span><span class="du-nav-text">云端浏览器</span></a><a class="du-nav-item" href="/script.html"><span class="du-nav-ico">⚡</span><span class="du-nav-text">单次成型脚本</span></a></div><div class="du-nav-group"><div class="du-nav-label">底层命令</div><a class="du-nav-item" href="/core-loop.html"><span class="du-nav-ico">🔁</span><span class="du-nav-text">核心循环</span></a><a class="du-nav-item" href="/how-it-works.html"><span class="du-nav-ico">⚙️</span><span class="du-nav-text">它怎么工作</span></a><a class="du-nav-item" href="/finding.html"><span class="du-nav-ico">🔎</span><span class="du-nav-text">定位元素</span></a><a class="du-nav-item" href="/waiting.html"><span class="du-nav-ico">⏳</span><span class="du-nav-text">等待与断言</span></a><a class="du-nav-item" href="/network.html"><span class="du-nav-ico">🛰️</span><span class="du-nav-text">网络拦截与改写</span></a><a class="du-nav-item" href="/react.html"><span class="du-nav-ico">⚛️</span><span class="du-nav-text">React / Web Vitals</span></a><a class="du-nav-item" href="/commands.html"><span class="du-nav-ico">📚</span><span class="du-nav-text">命令参考</span></a></div><div class="du-nav-group"><div class="du-nav-label">参考</div><a class="du-nav-item" href="/troubleshooting.html"><span class="du-nav-ico">🩹</span><span class="du-nav-text">故障排查</span></a><a class="du-nav-item" href="/changelog.html"><span class="du-nav-ico">📝</span><span class="du-nav-text">更新日志</span></a><a class="du-nav-item" href="/extension-changelog.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">插件更新日志</span></a><a class="du-nav-item" href="/family.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">*-use 家族</span></a><a class="du-nav-item" href="/lineage.html"><span class="du-nav-ico">🌱</span><span class="du-nav-text">血统与上游</span></a></div></nav>
 
     <!-- ============================ PAGE CONTENT ============================ -->
-    <main class="du-main"><nav aria-label="文档"><a href="/">chrome-use</a> · <a href="/install.html">安装</a> · <a href="/logged-in-browser.html">已登录浏览器指南</a> · <a href="/mcp.html">MCP</a> · <a href="/compare.html">选型</a></nav>
+    <main class="du-main">
 
       <p class="du-eyebrow">不开终端 / No Terminal Needed</p>
 
@@ -132,9 +149,7 @@
       <p>重复结果、连续失败或长时间没有活动会显示提示；提示本身不会停止任务或自动重试。可以停止、继续等待，或查看步骤判断原因。上下文压缩会留下标记，历史记录仍保留；压缩不会把未经检查的动作变成成功。</p>
 
       <h2 id="related">相关流程</h2>
-      <p>点输入框工具栏最前面的<strong>选择元素</strong>（或在页面上按 <code>Alt+Shift+C</code>），在页面上点选元素，元素会作为卡片放进这个标签页侧边栏的输入框，随下一条消息发给 agent；也可以把修改要求交给已经运行的本地终端会话。见<a href="/inspect.html">点选改代码</a>。</p>
-
-    </main>
+      <p>点输入框工具栏最前面的<strong>选择元素</strong>（或在页面上按 <code>Alt+Shift+C</code>），在页面上点选元素，元素会作为卡片放进这个标签页侧边栏的输入框，随下一条消息发给 agent；也可以把修改要求交给已经运行的本地终端会话。见<a href="/inspect.html">点选改代码</a>。</p><!-- seo:footer --><nav class="du-static-footer" aria-label="更多"><a href="/">chrome-use</a> · <a href="/logged-in-browser.html">让 agent 用已登录 Chrome</a> · <a href="/debugger-banner-silence.html">静音调试提示条</a> · <a href="/privacy.html">隐私政策</a> · <a href="/mobile-privacy.html">手机 App 隐私政策</a> · <a href="https://github.com/leeguooooo/chrome-use">GitHub</a> · <a href="https://github.com/leeguooooo/chrome-use/releases">下载 / Releases</a> · <a href="https://github.com/leeguooooo/iphone-use">iphone-use（让 agent 操作 iPhone）</a> · <a href="https://blog.leeguoo.com">博客</a> · <a href="/en/agent-panel.html" hreflang="en">English</a></nav><!-- /seo:footer --></main>
     <!-- ========================== /PAGE CONTENT =========================== -->
 
     <!-- injected: right on-this-page TOC -->
