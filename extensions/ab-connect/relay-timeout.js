@@ -8,6 +8,12 @@ export const RELAY_TIMEOUT_ERROR_NAME = 'RelayTimeoutError'
 // does not dispatch it twice.
 export const INPUT_COMMAND_TIMEOUT_MS = 25000
 
+// Native captures after viewport/DPR changes have completed in 12–24s while
+// page JavaScript remained responsive. Let that one capture finish instead of
+// reporting failure at 8s and leaving it in flight. Keep a bounded deadline
+// below the CLI's 30s CDP budget; this does not retry or activate the tab.
+export const SCREENSHOT_COMMAND_TIMEOUT_MS = 25000
+
 const INPUT_COMMANDS = new Set([
   'Input.dispatchMouseEvent',
   'Input.dispatchKeyEvent',
@@ -50,10 +56,12 @@ export const PAYLOAD_MAX_TIMEOUT_MS = 300000
 /**
  * Budget for one CDP command. Pure: takes the method and its params, returns
  * milliseconds. Input dispatch gets a longer flat budget; insertText keeps its
- * payload scaling. Everything else keeps the ordinary flat budget.
+ * payload scaling. Screenshot capture gets its own bounded completion budget.
+ * Everything else keeps the ordinary flat budget.
  */
 export function relayCommandBudgetMs(method, params) {
   if (INPUT_COMMANDS.has(method)) return INPUT_COMMAND_TIMEOUT_MS
+  if (method === 'Page.captureScreenshot') return SCREENSHOT_COMMAND_TIMEOUT_MS
   const text = method === 'Input.insertText' ? params?.text : null
   if (typeof text !== 'string' || text.length === 0) return RELAY_COMMAND_TIMEOUT_MS
   const scaled = RELAY_COMMAND_TIMEOUT_MS + text.length * PAYLOAD_MS_PER_BYTE

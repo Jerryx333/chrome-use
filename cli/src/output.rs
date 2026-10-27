@@ -3920,6 +3920,12 @@ Options:
   --screenshot-format <fmt>  Image format: png (default) or jpeg
                        (or AGENT_BROWSER_SCREENSHOT_FORMAT env)
 
+The updated extension relay allows 25s for each native screenshot capture,
+below the CLI's 30s CDP deadline. Viewport or DPR changes can make captures
+slower than ordinary commands. It waits for the same capture without replay
+or tab activation. A timeout still fails and does not cancel Chrome's pending
+capture; avoid overlapping capture retries.
+
 Global Options:
   --json               Output as JSON
   --session <name>     Use specific session
