@@ -619,9 +619,194 @@
     });
   }
 
+  /* ========================================================= CHANGELOG == */
+  /* Changelog pages keep one flat <li> per release so release sessions can
+     append entries by hand. Here each entry becomes a card: version, date,
+     extension badge, one bullet per sentence, linked PRs and contributors. */
+  var ABBREV = /(?:\be\.g|\bi\.e|\bvs|\betc|\bcf|\bapprox|\bNo)$/i;
+
+  function splitSentences(html, lng) {
+    var out = [], buf = "", tagDepth = 0, paren = 0, i = 0;
+    while (i < html.length) {
+      var c = html[i];
+      if (c === "<") {
+        var end = html.indexOf(">", i);
+        if (end < 0) end = html.length - 1;
+        var tag = html.slice(i, end + 1);
+        if (/^<\//.test(tag)) tagDepth = Math.max(0, tagDepth - 1);
+        else if (!/\/>$|^<(br|img|wbr)\b/i.test(tag)) tagDepth++;
+        buf += tag; i = end + 1; continue;
+      }
+      buf += c; i++;
+      if (tagDepth) continue;
+      if (c === "（" || c === "(") paren++;
+      else if ((c === "）" || c === ")") && paren) paren--;
+      if (paren) continue;
+      var cut = false;
+      if (c === "。" || c === "；") cut = true;
+      else if ((c === "." || c === ";") && /\s/.test(html[i] || "") && i < html.length) {
+        cut = c === ";" ? lng !== "en" : !ABBREV.test(buf.slice(0, -1));
+      }
+      if (cut) { if (buf.trim()) out.push(buf.trim()); buf = ""; }
+    }
+    if (buf.trim()) out.push(buf.trim());
+    return out;
+  }
+
+  function linkifyRefs(root) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var nodes = [];
+    while (walker.nextNode()) {
+      var n = walker.currentNode;
+      if (n.parentNode.closest("a, code, pre")) continue;
+      if (/#\d{2,5}\b/.test(n.nodeValue)) nodes.push(n);
+    }
+    nodes.forEach(function (n) {
+      var frag = document.createDocumentFragment();
+      n.nodeValue.split(/(#\d{2,5}\b)/).forEach(function (part) {
+        var m = /^#(\d{2,5})$/.exec(part);
+        if (!m) { if (part) frag.appendChild(document.createTextNode(part)); return; }
+        var a = el("a", "du-cl-ref", part);
+        a.href = GH + "/pull/" + m[1]; a.target = "_blank"; a.rel = "noopener";
+        frag.appendChild(a);
+      });
+      n.parentNode.replaceChild(frag, n);
+    });
+  }
+
+  function contributorChip(handle) {
+    var a = el("a", "du-cl-user");
+    a.href = "https://github.com/" + handle; a.target = "_blank"; a.rel = "noopener";
+    a.title = "github.com/" + handle;
+    var img = document.createElement("img");
+    img.src = "https://github.com/" + handle + ".png?size=40";
+    img.alt = ""; img.loading = "lazy"; img.width = 18; img.height = 18;
+    img.onerror = function () { img.remove(); };
+    a.appendChild(img);
+    a.appendChild(document.createTextNode("@" + handle));
+    return a;
+  }
+
+  function enhanceEntry(li, lng) {
+    var html = li.innerHTML.trim();
+    var head = /^<strong>([^<]+)<\/strong>\s*/.exec(html);
+    if (!head) return;
+    var version = head[1].trim();
+    html = html.slice(head[0].length);
+
+    var meta = "";
+    var mm = /^[（(]([^）)<]{1,40})[）)]\s*(?:[：:]|—|–|-)?\s*/.exec(html);
+    if (mm) { meta = mm[1].trim(); html = html.slice(mm[0].length); }
+    else html = html.replace(/^(?:[：:]|—|–)\s*/, "");
+
+    var handles = [], trailing = "";
+    var cm = /(?:<strong>)?\s*(?:贡献者|Contributors?)\s*[：:]\s*(?:<\/strong>)?([^<]*?)\s*[。.]?\s*(\(#\d+\))?\s*$/.exec(html);
+    if (cm) {
+      cm[1].replace(/@([A-Za-z0-9-]+)/g, function (_, h) { handles.push(h); return _; });
+      trailing = cm[2] || "";
+      html = html.slice(0, cm.index);
+    }
+
+    var extVer = "";
+    var items = splitSentences(html, lng).filter(function (s) {
+      var em = /^(?:(?:兼容|适用)扩展|Works with (?:the )?extension)\s*([\d.]+)\s*[。.]?$/i.exec(s.replace(/<[^>]+>/g, ""));
+      if (em) { extVer = em[1].replace(/\.$/, ""); return false; }
+      return true;
+    });
+    if (trailing) items.push(trailing);
+    if (items.length > 1) {
+      items = items.map(function (s) { return s.replace(lng === "en" ? /;$/ : /[；。]$/, ""); });
+    }
+
+    li.innerHTML = "";
+    li.className = "du-cl-entry";
+    li.id = version.replace(/\s+/g, "-");
+
+    var top = el("div", "du-cl-head");
+    var ver = el("a", "du-cl-ver", version);
+    ver.href = "#" + li.id;
+    top.appendChild(ver);
+    if (meta) {
+      var isDate = /\d{4}/.test(meta);
+      top.appendChild(el(isDate ? "time" : "span", isDate ? "du-cl-date" : "du-cl-status", meta));
+    }
+    if (extVer) {
+      top.appendChild(el("span", "du-cl-ext", (lng === "en" ? "extension " : "扩展 ") + extVer));
+    }
+    li.appendChild(top);
+
+    if (items.length === 1) {
+      li.appendChild(el("p", "du-cl-body", items[0]));
+    } else if (items.length) {
+      var ul = el("ul", "du-cl-items");
+      items.forEach(function (s) { ul.appendChild(el("li", null, s)); });
+      li.appendChild(ul);
+    }
+
+    if (handles.length) {
+      var by = el("div", "du-cl-by");
+      by.appendChild(el("span", "du-cl-by-label", lng === "en" ? "Contributors" : "贡献者"));
+      handles.forEach(function (h) { by.appendChild(contributorChip(h)); });
+      li.appendChild(by);
+    }
+    linkifyRefs(li);
+  }
+
+  function buildChangelogFilter(lists, lng) {
+    var first = lists[0];
+    var box = el("div", "du-cl-filter");
+    var input = document.createElement("input");
+    input.type = "search";
+    input.placeholder = lng === "en" ? "Filter releases — version, feature, @contributor…" : "筛选版本：版本号、功能关键字、@贡献者…";
+    input.setAttribute("aria-label", input.placeholder);
+    var count = el("span", "du-cl-count");
+    box.appendChild(input); box.appendChild(count);
+    first.parentNode.insertBefore(box, first.previousElementSibling && first.previousElementSibling.tagName === "H2" ? first.previousElementSibling : first);
+
+    var entries = [];
+    lists.forEach(function (ul) {
+      Array.prototype.forEach.call(ul.children, function (li) { entries.push({ li: li, ul: ul, hay: li.textContent.toLowerCase() }); });
+    });
+    function apply() {
+      var q = input.value.trim().toLowerCase(), shown = 0;
+      entries.forEach(function (e) {
+        var hit = !q || e.hay.indexOf(q) >= 0;
+        e.li.hidden = !hit; if (hit) shown++;
+      });
+      lists.forEach(function (ul) {
+        var any = Array.prototype.some.call(ul.children, function (li) { return !li.hidden; });
+        ul.hidden = !any;
+        var h = ul.previousElementSibling;
+        if (h && h.tagName === "H2") h.hidden = !any;
+      });
+      count.textContent = q
+        ? (lng === "en" ? shown + " / " + entries.length + " releases" : shown + " / " + entries.length + " 个版本")
+        : (lng === "en" ? entries.length + " releases" : "共 " + entries.length + " 个版本");
+    }
+    input.addEventListener("input", apply);
+    apply();
+  }
+
+  function enhanceChangelog() {
+    var lists = Array.prototype.slice.call(document.querySelectorAll("ul.du-changelog"));
+    if (!lists.length) return;
+    var lng = lang();
+    lists.forEach(function (ul) {
+      Array.prototype.forEach.call(ul.children, function (li) {
+        if (li.tagName !== "LI") return;
+        try { enhanceEntry(li, lng); } catch (e) { console.error("[docs] changelog entry", e); }
+      });
+    });
+    // "Latest" goes on the newest dated release, not on an unreleased one.
+    var latest = document.querySelector(".du-cl-entry .du-cl-date");
+    if (latest) latest.parentNode.insertBefore(el("span", "du-cl-latest", lng === "en" ? "Latest" : "最新"), latest.nextSibling);
+    buildChangelogFilter(lists, lng);
+  }
+
   /* ============================================================= BOOT ===== */
   function init() {
     try { addSeoLinks(); } catch (e) { console.error("[docs] seo links", e); }
+    try { enhanceChangelog(); } catch (e) { console.error("[docs] changelog", e); }
     try { buildTopbar(); } catch (e) { console.error("[docs] topbar", e); }
     try { buildSidebar(); } catch (e) { console.error("[docs] sidebar", e); }
     try { buildTOC(); } catch (e) { console.error("[docs] toc", e); }
