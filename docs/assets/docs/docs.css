@@ -717,3 +717,24 @@ img { max-width: 100%; }
 }
 .du-cl-entry { overflow-wrap: anywhere; }
 .du-cl-entry code { overflow-wrap: anywhere; word-break: break-word; }
+
+/* ======================================================= HOME: AGENT ==== */
+.du-main ol.du-steps { list-style: none; counter-reset: du-step; padding-left: 0; margin: 18px 0 20px; }
+.du-main ol.du-steps > li {
+  counter-increment: du-step; position: relative;
+  margin: 0 0 18px; padding-left: 44px;
+}
+.du-main ol.du-steps > li::before {
+  content: counter(du-step); position: absolute; left: 0; top: 0;
+  width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  font: 16px/1 var(--font-marker); color: var(--paper); background: var(--ink);
+}
+.du-main ol.du-steps .du-code { margin: 10px 0 0; }
+.du-card p.du-say {
+  margin: 8px 0 8px; padding: 8px 12px;
+  background: var(--paper-2); border-left: 3px solid var(--red); border-radius: 6px;
+  color: var(--ink); font-size: 14.5px;
+}
+.du-card p.du-say::before { content: "“"; color: var(--red); font-weight: 700; margin-right: 2px; }
+.du-card p.du-say::after { content: "”"; color: var(--red); font-weight: 700; margin-left: 2px; }

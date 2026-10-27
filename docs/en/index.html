@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>chrome-use: Automate Your Logged-in Chrome | AI Agent CLI &amp; MCP</title>
-  <meta name="description" content="chrome-use lets any AI agent — Claude Code, Cursor, Codex, your own scripts — drive your real, logged-in Chrome. Reuses existing sessions; CreepJS measurements are documented with their limitations." />
+  <title>chrome-use: Let Your AI Agent Use Your Logged-in Chrome</title>
+  <meta name="description" content="chrome-use is a browser tool for AI agents: Claude Code, Codex, Cursor and others read pages, collect data, fill forms and publish in your real, signed-in Chrome while you watch and take over. Or chat with a local agent in Chrome&#39;s side panel." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="website" />
@@ -83,10 +83,10 @@
       </div>
 
       <p class="du-lede">
-        chrome-use lets <span class="mark">any AI agent drive your real, logged-in Chrome</span> —
-        Claude Code, Cursor, Codex, your own scripts. It reuses your existing login sessions and browser profile.
-        <strong>Detector results are documented for the tested conditions</strong>:
-        <a href="/en/real-chrome.html">CreepJS scores it 0% bot</a>.
+        chrome-use is a <span class="mark">browser tool for AI agents</span>. Once it's installed, Claude Code, Codex,
+        Cursor and other agents can read pages, collect data, fill in forms and publish posts in
+        <strong>the Chrome you're already signed in to</strong>. You watch the tab and take over whenever a sign-in
+        or verification comes up. Prefer not to open a terminal? Chat with a local agent right in Chrome's side panel.
       </p>
 
 <section id="advertising" aria-label="Advertisement · Available" style="border:1px dashed currentColor;border-radius:12px;padding:24px;margin:24px 0;text-align:center;overflow-wrap:anywhere;">
@@ -96,114 +96,163 @@
   <p style="margin:0;"><a href="mailto:leeguoooo@gmail.com?subject=chrome-use%20advertising%20inquiry&amp;body=Product%20%2F%20company%20name%3A%0AProduct%20URL%3A%0APlacement%20%28README%20%2F%20website%20%2F%20both%29%3A%0ACampaign%20dates%3A%0ABudget%20%2F%20currency%20%28optional%29%3A%0A"><strong>Ask about advertising</strong></a> · <a href="mailto:leeguoooo@gmail.com">leeguoooo@gmail.com</a></p>
 </section>
 
-      <div class="du-code">
-        <div class="du-code-head">
-          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-          <span class="du-code-name">bash</span>
-        </div>
-<pre><code><span class="du-cmt"># install the CLI — no npm, no tokens</span>
-<span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
-      </div>
+      <h2>Connect your agent in three steps</h2>
+      <ol class="du-steps">
+        <li>
+          <strong>Install chrome-use</strong>: one line, no npm, no tokens. On Windows use the PowerShell line in <a href="/en/install.html">Install</a>.
+          <div class="du-code">
+            <div class="du-code-head">
+              <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+              <span class="du-code-name">bash</span>
+            </div>
+<pre><code><span class="du-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh</code></pre>
+          </div>
+        </li>
+        <li>
+          <strong>Connect your Chrome</strong>: add the <a href="/en/install.html">chrome-use extension</a> from the Web Store, then register the local bridge once. Your agent then works in the Chrome you use every day, with no "Allow remote debugging?" prompt.
+          <div class="du-code">
+            <div class="du-code-head">
+              <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+              <span class="du-code-name">bash</span>
+            </div>
+<pre><code><span class="du-prompt">$</span> chrome-use extension install
+<span class="du-prompt">$</span> chrome-use doctor   <span class="du-cmt"># self-check</span></code></pre>
+          </div>
+        </li>
+        <li>
+          <strong>Give your agent the skill</strong>: the skill teaches it when and how to use chrome-use. Claude Code installs it from the plugin marketplace; other agents use <code>npx skills</code>.
+          <div class="du-code">
+            <div class="du-code-head">
+              <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+              <span class="du-code-name">Claude Code</span>
+            </div>
+<pre><code><span class="du-prompt">&gt;</span> /plugin marketplace add leeguooooo/plugins
+<span class="du-prompt">&gt;</span> /plugin install chrome-use@leeguooooo-plugins
+<span class="du-cmt"># Codex, Cursor and other agents</span>
+<span class="du-prompt">$</span> npx skills add leeguooooo/chrome-use -g</code></pre>
+          </div>
+        </li>
+      </ol>
+      <p>
+        From there, tell your agent what you want done; you don't need to learn the commands. Clients that only speak MCP and can't run a shell
+        (Claude Desktop, ChatGPT connectors) use the <a href="/en/mcp.html">MCP server</a>. For a guided first run, see
+        <a href="/en/logged-in-browser.html">Let Codex or Claude Code use your logged-in Chrome</a>.
+      </p>
 
-      <div class="du-callout tip">
-        <div class="du-callout-title">✅ New here?</div>
-        Read <a href="/en/install.html">Install &amp; Setup</a> to connect the browser extension, then
-        walk the <a href="/en/core-loop.html">Core Loop</a> (snapshot → find → act) — that's 90% of
-        everything you'll do with chrome-use.
+      <hr class="du-divider" />
+
+      <h2>Ask your agent</h2>
+      <p>A few common requests. The agent works in its own tab group in your Chrome and leaves your tabs alone.</p>
+      <div class="du-cards">
+        <a class="du-card" href="/en/reading.html">
+          <div class="du-card-title"><span class="du-card-ico">📖</span> Read and research</div>
+          <p class="du-say">Open these three articles, compare what they say about the new policy and list where they disagree.</p>
+          <p>The agent reads the page structure, not a screenshot, so long pages come through whole.</p>
+        </a>
+        <a class="du-card" href="/en/extract.html">
+          <div class="du-card-title"><span class="du-card-ico">🧪</span> Collect data</div>
+          <p class="du-say">Put the title, price and link of the first 50 items in this list into a CSV.</p>
+          <p>The agent handles paging and infinite scroll; popular sites have ready-made site adapters that return structured data in one step.</p>
+        </a>
+        <a class="du-card" href="/en/interacting.html">
+          <div class="du-card-title"><span class="du-card-ico">🖱️</span> Fill forms and work in admin panels</div>
+          <p class="du-say">Update stock for these 20 products in the admin panel. Show me before you submit.</p>
+          <p>Clicks, typing, uploads and dropdowns are each checked against the page, not just the command's exit code.</p>
+        </a>
+        <a class="du-card" href="/en/real-chrome.html">
+          <div class="du-card-title"><span class="du-card-ico">🔒</span> Use your signed-in accounts</div>
+          <p class="du-say">Check my GitHub notifications and tell me which PRs are waiting for my review.</p>
+          <p>Your Chrome's existing sessions are reused. At a sign-in or CAPTCHA the agent stops and hands it to you.</p>
+        </a>
+        <a class="du-card" href="/en/testing.html">
+          <div class="du-card-title"><span class="du-card-ico">🧷</span> Test web apps</div>
+          <p class="du-say">Go through the sign-up flow and screenshot every error and layout problem.</p>
+          <p>Works on local dev servers and staging, with screenshots, video and network interception.</p>
+        </a>
+        <a class="du-card" href="/en/inspect.html">
+          <div class="du-card-title"><span class="du-card-ico">🎯</span> Point at an element, change the code</div>
+          <p class="du-say">(click a button on the page) Round these corners and match the header color.</p>
+          <p>The element's source location, screenshot and styles go to the agent already working in that project.</p>
+        </a>
       </div>
 
       <hr class="du-divider" />
 
-      <h2>Why chrome-use</h2>
-      <p>
-        Connect an agent to the Chrome profile you already use. You keep the existing login sessions,
-        watch its work and take over when a website requests verification. Fresh browser contexts start
-        without those sessions; other automation tools can also use persistent profiles or existing-browser
-        connections, so compare the actual connection path.
-      </p>
+      <h2>No terminal needed</h2>
+      <div class="du-cards cols-3">
+        <a class="du-card" href="/en/agent-panel.html">
+          <div class="du-card-title"><span class="du-card-ico">💬</span> Side panel chat</div>
+          <p>Click the extension icon and chat with your local Codex, Claude Code, OpenCode or Pi in Chrome's side panel. It works in the current tab.</p>
+        </a>
+        <a class="du-card" href="/en/mobile.html">
+          <div class="du-card-title"><span class="du-card-ico">📱</span> Mobile remote</div>
+          <p>Away from your desk, keep the chat going from your phone: start a turn, follow progress, answer approvals, get notified when it's done.</p>
+        </a>
+        <a class="du-card" href="/en/agent-panel.html">
+          <div class="du-card-title"><span class="du-card-ico">⏰</span> Scheduled prompts</div>
+          <p>Schedule a prompt in the side panel, for example a summary of your dashboard every morning.</p>
+        </a>
+      </div>
 
+      <hr class="du-divider" />
+
+      <h2>Why your agent should use your own Chrome</h2>
       <div class="du-cards">
         <a class="du-card" href="/en/real-chrome.html">
-          <div class="du-card-title"><span class="du-card-ico">🔒</span> Your real, logged-in Chrome</div>
-          <p>Your cookies, sessions, and fingerprint are all real — because it IS your real browser. See the detector measurements and their limitations.</p>
+          <div class="du-card-title"><span class="du-card-ico">🔑</span> Already signed in</div>
+          <p>A fresh automation browser is signed in to nothing. chrome-use connects to the Chrome profile you use, cookies and sessions included.</p>
         </a>
         <a class="du-card" href="/en/install.html">
           <div class="du-card-title"><span class="du-card-ico">🧩</span> Extension, not a debug port</div>
-          <p>A one-click Store extension over native messaging — no <code>--remote-debugging-port</code>, so it never pops "Allow remote debugging?".</p>
+          <p>A Web Store extension plus native messaging, no <code>--remote-debugging-port</code>, so no "Allow remote debugging?" prompt.</p>
         </a>
         <a class="du-card" href="/en/sessions.html">
-          <div class="du-card-title"><span class="du-card-ico">🎨</span> Multi-agent isolation</div>
-          <p>Each <code>--session</code> gets its own colored tab group, so many agents share one real Chrome without stepping on each other.</p>
+          <div class="du-card-title"><span class="du-card-ico">🎨</span> Several agents, no collisions</div>
+          <p>Each agent session gets its own colored tab group, so agents sharing one Chrome never fight over a tab.</p>
         </a>
         <a class="du-card" href="/en/real-chrome.html">
-          <div class="du-card-title"><span class="du-card-ico">🕵️</span> Silent operation</div>
-          <p>Runs entirely in the background — new tabs open un-focused, the agent never force-fronts a tab or steals your foreground.</p>
+          <div class="du-card-title"><span class="du-card-ico">🕵️</span> Stays out of your way</div>
+          <p>Agents work in background tabs without stealing focus or switching the window you're looking at. Click over whenever you want to watch.</p>
         </a>
       </div>
-
-      <hr class="du-divider" />
 
       <h2>Why not just use…</h2>
       <ul>
-        <li><strong>Playwright / Puppeteer / browser-use?</strong> A new browser context starts without your existing sessions. Those tools can also use persistent contexts or existing browsers; compare connection setup and ownership for your workflow. chrome-use uses the session you already have.</li>
-        <li><strong>Claude's Chrome extension?</strong> Great, but it only drives Claude. chrome-use drives <em>any</em> agent or CLI over the same real browser.</li>
-        <li><strong>A raw <code>--remote-debugging-port</code>?</strong> Chrome 136 restricts debugging of the default profile; connection requirements vary by Chrome version and mode. chrome-use never does — one-click Store extension, native messaging.</li>
+        <li><strong>Playwright / Puppeteer / browser-use?</strong> They're built for writing automation code, and a fresh browser context has none of your sessions; they can also persist profiles or attach to an existing browser, so compare the actual connection path. chrome-use is built for agents and reuses the sessions you already have.</li>
+        <li><strong>Claude's Chrome extension?</strong> Great, but Claude-only. chrome-use works for <em>any</em> agent, on the same real browser.</li>
+        <li><strong>Raw <code>--remote-debugging-port</code> (CDP)?</strong> Chrome 136 restricts remote debugging of the default profile, and the details vary by version and connection mode. chrome-use uses a Web Store extension and native messaging, with no prompt.</li>
       </ul>
 
       <div class="du-callout note">
-        <div class="du-callout-title">ℹ️ The receipts</div>
-        Real-browser fingerprint verified against the toughest public detectors: <strong>CreepJS 0% stealth · 0% headless</strong>,
-        no <code>Runtime.enable</code> CDP leak (off by default), and a small permission footprint —
-        <strong>12 permissions, no <code>&lt;all_urls&gt;</code></strong>. See <a href="/en/real-chrome.html">Real Chrome &amp; Anti-detection</a>.
+        <div class="du-callout-title">ℹ️ What detector results mean</div>
+        The documented CreepJS run reported <strong>0% bot and 0% headless</strong>; nothing is injected into pages when driving your real Chrome, and the extension needs 12 permissions, no <code>&lt;all_urls&gt;</code>.
+        This is a measurement in a particular environment, not a promise of invisibility or account safety; websites also weigh behavior, account history and network signals.
+        Test conditions, <code>--humanize</code> and Cloudflare clearance reuse are in <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>.
       </div>
 
       <hr class="du-divider" />
 
-      <h2>What detector results mean</h2><p>The documented CreepJS run reported 0% bot and 0% headless. This is a measurement in a particular environment, not a promise of invisibility or account safety. Websites can also evaluate behavior, account history and network signals. Read the <a href="/en/stealth.html">test conditions</a>; hand login challenges to the user.</p>
-
-      <div class="du-cards">
-        <a class="du-card" href="/en/stealth.html">
-          <div class="du-card-title"><span class="du-card-ico">🛡️</span> CreepJS <span class="mark">0% bot · 0% headless</span></div>
-          <p>When it drives your real Chrome over the extension it injects <strong>no JS patches</strong> — no disguise means no seams for the lie-detectors to catch. bot.incolumitas / sannysoft / BrowserScan all green.</p>
-        </a>
-        <a class="du-card" href="/en/stealth.html">
-          <div class="du-card-title"><span class="du-card-ico">⚙️</span> Native overrides &gt; JS lies</div>
-          <p>The <code>--launch</code> standalone browser uses <em>native</em> overrides: <code>navigator.webdriver=false</code> (<code>Emulation.setAutomationOverride</code>), timezone, WebRTC local IP, canvas/audio noise — none of them redefined getters that can be probed back. Headless is <strong>disabled by default</strong> (it's a bot tell in itself).</p>
-        </a>
-        <a class="du-card" href="/en/stealth.html">
-          <div class="du-card-title"><span class="du-card-ico">🖐️</span> <code>--humanize</code> beats behavioral detection</div>
-          <p>Beyond fingerprints, Akamai / PerimeterX / DataDome also score <em>behavior</em>. Turn it on and the cursor follows curved Bézier paths, lands on jittered points inside the element, and typing cadence varies — and it's <strong>adaptive</strong>: it escalates on pages from those vendors, and stays instant with zero overhead on ordinary sites.</p>
-        </a>
-        <a class="du-card" href="/en/stealth.html">
-          <div class="du-card-title"><span class="du-card-ico">☁️</span> Cloudflare pass-once, reuse</div>
-          <p>The <code>cf_clearance</code> earned by clearing a challenge once (bound to IP+UA) is saved and reused, so you don't re-solve it every time. Run <code>chrome-use stealth status</code> anytime to self-check the webdriver / chrome / plugins / UA probes.</p>
-        </a>
-      </div>
-
-      <p style="margin-top:18px">
-        <a href="/en/stealth.html">Stealth &amp; Anti-detection →</a>
+      <h2>Under the hood</h2>
+      <p>
+        Your agent runs the <code>chrome-use</code> CLI (or the <a href="/en/mcp.html">MCP server</a> or <a href="/en/http-api.html">local HTTP API</a>).
+        Every task is the same loop: read the page structure → find the element → act → check the result. Start here to write your own scripts, debug, or see how it works:
       </p>
-
-      <hr class="du-divider" />
-
-      <h2>Get started</h2>
-      <p>A few short reads take you from zero to driving your own Chrome:</p>
       <div class="du-cards">
-        <a class="du-card" href="/en/install.html">
-          <div class="du-card-title"><span class="du-card-ico">📦</span> Install &amp; Setup</div>
-          <p>One-line installer, then the browser extension + native-messaging bridge.</p>
-        </a>
         <a class="du-card" href="/en/core-loop.html">
-          <div class="du-card-title"><span class="du-card-ico">🔁</span> Core Loop</div>
-          <p>snapshot → find → act: the read/interact rhythm behind every task.</p>
+          <div class="du-card-title"><span class="du-card-ico">🔁</span> The Core Loop</div>
+          <p><code>snapshot → find → act</code>: what the agent does at each step.</p>
         </a>
-        <a class="du-card" href="/en/reading.html">
-          <div class="du-card-title"><span class="du-card-ico">📖</span> Reading Pages</div>
-          <p>Pull a structured, agent-friendly view of any page with <code>snapshot</code>.</p>
+        <a class="du-card" href="/en/how-it-works.html">
+          <div class="du-card-title"><span class="du-card-ico">⚙️</span> How It Works</div>
+          <p>How the daemon, extension relay and native messaging reach your Chrome.</p>
         </a>
-        <a class="du-card" href="/en/mcp.html">
-          <div class="du-card-title"><span class="du-card-ico">🔌</span> MCP Server</div>
-          <p>For hosts that can't shell out — Claude Desktop, ChatGPT connectors — via <code>chrome-use mcp</code>.</p>
+        <a class="du-card" href="/en/commands.html">
+          <div class="du-card-title"><span class="du-card-ico">📚</span> Command Reference</div>
+          <p>Every command and flag your agent can use.</p>
+        </a>
+        <a class="du-card" href="/en/troubleshooting.html">
+          <div class="du-card-title"><span class="du-card-ico">🩹</span> Troubleshooting</div>
+          <p>Extension not connecting, tab not found, commands timing out.</p>
         </a>
       </div>
 
