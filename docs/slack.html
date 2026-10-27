@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Slack 自动化 · chrome-use 文档</title>
-  <meta name="description" content="用 chrome-use 驱动真实 Slack 网页会话：查未读、导航频道、搜索会话、抽取消息数据——纯浏览器自动化，无需 Slack API、OAuth 或机器人令牌。" />
+  <meta name="description" content="让 agent 在你已登录的 Slack 网页版里查未读、进频道、搜消息、导出消息数据，走你的浏览器，不需要 Slack API、OAuth 或机器人令牌。下文附 open、snapshot、get text 等底层命令。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -39,7 +39,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">专项能力 / Specialized</p>
+      <p class="du-eyebrow">让 agent 做事 / What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>Slack 自动化</h1>
@@ -50,6 +50,47 @@
       </div>
 
       <p class="du-lede">
+        让 agent 在你<span class="mark">已登录的 Slack 网页版</span>里查未读、进频道、搜消息、整理讨论内容。它走的是你的浏览器，不需要 Slack API、OAuth 或机器人令牌。
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>你可以这样说</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">看看我 Slack 里有哪些未读，按频道列出来。</p>
+          <p>从 Activity 和 More unreads 里找。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">搜一下上周关于发版的讨论，整理成要点。</p>
+          <p>用 Slack 自带的搜索。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">把 #engineering 最近的消息导出成 JSON，带作者和时间。</p>
+          <p>从页面结构里取消息、用户名和时间戳。</p>
+        </div>
+      </div>
+      <h2>agent 会怎么做</h2>
+      <ol>
+        <li>用 <code>open https://app.slack.com</code> 打开网页版，登录直接用你 Chrome 里的。</li>
+        <li>用 <code>snapshot -i</code> 读侧边栏，从 Activity 标签和 More unreads 找未读。</li>
+        <li>点侧边栏里的频道进入，等内容加载完，再滚动加载更多历史。</li>
+        <li>搜索走 Slack 自带的搜索框：填关键词、回车、等结果加载。</li>
+        <li>要结构化数据时导出 JSON 快照，或按元素取文字。</li>
+      </ol>
+      <h2>你会看到什么</h2>
+      <ul>
+        <li>Slack 在你 Chrome 的 <code>✦ 项目名</code> 标签组里以后台标签打开，你正在用的 Slack 标签不受影响。</li>
+        <li>只能操作你已登录的那个工作区，不能跨工作区。</li>
+        <li>操作太密集时 Slack 可能限流，agent 会在命令之间留间隔。</li>
+        <li>agent 截的图存在它指定的路径，可以对着 Slack 界面核对未读数和搜索结果。</li>
+        <li>任务结束时 agent 用 <code>done</code> 收尾：中间打开的标签关掉，你要看或要接着用的页面留下。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>底层命令</h2>
+      <p>下面是 agent 实际调用的命令和参数。自己写脚本、排查问题或想了解细节时看这部分。</p>
+      <p>
         Slack 的网页版就是一个大型 Web 应用——chrome-use 把它当成普通页面来驱动：
         <span class="mark">连接已经登录的会话</span>，读可访问性快照拿到带 <code>@ref</code> 的元素，
         然后查未读、跳频道、搜会话、抽消息。全程走真实浏览器，

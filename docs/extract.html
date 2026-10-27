@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>提取数据 · chrome-use 文档</title>
-  <meta name="description" content="从页面把数据抽成干净的结构：snapshot --json、get text/attr、eval 自定义形状、站点适配器，以及一步到位的 extract --schema。" />
+  <title>抓数据 · chrome-use 文档</title>
+  <meta name="description" content="让 agent 把网页上的列表、表格、搜索结果整理成结构化数据：常用网站走站点适配器，其他页面按字段一次抽成 JSON，多页数据一次跑完。下文附 extract --schema、eval、snapshot --json 等底层命令。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -39,10 +39,10 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">核心用法 / Core Usage</p>
+      <p class="du-eyebrow">让 agent 做事 / What Agents Can Do</p>
 
       <div class="du-title-row">
-        <h1>提取数据</h1>
+        <h1>抓数据</h1>
         <button class="du-copy-page" type="button" aria-label="复制页面">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
           <span class="du-copy-page-label">复制页面</span>
@@ -50,6 +50,47 @@
       </div>
 
       <p class="du-lede">
+        让 agent 把页面上的<span class="mark">列表、表格、搜索结果</span>整理成数据。常用网站有站点适配器，直接调用网站自己的接口；其他页面按你说的字段一次抽成 JSON，再由 agent 转成你要的格式。
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>你可以这样说</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">把这个列表前 50 条的标题、价格和链接整理成 CSV。</p>
+          <p>agent 拿到 JSON 后转成 CSV，翻页和滚动加载由它处理。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">列出这个 GitHub 仓库所有 open 的 issue，按标签分组。</p>
+          <p>GitHub 有现成的站点适配器，不用一页页点。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">翻三页搜索结果，只留评分 4.5 以上的。</p>
+          <p>翻页、抽取、筛选放在一个脚本里跑完。</p>
+        </div>
+      </div>
+      <h2>agent 会怎么做</h2>
+      <ol>
+        <li>先判断要不要开浏览器：公开的静态页面直接抓取更快；需要登录、交互或 JS 渲染的才用 chrome-use。</li>
+        <li>网站有站点适配器时（GitHub、Reddit、B 站等），用 <code>site &lt;name&gt;/&lt;cmd&gt;</code> 在你登录的标签页里调用网站自己的接口。</li>
+        <li>没有适配器时，用 <code>extract --schema</code> 说明哪些元素是一行、每行取哪些字段，一次拿到 JSON；形状特殊的用 <code>eval</code> 写一段脚本。</li>
+        <li>多页数据把翻页和抽取放进一个 <code>script</code> 循环，跑完再合并。</li>
+        <li>最后把 JSON 转成你要的 CSV、表格或摘要。</li>
+      </ol>
+      <h2>你会看到什么</h2>
+      <ul>
+        <li>你的标签不受影响：agent 在你 Chrome 里的 <code>✦ 项目名</code> 标签组中开后台标签，不抢焦点，你想看随时点过去。</li>
+        <li>需要登录时，agent 用你 Chrome 里现成的登录态。要你做选择的（比如要不要用密码库登录），或者只有你能完成的步骤（扫码、确认），它会停下来问你，等你处理完再继续。</li>
+        <li>chrome-use 返回的是 JSON，CSV、表格这些文件由 agent 生成，存到哪里可以直接告诉它。</li>
+        <li>选择器一条都没匹配到时，<code>extract</code> 会列出页面上有哪些重复的容器，不会悄悄返回空数组；某个字段每一行都是空的，也会点名警告。拿到结果先看行数和空字段。</li>
+        <li>任务结束时 agent 用 <code>done</code> 收尾：中间打开的标签关掉，你要看或要接着用的页面留下。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>底层命令</h2>
+      <p>下面是 agent 实际调用的命令和参数。自己写脚本、排查问题或想了解细节时看这部分。</p>
+      <p>
         当你要的是页面里的<span class="mark">数据</span>而不是操作时，别把整页 HTML 倒进上下文。
         chrome-use 提供从轻到重的一整套抽取手段：结构化快照、按 ref 精准取值、
         自定义形状的 <code>eval</code>、社区站点适配器，直到一步到位的 <code>extract --schema</code>。

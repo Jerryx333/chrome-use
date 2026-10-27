@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>站点适配器 · chrome-use 文档</title>
-  <meta name="description" content="站点适配器：一小段 JS，在你登录态的标签页里直接调用站点自己的 JSON API，返回干净结构化数据——不点击、不爬、不截图。site update / list / info / run 全流程，以及自动触发提示与选型对比。" />
+  <meta name="description" content="站点适配器让 agent 在你已登录的标签页里直接调用网站自己的接口，一条命令拿到 GitHub、Reddit、B 站等网站的结构化数据，或者发文章、传视频。下文附 site update / list / info / run 等底层命令。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -42,7 +42,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">核心用法 / Core Usage</p>
+      <p class="du-eyebrow">让 agent 做事 / What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>站点适配器</h1>
@@ -52,14 +52,58 @@
         </button>
       </div>
 
-      <p>需要此类任务的 CLI 细节时，按需加载 <code>chrome-use skills get core/site-adapters</code>。普通点击和表单操作已包含在 <code>core</code> 中。</p>
 
       <p class="du-lede">
+        站点适配器是按网站写好的一小段脚本，在你<span class="mark">已登录的标签页</span>里直接调用网站自己的接口。GitHub、Reddit、B 站这类常用网站，agent 不用一页页点，一条命令就拿到整理好的数据；发文章、传视频的适配器也是一条命令跑完。
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>你可以这样说</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">列出这个仓库最近 30 个 open 的 issue 和 PR。</p>
+          <p>用 <code>github/issues</code> 适配器，一次返回 JSON。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">看看我 B 站关注的动态里有什么新视频。</p>
+          <p>需要登录才能看的信息流，以你的身份读取。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">把 post.md 发到 CSDN，标题叫 Hello。</p>
+          <p>正文从文件读，等到发布完成再返回。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">这个网站我每天都要查一遍，帮我写成适配器。</p>
+          <p>以后同样的事一条命令完成。</p>
+        </div>
+      </div>
+      <h2>agent 会怎么做</h2>
+      <ol>
+        <li>打开有适配器的网站时，chrome-use 会提示这个域名有哪些适配器，agent 直接用提示里的命令。</li>
+        <li>先用 <code>site info</code> 看适配器要哪些参数，再用 <code>site &lt;name&gt;/&lt;cmd&gt; --json</code> 运行；它会自己导航到对应网站。</li>
+        <li>发布类适配器从文件读正文、直接收本地视频路径；加 <code>--until-done</code> 会一直跑到上传和发布完成。</li>
+        <li>你常用的网站没有适配器时，chrome-use 会提醒 agent 问你要不要写一个。你同意后，它写进 <code>~/.chrome-use/my-sites/</code> 并登记。</li>
+      </ol>
+      <h2>你会看到什么</h2>
+      <ul>
+        <li>你的标签不受影响：agent 在你 Chrome 里的 <code>✦ 项目名</code> 标签组中开后台标签，不抢焦点，你想看随时点过去。</li>
+        <li>请求从你已登录的标签页发出，用的是你的账号。网站没登录时命令失败并提示 login wall；agent 会把「这次登录、以后自动登录、不登录」的选择转给你，不替你选。</li>
+        <li>走第三方 OpenCLI 命令时，输出会注明它不由 chrome-use 维护。发帖、删除、点赞、关注这类动你账号的操作，不应依赖 OpenCLI。</li>
+        <li>发布返回 <code>timeout</code> 不等于失败，页面里那次发布可能随后完成。agent 重跑前要先看页面实际状态，你也可以点到那个标签自己看，避免重复发布。</li>
+        <li>任务结束时 agent 用 <code>done</code> 收尾：中间打开的标签关掉，你要看或要接着用的页面留下。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>底层命令</h2>
+      <p>下面是 agent 实际调用的命令和参数。自己写脚本、排查问题或想了解细节时看这部分。</p>
+      <p>
         读「站点 X 的结构化数据」，最省的路径是<span class="mark">跳过 snapshot + click</span>。
         在你 <code>open</code>、翻页、一路点击穿越 GitHub / Reddit / Bilibili 之前，先看有没有现成的
         <strong>站点适配器</strong>——一小段社区写的 JS，在你登录态的标签页里直接打站点自己的 JSON API，
         把干净的结构化数据一次交给你。不点击、不爬、不截图。
       </p>
+      <p>需要此类任务的 CLI 细节时，按需加载 <code>chrome-use skills get core/site-adapters</code>。普通点击和表单操作已包含在 <code>core</code> 中。</p>
 
       <!-- ============ SECTION ======= -->
       <h2>是什么</h2>

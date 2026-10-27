@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>读取页面 · chrome-use 文档</title>
-  <meta name="description" content="用 snapshot 拿到结构化的可访问性快照，用 get text 跨 frame 读取正文，穿透 closed shadow DOM，在指定 frame 里执行 eval——把页面变成可操作的结构化视图。" />
+  <title>读网页、查资料 · chrome-use 文档</title>
+  <meta name="description" content="让 agent 在你已登录的 Chrome 里读网页、查文档、对比文章。它读的是页面结构和正文，不靠截图，iframe 里的内容也能读到。下文附 snapshot、get text、read 等底层命令。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -42,23 +42,63 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">核心用法 / Core Usage</p>
+      <p class="du-eyebrow">让 agent 做事 / What Agents Can Do</p>
 
       <div class="du-title-row">
-        <h1>读取页面</h1>
+        <h1>读网页、查资料</h1>
         <button class="du-copy-page" type="button" aria-label="复制页面">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
           <span class="du-copy-page-label">复制页面</span>
         </button>
       </div>
 
-      <p>需要此类任务的 CLI 细节时，按需加载 <code>chrome-use skills get core/reading</code>。普通点击和表单操作已包含在 <code>core</code> 中。</p>
 
       <p class="du-lede">
+        让 agent 替你打开网页、读文档、对比几篇文章。它读的是<span class="mark">页面结构和正文</span>，不靠截图，长页面和藏在 iframe 里的内容也能读全。
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>你可以这样说</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">打开这三篇文章，对比它们对新政策的说法，列出分歧。</p>
+          <p>agent 把每篇的正文读下来再对比，不需要你复制粘贴。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">读一下这个库的官方文档，告诉我怎么配置代理。</p>
+          <p>文档站有 llms.txt 时，agent 先读页面清单，再挑对应的页面读 markdown 版。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">这个商品页的规格写在哪？把完整描述贴给我。</p>
+          <p>商品描述放在内嵌 iframe 里也能读到。</p>
+        </div>
+      </div>
+      <h2>agent 会怎么做</h2>
+      <ol>
+        <li>文档、博客这类正文，用 <code>read</code> 拉成 markdown 或纯文本。</li>
+        <li>只要文字时用 <code>get text</code>，默认把所有 frame 的文本合在一起；加 <code>--main</code> 跳过导航和侧栏。</li>
+        <li>读完还要在页面上操作时，用 <code>snapshot -i</code> 列出可交互元素，每个元素带一个 ref，后面点击、输入都用它。</li>
+        <li>页面很大时按区域、关键词或字节数收窄（<code>snapshot -s</code>、<code>-f</code>、<code>--max-bytes</code>），只读下一步需要的部分。</li>
+      </ol>
+      <h2>你会看到什么</h2>
+      <ul>
+        <li>你的标签不受影响：agent 在你 Chrome 里的 <code>✦ 项目名</code> 标签组中开后台标签，不抢焦点，你想看随时点过去。</li>
+        <li>需要登录时，agent 用你 Chrome 里现成的登录态。要你做选择的（比如要不要用密码库登录），或者只有你能完成的步骤（扫码、确认），它会停下来问你，等你处理完再继续。</li>
+        <li>卡号、密码、验证码这类字段在读取结果里默认显示成 <code>&lt;filled N chars&gt;</code>，明文不进对话记录。</li>
+        <li>要核对 agent 的结论，让它给出读过的网址，或者让它把原页面留给你。</li>
+        <li>任务结束时 agent 用 <code>done</code> 收尾：中间打开的标签关掉，你要看或要接着用的页面留下。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>底层命令</h2>
+      <p>下面是 agent 实际调用的命令和参数。自己写脚本、排查问题或想了解细节时看这部分。</p>
+      <p>
         <code>snapshot</code> 把页面变成一棵
         <span class="mark">带 ref 的可访问性树</span>——你据此点击、输入；<code>get text</code>
         则跨所有 frame 抓取正文，连 closed shadow DOM 都能穿透。
       </p>
+      <p>需要此类任务的 CLI 细节时，按需加载 <code>chrome-use skills get core/reading</code>。普通点击和表单操作已包含在 <code>core</code> 中。</p>
 
       <!-- ============ SECTION ======= -->
       <p>有效增量快照的 JSON <code>refs</code> 只包含增量片段中的节点；无变化时为空。会话仍保留完整实时映射和先前引用；回退完整树时保持普通完整快照的行为。</p>

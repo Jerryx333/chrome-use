@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>Reading Pages · chrome-use</title>
-  <meta name="description" content="Get a structured accessibility snapshot with snapshot, read body text across frames with get text, pierce closed shadow DOM, and run eval inside a specific frame — turning the page into an actionable structured view." />
+  <title>Read &amp; Research · chrome-use</title>
+  <meta name="description" content="Have your agent read pages, look things up in docs and compare articles in the Chrome you&#39;re signed in to. It reads page structure and text, not screenshots, including content inside iframes. Underlying commands (snapshot, get text, read) follow." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -42,23 +42,63 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">Core Usage</p>
+      <p class="du-eyebrow">What Agents Can Do</p>
 
       <div class="du-title-row">
-        <h1>Reading Pages</h1>
+        <h1>Read &amp; Research</h1>
         <button class="du-copy-page" type="button" aria-label="Copy page">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
           <span class="du-copy-page-label">Copy page</span>
         </button>
       </div>
 
-      <p>For task-specific CLI guidance, load <code>chrome-use skills get core/reading</code>. Ordinary clicks and form actions are already covered by <code>core</code>.</p>
 
       <p class="du-lede">
+        Have your agent open pages, read docs and compare articles for you. It reads <span class="mark">the page structure and text</span>, not a screenshot, so long pages and content inside iframes come through whole.
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>Ask your agent</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">Open these three articles, compare what they say about the new policy and list where they disagree.</p>
+          <p>The agent reads each article&#39;s text and compares them; no copy-pasting on your side.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Read this library&#39;s official docs and tell me how to configure a proxy.</p>
+          <p>If the docs site has an llms.txt, the agent reads its page list first, then the markdown version of the right page.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Where are the specs on this product page? Paste me the full description.</p>
+          <p>Descriptions inside an embedded iframe are read too.</p>
+        </div>
+      </div>
+      <h2>What the agent does</h2>
+      <ol>
+        <li>For articles, docs and blog posts, <code>read</code> pulls the page as markdown or plain text.</li>
+        <li>When only the text matters, <code>get text</code> reads it, across every frame by default; <code>--main</code> skips navigation and sidebars.</li>
+        <li>When the agent will act on the page next, <code>snapshot -i</code> lists the interactive elements, each with a ref used by later clicks and typing.</li>
+        <li>On very large pages it narrows the read by region, keyword or byte budget (<code>snapshot -s</code>, <code>-f</code>, <code>--max-bytes</code>) and reads only what the next step needs.</li>
+      </ol>
+      <h2>What you&#39;ll see</h2>
+      <ul>
+        <li>Your tabs stay as they are: the agent opens background tabs in a <code>✦ &lt;project&gt;</code> tab group in your Chrome and does not take focus. Click over whenever you want to watch.</li>
+        <li>Sign-ins come from your Chrome&#39;s existing sessions. When there is a choice to make (such as whether to sign in from your password vault) or a step only you can do (scanning a QR code, confirming), the agent stops, asks you, and continues after you finish.</li>
+        <li>Card numbers, passwords and one-time codes show as <code>&lt;filled N chars&gt;</code> in reads by default, so the plain value stays out of the transcript.</li>
+        <li>To check a conclusion, ask the agent for the URLs it read, or ask it to leave the source page open for you.</li>
+        <li>At the end the agent runs <code>done</code>: tabs it opened along the way close, and pages you need to see or keep using stay open.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Under the hood</h2>
+      <p>The commands and flags the agent runs. Read on if you write your own scripts, debug a run, or want the details.</p>
+      <p>
         <code>snapshot</code> turns the page into
         <span class="mark">an accessibility tree with refs</span> — you click and type based on it; <code>get text</code>
         grabs body text across every frame, piercing even closed shadow DOM.
       </p>
+      <p>For task-specific CLI guidance, load <code>chrome-use skills get core/reading</code>. Ordinary clicks and form actions are already covered by <code>core</code>.</p>
 
       <!-- ============ SECTION ======= -->
       <p>Valid incremental snapshots return JSON <code>refs</code> only for nodes in the delta. A no-change delta has empty <code>refs</code>; the complete live session map and previously captured refs remain available. A full-tree fallback keeps the normal full-snapshot behavior.</p>

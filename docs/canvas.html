@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Canvas / WebGL / 游戏 · chrome-use 文档</title>
-  <meta name="description" content="用坐标点击、hold 移动、batch 定时序列和实时 WebSocket 流驱动没有 DOM/无障碍节点的 canvas / WebGL / 游戏界面：canvas 捕获像素、读取引擎全局变量、60fps 实时输入。" />
+  <meta name="description" content="游戏、地图、3D 查看器、设计画布画在 canvas 上，没有可点的元素。agent 靠看画面、按坐标操作、读引擎状态来驱动它们，也能在 Google Docs 这类编辑器里先探针再输入。下文附 canvas capture、click x y、batch、stream 等底层命令。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -38,7 +38,7 @@
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><use href="/assets/docs/doodles.svg#star"/></svg>
       </span>
 
-      <p class="du-eyebrow">进阶 / Advanced</p>
+      <p class="du-eyebrow">让 agent 做事 / What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>Canvas / WebGL / 游戏</h1>
@@ -49,6 +49,46 @@
       </div>
 
       <p class="du-lede">
+        游戏、地图、3D 查看器、Figma 这类设计画布，都画在 <code>&lt;canvas&gt;</code> 上，页面结构里<span class="mark">没有按钮可点</span>。让 agent 操作它们时，它看画面、按坐标点击和按键；能读到引擎状态时直接读状态。
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>你可以这样说</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">在这个网页游戏里按住右键往前走，跳过第一个坑。</p>
+          <p>按住时长在 chrome-use 内部计时，比逐条命令准。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">把这个 Figma 画布当前的画面导出成 PNG。</p>
+          <p>拿到的是画出来的画面，不是设计源文件。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">在这份 Google Docs 末尾加一段会议纪要。</p>
+          <p>先打一个探针词确认光标在正文里，再输入。</p>
+        </div>
+      </div>
+      <h2>agent 会怎么做</h2>
+      <ol>
+        <li>先用 <code>snapshot -i</code> 和 <code>get text --pierce</code> 确认是不是真的没有可点元素；能拿到 ref 就不用坐标。</li>
+        <li>用 <code>canvas capture</code> 或 <code>screenshot</code> 看画面，算出位置后 <code>click x y</code>；持续按键用 <code>press --hold</code>。</li>
+        <li>一串固定时序的动作用 <code>batch</code> 一次发完；需要实时控制时打开 <code>stream</code>，在 WebSocket 上收画面、发输入。</li>
+        <li>游戏引擎把状态挂在页面全局变量上时，用 <code>eval</code> 直接读位置和分数，不从截图猜。</li>
+        <li>Google Docs、Notion 这类编辑器，先输入一个探针词确认落点，再输入正文，最后截图或导出核对。</li>
+      </ol>
+      <h2>你会看到什么</h2>
+      <ul>
+        <li>通过扩展操作你的 Chrome 时，坐标点击可能落到你前台的标签页上。大量坐标操作的任务，agent 应优先用自己启动的浏览器（<code>--launch</code>）或自己的标签页，或者改用应用的后端接口确认状态。</li>
+        <li><code>canvas capture</code> 拿到的是渲染出来的画面。设计源文件、游戏的隐藏状态要走应用自己的接口。</li>
+        <li>agent 报告完成前，应当已经用截图、导出或接口回读核对过；你可以要那张截图来看。</li>
+        <li>任务结束时 agent 用 <code>done</code> 收尾：中间打开的标签关掉，你要看或要接着用的页面留下。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>底层命令</h2>
+      <p>下面是 agent 实际调用的命令和参数。自己写脚本、排查问题或想了解细节时看这部分。</p>
+      <p>
         游戏画面、语音房麦位、地图瓦片、3D 查看器、设计画布（Figma / 墨刀）——这些界面把一切都画在
         <code>&lt;canvas&gt;</code> 上，<span class="mark">背后没有 DOM 节点、也没有无障碍节点</span>。
         <a href="/reading.html">snapshot</a> / find / eval querySelector 永远拿不到它们的 <code>@ref</code>。

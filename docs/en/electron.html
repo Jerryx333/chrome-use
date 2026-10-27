@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Electron Apps · chrome-use docs</title>
-  <meta name="description" content="Automate any Electron desktop app with chrome-use over the Chrome DevTools Protocol — Slack, VS Code, Discord, Figma, Notion, Spotify. Launch with a debug port, connect, explore via snapshot, interact by ref." />
+  <meta name="description" content="Once an Electron desktop app (Slack, VS Code, Discord, Notion and more) starts with a debug port, your agent can read its UI, click, type and take screenshots like on a web page, and drive several apps at once. Underlying commands (connect, tab, --session) and troubleshooting follow." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -39,7 +39,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">Desktop Apps</p>
+      <p class="du-eyebrow">What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>Electron Apps</h1>
@@ -50,6 +50,46 @@
       </div>
 
       <p class="du-lede">
+        Slack, VS Code, Discord and Notion are desktop apps built on Electron, which is Chromium inside. Once an app <span class="mark">starts with a debug port</span>, your agent can work in it like a web page: read the UI, click buttons, type into fields and take screenshots.
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>Ask your agent</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">Search the Slack desktop app for last week&#39;s release discussion and send me a screenshot.</p>
+          <p>Same search box as the web app; the results are saved as a screenshot.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Open VS Code settings and tell me what auto save is set to.</p>
+          <p>It reads the app&#39;s UI; it doesn&#39;t edit config files.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Copy out the to-do list on the current page of the Notion desktop app.</p>
+          <p>Text comes from UI elements, or the whole page as JSON.</p>
+        </div>
+      </div>
+      <h2>What the agent does</h2>
+      <ol>
+        <li>The app has to start with <code>--remote-debugging-port</code>. An app that is already running must be quit and relaunched with the flag.</li>
+        <li>The agent attaches with <code>connect &lt;port&gt;</code>; later commands go to that app.</li>
+        <li>It reads the UI with <code>snapshot -i</code> as usual and clicks or types by ref, re-reading after the UI changes.</li>
+        <li>If the app has several windows or webviews, <code>tab</code> lists them and switches to the right one.</li>
+        <li>To drive several apps at once, each app gets a named session (<code>--session</code>) on its own port.</li>
+      </ol>
+      <h2>What you&#39;ll see</h2>
+      <ul>
+        <li>This works on the desktop app itself. It does not go through your Chrome and there is no tab group.</li>
+        <li>If the app was already open it has to restart once, so save your work first.</li>
+        <li>Over the debug port the app may switch to its light theme; to keep dark mode, have the agent add <code>--color-scheme dark</code>.</li>
+        <li>If it can&#39;t connect or can&#39;t find an element, see Troubleshooting below.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Under the hood</h2>
+      <p>The commands and flags the agent runs. Read on if you write your own scripts, debug a run, or want the details.</p>
+      <p>
         Slack, VS Code, Discord, Figma, Notion, Spotify — these desktop apps are really just <span class="mark">Chromium in a shell</span>: they're all built on Electron.
         Launch them with <code>--remote-debugging-port</code> and chrome-use can attach exactly like it would to a web page:
         the same <a href="/en/core-loop.html">snapshot → interact → snapshot again</a> loop, the same <code>@ref</code> targeting.

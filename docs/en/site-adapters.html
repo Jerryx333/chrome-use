@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Site Adapters · chrome-use</title>
-  <meta name="description" content="Site adapters: a small JS snippet that hits a site's own JSON API directly from your logged-in tab and returns clean structured data — no clicking, no scraping, no screenshots. The full site update / list / info / run flow, plus auto-hints and how it compares to the alternatives." />
+  <meta name="description" content="Site adapters let your agent call a site&#39;s own API from your signed-in tab: one command returns structured data from GitHub, Reddit, Bilibili and others, or publishes a post or video. Underlying commands (site update / list / info / run) follow." />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -42,7 +42,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">Core Usage</p>
+      <p class="du-eyebrow">What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>Site Adapters</h1>
@@ -52,14 +52,58 @@
         </button>
       </div>
 
-      <p>For task-specific CLI guidance, load <code>chrome-use skills get core/site-adapters</code>. Ordinary clicks and form actions are already covered by <code>core</code>.</p>
 
       <p class="du-lede">
+        A site adapter is a small per-site script that calls the site&#39;s own API from <span class="mark">your signed-in tab</span>. On popular sites like GitHub, Reddit and Bilibili the agent gets clean data in one command instead of clicking page by page, and publishing adapters post an article or upload a video in one command too.
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>Ask your agent</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">List the last 30 open issues and PRs in this repo.</p>
+          <p>The <code>github/issues</code> adapter returns them as JSON in one call.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">What new videos are in my Bilibili following feed?</p>
+          <p>Feeds that need sign-in are read as you.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Publish post.md to CSDN with the title Hello.</p>
+          <p>The body is read from the file, and the command returns once publishing finishes.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">I check this site every day. Write an adapter for it.</p>
+          <p>Next time the same job is one command.</p>
+        </div>
+      </div>
+      <h2>What the agent does</h2>
+      <ol>
+        <li>When the agent lands on a site that has adapters, chrome-use prints which ones exist for that domain, and the agent uses the command it names.</li>
+        <li>It checks the arguments with <code>site info</code>, then runs <code>site &lt;name&gt;/&lt;cmd&gt; --json</code>, which navigates to the site by itself.</li>
+        <li>Publishing adapters read the body from a file and take local video paths directly; <code>--until-done</code> keeps going until the upload and publish finish.</li>
+        <li>If you use a site a lot and it has no adapter, chrome-use prompts the agent to ask whether you want one. If you agree, it writes the adapter into <code>~/.chrome-use/my-sites/</code> and registers it.</li>
+      </ol>
+      <h2>What you&#39;ll see</h2>
+      <ul>
+        <li>Your tabs stay as they are: the agent opens background tabs in a <code>✦ &lt;project&gt;</code> tab group in your Chrome and does not take focus. Click over whenever you want to watch.</li>
+        <li>Requests go out from your signed-in tab, as your account. If the site is signed out the command fails with a login wall, and the agent passes the choice (sign in this time, always, or never) to you; it does not choose for you.</li>
+        <li>When a third-party OpenCLI command runs, the output says it is not maintained by chrome-use. Posting, deleting, liking and following on your real account should not rely on OpenCLI.</li>
+        <li>A publish that returns <code>timeout</code> has not necessarily failed; the run in the page may still finish. The agent should check the page before rerunning, and you can click over to that tab yourself, so nothing gets posted twice.</li>
+        <li>At the end the agent runs <code>done</code>: tabs it opened along the way close, and pages you need to see or keep using stay open.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Under the hood</h2>
+      <p>The commands and flags the agent runs. Read on if you write your own scripts, debug a run, or want the details.</p>
+      <p>
         To read "structured data from site X," the cheapest path is to <span class="mark">skip snapshot + click</span>.
         Before you <code>open</code>, page through, and click your way across GitHub / Reddit / Bilibili, check whether a ready-made
         <strong>site adapter</strong> exists — a small community-written JS snippet that hits the site's own JSON API directly from your
         logged-in tab and hands you clean structured data in one shot. No clicking, no scraping, no screenshots.
       </p>
+      <p>For task-specific CLI guidance, load <code>chrome-use skills get core/site-adapters</code>. Ordinary clicks and form actions are already covered by <code>core</code>.</p>
 
       <!-- ============ SECTION ======= -->
       <h2>What it is</h2>

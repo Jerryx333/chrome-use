@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>测试与探索 · chrome-use 文档</title>
-  <meta name="description" content="用 chrome-use test 把重复的手动浏览器检查写成可复跑的 YAML 回归套件；用 dogfood 做探索式测试、QA 和 bug 挖掘，带完整复现证据。" />
+  <meta name="description" content="让 agent 测你的网页：把反复的手动检查写成可复跑的 YAML 套件接进 CI，或者像用户一样把应用逛一遍，交回带截图、录像和复现步骤的问题报告。下文附 chrome-use test 和 dogfood 流程的底层命令。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -42,7 +42,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">进阶 / 工作流</p>
+      <p class="du-eyebrow">让 agent 做事 / What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>测试与探索</h1>
@@ -53,6 +53,50 @@
       </div>
 
       <p class="du-lede">
+        让 agent 测你的网页，有两种做法：把反复手动检查的流程写成<span class="mark">可复跑的测试套件</span>，每次改完代码跑一遍；或者让 agent 像用户一样把应用逛一遍，找出问题并留下截图、录像和复现步骤。
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>你可以这样说</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">把注册流程走一遍，截图记下所有报错和样式问题。</p>
+          <p>每个问题都附截图和复现步骤。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">把「登录后能看到设置页」写成测试用例，以后每次改完都跑一下。</p>
+          <p>写成 YAML 套件，退出码可以接进 CI。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">用管理员和普通成员两个账号测一下，确认普通成员看不到设置页。</p>
+          <p>需要装 cookie-use 存好两个账号的登录。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">对测试环境做一次探索测试，找 5 到 10 个问题写成报告。</p>
+          <p>宁可问题少，每个都要能复现。</p>
+        </div>
+      </div>
+      <h2>agent 会怎么做</h2>
+      <ol>
+        <li>回归测试：agent 先手动走一遍摸清选择器，再写进 <code>*.yaml</code> 套件，用 <code>chrome-use test</code> 运行。全部通过退出码为 0，任一失败为 1。</li>
+        <li>探索测试：agent 用一个具名会话打开目标网址，从主导航开始逐个区块点按钮、填表单、试边界输入，每页截图并查控制台错误。</li>
+        <li>发现问题先重试，确认能稳定复现。交互类问题录像加逐步截图，静态问题一张标注截图。</li>
+        <li>每发现一个问题就追加进报告，最后按严重度汇总计数。agent 不读被测应用的源码，所有发现都来自浏览器里看到的现象。</li>
+      </ol>
+      <h2>你会看到什么</h2>
+      <ul>
+        <li><code>chrome-use test</code> 默认启动一个全新的隔离浏览器，跑完就关，不碰你的 Chrome。要用你的登录态，让 agent 加 <code>--session</code> 对着已连接的会话跑。</li>
+        <li>失败的用例截图存到 <code>cu-test-artifacts/&lt;case&gt;.png</code>。</li>
+        <li>探索测试的结果在 <code>dogfood-output/</code>：<code>report.md</code>、<code>screenshots/</code>、<code>videos/</code>。报告里每个问题都写了复现步骤和证据文件路径，可以按路径打开核对。</li>
+        <li>登录需要短信或邮箱验证码时，agent 会问你，等你回复再填。</li>
+        <li>控制台错误默认不采集，会话启动时要打开采集（见下文 dogfood 一节）。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>底层命令</h2>
+      <p>下面是 agent 实际调用的命令和参数。自己写脚本、排查问题或想了解细节时看这部分。</p>
+      <p>
         同样是驱动浏览器，测试有两种截然不同的姿势：一种是把重复的手动检查
         <span class="mark">固化成可复跑的回归套件</span>，像前端的单元测试；另一种是像真实用户一样
         <span class="mark">系统地把应用逛一遍</span>，挖出 bug 与体验问题，并带上完整复现证据。

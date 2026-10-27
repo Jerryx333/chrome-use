@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>交互操作 · chrome-use 文档</title>
-  <meta name="description" content="用 click、type、fill、check、select、upload、scroll、drag 等命令驱动真实浏览器；理解 @ref 交互、键盘事件、跨源 iframe 与滑块验证码。" />
+  <title>填表与操作 · chrome-use 文档</title>
+  <meta name="description" content="让 agent 在你已登录的 Chrome 里点按钮、填表、选下拉、传文件，每一步读页面核对结果；发送、删除这类动作先经你同意。下文附 click、fill、select、upload 等底层命令。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -42,11 +42,10 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">核心用法 / Core Usage</p>
+      <p class="du-eyebrow">让 agent 做事 / What Agents Can Do</p>
 
       <div class="du-title-row">
-        <h1>交互操作</h1>
-      <p>自定义下拉框会先即时滚入视口，再用真实指针事件打开和选择。pick 未确认选中时返回 verified: false 和警告；选中后清空搜索框时会报告隐藏表单字段的变化，但不会据此断言选中成功。页面及容器使用即时滚动，位置未变化时返回 scrolled: false 和警告。</p>
+        <h1>填表与操作</h1>
         <button class="du-copy-page" type="button" aria-label="复制页面">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
           <span class="du-copy-page-label">复制页面</span>
@@ -54,12 +53,54 @@
       </div>
 
       <p class="du-lede">
+        让 agent 在网页上替你<span class="mark">点按钮、填表、选下拉、传文件</span>。每做完一步，它会读页面确认结果，不只看命令有没有报错。
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>你可以这样说</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">在后台按这份表格把 20 个商品的库存改掉，提交前先给我看。</p>
+          <p>每改一项都读回核对，提交前停下来等你。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">把这份 PDF 传到报销单里，金额和日期按发票填。</p>
+          <p>文件输入框和拖拽上传区都能收文件。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">把这个注册表单填完，验证码先自己试，过不去再叫我。</p>
+          <p>常见的滑块、点选验证码 agent 会先试。</p>
+        </div>
+      </div>
+      <h2>agent 会怎么做</h2>
+      <ol>
+        <li>读页面，用 <code>snapshot -i</code> 找到要操作的控件。</li>
+        <li>用 <code>click</code>、<code>fill</code>、<code>select</code>、<code>upload</code> 等命令操作；输入后读回字段的值核对。</li>
+        <li>关键点击加 <code>--observe</code>，看点击后出现了什么提示、发出了什么请求、有没有打开新标签。</li>
+        <li>提交没反应时，重新读页面上的校验提示，改完再试，不盲目重复同一个动作。</li>
+        <li>发送、购买、删除这类动作要有你的授权；结果不确定时先查页面状态，不重放。</li>
+      </ol>
+      <h2>你会看到什么</h2>
+      <ul>
+        <li>你的标签不受影响：agent 在你 Chrome 里的 <code>✦ 项目名</code> 标签组中开后台标签，不抢焦点，你想看随时点过去。后台标签里的点击照样生效。</li>
+        <li>验证码：agent 先用页面上的正常控件试，最多试三道新题；认不清或试不过时交给你，你处理完它再继续。扫码、短信这类只有你能做的步骤也一样。</li>
+        <li>卡号、密码这类值不会出现在输出和报错里。</li>
+        <li>看结果以页面给出的回执或成功提示为准。字段里显示了新值，不代表已经保存。</li>
+        <li>任务结束时 agent 用 <code>done</code> 收尾：中间打开的标签关掉，你要看或要接着用的页面留下。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>底层命令</h2>
+      <p>下面是 agent 实际调用的命令和参数。自己写脚本、排查问题或想了解细节时看这部分。</p>
+      <p>
         读到页面之后，就该动手了。这一页覆盖驱动真实浏览器的全部交互动词——
         <span class="mark">点击、输入、勾选、下拉、上传、滚动、拖拽</span>。
         大多数命令的第一个参数是 <code>snapshot -i</code> 拿到的
         <code>@ref</code>（例如 <code>@e42</code>）；先<a href="/finding.html">定位元素</a>，
         再用这里的命令操作它。
       </p>
+      <p>自定义下拉框会先即时滚入视口，再用真实指针事件打开和选择。pick 未确认选中时返回 verified: false 和警告；选中后清空搜索框时会报告隐藏表单字段的变化，但不会据此断言选中成功。页面及容器使用即时滚动，位置未变化时返回 scrolled: false 和警告。</p>
 
       <!-- ============ 点击与指针 ============ -->
       <h2>点击与指针</h2>

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Screenshots, Video &amp; Viewport · chrome-use</title>
-  <meta name="description" content="Use chrome-use to grab screenshots, record workflow videos, emulate viewport sizes, and handle iframes and dialogs — built for debugging, archiving, and responsive-layout triage." />
+  <meta name="description" content="Have your agent save what&#39;s in the browser as files: screenshots, workflow videos, phone-width layout checks, plus handling dialogs that block the flow. Underlying commands (screenshot, record, viewport, dialog) follow." />
 
   <!-- SEO / social -->
   <meta name="theme-color" content="#fcfbf4" />
@@ -47,7 +47,7 @@
       </span>
 
       <!-- eyebrow = group name -->
-      <p class="du-eyebrow">Core Usage</p>
+      <p class="du-eyebrow">What Agents Can Do</p>
 
       <!-- title row -->
       <div class="du-title-row">
@@ -60,6 +60,47 @@
 
       <!-- lede -->
       <p class="du-lede">
+        Have your agent <span class="mark">save what&#39;s in the browser as files</span>: a screenshot, a video of a workflow, or the page shrunk to phone width to check the layout. Screenshots are for records and for you; the agent finds and clicks buttons from the page structure, not from screenshots.
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>Ask your agent</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">Take a full-page screenshot of this page and save it in docs/images/.</p>
+          <p>Captures the full scroll height, not just the visible area.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Record the checkout flow as a video I can send to a colleague.</p>
+          <p>Pauses after key steps so it&#39;s watchable at 1x.</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">Look at this page at a 375px phone width. What overflows horizontally?</p>
+          <p>Only the layout width of this tab changes.</p>
+        </div>
+      </div>
+      <h2>What the agent does</h2>
+      <ol>
+        <li><code>screenshot</code> captures the viewport, <code>--full</code> the whole page, or just one element or region.</li>
+        <li>When you want to discuss a picture, <code>--annotate</code> numbers the elements, and the numbers match the elements the agent read.</li>
+        <li>Video: <code>record start</code> and <code>record stop</code> wrap the whole workflow, with short waits after key actions.</li>
+        <li>For responsive bugs, <code>viewport</code> sets width and height, then the agent compares page width with viewport width to find what breaks the layout.</li>
+        <li>Plain alerts are accepted automatically. When a confirm or prompt dialog blocks the flow, <code>dialog</code> accepts or dismisses it.</li>
+      </ol>
+      <h2>What you&#39;ll see</h2>
+      <ul>
+        <li>Your tabs stay as they are: the agent opens background tabs in a <code>✦ &lt;project&gt;</code> tab group in your Chrome and does not take focus. Click over whenever you want to watch.</li>
+        <li>A screenshot without a path goes to a temp file and the path is printed; tell the agent where you want it instead. Screenshots are scaled to at most 1200px on the longest side by default (full-page shots cap only the width); ask if you need full resolution.</li>
+        <li>Recording needs ffmpeg installed and writes <code>.webm</code> or <code>.mp4</code>; there is no GIF export. When connected to your Chrome through the extension, it records the agent&#39;s own tabs.</li>
+        <li>Changing the viewport only affects that tab&#39;s layout. Your Chrome window keeps its size.</li>
+        <li>At the end the agent runs <code>done</code>: tabs it opened along the way close, and pages you need to see or keep using stay open.</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>Under the hood</h2>
+      <p>The commands and flags the agent runs. Read on if you write your own scripts, debug a run, or want the details.</p>
+      <p>
         This page is about turning what happens in the browser into files: grab a
         <span class="mark">screenshot</span>, record a
         <span class="mark">workflow video</span>, shrink the viewport to phone width to reproduce a responsive bug,

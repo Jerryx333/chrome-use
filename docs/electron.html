@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Electron 桌面应用 · chrome-use 文档</title>
-  <meta name="description" content="用 chrome-use 通过 Chrome DevTools Protocol 自动化任意 Electron 桌面应用——Slack、VS Code、Discord、Figma、Notion、Spotify。启动带调试端口、connect 连接、snapshot 探索、按 ref 交互。" />
+  <meta name="description" content="Slack、VS Code、Discord、Notion 等 Electron 桌面应用带调试端口启动后，agent 可以像操作网页一样读界面、点按钮、填输入框、截图，也能同时操作多个应用。下文附 connect、tab、--session 等底层命令和排障。" />
 
   <meta name="theme-color" content="#fcfbf4" />
   <meta property="og:type" content="article" />
@@ -39,7 +39,7 @@
         </svg>
       </span>
 
-      <p class="du-eyebrow">桌面应用 / Desktop Apps</p>
+      <p class="du-eyebrow">让 agent 做事 / What Agents Can Do</p>
 
       <div class="du-title-row">
         <h1>Electron 桌面应用</h1>
@@ -50,6 +50,46 @@
       </div>
 
       <p class="du-lede">
+        Slack、VS Code、Discord、Notion 这些桌面应用是用 Electron 做的，内核就是 Chromium。应用<span class="mark">带调试端口启动</span>后，agent 可以像操作网页一样操作它：读界面、点按钮、填输入框、截图。
+      </p>
+
+      <!-- ============ agent-first ============ -->
+      <h2>你可以这样说</h2>
+      <div class="du-cards">
+        <div class="du-card">
+          <p class="du-say">在 Slack 桌面版里搜一下上周关于发版的讨论，截图给我。</p>
+          <p>和网页版一样用搜索框，结果截图存下来。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">打开 VS Code 的设置，看看自动保存现在是什么值。</p>
+          <p>读的是应用界面，不改配置文件。</p>
+        </div>
+        <div class="du-card">
+          <p class="du-say">把 Notion 桌面版当前页面的待办列表抄出来。</p>
+          <p>按界面元素取文字，或导出整页 JSON。</p>
+        </div>
+      </div>
+      <h2>agent 会怎么做</h2>
+      <ol>
+        <li>应用要带 <code>--remote-debugging-port</code> 启动。已经开着的应用要先退出，再带参数重新启动。</li>
+        <li>agent 用 <code>connect &lt;端口&gt;</code> 连上，之后的命令都指向这个应用。</li>
+        <li>照常用 <code>snapshot -i</code> 读界面、用 ref 点击和输入；界面变了就重新读。</li>
+        <li>应用有多个窗口或 webview 时，用 <code>tab</code> 列出并切到正确的那个。</li>
+        <li>同时操作几个应用时，每个应用用一个具名会话（<code>--session</code>）和各自的端口。</li>
+      </ol>
+      <h2>你会看到什么</h2>
+      <ul>
+        <li>这里操作的是桌面应用本身，不经过你的 Chrome，也没有标签组。</li>
+        <li>应用原本开着的话需要重启一次，没保存的内容先存好。</li>
+        <li>通过调试端口连接后，界面默认可能变成浅色；要保留深色模式，让 agent 加 <code>--color-scheme dark</code>。</li>
+        <li>连不上或找不到元素时，看下文的排障一节。</li>
+      </ul>
+
+      <hr class="du-divider" />
+
+      <h2>底层命令</h2>
+      <p>下面是 agent 实际调用的命令和参数。自己写脚本、排查问题或想了解细节时看这部分。</p>
+      <p>
         Slack、VS Code、Discord、Figma、Notion、Spotify 这些桌面应用其实都是 <span class="mark">Chromium 套壳</span>——它们都基于 Electron。
         只要启动时带上 <code>--remote-debugging-port</code>，chrome-use 就能像操作网页一样接进去：
         同样的 <a href="/core-loop.html">snapshot → 交互 → 再 snapshot</a> 循环，同样的 <code>@ref</code> 定位。
