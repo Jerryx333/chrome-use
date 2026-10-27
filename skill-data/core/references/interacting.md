@@ -123,8 +123,12 @@ chrome-use keyup d                     # release it — pair them to hold-to-mov
                                           # in a game: `keydown d; sleep; keyup d`
 chrome-use check @e3                   # check checkbox
 chrome-use uncheck @e3                 # uncheck
-chrome-use select @e4 "option-value"   # native <select> (React/Vue-safe native setter)
-chrome-use select @e4 "a" "b"          # select multiple
+chrome-use select @e4 "option-value"   # native <select>: on a web page, trusted
+                                          # type-ahead keys (engine "keyboard"), so the
+                                          # page gets isTrusted input/change; options
+                                          # typing can't reach (non-ASCII label) use the
+                                          # value setter and warn (engine "setter")
+chrome-use select @e4 "a" "b"          # select multiple (value setter)
 chrome-use pick @e4 --option "Europe"  # ANY combobox (react-select / ARIA /
                                           # native): opens it, waits for the menu
                                           # (incl. portal-rendered), matches by

@@ -536,6 +536,28 @@ pub struct DispatchMouseEventParams {
     pub delta_y: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modifiers: Option<i32>,
+    /// Pen/mouse pressure in [0, 1]. Chrome reports it as
+    /// `PointerEvent.pressure` while a button is held, and CDP defaults it to
+    /// 0, which no real mouse produces (a mouse reports 0.5). Set it with
+    /// [`mouse_force`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub force: Option<f64>,
+}
+
+/// The `force` a real mouse gives an `Input.dispatchMouseEvent`: 0.5 while any
+/// button is held (`mousePressed`, a drag's `mouseMoved`, a release with
+/// another button still down), 0 on the release that lets go of the last
+/// button, and nothing for a plain move or a wheel. Without it a press reads
+/// `pointerdown.pressure == 0`, which detectors score as injected input.
+/// `buttons` is the button mask after the event.
+pub fn mouse_force(event_type: &str, buttons: i32) -> Option<f64> {
+    match event_type {
+        "mousePressed" => Some(0.5),
+        "mouseReleased" if buttons != 0 => Some(0.5),
+        "mouseReleased" => Some(0.0),
+        "mouseMoved" if buttons != 0 => Some(0.5),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -650,4 +672,41 @@ pub struct BrowserVersionInfo {
 #[allow(clippy::upper_case_acronyms)]
 pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/cdp_generated.rs"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_force_matches_a_real_mouse() {
+        assert_eq!(mouse_force("mousePressed", 1), Some(0.5));
+        assert_eq!(mouse_force("mouseMoved", 1), Some(0.5));
+        assert_eq!(mouse_force("mouseReleased", 0), Some(0.0));
+        // Right button still down after the left one is released.
+        assert_eq!(mouse_force("mouseReleased", 2), Some(0.5));
+        assert_eq!(mouse_force("mouseMoved", 0), None);
+        assert_eq!(mouse_force("mouseWheel", 0), None);
+    }
+
+    #[test]
+    fn force_is_serialized_only_when_set() {
+        let mut p = DispatchMouseEventParams {
+            event_type: "mousePressed".to_string(),
+            x: 1.0,
+            y: 2.0,
+            button: Some("left".to_string()),
+            buttons: Some(1),
+            click_count: Some(1),
+            delta_x: None,
+            delta_y: None,
+            modifiers: None,
+            force: Some(0.5),
+        };
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["force"], 0.5);
+        p.force = None;
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(v.get("force").is_none());
+    }
 }

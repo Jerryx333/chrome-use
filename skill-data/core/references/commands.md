@@ -139,7 +139,7 @@ chrome-use hover @e1           # Hover with the real pointer; ✓ only when a tr
 chrome-use bringToFront        # Surface the active tab (tabs are driven in the background, where document.visibilityState stays 'hidden')
 chrome-use check @e1           # Check checkbox
 chrome-use uncheck @e1         # Uncheck checkbox
-chrome-use select @e1 "value"  # Select by value/label; native setter commits controlled forms
+chrome-use select @e1 "value"  # Select by value/label; trusted type-ahead keys on web pages, else (and as a reported fallback) the native setter; --json "engine"
 chrome-use select @e1 "a" "b"  # Select multiple options
 chrome-use scroll down 500     # Scroll page (default: down 300px)
 chrome-use scroll down --until "#footer"  # Step until target (selector/@ref/text=) is in view;
