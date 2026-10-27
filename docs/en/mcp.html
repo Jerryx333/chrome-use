@@ -277,6 +277,14 @@ mcp</code></pre>
         a real Chrome stay <strong>exactly the same</strong> — MCP just swaps in a different protocol
         shell.
       </p>
+      <p>
+        Every browser tool result is marked as <strong>untrusted page content</strong> by default: it is fenced with a
+        per-call nonce and headed by a line saying it is page content, not instructions from the user, and
+        <code>structuredContent.pageContent</code> carries the same notice. <code>chrome_use_snapshot</code> and
+        <code>chrome_use_read</code> leave out text a person can't see; <code>includeHidden: true</code> keeps it.
+        Start the server with <code>--no-content-boundaries</code> (or <code>AGENT_BROWSER_CONTENT_BOUNDARIES=0</code>)
+        to turn the fence off. See <a href="/en/stealth.html#prompt-injection">Prompt injection</a>.
+      </p>
 
       <div class="du-callout warn">
         <div class="du-callout-title">⚠️ You still need to connect a real Chrome first</div>

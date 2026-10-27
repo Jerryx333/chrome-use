@@ -482,6 +482,16 @@ chrome-use jev run --goal "查苏黎世到伦敦的航班" --url https://www.goo
 页面文字和字段值，也就包括表单里已经填进去的内容，所以请把这个文件当作敏感数据。运行报告还会把 `act_ms`
 拆成 `act_read_ms`、`cmd_click_ms`、`cmd_press_ms`、`cmd_insert_ms`。
 
+## 提示注入防护
+
+网页可以把写给 agent 的指令藏在人看不见的地方。默认行为：
+
+- `snapshot`、`get text`、`read`（当前标签页）去掉人看不见的文字（移出屏幕、透明、裁剪、零尺寸、和背景同色），并注明去掉了多少；`--include-hidden` 保留。判断在隔离 world 里只读完成，隐身模式不受影响。
+- `chrome-use mcp`（以及侧栏 agent）给每个浏览器结果加带 nonce 的「不可信页面内容」边界，`--no-content-boundaries` 可关。CLI 默认输出原文，需要时加 `--content-boundaries`。
+- 侧栏不会自动批准带有网页里出现过、你没打过的 URL 或命令片段的 shell 命令，卡片上会写明原因。不先请求批准的后端（Pi；完全访问下的 Claude 和 Codex）不在覆盖范围内。
+
+2026-10-27 的内部演练（Haiku 子 agent，样本小）：隐藏的虚假事实进入回答，前 5/5、后 0/5；隐藏的「打开完整评论」提示被照做，前 6/6、后 0/6。方法和限制见 [docs/stealth.html#prompt-injection](https://chrome-use.leeguoo.com/stealth.html#prompt-injection)。
+
 ## 反检测
 
 带 session 的内部 DOM 读取要求隔离执行上下文；创建、重建或节点解析无法保持隔离时返回 `isolation_unavailable`，不再静默重试页面主世界。等待导航稳定后重新观察；部分同进程 iframe 操作可能仍不支持。用户主动执行的脚本、站点适配器、明确的编辑器模型访问和显式上下文保留现有语义。已有的 `AGENT_BROWSER_MAIN_WORLD=1` 兼容开关会取消默认隔离要求，不是保持隐身的解决办法。此策略独立于扩展的光标设置。

@@ -528,6 +528,16 @@ set. It records the goal, the page text and field values, which includes
 anything already typed into the form, so treat the file as sensitive. The run report also splits `act_ms` into
 `act_read_ms`, `cmd_click_ms`, `cmd_press_ms` and `cmd_insert_ms`.
 
+## Prompt injection
+
+Pages can hide instructions for agents where a person never sees them. By default:
+
+- `snapshot`, `get text` and `read` (active tab) leave out text a person can't see (off-screen, transparent, clipped, zero-size, same colour as the background) and say how much they left out. `--include-hidden` keeps it. The check is an isolated-world read, so stealth mode is unaffected.
+- `chrome-use mcp` (and the agent side panel) fences every browser result as untrusted page content with a per-call nonce; `--no-content-boundaries` turns it off. The CLI keeps raw output unless you pass `--content-boundaries`.
+- The side panel never auto-approves a shell command that carries a URL or snippet a page showed and you did not type, and its card says why. Backends that never ask first (Pi; Claude and Codex in full access) are not covered.
+
+In an internal drill on 2026-10-27 (Haiku subagents, small samples), hidden fake facts reached 5/5 answers before and 0/5 after, and a hidden "open the full reviews" hint was followed 6/6 before and 0/6 after. Method and limits: [docs/en/stealth.html#prompt-injection](https://chrome-use.leeguoo.com/en/stealth.html#prompt-injection).
+
 ## Anti-detection
 
 Session-scoped internal DOM reads require an isolated execution context. If creation, recreation or node resolution cannot keep that context, the command returns `isolation_unavailable` rather than retrying in the page world. Wait for navigation to settle and observe again; some same-process frame operations may remain unsupported. User-requested evaluation, site adapters, deliberate editor-model access and explicitly supplied contexts keep their existing semantics. The existing `AGENT_BROWSER_MAIN_WORLD=1` compatibility override disables this default isolation requirement; it is not a stealth-preserving workaround. This policy is independent of the extension cursor setting.

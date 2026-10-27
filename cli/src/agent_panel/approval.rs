@@ -27,6 +27,9 @@ pub(super) struct Pending {
     /// This request id has had exactly one revision, so a reply without a
     /// revision cannot belong to an older card.
     pub single_revision: bool,
+    /// The command carries a string that came from a page, not the user
+    /// (`injection_guard`): it waits for the user even under full access.
+    pub page_taint: bool,
 }
 
 fn ask_user_question(method: &str, original: &Value) -> bool {

@@ -78,6 +78,7 @@ pub mod timing;
 pub mod tracing;
 pub mod tracked_requests;
 pub mod upload;
+pub(crate) mod visibility;
 #[allow(dead_code)]
 pub mod webdriver;
 

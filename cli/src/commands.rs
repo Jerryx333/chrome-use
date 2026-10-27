@@ -2177,6 +2177,10 @@ fn parse_command_inner(args: &[String], flags: &Flags) -> Result<Value, ParseErr
                     "--reveal-values" => {
                         obj.insert("revealValues".to_string(), json!(true));
                     }
+                    // Keep text a person can't see (#781); left out by default.
+                    "--include-hidden" => {
+                        obj.insert("includeHidden".to_string(), json!(true));
+                    }
                     "--dom" => {
                         obj.insert("dom".to_string(), json!(true));
                     }
@@ -4495,6 +4499,47 @@ fn parse_diff(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     }
 }
 
+/// `get text` and its modes (`--all-frames`, `--pierce`, `--main`, or a
+/// selector), before the flags every mode shares.
+fn parse_get_text(rest: &[&str], id: &str) -> Result<Value, ParseError> {
+    // `get text --all-frames` aggregates visible text across every
+    // frame, including out-of-process iframes invisible to the top
+    // document (issue #27). The selector is ignored in this mode.
+    let all_frames = rest[1..]
+        .iter()
+        .any(|a| matches!(*a, "--all-frames" | "--frames" | "-a"));
+    if all_frames {
+        return Ok(json!({ "id": id, "action": "gettext", "allFrames": true }));
+    }
+    // `get text --pierce` reads through CLOSED shadow DOM / child docs
+    // via the CDP DOM tree — content eval/innerText can't reach, e.g. an
+    // extension's injected panel in a closed shadow root (issue #30).
+    let pierce = rest[1..]
+        .iter()
+        .any(|a| matches!(*a, "--pierce" | "--shadow" | "--deep"));
+    if pierce {
+        return Ok(json!({ "id": id, "action": "gettext", "pierce": true }));
+    }
+    // `get text --main` returns the main-content region (readability),
+    // skipping header/nav/footer/sidebar boilerplate (issue #27).
+    let main = rest[1..]
+        .iter()
+        .any(|a| matches!(*a, "--main" | "--readable" | "-m"));
+    if main {
+        return Ok(json!({ "id": id, "action": "gettext", "main": true }));
+    }
+    // `get text` with no selector reads the WHOLE PAGE and now defaults
+    // to cross-frame aggregation, so an agent gets a page's iframed
+    // content (listing descriptions etc.) without having to know about
+    // `--all-frames` (#27). On a single-frame page this is identical to
+    // the old body read; multi-frame pages get the child frames too —
+    // a strict superset. An explicit selector stays element-scoped.
+    match rest.iter().skip(1).find(|a| !a.starts_with("--")).copied() {
+        Some(sel) => Ok(json!({ "id": id, "action": "gettext", "selector": sel })),
+        None => Ok(json!({ "id": id, "action": "gettext", "allFrames": true })),
+    }
+}
+
 fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
     const VALID: &[&str] = &[
         "text", "html", "value", "attr", "url", "title", "count", "box", "styles", "cdp-url",
@@ -4502,42 +4547,12 @@ fn parse_get(rest: &[&str], id: &str) -> Result<Value, ParseError> {
 
     match rest.first().copied() {
         Some("text") => {
-            // `get text --all-frames` aggregates visible text across every
-            // frame, including out-of-process iframes invisible to the top
-            // document (issue #27). The selector is ignored in this mode.
-            let all_frames = rest[1..]
-                .iter()
-                .any(|a| matches!(*a, "--all-frames" | "--frames" | "-a"));
-            if all_frames {
-                return Ok(json!({ "id": id, "action": "gettext", "allFrames": true }));
+            // Text a person can't see is left out unless `--include-hidden` (#781).
+            let mut cmd = parse_get_text(rest, id)?;
+            if rest[1..].contains(&"--include-hidden") {
+                cmd["includeHidden"] = json!(true);
             }
-            // `get text --pierce` reads through CLOSED shadow DOM / child docs
-            // via the CDP DOM tree — content eval/innerText can't reach, e.g. an
-            // extension's injected panel in a closed shadow root (issue #30).
-            let pierce = rest[1..]
-                .iter()
-                .any(|a| matches!(*a, "--pierce" | "--shadow" | "--deep"));
-            if pierce {
-                return Ok(json!({ "id": id, "action": "gettext", "pierce": true }));
-            }
-            // `get text --main` returns the main-content region (readability),
-            // skipping header/nav/footer/sidebar boilerplate (issue #27).
-            let main = rest[1..]
-                .iter()
-                .any(|a| matches!(*a, "--main" | "--readable" | "-m"));
-            if main {
-                return Ok(json!({ "id": id, "action": "gettext", "main": true }));
-            }
-            // `get text` with no selector reads the WHOLE PAGE and now defaults
-            // to cross-frame aggregation, so an agent gets a page's iframed
-            // content (listing descriptions etc.) without having to know about
-            // `--all-frames` (#27). On a single-frame page this is identical to
-            // the old body read; multi-frame pages get the child frames too —
-            // a strict superset. An explicit selector stays element-scoped.
-            match rest.iter().skip(1).find(|a| !a.starts_with("--")).copied() {
-                Some(sel) => Ok(json!({ "id": id, "action": "gettext", "selector": sel })),
-                None => Ok(json!({ "id": id, "action": "gettext", "allFrames": true })),
-            }
+            Ok(cmd)
         }
         Some("html") => {
             let sel = rest.get(1).ok_or_else(|| ParseError::MissingArguments {
@@ -5075,7 +5090,7 @@ fn canon_element_state(s: &str) -> Option<&'static str> {
 
 fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseError> {
     const READ_USAGE: &str =
-        "read [url] [--raw] [--require-md] [--llms <index|full>] [--outline] [--filter <text>] [--timeout <ms>] [--links] [--max-links <n>]";
+        "read [url] [--raw] [--require-md] [--llms <index|full>] [--outline] [--filter <text>] [--timeout <ms>] [--links] [--max-links <n>] [--include-hidden]";
     let mut cmd = json!({
         "id": id,
         "action": "read",
@@ -5109,6 +5124,10 @@ fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
             }
             "--outline" => {
                 cmd["outline"] = json!(true);
+            }
+            // Keep text a person can't see on the active tab (#781).
+            "--include-hidden" => {
+                cmd["includeHidden"] = json!(true);
             }
             // #503: the page's links as absolute URLs, bounded.
             "--links" => {
@@ -5173,6 +5192,7 @@ fn parse_read(rest: &[&str], id: &str, flags: &Flags) -> Result<Value, ParseErro
                         "--timeout",
                         "--links",
                         "--max-links",
+                        "--include-hidden",
                         "--json",
                     ],
                 });
@@ -9080,6 +9100,30 @@ mod tests {
         // `text` top-level shortcut behaves the same.
         let cmd3 = parse_command(&args("text"), &default_flags()).unwrap();
         assert_eq!(cmd3["allFrames"], true);
+    }
+
+    #[test]
+    fn include_hidden_travels_with_snapshot_get_text_and_read() {
+        // #781: hidden text is left out by default; the flag asks for it.
+        for (line, action) in [
+            ("snapshot --include-hidden", "snapshot"),
+            ("snapshot -i --include-hidden", "snapshot"),
+            ("get text --include-hidden", "gettext"),
+            ("get text h1 --include-hidden", "gettext"),
+            ("get text --main --include-hidden", "gettext"),
+            ("text --include-hidden", "gettext"),
+            ("read --include-hidden", "read"),
+        ] {
+            let cmd = parse_command(&args(line), &default_flags()).unwrap();
+            assert_eq!(cmd["action"], action, "{line}");
+            assert_eq!(cmd["includeHidden"], true, "{line}");
+        }
+        let cmd = parse_command(&args("get text h1 --include-hidden"), &default_flags()).unwrap();
+        assert_eq!(cmd["selector"], "h1");
+        for line in ["snapshot", "get text", "read"] {
+            let cmd = parse_command(&args(line), &default_flags()).unwrap();
+            assert!(cmd.get("includeHidden").is_none(), "{line}");
+        }
     }
 
     #[test]

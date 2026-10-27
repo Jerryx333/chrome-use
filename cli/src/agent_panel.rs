@@ -23,6 +23,7 @@ mod conversation;
 mod evidence;
 pub(crate) mod evidence_proto;
 mod heic;
+mod injection_guard;
 mod inspect;
 mod inspection;
 mod options;
