@@ -21456,17 +21456,31 @@ fn reason_phrase(code: i64) -> &'static str {
     }
 }
 
+/// Whole-URL glob match where any run of `*` (so `*` and `**` alike) matches
+/// any sequence of characters, slashes included.
+fn url_glob_matches(pattern: &str, url: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !url.starts_with(first) || url.len() < first.len() + last.len() {
+        return false;
+    }
+    let mut rest = &url[first.len()..url.len() - last.len()];
+    if !url.ends_with(last) {
+        return false;
+    }
+    for part in &parts[1..parts.len() - 1] {
+        match rest.find(part) {
+            Some(i) => rest = &rest[i + part.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
 /// Does this route's URL glob + resource-type filter match the paused request?
 fn route_matches(route: &RouteEntry, paused: &FetchPausedRequest) -> bool {
-    let url_matches = if route.url_pattern == "*" {
-        true
-    } else if route.url_pattern.contains('*') {
-        let parts: Vec<&str> = route.url_pattern.split('*').collect();
-        if parts.len() == 2 {
-            paused.url.starts_with(parts[0]) && paused.url.ends_with(parts[1])
-        } else {
-            paused.url.contains(&route.url_pattern)
-        }
+    let url_matches = if route.url_pattern.contains('*') {
+        url_glob_matches(&route.url_pattern, &paused.url)
     } else {
         paused.url.contains(&route.url_pattern)
     };
@@ -27592,6 +27606,24 @@ mod tests {
             compare_count("le", 3, 3) && compare_count("le", 2, 3) && !compare_count("le", 4, 3)
         );
         assert!(!compare_count("??", 3, 3));
+    }
+
+    #[test]
+    fn test_url_glob_matches() {
+        assert!(url_glob_matches("*", "http://a/b"));
+        assert!(url_glob_matches(
+            "**/api/test-config",
+            "http://127.0.0.1:8945/api/test-config"
+        ));
+        assert!(url_glob_matches(
+            "*/api/test-config",
+            "http://127.0.0.1:8945/api/test-config"
+        ));
+        assert!(url_glob_matches("**/v1/*", "https://h/x/v1/users?id=1"));
+        assert!(url_glob_matches("https://h/**/save", "https://h/a/b/save"));
+        assert!(!url_glob_matches("**/api/save", "https://h/api/saved"));
+        assert!(!url_glob_matches("**/v1/*", "https://h/v2/users"));
+        assert!(!url_glob_matches("a*a", "a"));
     }
 
     #[test]
