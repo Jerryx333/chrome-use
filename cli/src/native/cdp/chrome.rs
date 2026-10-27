@@ -267,7 +267,11 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         "--use-angle=default".to_string(),
         "--disable-background-networking".to_string(),
         "--disable-backgrounding-occluded-windows".to_string(),
-        "--disable-component-update".to_string(),
+        // No `--disable-component-update`: it keeps Google Chrome from
+        // registering its bundled Widevine CDM, so `requestMediaKeySystemAccess`
+        // fails where every real Chrome succeeds (Clearcote's
+        // `widevine-vs-chrome-branding`). Background traffic stays off through
+        // `--disable-background-networking`.
         "--disable-default-apps".to_string(),
         "--disable-hang-monitor".to_string(),
         "--disable-prompt-on-repost".to_string(),
@@ -1917,6 +1921,24 @@ mod tests {
         let dir = result.temp_user_data_dir.unwrap();
         assert!(dir.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_build_args_keep_component_updates_for_widevine() {
+        // Branded Chrome registers its bundled Widevine CDM through the
+        // component updater; turning it off makes EME fail (Clearcote).
+        let result = build_chrome_args(&LaunchOptions::default()).unwrap();
+        assert!(!result
+            .args
+            .iter()
+            .any(|a| a == "--disable-component-update"));
+        assert!(result
+            .args
+            .iter()
+            .any(|a| a == "--disable-background-networking"));
+        if let Some(dir) = result.temp_user_data_dir {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

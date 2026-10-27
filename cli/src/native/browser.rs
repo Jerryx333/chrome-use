@@ -2727,6 +2727,31 @@ pub(crate) const RELAY_TIMEOUT_DIAGNOSIS: &str = "Diagnosis:";
 const RELAY_TIMEOUT_RESTART_ADVICE: &str =
     "The Chrome debugger stopped responding; restart the session and retry. ";
 
+/// Whether a `document.visibilityState` reply (or its absence) calls for
+/// focus emulation: anything but a readable `visible` does.
+fn needs_focus_emulation(reply: Option<&Value>) -> bool {
+    reply
+        .and_then(|r| r.get("result"))
+        .and_then(|r| r.get("value"))
+        .and_then(Value::as_str)
+        != Some("visible")
+}
+
+/// The `name`s in a `Runtime.getProperties` reply.
+fn property_names(reply: &Value) -> Vec<String> {
+    reply
+        .get("result")
+        .and_then(|r| r.as_array())
+        .map(|props| {
+            props
+                .iter()
+                .filter_map(|p| p.get("name").and_then(|n| n.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) fn is_relay_timeout(error: &str) -> bool {
     error.contains("relay timeout after")
         // A payload-scaled insert has its own, already specific advice.
@@ -5247,15 +5272,92 @@ impl BrowserManager {
         // `!document.hasFocus()` — which both breaks timing-sensitive pages and
         // is itself a bot signal (a real user looks at the page). Best-effort;
         // ignored on engines without Emulation support.
-        let _ = self
-            .client
-            .send_command(
-                "Emulation.setFocusEmulationEnabled",
-                Some(json!({ "enabled": true })),
-                Some(session_id),
-            )
-            .await;
+        //
+        // Except for the tab a launched browser shows in front: focus
+        // emulation makes Chrome count the tab as captured, and a captured
+        // tab's `requestFullscreen` only fills the tab, never the screen —
+        // the Playwright signature Clearcote's `fullscreen-is-real-fullscreen`
+        // looks for. A tab already visible does not need it (launched Chrome
+        // runs with `--disable-backgrounding-occluded-windows`), so it is
+        // left alone; it gets emulation the moment chrome-use puts another
+        // tab in front of it (`emulate_focus_on_other_tabs`) or finds it
+        // hidden before a click or screenshot (`restore_rendering_if_hidden`).
+        // The relay always emulates: its agent tabs sit behind the user's.
+        let emulate = self.emulates_focus_unconditionally()
+            || self.tab_needs_focus_emulation(session_id).await;
+        if !emulate {
+            // This tab came up in front (a popup, `tab new --activate`), so
+            // the one it covers stops rendering unless it is emulated now.
+            self.emulate_focus_on_other_tabs(session_id).await;
+        }
+        if emulate {
+            let _ = self
+                .client
+                .send_command(
+                    "Emulation.setFocusEmulationEnabled",
+                    Some(json!({ "enabled": true })),
+                    Some(session_id),
+                )
+                .await;
+        }
         Ok(())
+    }
+
+    /// Focus emulation goes on every tab, visible or not: on the relay (agent
+    /// tabs live in the user's browser, behind the tab the user looks at),
+    /// and in the discouraged headless mode, where nothing is ever in front.
+    fn emulates_focus_unconditionally(&self) -> bool {
+        self.via_relay()
+            || self.on_relay()
+            || std::env::var("AGENT_BROWSER_ALLOW_HEADLESS")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+    }
+
+    /// Whether the tab is hidden right now. Read before focus emulation is
+    /// switched on, so it is the real state; in the isolated world, so the
+    /// page does not see the read. Unreadable counts as hidden: emulating
+    /// is the old, safe behaviour.
+    async fn tab_needs_focus_emulation(&self, session_id: &str) -> bool {
+        let reply = tokio::time::timeout(
+            std::time::Duration::from_millis(1000),
+            self.client.send_command(
+                "Runtime.evaluate",
+                Some(json!({ "expression": "document.visibilityState", "returnByValue": true })),
+                Some(session_id),
+            ),
+        )
+        .await;
+        match reply {
+            Ok(Ok(reply)) => needs_focus_emulation(Some(&reply)),
+            _ => true,
+        }
+    }
+
+    /// Before chrome-use brings `front` (a target or session id) forward in
+    /// a launched browser, give every other tab focus emulation: the tab now
+    /// in front may have none (see `enable_domains`), and once hidden it
+    /// would stop rendering. Turning it on while the tab is still visible
+    /// changes nothing the page can see; on a tab that already has it,
+    /// Chrome ignores the request.
+    async fn emulate_focus_on_other_tabs(&self, front: &str) {
+        if self.emulates_focus_unconditionally() {
+            return;
+        }
+        for page in self
+            .pages
+            .iter()
+            .filter(|p| p.target_type == "page" && p.target_id != front && p.session_id != front)
+        {
+            let _ = self
+                .client
+                .send_command(
+                    "Emulation.setFocusEmulationEnabled",
+                    Some(json!({ "enabled": true })),
+                    Some(&page.session_id),
+                )
+                .await;
+        }
     }
 
     /// Enable domains on a direct page connection (no session_id needed).
@@ -5996,6 +6098,60 @@ impl BrowserManager {
     pub async fn evaluate_main(&self, script: &str) -> Result<Value, String> {
         let session_id = self.active_session_id()?.to_string();
         self.eval_in_context(script, &session_id, None, true).await
+    }
+
+    /// Own property names of the page's global object, read without running
+    /// any page-callable JS: the bare `globalThis` is evaluated in the main
+    /// world only to get a handle, and V8's inspector enumerates it
+    /// (`Runtime.getProperties`), so no `Object.getOwnPropertyNames` or getter
+    /// the page could have wrapped is called. For the vendor probe.
+    pub async fn main_world_global_names(&self) -> Result<Vec<String>, String> {
+        const GROUP: &str = "cu-globals";
+        let session_id = self.active_session_id()?.to_string();
+        let handle = self
+            .client
+            .send_command(
+                "Runtime.evaluate",
+                Some(json!({
+                    "expression": "globalThis",
+                    "returnByValue": false,
+                    "objectGroup": GROUP,
+                    "__cuMain": true,
+                })),
+                Some(&session_id),
+            )
+            .await?;
+        let object_id = handle
+            .get("result")
+            .and_then(|r| r.get("objectId"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let props = match object_id {
+            Some(object_id) => {
+                self.client
+                    .send_command(
+                        "Runtime.getProperties",
+                        Some(json!({
+                            "objectId": object_id,
+                            "ownProperties": true,
+                            "generatePreview": false,
+                            "nonIndexedPropertiesOnly": true,
+                        })),
+                        Some(&session_id),
+                    )
+                    .await
+            }
+            None => Err("main_world_global_names: no handle on globalThis".to_string()),
+        };
+        let _ = self
+            .client
+            .send_command(
+                "Runtime.releaseObjectGroup",
+                Some(json!({ "objectGroup": GROUP })),
+                Some(&session_id),
+            )
+            .await;
+        Ok(property_names(&props?))
     }
 
     /// Evaluate `script` in a specific frame's context (issue #58 `eval --frame`).
@@ -8939,6 +9095,7 @@ impl BrowserManager {
             if activate {
                 // No result to carry a warning here; activate without the check.
                 let target_id = self.active_target_id()?.to_string();
+                self.emulate_focus_on_other_tabs(&target_id).await;
                 self.client
                     .send_command(
                         "Target.activateTarget",
@@ -9515,6 +9672,8 @@ impl BrowserManager {
 
     pub async fn bring_to_front(&self) -> Result<(), String> {
         let session_id = self.active_session_id()?;
+        let front = self.active_target_id()?.to_string();
+        self.emulate_focus_on_other_tabs(&front).await;
         self.client
             .send_command("Page.bringToFront", None, Some(session_id))
             .await?;
@@ -9546,6 +9705,7 @@ impl BrowserManager {
             return Err(conflict.refusal());
         }
         let conflict = conflict.map(|c| c.warning());
+        self.emulate_focus_on_other_tabs(target_id).await;
         self.client
             .send_command(
                 "Target.activateTarget",
@@ -13385,6 +13545,27 @@ mod tests {
         assert!(m.contains("open <url>") && m.contains("adopt"));
         assert!(m.contains("did NOT") || m.contains("not silently"));
         assert_ne!(m, raw, "should rewrite the cryptic CDP text");
+    }
+
+    #[test]
+    fn property_names_reads_get_properties_replies() {
+        let reply = json!({ "result": [
+            { "name": "document", "value": { "type": "object" } },
+            { "name": "_pxAppId", "value": { "type": "string" } },
+            { "value": { "type": "undefined" } },
+        ] });
+        assert_eq!(property_names(&reply), ["document", "_pxAppId"]);
+        assert!(property_names(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn focus_emulation_is_skipped_only_for_a_visible_tab() {
+        let visible = json!({ "result": { "type": "string", "value": "visible" } });
+        let hidden = json!({ "result": { "type": "string", "value": "hidden" } });
+        assert!(!needs_focus_emulation(Some(&visible)));
+        assert!(needs_focus_emulation(Some(&hidden)));
+        assert!(needs_focus_emulation(Some(&json!({}))));
+        assert!(needs_focus_emulation(None));
     }
 
     #[test]
