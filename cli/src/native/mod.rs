@@ -29,6 +29,7 @@ pub mod inspect_server;
 #[allow(dead_code)]
 pub mod interaction;
 pub mod login_wall;
+mod monaco_model;
 #[allow(dead_code)]
 pub mod network;
 mod observation;
