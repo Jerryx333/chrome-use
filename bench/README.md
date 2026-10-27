@@ -10,6 +10,9 @@ Wall clock is secondary — it mixes model speed with harness speed.
 
 ## Compare against another agent's browser tool
 
+Head-to-head against Claude in Chrome (same tasks, same model, raw logs):
+[`claude-in-chrome/`](claude-in-chrome/).
+
 `codex_rollout_stats.py` reads a Codex rollout log and reports its round
 trips, returned bytes, tool-exec time and model think time:
 

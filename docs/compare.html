@@ -291,6 +291,39 @@
       </table>
       </div>
 
+      <h2 id="vs-claude-in-chrome">chrome-use 和 Claude in Chrome 实测对比</h2>
+      <p>2026-10-27 在同一台 Mac 上测：Chrome 156，两个全新的独立配置文件。Claude in Chrome 1.0.102 用它自带的侧栏，模型 Opus 5.5 · Medium，保持默认的“自动批准”。chrome-use 1.5.271 交给 Claude Code，同样是 Opus 5.5 · medium。两边拿到的任务文字一字不差。</p>
+      <div class="cmp-scroll">
+      <table class="cmp-table">
+        <thead><tr><th>测试</th><th>Claude in Chrome</th><th>chrome-use</th></tr></thead>
+        <tbody>
+          <tr><th>botcheck.leeguoo.com（我们自己写的检测页），页面上的 4 步操作</th><td>14 项通过，5 项失败：向页面插入了节点、中文没走输入法、按键时长约 0 ms、下拉选择事件不可信、窗口尺寸</td><td class="cmp-win">18 项通过，1 项失败：窗口尺寸（后台标签页）</td></tr>
+          <tr><th>网站能否探测到扩展</th><td>能：页面里 <code>fetch()</code> 它的公开脚本返回 200</td><td class="cmp-win">不能：与不存在的扩展结果一样</td></tr>
+          <tr><th>rebrowser bot-detector</th><td>16 绿 0 红</td><td>16 绿 0 红</td></tr>
+          <tr><th>跨域 iframe 里填优惠码并读结果</th><td>完成，结果靠截图读，把连字符读成了减号 U+2212</td><td class="cmp-win">完成，iframe 内的控件直接出现在快照里，结果文字一字不差</td></tr>
+          <tr><th>9 个字段的表单</th><td>正确，22 秒</td><td>正确，21 秒</td></tr>
+          <tr><th>两个标签页之间抄数据</th><td class="cmp-win">正确，18 秒</td><td>正确，29 秒</td></tr>
+          <tr><th>Hacker News 前 30 条转成 JSON</th><td>30 条，38 秒</td><td class="cmp-win">30 条，JSON 可直接解析，28 秒</td></tr>
+          <tr><th>同一个 Chrome 同时跑 3 个 agent</th><td>文档没写</td><td class="cmp-win">3 个都对，总共约 31 秒</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <h3>Claude in Chrome 更强的地方</h3>
+      <ul>
+        <li><b>防提示注入：</b>它有专门训练、注入扫描，每一步动作都过一遍分类器，还公布了攻击成功率（GA 公告给出 Opus 5 / Sonnet 5 为 0%）。chrome-use 没有分类器，只有可选的内容边界标记和域名、动作策略。</li>
+        <li><b>权限：</b>可以按网站允许或拒绝，有权限历史；默认屏蔽部分高风险类网站；团队管理员能设黑白名单。</li>
+        <li><b>上手：</b>商店装好、登录就能用，不需要终端。</li>
+        <li><b>录制演示：</b>可以把你自己操作一遍的步骤录成流程。</li>
+      </ul>
+      <h3>chrome-use 更强的地方</h3>
+      <ul>
+        <li><b>网站看不出来：</b>不往页面注入脚本，扩展探测不到，行为检测基本都过。Claude in Chrome 本来就是让人看得见的设计：有发光边框，政策上也不处理验证码。</li>
+        <li><b>能稳定重复跑：</b>有 <code>extract --schema</code>、<code>batch</code>、<code>script</code>、197 个站点适配器、YAML 测试、网络拦截、HAR、MCP 和 HTTP API。</li>
+        <li><b>多个 agent 共用一个 Chrome：</b>每个会话一个独立的标签组。</li>
+        <li><b>数据留在本机：</b>走 native messaging，不需要 Claude 订阅；页面内容只发给你自己选的模型。Claude in Chrome 经过 Anthropic 的中转服务，不支持零数据保留。</li>
+      </ul>
+      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">以上是在一台机器、一个网络环境下、每项各跑一次的测量，不代表所有网站都测不出来。任务、测试页、脚本和原始记录见 <a href="https://github.com/leeguooooo/chrome-use/tree/main/bench/claude-in-chrome">bench/claude-in-chrome</a>，每个版本可以照着重跑。</p>
+
       <h2>chrome-use vs ego(lite)：2026-10 实测</h2>
       <p>
         ego(lite) 的定位和我们很像：都让 agent 用真登录、不抢你的标签。2026-10-27 我们在同一台机器（190，M4）上用两边当前版本重测了一遍：

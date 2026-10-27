@@ -1,0 +1,21 @@
+secs 23.696 turns 7 tool_calls 6 in 14 cache_create 12026 cache_read 191675 out 767 cost 0.15
+  $ chrome-use skills get core
+  $ chrome-use open http://127.0.0.1:8711/price.html && chrome-use read
+  $ chrome-use extract --schema '{"rows":"tr","fields":{"c":"td:nth-child(1)","q":"td:nth-child(2)","u":"td:nth-child(3)"}}'; chrome-use get text body
+  $ chrome-use open --new-tab http://127.0.0.1:8711/order.html && chrome-use snapshot -i
+  $ chrome-use batch "fill @e3 Q-4471" "fill @e4 107.50" "click @e2 --observe"
+  $ chrome-use done --keep
+The purchase order was created. The page shows this confirmation:
+
+**PO CREATED quote=Q-4471 total=107.50**
+
+The quote total adds up like this:
+
+| Item | Qty × unit price | Line total |
+|---|---|---|
+| Widget A | 12 × 3.25 | 39.00 |
+| Widget B | 5 × 7.10 | 35.50 |
+| Widget C | 3 × 11.00 | 33.00 |
+| **Total** | | **107.50** |
+
+I left the order tab open with the confirmation on it and closed the quote tab.

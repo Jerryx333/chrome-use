@@ -1035,6 +1035,40 @@ mod tests {
         );
     }
 
+    /// `skills get core` is loaded on every task, so its size is paid on every
+    /// run (issue #781, G7: it had grown to 26 KB). The entry point is the
+    /// everyday loop; detail lives in `core/<topic>` references. Keep it under
+    /// 8 KB, and keep every `core/<topic>` it points at resolvable, so slimming
+    /// it never turns deferred detail into unreachable detail.
+    #[test]
+    fn core_entry_point_stays_small_and_its_pointers_resolve() {
+        let tmp = tempfile::tempdir().unwrap();
+        EMBEDDED_SKILL_DATA.extract(tmp.path()).unwrap();
+        let core = tmp.path().join("core");
+        let served = read_skill_tiered(&core.join("SKILL.md"), false).unwrap();
+        assert!(
+            served.len() <= 8 * 1024,
+            "`skills get core` serves {} bytes; keep the everyday loop at 8 KB or less \
+             and move detail into skill-data/core/references/",
+            served.len()
+        );
+        let mut rest = served.as_str();
+        let mut pointers = 0;
+        while let Some(i) = rest.find("`core/") {
+            rest = &rest[i + "`core/".len()..];
+            let stem: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            pointers += 1;
+            assert!(
+                resolve_supplementary(&core, &stem).is_some(),
+                "core points at `core/{stem}`, which has no reference file"
+            );
+        }
+        assert!(pointers >= 10, "core lost its routing table ({pointers} pointers)");
+    }
+
     #[test]
     fn test_parse_frontmatter_no_frontmatter() {
         let content = "# Just a heading\n\nNo frontmatter here.\n";

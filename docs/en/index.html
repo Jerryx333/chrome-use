@@ -258,13 +258,13 @@
       <h2>Why not just use…</h2>
       <ul>
         <li><strong>Playwright / Puppeteer / browser-use?</strong> They're built for writing automation code, and a fresh browser context has none of your sessions; they can also persist profiles or attach to an existing browser, so compare the actual connection path. chrome-use is built for agents and reuses the sessions you already have.</li>
-        <li><strong>Claude's Chrome extension?</strong> Great, but Claude-only. chrome-use works for <em>any</em> agent, on the same real browser.</li>
+        <li><strong>Claude in Chrome?</strong> Any website can detect its extension with a single fetch; chrome-use's can't be probed. Inside cross-origin iframes it reads screenshots, while chrome-use reads the content as structured data. And on the four botcheck actions (our own detector), with the same model, it was flagged on 5 checks and chrome-use on 1. <a href="/en/compare.html#vs-claude-in-chrome">The measurements</a></li>
         <li><strong>Raw <code>--remote-debugging-port</code> (CDP)?</strong> Chrome 136 restricts remote debugging of the default profile, and the details vary by version and connection mode. chrome-use uses a Web Store extension and native messaging, with no prompt.</li>
       </ul>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ What detector results mean</div>
-        Our own CreepJS run reported <strong>0% bot and 0% headless</strong>; nothing is injected into pages when driving your real Chrome, and the extension needs 12 permissions, no <code>&lt;all_urls&gt;</code>.
+        Our own CreepJS run reported <strong>0% bot and 0% headless</strong>; nothing is injected into pages when driving your real Chrome, and the extension asks for 15 permissions and no granted host permissions (no <code>&lt;all_urls&gt;</code>).
         This is a measurement in a particular environment, not a promise of invisibility or account safety; websites also weigh behavior, account history and network signals.
         Test conditions, <code>--humanize</code> and Cloudflare clearance reuse are in <a href="/en/stealth.html">Stealth &amp; Anti-detection</a>.
       </div>

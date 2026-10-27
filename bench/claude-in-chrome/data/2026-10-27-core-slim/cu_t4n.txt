@@ -1,0 +1,11 @@
+secs 31.613 turns 6 tool_calls 5 in 12 cache_create 4134 cache_read 138039 out 597 cost 0.073
+  $ chrome-use skills get core
+  $ chrome-use --session coupon open http://127.0.0.1:8711/frame.html && chrome-use --session coupon snapshot -i
+  $ chrome-use --session coupon snapshot -i
+  $ chrome-use --session coupon fill @e4 "spring-25" --observe && chrome-use --session coupon click @e3 --observe
+  $ chrome-use --session coupon done
+After I entered `spring-25` and clicked "Apply coupon", the widget showed this result text:
+
+**APPLIED:SPRING-25**
+
+The widget shows the code in uppercase even though I typed it in lowercase. I've closed the tab I opened.

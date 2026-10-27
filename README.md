@@ -75,11 +75,11 @@ A **new browser context** starts without your existing login sessions. Playwrigh
 | Drives your **real, logged-in** Chrome | Configurable; fresh contexts start empty | ✅ | ✅ | ✅ |
 | Connect method / **"Allow remote debugging?" popup** | — (own browser) | `--remote-debugging-port` · version/mode dependent | `chrome.debugger` · no | native messaging · **never** ✅⁴ |
 | Real-browser fingerprint (CreepJS ~0%)¹ | ❌ automation markers / headless | ✅ | ✅ | ✅ **verified 0%** |
-| **No `Runtime.enable` CDP leak** (rebrowser)² | ❌ leaks | ❌ leaks | — | ✅ **off by default** |
+| **No `Runtime.enable` CDP leak** (rebrowser)² | ❌ leaks | ❌ leaks | ✅ measured clean (2026-10-27) | ✅ **off by default** |
 | Many agents on **one** real Chrome, isolated tab groups³ | ❌ separate browsers | ⚠️ shared tabs, no isolation | ❌ single app | ✅ |
-| Permissions footprint | full control | full CDP | 16 incl. `<all_urls>` | **12, no `<all_urls>`** |
+| Permissions footprint | full control | full CDP | 16 incl. `<all_urls>` | **15, no granted host permissions** (`http/https` optional) |
 
-<sub>¹ All three real-Chrome tools score ~0% on CreepJS (it's a real browser); we've measured ours. ² rebrowser's `runtimeEnableLeak`: verified clean on our relay path; Claude in Chrome not independently tested (—). ³ web-access can run parallel sub-agents on one browser, but without per-session isolation; each `--session` here gets its own colored, command-isolated tab group. ⁴ No consent dialog, but the extension still uses `chrome.debugger`, so Chrome shows its "started debugging this browser" bar while an agent tab is attached. See [Setup](#setup-connect-to-your-chrome) for removing it. See [Anti-detection](#anti-detection) for the measured numbers.</sub>
+<sub>¹ All three real-Chrome tools score ~0% on CreepJS (it's a real browser); we've measured ours. ² rebrowser's `runtimeEnableLeak`: verified clean on our relay path; Claude in Chrome measured clean (2026-10-27, 16 green / 0 red, see [bench/claude-in-chrome](bench/claude-in-chrome/)). ³ web-access can run parallel sub-agents on one browser, but without per-session isolation; each `--session` here gets its own colored, command-isolated tab group. ⁴ No consent dialog, but the extension still uses `chrome.debugger`, so Chrome shows its "started debugging this browser" bar while an agent tab is attached. See [Setup](#setup-connect-to-your-chrome) for removing it. See [Anti-detection](#anti-detection) for the measured numbers.</sub>
 
 ## How it works
 

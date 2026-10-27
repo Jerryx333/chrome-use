@@ -263,13 +263,13 @@
       <h2>为什么不直接用……</h2>
       <ul>
         <li><strong>Playwright / Puppeteer / browser-use？</strong>它们面向写自动化代码，新建的浏览器上下文没有你的登录态；也能持久化配置或连接已有浏览器，选型时比较具体连接方式。chrome-use 面向 agent，直接复用你已有的会话。</li>
-        <li><strong>Claude 的 Chrome 插件？</strong>很好用，但只能给 Claude 用。chrome-use 给<em>任意</em> agent 用，同一个真实浏览器。</li>
+        <li><strong>Claude in Chrome？</strong>它的扩展任何网站一次 fetch 就能认出来，chrome-use 的认不出。跨域 iframe 里的文字它只能看截图，chrome-use 直接读成结构化数据。用同一个模型做 botcheck（我们自己写的检测页）的四步操作，它被识破 5 项，chrome-use 1 项。<a href="/compare.html#vs-claude-in-chrome">实测对比</a></li>
         <li><strong>裸 <code>--remote-debugging-port</code>（CDP）？</strong>Chrome 136 限制默认配置文件的远程调试，具体要求随版本和连接模式而变。chrome-use 走商店扩展和原生消息，不弹确认。</li>
       </ul>
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ 检测结果能说明什么</div>
-        我们自测 CreepJS 为 <strong>0% bot、0% headless</strong>；连真实 Chrome 时不注入 JS 补丁，扩展只要 12 个权限、没有 <code>&lt;all_urls&gt;</code>。
+        我们自测 CreepJS 为 <strong>0% bot、0% headless</strong>；连真实 Chrome 时不注入 JS 补丁，扩展申请 15 个权限，不授予任何站点权限（没有 <code>&lt;all_urls&gt;</code>）。
         这是特定环境的测量，不保证无法被检测或账号不会被封，网站还会看操作行为、账号历史和网络信号。
         测试条件、<code>--humanize</code> 和 Cloudflare 复用见<a href="/stealth.html">反检测与隐身</a>。
       </div>

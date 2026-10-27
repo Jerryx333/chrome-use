@@ -1,0 +1,45 @@
+{
+  "fixtures_origin": "http://127.0.0.1:8711 (fixtures/a); the coupon widget iframe is served from http://localhost:8712 (fixtures/b), a different origin",
+  "tasks": {
+    "t1": {
+      "name": "Hacker News top 30 as JSON",
+      "prompt": "Open https://news.ycombinator.com/ and reply with only a JSON array of the 30 stories on the front page, each {rank, title, points, comments} with points and comments as numbers (0 if missing).",
+      "check": "30 items, titles match the live page at run time, output parses as JSON"
+    },
+    "t2": {
+      "name": "9-field form",
+      "prompt": "Open http://127.0.0.1:8711/form.html and register with: full name Ada Lovelace, email ada@example.com, country Germany, ticket VIP, topics AI and Security, arrival date 2026-12-03, notes \"Vegetarian meal please\", accept the terms, then submit. Reply with the exact text shown on the page after submission.",
+      "expect": "SUBMITTED {\"name\":\"Ada Lovelace\",\"email\":\"ada@example.com\",\"country\":\"Germany\",\"ticket\":\"vip\",\"topics\":[\"ai\",\"security\"],\"arrival\":\"2026-12-03\",\"notes\":\"Vegetarian meal please\",\"terms\":\"yes\"}"
+    },
+    "t3": {
+      "name": "Copy data between two tabs",
+      "prompt": "Open http://127.0.0.1:8711/price.html in one tab and http://127.0.0.1:8711/order.html in a second tab. From the quote tab compute the quote total (sum of qty x unit price). Then in the order tab fill in the quote number and the total (two decimals) and click Create PO. Reply with the confirmation text shown.",
+      "expect": "PO CREATED quote=Q-4471 total=107.50"
+    },
+    "t4": {
+      "name": "Coupon in a cross-origin iframe",
+      "prompt": "Open http://127.0.0.1:8711/frame.html. In the embedded coupon widget, enter the code spring-25 and apply it. Reply with the exact result text the widget shows.",
+      "expect": "APPLIED:SPRING-25 (ASCII hyphen-minus, U+002D)"
+    },
+    "t5": {
+      "name": "botcheck behavioural detector",
+      "prompt": "Open https://botcheck.leeguoo.com/ and do the four tasks on the page: click the Click me button, type Hi #你好 in the text box, scroll the list to item 37 and press its button, and pick Kyoto from the city list. Then tell me the overall result the page shows.",
+      "check": "count of pass/fail checks in the page's report; botcheck is the chrome-use maintainer's own detector"
+    },
+    "t6": {
+      "name": "rebrowser bot-detector",
+      "prompt": "Open https://bot-detector.rebrowser.net/ in a new tab, wait until its tests finish, and list every test name with its result (green/red/neutral).",
+      "check": "count of green/red/neutral tests"
+    },
+    "parallel": {
+      "name": "t2 + t4 + t3 at once on one Chrome (chrome-use only)",
+      "how": "start three run-chrome-use.sh runs at the same time, each with its own session name",
+      "check": "all three answers correct; wall clock of the slowest"
+    },
+    "probe": {
+      "name": "Can a page detect the extension?",
+      "how": "from a page on 127.0.0.1:8711, fetch('chrome-extension://<id>/<web-accessible resource>') in DevTools; compare with a random extension id",
+      "check": "HTTP 200 means detectable; a failure identical to a random id means not probeable"
+    }
+  }
+}
