@@ -1,0 +1,57 @@
+{
+  "type": "object",
+  "properties": {
+    "allowedDomains": {
+      "title": "Sites agents may act on",
+      "description": "When set and not empty, chrome-use refuses any action on a site not covered by this list. A domain covers its subdomains.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "blockedDomains": {
+      "title": "Sites agents may not act on",
+      "description": "chrome-use refuses every action on these sites. A domain covers its subdomains.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "confirmDomains": {
+      "title": "Sites that always ask first",
+      "description": "Every action on these sites waits for the user's approval, even on sites the user always allowed.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "sensitiveSites": {
+      "title": "Ask first on the built-in sensitive-site list",
+      "description": "Banking, brokerage, crypto exchange and government ID sites. Set to pin it on (true) or off (false); unset leaves it to the user.",
+      "type": "boolean"
+    },
+    "ask": {
+      "title": "Always ask before",
+      "description": "Any of payment_input (card number, CVV, expiry), purchase, password_input (password and one-time-code fields), download. Pins the setting; unset leaves it to the user (default: payment_input and purchase).",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "firstVisit": {
+      "title": "Ask the first time on a new site",
+      "description": "Any of navigation, click, typing, upload, download. Pins the setting; unset leaves it to the user.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "actionPolicy": {
+      "title": "Action policy",
+      "description": "Same shape as a chrome-use --action-policy file, applied on top of the local one: deny refuses an action, confirm makes it wait for the user.",
+      "type": "object",
+      "properties": {
+        "default": { "type": "string" },
+        "allow": { "type": "array", "items": { "type": "string" } },
+        "deny": { "type": "array", "items": { "type": "string" } },
+        "confirm": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "disabledAgents": {
+      "title": "Side-panel agents to turn off",
+      "description": "Any of codex, claude, opencode, pi. The side panel does not offer them.",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

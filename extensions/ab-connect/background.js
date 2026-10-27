@@ -91,6 +91,7 @@ import {
 } from './update-check.js';
 import { attachedTargetsFrom } from './attached-targets.js';
 import { executeCall, policySummary, POLICY_VERSION } from './api-passthrough.js';
+import { createSitePermissions } from './site-permissions.js';
 import { createUserTabOrganizer, USER_TAB_GROUPS_VERSION, USER_TAB_GROUPS_JOIN } from './user-tab-organizer.js';
 import { createTabGrants, LENT_TAB_CLOSE } from './tab-grant.js';
 import { bindingsFrom, openTabPanel, panelTabKey, PANEL_TAB_PREFIX, tabForConversation } from './panel-tabs.js';
@@ -280,10 +281,21 @@ try {
     }
   });
 } catch {}
+// Per-site permissions (#781): approved sites, history, pending requests and
+// the managed policy. The daemon decides; this keeps the person's answers.
+const sitePermissions = createSitePermissions({ storage: chrome.storage, notifications: chrome.notifications, t });
+try {
+  chrome.storage.onChanged.addListener((_changes, area) => { if (area === 'managed') void sitePermissions.refreshManaged(); });
+} catch {}
 chrome.notifications.onClicked.addListener(id => {
   if (id === SITE_ACCESS_NOTIFICATION) {
     void chrome.tabs.create({ url: chrome.runtime.getURL(SITE_ACCESS_OPTIONS_PAGE) }).catch(() => {});
     void chrome.notifications.clear(id).catch(() => {});
+    return;
+  }
+  // A site approval: its choices live on the options page (and the side panel).
+  if (typeof id === 'string' && id.startsWith('ab-site-')) {
+    void chrome.tabs.create({ url: chrome.runtime.getURL('options.html#permissions') }).catch(() => {});
     return;
   }
   openFromNotification(id, { windowId: lastFocusedWindowId, chrome, panels: panelPresence, pending: selection => { pendingPanelSelect = selection; }, tabs: agentPanelEntry.ready ? notificationPanels : null });
@@ -1152,6 +1164,9 @@ function connectHost() {
           // `cliUpdate` (0.5.72): shows the CLI's version notices and sends
           // `upgradeCli` from the popup / side panel button.
           'cliUpdate',
+          // `sitePolicy` (#781): `ABExt.sitePolicy` and `ABExt.siteApproval`,
+          // per-site permissions and the managed policy.
+          'sitePolicy',
         ],
         ...extra,
       });
@@ -1842,6 +1857,11 @@ async function handleForwardCdpCommand(msg) {
 
   // Everything the daemon otherwise assembles from several calls, in one:
   // what the relay holds, what it owns, how it is configured. Ids only.
+  // Per-site permissions (#781): the person's and the administrator's layers,
+  // and approval requests the daemon files and polls.
+  if (method === 'ABExt.sitePolicy') return sitePermissions.policy();
+  if (method === 'ABExt.siteApproval') return sitePermissions.approval(params);
+
   if (method === 'ABExt.state') {
     await loadOwnedTabs();
     return {
@@ -3049,6 +3069,19 @@ try {
 // Popup status page asks for the live pairing state. Attempt a (re)connect on
 // demand so opening the popup also nudges the link awake, then report.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // The side panel and the options page answer site approvals and edit the
+  // approved-sites list; nothing else may (#781).
+  if (msg?.type === 'ab-site-permission') {
+    if (!isAgentPanelSender(_sender, chrome.runtime)) {
+      sendResponse({ success: false, error: 'Site permissions change only from the chrome-use side panel or options page' });
+      return false;
+    }
+    sitePermissions.onMessage(msg).then(
+      result => sendResponse({ success: true, ...result }),
+      error => sendResponse({ success: false, error: String(error?.message || error) }),
+    );
+    return true;
+  }
   if (typeof msg?.type === 'string' && msg.type.startsWith('inspect:')) {
     return inspectController.onPickerMessage(msg, _sender, sendResponse);
   }

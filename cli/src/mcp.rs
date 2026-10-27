@@ -7,8 +7,8 @@
 //! is purely a JSON-RPC-over-stdio front end onto the existing CLI surface.
 //!
 //! Two profiles, selected with `chrome-use mcp [--tools <core|all>]`:
-//!   - `core` (default): ~12 tools (open/read/snapshot/click/fill/type/press/
-//!     eval/wait/back/forward/reload).
+//!   - `core` (default): ~13 tools (open/read/snapshot/click/fill/type/press/
+//!     eval/wait/back/forward/reload/confirm).
 //!   - `all`: `core` plus an extended set (hover/select/screenshot/scroll/
 //!     tabs/extract/expect/find/network_route/site/upload/download) — closer
 //!     to full CLI parity, still not exhaustive.
@@ -49,6 +49,8 @@ const TOOL_WAIT: &str = "chrome_use_wait";
 const TOOL_BACK: &str = "chrome_use_back";
 const TOOL_FORWARD: &str = "chrome_use_forward";
 const TOOL_RELOAD: &str = "chrome_use_reload";
+/// Answers a held action (`confirmation_required`, #781): `confirm` / `deny`.
+const TOOL_CONFIRM: &str = "chrome_use_confirm";
 
 // Extended profile (`--tools all`) — see module docs above.
 const TOOL_HOVER: &str = "chrome_use_hover";
@@ -318,7 +320,7 @@ fn initialize_result(params: Option<&Value>, profile: Profile) -> Value {
         } else {
             "Use the chrome_use_* tools to drive a real browser. Call chrome_use_open to \
             navigate, then chrome_use_snapshot to get an accessibility tree with @ref \
-            handles before clicking/typing. This is the CORE tool profile (~12 tools) — \
+            handles before clicking/typing. This is the CORE tool profile (~13 tools) — \
             not full chrome-use CLI parity. Start the server with --tools all for the \
             extended profile."
         },
@@ -532,6 +534,14 @@ fn core_tools() -> Vec<Value> {
             "name": TOOL_RELOAD,
             "description": "Reload the current page.",
             "inputSchema": build_schema(obj(&[]), &[]),
+        }),
+        json!({
+            "name": TOOL_CONFIRM,
+            "description": "Answer an action the CLI held with confirmation_required (a sensitive site, a payment card field, a purchase, or a rule the user or their organization set, such as downloads or password fields). Tell the user what you were about to do and where first. With approval: user, only the user can allow it in the chrome-use extension; this call then waits up to 40s for their choice and runs the action if they allowed it. decline: true withdraws the request.",
+            "inputSchema": build_schema(obj(&[
+                ("id", json!({ "type": "string", "description": "The confirmation_id from the held action." })),
+                ("decline", json!({ "type": "boolean", "description": "Withdraw the request instead (chrome-use deny)." })),
+            ]), &["id"]),
         }),
     ]
 }
@@ -798,6 +808,7 @@ fn is_known_tool(name: &str, profile: Profile) -> bool {
             | TOOL_BACK
             | TOOL_FORWARD
             | TOOL_RELOAD
+            | TOOL_CONFIRM
     );
     if core {
         return true;
@@ -898,6 +909,7 @@ fn call_browser_tool(name: &str, arguments: &Value) -> Result<Value, ProtocolErr
         TOOL_BACK => call_observed(arguments, "back"),
         TOOL_FORWARD => call_observed(arguments, "forward"),
         TOOL_RELOAD => call_observed(arguments, "reload"),
+        TOOL_CONFIRM => call_confirm(arguments),
         TOOL_HOVER => call_hover(arguments),
         TOOL_SELECT => call_select(arguments),
         TOOL_SCREENSHOT => call_screenshot(arguments),
@@ -916,6 +928,22 @@ fn call_browser_tool(name: &str, arguments: &Value) -> Result<Value, ProtocolErr
         TOOL_DIAG_PAGES => call_diag_pages(arguments),
         _ => unreachable!("known MCP tool missing call handler: {}", name),
     }
+}
+
+/// `confirm <id>` / `deny <id>` for a held action (#781).
+fn call_confirm(arguments: &Value) -> Result<Value, ProtocolError> {
+    let id = required_string(arguments, "id")?;
+    if id.is_empty() || id.starts_with('-') {
+        return Err(ProtocolError::invalid_params(
+            "id must be a confirmation id",
+        ));
+    }
+    let verb = if optional_bool(arguments, "decline")?.unwrap_or(false) {
+        "deny"
+    } else {
+        "confirm"
+    };
+    run_tool(arguments, vec![verb.to_string(), id])
 }
 
 /// `back`, `forward`, `reload`: a bare command that may observe its effect.
@@ -2585,6 +2613,7 @@ mod tests {
         TOOL_BACK,
         TOOL_FORWARD,
         TOOL_RELOAD,
+        TOOL_CONFIRM,
     ];
 
     const EXTENDED_ONLY_TOOL_NAMES: &[&str] = &[

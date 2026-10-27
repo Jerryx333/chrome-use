@@ -111,6 +111,7 @@
       { slug: "sessions",    ico: "💾", zh: "多个 agent 与会话", en: "Agents & Sessions", kw: "session persist cookie profile 会话 持久化" },
       { slug: "choosebrowser", ico: "🧭", zh: "多 profile 路由：ChooseBrowser", en: "Multi-profile Routing: ChooseBrowser", kw: "choosebrowser profile router rules remember browser picker macos 多账号 profile 路由 规则 选择器" },
       { slug: "stealth",     ico: "🥷", zh: "反检测与隐身", en: "Stealth & Anti-detection", kw: "stealth anti-detection antibot cloudflare creepjs humanize 反检测 隐身 封号 指纹 bot" },
+      { slug: "permissions", ico: "🛡️", zh: "权限与安全", en: "Permissions & Safety", kw: "permissions approve allow once always decline sensitive banking crypto download password purchase policy managed mdm enterprise 权限 批准 授权 敏感 银行 下载 购买 企业 策略" },
     ]},
     { id: "connect", label: { zh: "接入方式", en: "Connecting Agents" }, items: [
       { slug: "mcp",      ico: "🔌", zh: "MCP 服务器", en: "MCP Server", kw: "mcp model context protocol claude desktop stdio json-rpc n8n dify chatgpt connector" },

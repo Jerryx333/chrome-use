@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "about": "Sites where chrome-use asks the user before an agent acts (navigation, clicks, typing, uploads, downloads) while it drives the user's own Chrome. A bare domain covers its subdomains. Turn the list off or extend it as docs/permissions.html describes. Additions welcome: keep each entry the site's registrable domain.",
+  "categories": {
+    "banking": [
+      "chase.com", "bankofamerica.com", "wellsfargo.com", "citi.com", "citibank.com", "usbank.com",
+      "capitalone.com", "pnc.com", "truist.com", "tdbank.com", "ally.com", "discover.com",
+      "americanexpress.com", "sofi.com", "chime.com", "navyfederal.org", "usaa.com",
+      "paypal.com", "venmo.com", "wise.com", "revolut.com", "monzo.com", "starlingbank.com",
+      "hsbc.com", "hsbc.co.uk", "hsbc.com.hk", "barclays.co.uk", "lloydsbank.com", "natwest.com",
+      "santander.co.uk", "santander.com", "bnpparibas.com", "societegenerale.fr", "credit-agricole.fr",
+      "deutsche-bank.de", "commerzbank.de", "ing.com", "ing.nl", "abnamro.nl", "rabobank.nl",
+      "n26.com", "ubs.com", "credit-suisse.com", "rbcroyalbank.com", "td.com", "scotiabank.com",
+      "bmo.com", "cibc.com", "commbank.com.au", "westpac.com.au", "anz.com", "nab.com.au",
+      "dbs.com.sg", "ocbc.com", "uob.com.sg", "standardchartered.com",
+      "icbc.com.cn", "ccb.com", "boc.cn", "bankofchina.com", "abchina.com", "bankcomm.com",
+      "cmbchina.com", "spdb.com.cn", "cebbank.com", "cib.com.cn", "psbc.com", "pingan.com",
+      "alipay.com", "tenpay.com", "unionpay.com", "95516.com",
+      "mufg.jp", "bk.mufg.jp", "smbc.co.jp", "mizuhobank.co.jp", "resonabank.co.jp",
+      "japanpost.jp", "jp-bank.japanpost.jp", "rakuten-bank.co.jp", "sbishinseibank.co.jp",
+      "paypay-bank.co.jp", "kbstar.com", "shinhan.com", "wooribank.com",
+      "hdfcbank.com", "icicibank.com", "onlinesbi.sbi", "axisbank.com",
+      "itau.com.br", "bb.com.br", "bradesco.com.br", "nubank.com.br"
+    ],
+    "brokerage": [
+      "schwab.com", "fidelity.com", "vanguard.com", "etrade.com", "tdameritrade.com",
+      "robinhood.com", "webull.com", "interactivebrokers.com", "ibkr.com", "merrilledge.com",
+      "ml.com", "morganstanley.com", "edwardjones.com", "wealthfront.com", "betterment.com",
+      "public.com", "firstrade.com", "tastytrade.com", "trading212.com", "etoro.com",
+      "degiro.com", "saxobank.com", "hl.co.uk", "ajbell.co.uk",
+      "futunn.com", "futuhk.com", "moomoo.com", "tigerbrokers.com", "itiger.com",
+      "eastmoney.com", "htsc.com.cn", "citics.com", "gtja.com", "10jqka.com.cn",
+      "sbisec.co.jp", "rakuten-sec.co.jp", "monex.co.jp", "matsui.co.jp", "smbcnikko.co.jp",
+      "nomura.co.jp", "daiwa.jp", "paypay-sec.co.jp", "zerodha.com", "groww.in"
+    ],
+    "crypto": [
+      "coinbase.com", "binance.com", "binance.us", "kraken.com", "gemini.com", "crypto.com",
+      "okx.com", "bybit.com", "kucoin.com", "bitfinex.com", "bitstamp.net", "htx.com",
+      "huobi.com", "gate.io", "gate.com", "mexc.com", "bitget.com", "bitflyer.com",
+      "coincheck.com", "bitbank.cc", "upbit.com", "bithumb.com", "blockchain.com",
+      "uphold.com", "bitpanda.com", "metamask.io", "app.uniswap.org"
+    ],
+    "government_id": [
+      "irs.gov", "ssa.gov", "login.gov", "id.me", "usps.com", "travel.state.gov",
+      "dmv.ca.gov", "uscis.gov", "healthcare.gov", "gov.uk", "hmrc.gov.uk",
+      "canada.ca", "cra-arc.gc.ca", "my.gov.au", "ato.gov.au", "servicesaustralia.gov.au",
+      "impots.gouv.fr", "franceconnect.gouv.fr", "ameli.fr", "elster.de", "bund.de",
+      "digid.nl", "belastingdienst.nl", "agenziaentrate.gov.it", "spid.gov.it",
+      "myna.go.jp", "myna.digital.go.jp", "e-tax.nta.go.jp", "nta.go.jp", "nenkin.go.jp",
+      "gov.cn", "chinatax.gov.cn", "12123.gov.cn", "12306.cn", "si.12333.gov.cn",
+      "gov.hk", "iam.gov.hk", "gov.sg", "singpass.gov.sg", "iras.gov.sg", "cpf.gov.sg",
+      "gov.in", "uidai.gov.in", "incometax.gov.in", "gov.br", "receita.fazenda.gov.br"
+    ]
+  }
+}

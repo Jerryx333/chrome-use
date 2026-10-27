@@ -2378,9 +2378,27 @@ fn print_response_body(resp: &Response, action: Option<&str>, opts: &OutputOptio
                 .get("confirmation_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            // A per-site gate (#781) names the site; `approval: user` means
+            // only the person can approve, in the extension.
+            let site = data.get("site").and_then(|v| v.as_str()).unwrap_or("");
+            let user = data.get("approval").and_then(|v| v.as_str()) == Some("user");
             println!("Confirmation required:");
             println!("  {}: {}", category, description);
-            println!("  Run: chrome-use confirm {}", cid);
+            if !site.is_empty() {
+                println!("  Site: {}", site);
+            }
+            if user {
+                println!(
+                    "  Ask the user to choose Allow once, Always allow on this site, or Decline"
+                );
+                println!("  in the chrome-use side panel or its notification. Then:");
+                println!(
+                    "  Run: chrome-use confirm {}   (waits up to 40s for the choice)",
+                    cid
+                );
+            } else {
+                println!("  Run: chrome-use confirm {}", cid);
+            }
             println!("  Or:  chrome-use deny {}", cid);
             return;
         }
@@ -4981,11 +4999,21 @@ Usage:
   chrome-use confirm <confirmation-id>
   chrome-use deny <confirmation-id>
 
-When --confirm-actions is set, certain action categories return a
-confirmation_required response with a confirmation ID. Use confirm/deny
-to approve or reject the action.
+When --confirm-actions or --action-policy asks for it, or a per-site
+permission does (sensitive sites, payment card fields and purchases by
+default; password fields and downloads when turned on; see "Permissions &
+safety" in the docs), the action returns a confirmation_required response
+with a confirmation ID instead of running.
+Use confirm/deny to approve or reject it.
 
-Pending confirmations auto-deny after 60 seconds.
+When the response says `approval: user`, the request is waiting in the
+chrome-use extension (side panel, notification, options page). Only the
+user can approve it there: `confirm` then waits up to 40 seconds for their
+choice (Allow once, Always allow on this site, Decline) and runs the action
+if they allowed it. With --confirm-interactive the prompt also offers
+"always" for the site.
+
+A new gated action replaces the pending one.
 
 Examples:
   chrome-use confirm c_8f3a1234
@@ -5419,10 +5447,10 @@ delegates to this same binary in `--json` mode, so behavior matches the
 normal CLI surface.
 
 Profiles (--tools, default core):
-  core   ~12 tools: chrome_use_open, chrome_use_read, chrome_use_snapshot,
+  core   ~13 tools: chrome_use_open, chrome_use_read, chrome_use_snapshot,
          chrome_use_click, chrome_use_fill, chrome_use_type, chrome_use_press,
          chrome_use_eval, chrome_use_wait, chrome_use_back, chrome_use_forward,
-         chrome_use_reload
+         chrome_use_reload, chrome_use_confirm
   all    core + an extended set: chrome_use_hover, chrome_use_select,
          chrome_use_screenshot, chrome_use_scroll, chrome_use_tabs,
          chrome_use_extract, chrome_use_expect, chrome_use_find,
@@ -6963,7 +6991,7 @@ Options:
                              `chrome-use mcp` and the agent panel
   --max-output <chars>       Truncate page output to N chars (or AGENT_BROWSER_MAX_OUTPUT)
   --allowed-domains <list>   Restrict navigation domains (or AGENT_BROWSER_ALLOWED_DOMAINS)
-  --action-policy <path>     Action policy JSON file (or AGENT_BROWSER_ACTION_POLICY)
+  --action-policy <path>     Action policy JSON file (or AGENT_BROWSER_ACTION_POLICY); its "sites" block sets per-site allow/deny/confirm
   --confirm-actions <list>   Categories requiring confirmation (or AGENT_BROWSER_CONFIRM_ACTIONS)
   --confirm-interactive      Interactive confirmation prompts; auto-denies if stdin is not a TTY (or AGENT_BROWSER_CONFIRM_INTERACTIVE)
   --engine <name>            Browser engine: chrome (default), lightpanda (or AGENT_BROWSER_ENGINE)
@@ -7102,6 +7130,7 @@ Environment:
   AGENT_BROWSER_ACTION_POLICY    Path to action policy JSON file
   AGENT_BROWSER_CONFIRM_ACTIONS  Action categories requiring confirmation
   AGENT_BROWSER_CONFIRM_INTERACTIVE Enable interactive confirmation prompts
+  CHROME_USE_SENSITIVE_SITES=0   Turn off the built-in ask-first list of banking, brokerage, crypto and government ID sites
   AGENT_BROWSER_NO_AUTO_DIALOG   Disable automatic dismissal of alert/beforeunload dialogs
   AGENT_BROWSER_ENGINE           Browser engine: chrome (default), lightpanda
   HTTP_PROXY / HTTPS_PROXY       Standard proxy env vars (fallback if AGENT_BROWSER_PROXY not set)

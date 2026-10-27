@@ -28,6 +28,10 @@ pub struct ActionPolicy {
     deny: Option<Vec<String>>,
     #[serde(default)]
     confirm: Option<Vec<String>>,
+    /// Per-site rules (#781): `allow` / `deny` / `confirm` host lists plus
+    /// `sensitiveSites`, `firstVisit` and `ask`. See `site_policy`.
+    #[serde(default)]
+    sites: Option<super::site_policy::SiteLayer>,
 }
 
 /// Confirmation categories parsed from AGENT_BROWSER_CONFIRM_ACTIONS.
@@ -69,6 +73,17 @@ impl ActionPolicy {
             serde_json::from_str(&contents).map_err(|e| format!("Invalid policy JSON: {}", e))?;
         policy.path = path_buf;
         Ok(policy)
+    }
+
+    /// A policy given as a JSON value (the managed `actionPolicy`), with no
+    /// file behind it; `reload` is never called on one.
+    pub fn from_value(value: &serde_json::Value) -> Result<Self, String> {
+        serde_json::from_value(value.clone()).map_err(|e| format!("Invalid policy JSON: {}", e))
+    }
+
+    /// The `sites` block, if the file has one.
+    pub fn sites(&self) -> Option<&super::site_policy::SiteLayer> {
+        self.sites.as_ref()
     }
 
     /// Load policy if AGENT_BROWSER_ACTION_POLICY env var is set.
@@ -202,6 +217,18 @@ mod tests {
         let policy: ActionPolicy = serde_json::from_str(json).unwrap();
         assert_eq!(policy.check("click"), PolicyResult::Allow);
         assert!(matches!(policy.check("navigate"), PolicyResult::Deny(_)));
+    }
+
+    #[test]
+    fn test_policy_sites_block_and_value() {
+        let json = r#"{"deny": [], "sites": {"allow": ["a.test"], "sensitiveSites": false}}"#;
+        let policy: ActionPolicy = serde_json::from_str(json).unwrap();
+        let sites = policy.sites().unwrap();
+        assert_eq!(sites.allow, vec!["a.test"]);
+        assert_eq!(sites.sensitive_sites, Some(false));
+        let managed = ActionPolicy::from_value(&serde_json::json!({"deny": ["upload"]})).unwrap();
+        assert!(matches!(managed.check("upload"), PolicyResult::Deny(_)));
+        assert_eq!(managed.check("click"), PolicyResult::Allow);
     }
 
     #[test]

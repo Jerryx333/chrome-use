@@ -2066,6 +2066,9 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
   controls(); closeConversationMenu();
   return { async start() {
     try {
+      // Agents an administrator turned off (managed `disabledAgents`, #781).
+      const disabled = (await Promise.resolve(storage?.managed?.get?.('disabledAgents')).catch(() => null))?.disabledAgents;
+      if (Array.isArray(disabled)) for (const agent of disabled) chatAgents.delete(agent);
       const saved = await storage?.local?.get(['ab_panel_conversation', 'ab_panel_pending', 'ab_panel_full_access', 'ab_panel_conversation_scope', 'ab_panel_agent', 'ab_panel_show_replies']);
       // Opened from a reply notification.
       if (Date.now() - Number(saved?.ab_panel_show_replies || 0) < 30000) replyBox.open = true;

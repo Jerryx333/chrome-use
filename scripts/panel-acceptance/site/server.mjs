@@ -46,6 +46,8 @@ async function saveOk(){const r=await fetch('/api/draft',{method:'POST',body:doc
     return page(`List page ${n}`, `<h1>List page ${n}</h1><ul>${items}</ul>${next}`);
   },
   '/static': () => page('Unchanged page', '<h1>Unchanged</h1><p>This page never changes.</p>'),
+  // Site permissions (#781): a card field asks by default.
+  '/pay': () => page('Pay', `<h1>Pay</h1><label>Card number <input id="cc" name="cardnumber" autocomplete="cc-number"></label>`),
   '/login': () => page('Sign in', `<h1>Sign in</h1><form id="f" method="post" action="/api/login"><label>User <input id="user" name="user" value="alice"></label>
 <label>Password <input id="password" type="password" name="password"></label><button id="submit" type="submit">Sign in</button></form>`),
   // Secrets come from the driver (POST /__secrets), never from this page's
