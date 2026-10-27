@@ -19,7 +19,7 @@ use super::browser::{should_track_target, BrowserManager, WaitUntil};
 use super::cdp::chrome::LaunchOptions;
 use super::cdp::client::CdpClient;
 use super::cdp::types::{
-    AttachToTargetParams, AttachToTargetResult, CdpEvent, CreateTargetResult,
+    mouse_force, AttachToTargetParams, AttachToTargetResult, CdpEvent, CreateTargetResult,
     DispatchMouseEventParams, ExceptionThrownEvent, JavascriptDialogOpeningEvent,
     TargetCreatedEvent, TargetDestroyedEvent, TargetInfoChangedEvent,
 };
@@ -11711,16 +11711,27 @@ async fn handle_select(cmd: &Value, state: &mut DaemonState) -> Result<Value, St
             .unwrap_or_default(),
     };
 
-    interaction::select_option(
+    // Trusted type-ahead keys on web pages; VS Code / Electron webviews
+    // reject repeated printable key events, as in `type`.
+    let trusted_input = {
+        let url = mgr.get_url().await.unwrap_or_default();
+        url.starts_with("https://") || url.starts_with("http://")
+    };
+    let outcome = interaction::select_option(
         &mgr.client,
         &session_id,
         &state.ref_map,
         selector,
         &values,
         &state.iframe_sessions,
+        trusted_input,
     )
     .await?;
-    Ok(json!({ "selected": values }))
+    let mut out = json!({ "selected": values, "engine": outcome.engine });
+    if let Some(w) = outcome.warning {
+        out["warning"] = json!(w);
+    }
+    Ok(out)
 }
 
 async fn handle_check(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
@@ -14614,18 +14625,20 @@ async fn handle_mouse(cmd: &Value, state: &DaemonState) -> Result<Value, String>
 
     super::interaction::restore_rendering_if_hidden(&mgr.client, &session_id).await;
 
+    let mut params = json!({
+        "type": event_type,
+        "x": x,
+        "y": y,
+        "button": button,
+        "clickCount": click_count,
+    });
+    // This raw form carries no button mask: only the press itself is known
+    // to hold a button.
+    if let Some(force) = mouse_force(event_type, i32::from(event_type == "mousePressed")) {
+        params["force"] = json!(force);
+    }
     mgr.client
-        .send_command(
-            "Input.dispatchMouseEvent",
-            Some(json!({
-                "type": event_type,
-                "x": x,
-                "y": y,
-                "button": button,
-                "clickCount": click_count,
-            })),
-            Some(&session_id),
-        )
+        .send_command("Input.dispatchMouseEvent", Some(params), Some(&session_id))
         .await?;
 
     Ok(json!({ "dispatched": event_type }))
@@ -19954,7 +19967,7 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     mgr.client
         .send_command(
             "Input.dispatchMouseEvent",
-            Some(json!({ "type": "mousePressed", "x": sx, "y": sy, "button": "left", "buttons": 1, "clickCount": 1 })),
+            Some(json!({ "type": "mousePressed", "x": sx, "y": sy, "button": "left", "buttons": 1, "clickCount": 1, "force": 0.5 })),
             Some(&source_session_id),
         )
         .await?;
@@ -19982,7 +19995,7 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
         mgr.client
             .send_command(
                 "Input.dispatchMouseEvent",
-                Some(json!({ "type": "mouseMoved", "x": cx, "y": cy, "button": "left", "buttons": 1 })),
+                Some(json!({ "type": "mouseMoved", "x": cx, "y": cy, "button": "left", "buttons": 1, "force": 0.5 })),
                 Some(&target_session_id),
             )
             .await?;
@@ -19995,7 +20008,7 @@ async fn handle_drag(cmd: &Value, state: &mut DaemonState) -> Result<Value, Stri
     mgr.client
         .send_command(
             "Input.dispatchMouseEvent",
-            Some(json!({ "type": "mouseReleased", "x": tx, "y": ty, "button": "left", "buttons": 0, "clickCount": 1 })),
+            Some(json!({ "type": "mouseReleased", "x": tx, "y": ty, "button": "left", "buttons": 0, "clickCount": 1, "force": 0.0 })),
             Some(&target_session_id),
         )
         .await?;
@@ -20083,15 +20096,15 @@ async fn yidun_mouse(
     buttons: i32,
 ) -> Result<(), String> {
     let click_count = if ev == "mouseMoved" { 0 } else { 1 };
+    let mut params = json!({
+        "type": ev, "x": x, "y": y,
+        "button": "left", "buttons": buttons, "clickCount": click_count
+    });
+    if let Some(force) = mouse_force(ev, buttons) {
+        params["force"] = json!(force);
+    }
     mgr.client
-        .send_command(
-            "Input.dispatchMouseEvent",
-            Some(json!({
-                "type": ev, "x": x, "y": y,
-                "button": "left", "buttons": buttons, "clickCount": click_count
-            })),
-            Some(session_id),
-        )
+        .send_command("Input.dispatchMouseEvent", Some(params), Some(session_id))
         .await?;
     Ok(())
 }
@@ -25462,6 +25475,7 @@ fn build_mouse_event_params(
         delta_x,
         delta_y,
         modifiers,
+        force: mouse_force(event_type, next_buttons),
     }
 }
 
@@ -27438,6 +27452,7 @@ mod tests {
         assert_eq!(move_params.x, 120.0);
         assert_eq!(move_params.y, 240.0);
         assert_eq!(move_params.buttons, Some(0));
+        assert_eq!(move_params.force, None);
 
         let down_params = build_mouse_event_params(
             &mut mouse_state,
@@ -27455,6 +27470,8 @@ mod tests {
         assert_eq!(down_params.y, 240.0);
         assert_eq!(down_params.button.as_deref(), Some("left"));
         assert_eq!(down_params.buttons, Some(1));
+        // A real mouse press reads pointerdown.pressure 0.5, not CDP's 0.
+        assert_eq!(down_params.force, Some(0.5));
         assert_eq!(mouse_state.buttons, 1);
 
         let drag_move_params = build_mouse_event_params(
@@ -27471,6 +27488,7 @@ mod tests {
         );
         assert_eq!(drag_move_params.buttons, Some(1));
         assert_eq!(drag_move_params.button.as_deref(), Some("left"));
+        assert_eq!(drag_move_params.force, Some(0.5));
         assert_eq!(mouse_state.x, 150.0);
         assert_eq!(mouse_state.y, 260.0);
 
@@ -27489,6 +27507,7 @@ mod tests {
         assert_eq!(up_params.x, 150.0);
         assert_eq!(up_params.y, 260.0);
         assert_eq!(up_params.buttons, Some(0));
+        assert_eq!(up_params.force, Some(0.0));
         assert_eq!(mouse_state.buttons, 0);
     }
 

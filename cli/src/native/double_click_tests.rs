@@ -129,6 +129,15 @@ async fn trusted_double_click_sends_two_complete_pairs_to_top_session() {
             ("mouseReleased".into(), 2, 0)
         ]
     );
+    // A held button reads pressure 0.5 like a real mouse; the release reads 0.
+    let forces: Vec<f64> = commands
+        .iter()
+        .filter(|r| {
+            r["method"] == "Input.dispatchMouseEvent" && r["params"]["type"] != "mouseMoved"
+        })
+        .map(|r| r["params"]["force"].as_f64().unwrap())
+        .collect();
+    assert_eq!(forces, vec![0.5, 0.0, 0.5, 0.0]);
 }
 
 #[tokio::test]

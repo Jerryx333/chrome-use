@@ -12436,6 +12436,97 @@ async fn launch_on(port: u16, state: &mut DaemonState) {
     assert_success(&resp);
 }
 
+/// Stealth (F1-F3 of the 2026-10-27 live audit): on a web page `select`
+/// drives a native single `<select>` with trusted type-ahead keys, so the
+/// page's `input`/`change` are `isTrusted`; a press carries pressure 0.5
+/// like a real mouse. Options typing cannot reach fall back to the setter
+/// and say so; `<select multiple>` keeps the setter.
+#[tokio::test]
+#[ignore]
+async fn e2e_select_and_press_are_trusted_input() {
+    let page = r##"<!doctype html><meta charset="utf-8"><title>trust</title>
+<button id="b" style="width:160px;height:40px">b</button>
+<select id="s">
+  <option value="osaka">Osaka</option><option value="tokyo">Tokyo</option>
+  <option value="tokyow">Tokyo West</option><option value="tottori" disabled>Tottori</option>
+  <option value="ny">New York</option><option value="bj">北京</option>
+</select>
+<select id="m" multiple><option value="a">A</option><option value="b">B</option></select>
+<script>
+  window.log = [];
+  const s = document.getElementById('s');
+  for (const t of ['input', 'change']) s.addEventListener(t, e => log.push([t, e.isTrusted, s.value]));
+  window.press = [];
+  addEventListener('pointerdown', e => press.push(e.pressure), true);
+</script>"##
+        .to_string();
+    let (port, server) = spawn_html_server(page).await;
+    let mut state = DaemonState::new();
+    launch_on(port, &mut state).await;
+
+    // Tokyo West from Osaka: the type-ahead cycles "t" twice.
+    let resp = select_values(&mut state, "3", "#s", &["Tokyo West"]).await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], json!("keyboard"));
+    assert!(get_data(&resp).get("warning").is_none());
+    let resp = select_values(&mut state, "4", "#s", &["ny"]).await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], json!("keyboard"));
+    assert_evaluate(
+        &mut state,
+        "5",
+        "(() => ({ value: s.value, untrusted: log.filter(e => !e[1]).length, \
+           last: log[log.length - 1] }))()",
+        json!({ "value": "ny", "untrusted": 0, "last": ["change", true, "ny"] }),
+    )
+    .await;
+
+    // Already selected: nothing is sent and no event fires.
+    let before = log_len(&mut state).await;
+    let resp = select_values(&mut state, "6", "#s", &["New York"]).await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], json!("unchanged"));
+    assert_eq!(log_len(&mut state).await, before);
+
+    // A label typing cannot produce: the setter, reported.
+    let resp = select_values(&mut state, "7", "#s", &["北京"]).await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], json!("setter"));
+    assert!(get_data(&resp)["warning"]
+        .as_str()
+        .is_some_and(|w| w.contains("isTrusted")));
+    assert_evaluate(&mut state, "8", "s.value", json!("bj")).await;
+
+    // <select multiple> keeps the setter, without a warning.
+    let resp = select_values(&mut state, "9", "#m", &["a", "b"]).await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["engine"], json!("setter"));
+    assert!(get_data(&resp).get("warning").is_none());
+
+    // A click presses with pressure 0.5.
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "10", "action": "click", "selector": "#b" }),
+        &mut state,
+    ))
+    .await;
+    assert_success(&resp);
+    assert_evaluate(&mut state, "11", "press", json!([0.5])).await;
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+    server.abort();
+}
+
+async fn log_len(state: &mut DaemonState) -> Value {
+    let resp = Box::pin(execute_command(
+        &json!({ "id": "len", "action": "evaluate", "script": "log.length" }),
+        state,
+    ))
+    .await;
+    assert_success(&resp);
+    get_data(&resp)["result"].clone()
+}
+
 /// `<textarea>`, `<input>` and contenteditable are three different selection
 /// APIs, and the command is only useful if all three land — so all three are
 /// verified from the page's own state, not from the command's own report.

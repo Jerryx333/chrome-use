@@ -129,7 +129,8 @@ async fn deliver(
         }
         for (event_type, buttons) in [("mousePressed", 1), ("mouseReleased", 0)] {
             client.send_command("Input.dispatchMouseEvent", Some(json!({
-                "type":event_type,"x":point.0,"y":point.1,"button":"left","buttons":buttons,"clickCount":count
+                "type":event_type,"x":point.0,"y":point.1,"button":"left","buttons":buttons,"clickCount":count,
+                "force":if buttons == 0 { 0.0 } else { 0.5 }
             })),Some(session_id)).await.map_err(|e| {
                 format!("dblclick interrupted during click {count} of 2: {e}; input may have taken effect, inspect before retrying")
             })?;

@@ -362,6 +362,45 @@ pub fn press_dwell(level: HumanizeLevel, seed: u64) -> Duration {
     }
 }
 
+/// How long a key is held between `keyDown` and `keyUp`. A real key press
+/// lasts tens of milliseconds; back-to-back CDP events give ~2 ms, which
+/// detectors score as injected (`key-press-dwell-duration`). Log-normal, the
+/// shape measured typing dwell has: `Fast` roughly 30–70 ms (median ~46),
+/// `Human` roughly 50–140 ms (median ~84). Zero for `Off`.
+pub fn key_dwell(level: HumanizeLevel, seed: u64) -> Duration {
+    let (median, sigma, lo, hi) = match level {
+        HumanizeLevel::Off => return Duration::ZERO,
+        HumanizeLevel::Fast => (46.0_f64, 0.22, 30.0, 70.0),
+        HumanizeLevel::Human => (84.0_f64, 0.25, 50.0, 140.0),
+    };
+    let mut rng = Rng::new(seed);
+    // Box-Muller: a standard normal from two uniforms. `1 - unit()` is in
+    // (0, 1], so the log is finite.
+    let z = (-2.0 * (1.0 - rng.unit()).ln()).sqrt() * (std::f64::consts::TAU * rng.unit()).cos();
+    let ms = (median * (sigma * z).exp()).clamp(lo, hi);
+    Duration::from_micros((ms * 1000.0) as u64)
+}
+
+/// The pause after a key is released, before the next key goes down, when
+/// the key was held for `dwell` and the cadence asked for `gap` between
+/// presses. The dwell comes out of the gap so typing speed is unchanged
+/// wherever the gap is longer than the dwell. Where it is not (most of
+/// `Fast`'s ~25 ms cadence), the press-to-press time becomes the dwell plus a
+/// small jittered floor: a keyUp and the next keyDown in the same
+/// millisecond is a tell of its own. Zero for `Off` and for a zero gap.
+pub fn flight_after_dwell(
+    gap: Duration,
+    dwell: Duration,
+    level: HumanizeLevel,
+    seed: u64,
+) -> Duration {
+    if level.is_off() || gap.is_zero() {
+        return gap.saturating_sub(dwell);
+    }
+    let floor = Duration::from_millis(4 + seed % 9);
+    gap.saturating_sub(dwell).max(floor)
+}
+
 /// Per-character delays for typing `len` characters. `Off` is all-zero (use a
 /// single `Input.insertText`); `Fast`/`Human` produce variable inter-keystroke
 /// gaps with the occasional longer "think" pause, like a real typist.
@@ -610,5 +649,56 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(detect_level(&s4, HumanizeLevel::Fast), HumanizeLevel::Fast);
+    }
+
+    #[test]
+    fn key_dwell_is_zero_off_and_human_sized_otherwise() {
+        assert_eq!(key_dwell(HumanizeLevel::Off, 7), Duration::ZERO);
+        for (level, lo, hi) in [
+            (HumanizeLevel::Fast, 30.0, 70.0),
+            (HumanizeLevel::Human, 50.0, 140.0),
+        ] {
+            let ms: Vec<f64> = (0..2000u64)
+                .map(|seed| key_dwell(level, seed.wrapping_mul(0x9E37_79B9)).as_secs_f64() * 1000.0)
+                .collect();
+            assert!(
+                ms.iter().all(|&m| (lo..=hi).contains(&m)),
+                "{level:?} out of range"
+            );
+            let mut sorted = ms.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let median = sorted[sorted.len() / 2];
+            assert!(
+                median > lo + 5.0 && median < hi - 10.0,
+                "{level:?} median {median}"
+            );
+            // Spread, not a constant: a fixed dwell is as much a tell as 2 ms.
+            assert!(sorted[sorted.len() * 9 / 10] - sorted[sorted.len() / 10] > 10.0);
+            // Seeded: the same seed gives the same dwell.
+            assert_eq!(key_dwell(level, 99), key_dwell(level, 99));
+        }
+    }
+
+    #[test]
+    fn flight_after_dwell_keeps_the_cadence() {
+        let ms = Duration::from_millis;
+        // A gap longer than the dwell: the press-to-press time is unchanged.
+        assert_eq!(
+            flight_after_dwell(ms(120), ms(80), HumanizeLevel::Human, 1),
+            ms(40)
+        );
+        // A gap shorter than the dwell never puts keyUp and the next keyDown
+        // in the same millisecond.
+        let f = flight_after_dwell(ms(20), ms(50), HumanizeLevel::Fast, 3);
+        assert!(f >= ms(4) && f <= ms(12), "{f:?}");
+        // Off has no dwell and keeps an explicit delay as is.
+        assert_eq!(
+            flight_after_dwell(ms(30), Duration::ZERO, HumanizeLevel::Off, 1),
+            ms(30)
+        );
+        assert_eq!(
+            flight_after_dwell(Duration::ZERO, Duration::ZERO, HumanizeLevel::Off, 1),
+            Duration::ZERO
+        );
     }
 }
