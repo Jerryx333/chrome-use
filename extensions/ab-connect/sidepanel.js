@@ -1,4 +1,5 @@
 import { missingHostHint } from './native-host-hint.js';
+import { createPanelOnboarding } from './onboarding.js';
 import { PanelTimeline, phaseLabels, assessmentLabel, outcomeLabel, stepVerdict, verdictLabels, stepActions, actingPages, notStarted } from './panel-state.js';
 import { heifConverter, isHeif, prepareImage } from './image-attachment.js';
 import { renderMarkdown } from './markdown.js';
@@ -248,6 +249,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     return reply.result;
   }
   const convertHeif = heifConverter(api);
+  const onboarding = createPanelOnboarding({ document, t, chrome: { runtime, tabs, downloads: globalThis.chrome?.downloads }, storage, hostBox: document.getElementById?.('onboardHost'), agentBox: document.getElementById?.('onboardAgents'), api, schedule, cancel });
   // Version banners: what needs doing about the CLI or this extension. The
   // "updated to X" note stays in the popup; the panel keeps to actionable ones.
   function renderVersions(state) {
@@ -265,7 +267,10 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     nodes.connection.classList.toggle('disconnected', !connected);
     nodes.connection.classList.toggle('ok', connected && panelSupport?.mode === 'full');
     nodes.connection.textContent = connected ? t('panel_connection_connected') : state?.connectionState === 'connecting' ? t('panel_connection_waiting') : state?.connectionError || t('panel_connection_unavailable');
-    const hostHint = !connected && state?.connectionState !== 'connecting' ? missingHostHint(state?.connectionError) : null;
+    // First-run setup (onboarding.js) replaces the one-line missing-host hint.
+    const setupActive = onboarding.update(state, panelSupport);
+    if (setupActive) nodes.connection.textContent = t('panel_onboard_status_missing');
+    const hostHint = !setupActive && !connected && state?.connectionState !== 'connecting' ? missingHostHint(state?.connectionError) : null;
     nodes.hostHint.hidden = !hostHint;
     nodes.hostHint.replaceChildren();
     if (hostHint) {
@@ -2097,7 +2102,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
       await refresh();
       projectChoice.setAgent(nodes.agent.value); refreshProjects();
     } catch (failure) { error(failure); }
-  }, refresh, select, send, togglePick, timeline: () => timeline, close() { closed = true; try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
+  }, refresh, select, send, togglePick, timeline: () => timeline, close() { closed = true; onboarding.close(); try { presencePort?.disconnect(); } catch {} cancel(replyTimer); clearTurnView(); modelEpoch++; discoverEpoch++; skillsEpoch++; schedulesEpoch++; cancel(timer); selectionEpoch++; configEpoch++; connectionEpoch++; } };
 }
 
 // The English fallback loads first, so the first render has no raw keys.

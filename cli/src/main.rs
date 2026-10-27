@@ -20,6 +20,7 @@ mod findurl;
 mod flags;
 mod friction;
 mod group_lifecycle;
+mod gui_setup;
 mod install;
 mod jev;
 #[cfg(target_os = "macos")]
@@ -2130,6 +2131,16 @@ fn main() {
             exit(1);
         }
         return;
+    }
+
+    // ChromeUse.app opened from Finder (the disk image the extension's setup
+    // guide downloads): install and register the native host, then say so in
+    // a dialog. Narrowly detected; see gui_setup::is_finder_launch.
+    if gui_setup::finder_launch_now() {
+        exit(gui_setup::run(&[], true));
+    }
+    if nm_arg1.as_deref() == Some("__gui-setup") {
+        exit(gui_setup::run_cli(&env::args().skip(2).collect::<Vec<_>>()));
     }
 
     // Hidden update-check worker, spawned detached by maybe_notify_update() to

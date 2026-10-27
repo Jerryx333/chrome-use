@@ -1413,12 +1413,14 @@ test('the empty state says the agent works in this tab, or in its own window whe
 test('missing-host guidance appears below the error and clears for other failures', async () => {
   const original = 'Specified native messaging host not found.';
   const f = await fixture({ status: () => ({ connected: false, connectionError: original }) });
-  assert.equal(f.nodes.get('connection').textContent, original);
-  assert.equal(f.nodes.get('hostHint').hidden, false);
-  assert.equal(f.nodes.get('hostHint').children[0].textContent, en.popup_hint_install_host.message);
-  assert.equal(f.nodes.get('hostHint').children[1].textContent, 'chrome-use extension install');
-  assert.equal(f.nodes.get('hostHint').children[2].textContent, en.panel_copy_command.message);
+  // No CLI at all: the setup guide (onboarding.js) replaces the one-line hint
+  // and the panel asks the worker to retry while it shows.
+  assert.equal(f.nodes.get('connection').textContent, en.panel_onboard_status_missing.message);
+  assert.equal(f.nodes.get('onboardHost').hidden, false);
+  assert.equal(f.nodes.get('hostHint').hidden, true);
   f.hostUpdate({ connected: false, connectionError: 'Access denied' });
+  assert.equal(f.nodes.get('connection').textContent, 'Access denied');
+  assert.equal(f.nodes.get('onboardHost').hidden, true);
   assert.equal(f.nodes.get('hostHint').hidden, true);
   assert.equal(f.nodes.get('hostHint').children.length, 0);
   f.panel.close();

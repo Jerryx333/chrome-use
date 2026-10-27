@@ -73,6 +73,22 @@
 
       <!-- ============ 1. INSTALL CLI ============ -->
       <p>The extension icon opens a local agent side panel. On macOS, Linux and Windows it supports Codex, Claude Code, OpenCode and Pi, with a current-page tag, CLI model menus, agent-specific permissions and conversation deletion. Upgrade older Windows hosts for full panel capabilities; no administrator access is required. See <a href="/en/agent-panel.html">Local agent side panel</a> for controls and privacy.</p>
+      <h2 id="from-the-extension">Started from the Chrome Web Store? Set up from the side panel</h2>
+      <p>
+        If you added the extension first, click its toolbar icon. With no CLI on the computer yet, the side panel (and the popup) shows a setup guide instead of an error, and checks every few seconds whether the CLI has appeared, so it carries on by itself without a reload.
+      </p>
+      <ul>
+        <li><strong>macOS:</strong> press <em>Download for Mac</em>. It fetches <code>chrome-use-darwin-arm64.dmg</code> or <code>chrome-use-darwin-x64.dmg</code> (picked from your Mac's CPU) from the latest GitHub Release. Open it from Chrome's download bar, double-click <strong>ChromeUse</strong> and choose <em>Open</em> when macOS asks about an app downloaded from the internet. The app is signed with a Developer ID and notarized. It installs itself exactly where <code>install.sh</code> would (<code>~/.local/share/chrome-use/ChromeUse.app</code>, with <code>~/.local/bin/chrome-use</code> linked to it, or <code>/usr/local</code> when that is writable), registers the native-messaging host with <code>extension install --no-profile</code> (no configuration profile, so Chrome does not become "managed"), installs the agent skill, and confirms in a dialog. No terminal and no administrator password. A newer CLI that is already installed is kept. The log is <code>~/.chrome-use/gui-setup.log</code>.</li>
+        <li><strong>Windows:</strong> there is no signed installer. The guide shows the PowerShell line below with a copy button: open PowerShell, paste, press Enter.</li>
+        <li><strong>Linux:</strong> the guide shows the <code>install.sh</code> line with a copy button.</li>
+      </ul>
+      <p>
+        Once the CLI answers, the panel checks the coding agents it can chat with (Codex, Claude Code, OpenCode, Pi) and says what each one needs: <em>Ready</em>, <em>Signed out</em> with the sign-in command to run once in a terminal (<code>codex login</code>, <code>claude</code>, <code>opencode auth login</code>, <code>pi</code>), or <em>Not installed</em> with a link to that agent's install page. It checks again when you come back to the panel. With an agent ready, type a request in the panel. Everything in the guide runs in the extension's own pages; nothing is added to the web pages you visit, with stealth mode on or off.
+      </p>
+      <p>
+        <code>~/.local/bin</code> may not be on your shell's <code>PATH</code>. The panel does not need it (the host manifest names the full path); to run <code>chrome-use</code> in a terminal, add <code>export PATH="$HOME/.local/bin:$PATH"</code> to your shell profile.
+      </p>
+
       <h2>Install the CLI in one line</h2>
       <p>
         Download the prebuilt binary for your platform from the latest

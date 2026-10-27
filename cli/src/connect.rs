@@ -1222,8 +1222,12 @@ fn install_user_data_dirs(args: &[String]) -> Result<InstallUserDataDirs, String
         let home = dirs::home_dir();
         let explicit = explicit_user_data_dirs(args, home.as_deref())?;
         let mut result = Vec::new();
-        match std::process::Command::new("ps").args(["-axww", "-o", "uid=,command="]).output() {
-            Ok(output) if output.status.success() => {
+        // Scripted installs into a private HOME (the acceptance rigs) must not
+        // rewrite the host manifests of other running browsers.
+        let scan = std::env::var_os("CHROME_USE_NO_BROWSER_SCAN").is_none();
+        match scan.then(|| std::process::Command::new("ps").args(["-axww", "-o", "uid=,command="]).output()) {
+            None => {}
+            Some(Ok(output)) if output.status.success() => {
                 for path in custom_user_data_dirs(&String::from_utf8_lossy(&output.stdout), unsafe { libc::getuid() }, home.as_deref()) {
                     // Discovery is best-effort: a browser that quit since the scan
                     // must not fail the install for the default directories.
@@ -1234,7 +1238,7 @@ fn install_user_data_dirs(args: &[String]) -> Result<InstallUserDataDirs, String
                     }
                 }
             }
-            _ => eprintln!("Warning: could not scan running browsers; use extension install --user-data-dir <path> for custom Chrome data directories."),
+            Some(_) => eprintln!("Warning: could not scan running browsers; use extension install --user-data-dir <path> for custom Chrome data directories."),
         }
         result.sort();
         result.dedup();

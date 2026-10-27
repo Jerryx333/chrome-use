@@ -7,6 +7,7 @@ import { missingHostHint } from './native-host-hint.js'
 import { versionNotices } from './version-notice.js'
 import { renderVersionNotices } from './version-banner.js'
 import { SITE_ACCESS, hasSiteAccess } from './site-access.js'
+import { HostSetupTracker, HOST_POLL_MS, hostSetupPlan, renderHostSetup, readArchitecture, currentPlatform } from './onboarding.js'
 
 applyI18n(document)
 
@@ -20,6 +21,37 @@ const hintCommand = document.getElementById('hintCommand')
 
 let resolved = false
 let statusEpoch = 0
+
+// First-run setup: the CLI is not installed (onboarding.js). The guide stays
+// while the worker retries; the popup polls so it flips as soon as the
+// installer has registered the host.
+const setupTracker = new HostSetupTracker()
+const setupBox = document.getElementById('setup')
+const setupDone = document.getElementById('setupDone')
+let setupRendered = false
+let setupPoll = null
+
+function renderSetup(state) {
+  const active = setupTracker.update(state)
+  setupBox.hidden = !active
+  setupDone.hidden = !(setupTracker.completed && state?.connected)
+  if (active && !setupRendered) {
+    setupRendered = true
+    readArchitecture().then(architecture => {
+      renderHostSetup(setupBox, hostSetupPlan({ platform: currentPlatform(), architecture }), { document, t, chrome: globalThis.chrome })
+    })
+  }
+  if (active && !setupPoll && globalThis.chrome?.runtime?.sendMessage) {
+    setupPoll = setInterval(() => {
+      chrome.runtime.sendMessage({ type: 'ab-host-retry' }).catch(() => {})
+    }, HOST_POLL_MS)
+  } else if (!active && setupPoll) {
+    clearInterval(setupPoll)
+    setupPoll = null
+  }
+  return active
+}
+
 
 // CLI / extension version banners. Shown whatever the connection state: a
 // pending extension update matters even while the CLI is not paired.
@@ -42,6 +74,7 @@ async function versionAction(action) {
 function render(state) {
   resolved = true
   renderVersions(state)
+  const setupActive = renderSetup(state)
   const connected = !!(state && state.connected)
   dot.classList.remove('on', 'off')
   if (connected) {
@@ -56,22 +89,23 @@ function render(state) {
       tabPill.classList.add('hidden')
     }
     hint.style.display = 'none'
-  } else if (state?.connectionState === 'connecting') {
+  } else if (state?.connectionState === 'connecting' && !setupActive) {
     label.textContent = t('popup_status_connecting')
     sub.textContent = t('popup_status_connecting_detail')
     tabPill.classList.add('hidden')
     hint.style.display = 'none'
   } else {
     dot.classList.add('off')
-    label.textContent = t('popup_status_not_paired')
-    sub.textContent = state?.connectionError || t('popup_status_not_paired_detail')
+    label.textContent = setupActive ? t('panel_onboard_status_missing') : t('popup_status_not_paired')
+    sub.textContent = setupActive ? t('panel_onboard_status_missing_detail') : state?.connectionError || t('popup_status_not_paired_detail')
     tabPill.classList.add('hidden')
     if (state?.standalone) {
       hint.style.display = 'none'
       hintCommand.textContent = ''
       return
     }
-    hint.style.display = 'block'
+    // The setup guide replaces the one-line hint.
+    hint.style.display = setupActive ? 'none' : 'block'
     const missingHost = missingHostHint(state?.connectionError)
     hintText.textContent = missingHost
       ? t('popup_hint_install_host')

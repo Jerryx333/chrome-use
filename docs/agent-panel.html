@@ -66,6 +66,8 @@
       <p class="du-lede">在 Chrome 侧栏里写下任务，让本机 agent 使用已登录的浏览器完成操作。扩展沿用你安装的 CLI 和它配置的模型服务。</p>
       <p><img src="/assets/side-panel.webp" alt="agent 对比页面上的套餐，并用表格给出结果" style="max-width:100%;height:auto;border-radius:12px" /></p>
       <p>先<a href="/install.html">安装 chrome-use</a>，运行 <code>chrome-use extension install</code> 注册原生宿主，再<a href="/real-chrome.html">安装 Chrome 扩展</a>。本机至少安装并登录一个受支持的 agent CLI，然后打开侧栏。</p>
+      <h2 id="first-run">从 Chrome 应用商店开始的第一次使用</h2>
+      <p>先装了扩展、还没装 CLI？照样打开侧栏。它显示安装向导而不是报错：在 Mac 上，「下载 Mac 版」会下载签名并经过 Apple 公证的磁盘映像，打开后双击 <strong>ChromeUse</strong>，它会为当前用户装好 CLI 并注册原生宿主，不用终端，也不用密码。Windows 和 Linux 上，向导显示安装命令和复制按钮。侧栏每隔几秒重试一次，CLI 一响应就自己接着往下走。接下来它列出 Codex、Claude Code、OpenCode 和 Pi 各自还差什么：「可用」；「未登录」并给出在终端里跑一次的登录命令；或「未安装」并给出链接。回到侧栏时会再查一次；点「隐藏」后不再显示。向导只在扩展页面里运行，不往网页里加任何东西。详见<a href="/install.html#from-the-extension">安装</a>。</p>
       <h2 id="start">开始对话</h2>
       <p>点击扩展图标打开侧栏，<strong>Settings</strong> 打开连接设置。macOS、Linux 和 Windows 可选择 Codex、Claude Code、OpenCode 或 Pi，沿用已安装 CLI 的登录。主机会报告支持哪些 agent，旧主机可能需要升级。Windows 同样支持技能、图片、会话参数、定时任务及配置应用和恢复。停止、删除或更改参数会确认整个 agent 进程树退出；私有数据通过 Windows ACL 限制为当前用户和 SYSTEM 访问，不需要管理员权限。Codex 走 app-server，Claude Code 走 stream-json，OpenCode 走 ACP，Pi 走 JSONL RPC。</p>
       <h2 id="pages-models">页面与模型</h2>
