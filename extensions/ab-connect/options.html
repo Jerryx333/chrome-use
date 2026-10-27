@@ -238,6 +238,69 @@
   </section>
 
 
+  <!-- Permissions & safety (#781). Kept in its own block with its own script
+       and stylesheet (options-permissions.*). -->
+  <link rel="stylesheet" href="options-permissions.css" />
+  <section class="card perms" id="permissions">
+    <h2 data-i18n="options_perm_heading">Permissions &amp; safety</h2>
+    <p class="lead" data-i18n="options_perm_lead">What an agent may do on which site before it asks you. The CLI checks these before every action; nothing is added to the pages.</p>
+    <p class="hint perm-managed" id="permManaged" hidden data-i18n="options_perm_managed_notice">Some of these settings are managed by your organization and cannot be changed here.</p>
+    <div id="permPending" class="perm-pending" hidden></div>
+    <div class="row">
+      <div class="grow">
+        <div class="name"><span data-i18n="options_perm_sensitive_name">Ask first on sensitive sites</span> <span class="perm-lock" id="permSensitiveLock" hidden data-i18n="options_perm_locked">Managed</span></div>
+        <div class="hint" data-i18n="options_perm_sensitive_hint">Banking, brokerage, crypto exchange and government ID sites from the list chrome-use ships. Every action there waits for you until you allow the site.</div>
+      </div>
+      <label class="toggle"><input type="checkbox" id="permSensitive" /><span class="track"></span><span class="knob"></span></label>
+    </div>
+    <div class="row">
+      <div class="grow">
+        <div class="name"><span data-i18n="options_perm_ask_name">Always ask before</span> <span class="perm-lock" id="permAskLock" hidden data-i18n="options_perm_locked">Managed</span></div>
+        <div class="hint" data-i18n="options_perm_ask_hint">On every site, even ones you always allow.</div>
+        <div class="perm-checks" id="permAsk"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="grow">
+        <div class="name"><span data-i18n="options_perm_first_name">Ask the first time on a new site</span> <span class="perm-lock" id="permFirstLock" hidden data-i18n="options_perm_locked">Managed</span></div>
+        <div class="hint" data-i18n="options_perm_first_hint">Off by default. What an agent may not do on a site you have not decided on yet.</div>
+        <div class="perm-checks" id="permFirst"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="grow">
+        <div class="name" data-i18n="options_perm_allowed_name">Approved sites</div>
+        <div class="hint" data-i18n="options_perm_allowed_hint">Sites you chose "Always allow on this site" for. A site covers its subdomains.</div>
+        <ul class="perm-list" id="permAllowList"></ul>
+        <div class="scope-editor"><input id="permAllowInput" placeholder="example.com" aria-label="Add an approved site" data-i18n-aria-label="options_perm_add_allowed" /><button class="btn ghost" id="permAllowAdd" type="button" data-i18n="options_perm_add">Add</button></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="grow">
+        <div class="name" data-i18n="options_perm_blocked_name">Blocked sites</div>
+        <div class="hint" data-i18n="options_perm_blocked_hint">An agent may not act on these at all.</div>
+        <ul class="perm-list" id="permBlockList"></ul>
+        <div class="scope-editor"><input id="permBlockInput" placeholder="example.com" aria-label="Add a blocked site" data-i18n-aria-label="options_perm_add_blocked" /><button class="btn ghost" id="permBlockAdd" type="button" data-i18n="options_perm_add">Add</button></div>
+        <div class="hint" id="permEditStatus" role="status"></div>
+      </div>
+    </div>
+    <div class="row" id="permManagedRow" hidden>
+      <div class="grow">
+        <div class="name" data-i18n="options_perm_managed_name">Set by your organization</div>
+        <ul class="perm-list" id="permManagedList"></ul>
+      </div>
+    </div>
+    <div class="row">
+      <div class="grow">
+        <div class="name" data-i18n="options_perm_history_name">Permission history</div>
+        <div class="hint" data-i18n="options_perm_history_hint">Your answers and list changes, newest first (the last 200).</div>
+        <ul class="perm-list perm-history" id="permHistory"></ul>
+        <button class="btn ghost" id="permHistoryClear" type="button" data-i18n="options_perm_history_clear">Clear history</button>
+      </div>
+    </div>
+  </section>
+  <script type="module" src="options-permissions.js"></script>
+
   <footer>
     <span class="privacy" data-i18n="options_privacy">Runs locally · no tracking · no cloud</span>
     <span style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">

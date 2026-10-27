@@ -4756,20 +4756,36 @@ fn main() {
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
 
+                        // A per-site gate (#781) names its site and can be
+                        // allowed for good: "always" lands in the extension's
+                        // approved-sites list.
+                        let site = data.get("site").and_then(|v| v.as_str()).unwrap_or("");
                         eprintln!("[chrome-use] Action requires confirmation:");
                         eprintln!("  {}: {}", category, desc);
-                        eprint!("  Allow? [y/N]: ");
+                        if site.is_empty() {
+                            eprint!("  Allow? [y/N]: ");
+                        } else {
+                            eprintln!("  Site: {}", site);
+                            eprint!("  Allow? [y]es once / [a]lways on this site / [N]o: ");
+                        }
 
                         let mut input = String::new();
-                        let approved = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                            std::io::stdin().read_line(&mut input).is_ok()
-                                && matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+                        let answer = if std::io::IsTerminal::is_terminal(&std::io::stdin())
+                            && std::io::stdin().read_line(&mut input).is_ok()
+                        {
+                            input.trim().to_lowercase()
                         } else {
-                            false
+                            String::new()
                         };
+                        let always = !site.is_empty() && matches!(answer.as_str(), "a" | "always");
+                        let approved = always || matches!(answer.as_str(), "y" | "yes");
 
                         let confirm_cmd = if approved {
-                            json!({ "id": gen_id(), "action": "confirm", "confirmationId": cid })
+                            let mut c = json!({ "id": gen_id(), "action": "confirm", "confirmationId": cid });
+                            if !site.is_empty() {
+                                c["userDecision"] = json!(if always { "always" } else { "once" });
+                            }
+                            c
                         } else {
                             json!({ "id": gen_id(), "action": "deny", "confirmationId": cid })
                         };
@@ -4844,6 +4860,12 @@ fn main() {
             }
             if !success {
                 exit(1);
+            }
+            // A per-site gate (#781) did not run the action: exit non-zero so
+            // `a && b` chains stop here instead of acting on a page the first
+            // command never reached.
+            if awaiting_confirmation && resp.data.as_ref().and_then(|d| d.get("site")).is_some() {
+                exit(3);
             }
             // Only now, and only on a navigation that actually ran: a rule
             // saying "this site belongs to that profile" is worth nothing if the

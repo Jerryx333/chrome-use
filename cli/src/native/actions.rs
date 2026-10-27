@@ -99,6 +99,28 @@ const TAB_INSPECT_MIN_EXTENSION_VERSION: &str = "0.5.16";
 pub struct PendingConfirmation {
     pub action: String,
     pub cmd: Value,
+    /// Set when the per-site gate (#781) raised it, not the action policy.
+    pub site: Option<SitePending>,
+}
+
+/// A site-gated action waiting for a person (#781).
+pub struct SitePending {
+    pub id: String,
+    pub host: String,
+    pub category: String,
+    pub reason: String,
+    /// The extension holds the request and only its UI (or a terminal
+    /// prompt) may approve it; `chrome-use confirm` alone cannot.
+    pub user_approval: bool,
+}
+
+/// The extension's answer to `ABExt.sitePolicy`, kept briefly so a run of
+/// clicks costs one relay round trip, not one each. `None` inside: the
+/// extension predates per-site permissions.
+pub struct SitePolicyCache {
+    pub at: std::time::Instant,
+    pub on_relay: bool,
+    pub extension: Option<super::site_policy::ExtensionSitePolicy>,
 }
 
 /// Captured request/response metadata used to export HAR 1.2 files.
@@ -540,6 +562,14 @@ pub struct DaemonState {
     pub screencasting: bool,
     pub policy: Option<ActionPolicy>,
     pub pending_confirmation: Option<PendingConfirmation>,
+    /// Per-site permissions (#781): the extension's layers, cached briefly.
+    pub site_policy_cache: Option<SitePolicyCache>,
+    /// Sites a terminal prompt allowed "always" when no extension could keep
+    /// the decision; they last as long as this daemon.
+    pub site_session_allow: Vec<String>,
+    /// Set while `confirm` runs the approved command, so its gates do not
+    /// ask again.
+    pub gates_bypassed: bool,
     pub har_recording: bool,
     pub har_entries: Vec<HarEntry>,
     pub confirm_actions: Option<ConfirmActions>,
@@ -708,6 +738,9 @@ impl DaemonState {
             screencasting: false,
             policy: ActionPolicy::load_if_exists(),
             pending_confirmation: None,
+            site_policy_cache: None,
+            site_session_allow: Vec::new(),
+            gates_bypassed: false,
             har_recording: false,
             har_entries: Vec::new(),
             confirm_actions: ConfirmActions::from_env(),
@@ -2016,11 +2049,12 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     state.pending_confirmation = Some(PendingConfirmation {
                         action: (*gated_action).to_string(),
                         cmd: cmd.clone(),
+                        site: None,
                     });
                     return json!({
                         "id": id,
                         "success": true,
-                        "data": { "confirmation_required": true, "action": gated_action },
+                        "data": { "confirmation_required": true, "confirmation_id": id, "action": gated_action },
                     });
                 }
             }
@@ -2035,6 +2069,7 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     state.pending_confirmation = Some(PendingConfirmation {
                         action: (*gated_action).to_string(),
                         cmd: cmd.clone(),
+                        site: None,
                     });
                     return json!({
                         "id": id,
@@ -2047,6 +2082,13 @@ async fn execute_command_inner(cmd: &Value, state: &mut DaemonState) -> Value {
                     });
                 }
             }
+        }
+    }
+
+    // Per-site permissions and the managed action policy (#781).
+    if action != "confirm" && action != "deny" && !state.gates_bypassed {
+        if let Some(response) = site_gate(cmd, action, &id, state).await {
+            return response;
         }
     }
 
@@ -25344,29 +25386,440 @@ async fn verify_auth_fields(
 // Confirmation handlers (stub)
 // ---------------------------------------------------------------------------
 
-async fn handle_confirm(_cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
-    let pending = state
-        .pending_confirmation
-        .take()
-        .ok_or("No pending confirmation")?;
+async fn handle_confirm(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let pending = take_pending_confirmation(cmd, state)?;
+
+    if let Some(site) = pending.site.as_ref() {
+        // A decision typed at the terminal prompt (`--confirm-interactive`):
+        // only the CLI's own TTY branch sets `userDecision`.
+        let typed = cmd.get("userDecision").and_then(|v| v.as_str());
+        let decision = match typed {
+            Some(d) => d.to_string(),
+            None if site.user_approval => match wait_for_site_decision(state, &site.id).await {
+                Some(d) => d,
+                None => {
+                    let message = format!(
+                        "Still waiting for your decision on {} in chrome-use (side panel, notification or the options page). Run `chrome-use confirm {}` again once you have chosen, or `chrome-use deny {}`.",
+                        site.host, site.id, site.id
+                    );
+                    state.pending_confirmation = Some(pending);
+                    return Err(message);
+                }
+            },
+            // No extension could hold the request (`--launch`, `--cdp`, an
+            // older extension): the operator's `confirm` approves, as for
+            // `--confirm-actions`.
+            None => "once".to_string(),
+        };
+        match decision.as_str() {
+            "once" | "always" => {}
+            _ => {
+                state.site_policy_cache = None;
+                return Ok(json!({
+                    "denied": true,
+                    "action": pending.action,
+                    "site": site.host,
+                    "reason": "declined",
+                }));
+            }
+        }
+        if decision == "always" && typed.is_some() {
+            record_site_decision(state, site, "always").await;
+        }
+    }
 
     // Temporarily remove policy and confirm_actions to avoid re-triggering confirmation
     let policy = state.policy.take();
     let confirm_actions = state.confirm_actions.take();
+    state.gates_bypassed = true;
     let result = Box::pin(execute_command(&pending.cmd, state)).await;
+    state.gates_bypassed = false;
     state.policy = policy;
     state.confirm_actions = confirm_actions;
+    state.site_policy_cache = None;
 
-    Ok(json!({ "confirmed": true, "action": pending.action, "result": result }))
+    let mut out = json!({ "confirmed": true, "action": pending.action, "result": result });
+    if let Some(site) = pending.site {
+        out["site"] = json!(site.host);
+    }
+    Ok(out)
 }
 
-async fn handle_deny(_cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+async fn handle_deny(cmd: &Value, state: &mut DaemonState) -> Result<Value, String> {
+    let pending = take_pending_confirmation(cmd, state)?;
+    if let Some(site) = pending.site.as_ref() {
+        if site.user_approval {
+            record_site_decision(state, site, "cancel").await;
+        }
+    }
+
+    Ok(json!({ "denied": true, "action": pending.action }))
+}
+
+/// The pending confirmation `confirm` / `deny` answers. When the caller names
+/// one, it has to be the one pending: answering a different action than the
+/// one the caller read about would approve something nobody looked at.
+fn take_pending_confirmation(
+    cmd: &Value,
+    state: &mut DaemonState,
+) -> Result<PendingConfirmation, String> {
     let pending = state
         .pending_confirmation
         .take()
         .ok_or("No pending confirmation")?;
+    let asked = cmd
+        .get("confirmationId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    if let Some(asked) = asked {
+        let current = pending.site.as_ref().map(|s| s.id.clone()).or_else(|| {
+            pending
+                .cmd
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
+        if current.as_deref() != Some(asked) {
+            let current = current.unwrap_or_default();
+            state.pending_confirmation = Some(pending);
+            return Err(format!(
+                "No pending confirmation '{asked}' (the pending one is '{current}')"
+            ));
+        }
+    }
+    Ok(pending)
+}
 
-    Ok(json!({ "denied": true, "action": pending.action }))
+// ---------------------------------------------------------------------------
+// Per-site permissions (#781)
+// ---------------------------------------------------------------------------
+
+/// How long the extension's site layers are reused before asking again.
+const SITE_POLICY_TTL: Duration = Duration::from_secs(2);
+/// How long `confirm` waits for the person's choice. Stays under the client's
+/// per-read budget so the reply is never cut off.
+const SITE_APPROVAL_WAIT: Duration = Duration::from_secs(40);
+
+/// Actions the gate never looks at: session plumbing, not page work.
+fn site_gate_skips(action: &str) -> bool {
+    matches!(
+        action,
+        "launch"
+            | "close"
+            | "confirm"
+            | "deny"
+            | "keep"
+            | "done"
+            | "upgrade_handoff"
+            | "stream_enable"
+            | "stream_disable"
+            | "stream_status"
+            | "stealth_status"
+            | "extension_state"
+    )
+}
+
+/// Whether this session drives the user's Chrome through the extension, and
+/// the extension's site layers when it has them.
+async fn site_policy_layers(
+    state: &mut DaemonState,
+) -> (bool, Option<super::site_policy::ExtensionSitePolicy>) {
+    if let Some(cache) = state
+        .site_policy_cache
+        .as_ref()
+        .filter(|c| c.at.elapsed() < SITE_POLICY_TTL)
+    {
+        return (cache.on_relay, cache.extension.clone());
+    }
+    let Some(mgr) = state.browser.as_ref() else {
+        return (false, None);
+    };
+    let on_relay = mgr.on_relay();
+    let mut extension = None;
+    if on_relay
+        && relay_capabilities(mgr)
+            .await
+            .iter()
+            .any(|c| c == "sitePolicy")
+    {
+        if let Ok(reply) = mgr
+            .client
+            .send_command_no_params("ABExt.sitePolicy", None)
+            .await
+        {
+            extension = serde_json::from_value(reply).ok();
+        }
+    }
+    state.site_policy_cache = Some(SitePolicyCache {
+        at: std::time::Instant::now(),
+        on_relay,
+        extension: extension.clone(),
+    });
+    (on_relay, extension)
+}
+
+/// `download`, `sensitive_input` or `purchase` for the actions that always
+/// deserve a look. Reads only what the daemon already holds (the ref map, the
+/// command) plus, for a typed-into ref, `DOM.describeNode` (a CDP read that
+/// runs nothing in the page).
+async fn site_gate_kind(
+    action: &str,
+    category: &str,
+    cmd: &Value,
+    state: &DaemonState,
+) -> Option<&'static str> {
+    use super::site_policy::is_purchase_name;
+    if category == "download" {
+        return Some("download");
+    }
+    let selector = cmd.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+    let entry = super::element::parse_ref(selector).and_then(|r| state.ref_map.get(&r).cloned());
+    match category {
+        "typing" => {
+            if action == "form_fill" {
+                let fields = cmd.get("map").map(|m| m.to_string()).unwrap_or_default();
+                return super::sensitive::sensitive_reference(&fields).then_some("sensitive_input");
+            }
+            // `fill --from-env`: the value is a secret by declaration.
+            if cmd.get("secret").and_then(|v| v.as_bool()) == Some(true) {
+                return Some("sensitive_input");
+            }
+            if super::sensitive::sensitive_reference(selector) {
+                return Some("sensitive_input");
+            }
+            let entry = entry?;
+            if super::sensitive::sensitive_by_name(&entry.name) {
+                return Some("sensitive_input");
+            }
+            let backend = entry.backend_node_id?;
+            let mgr = state.browser.as_ref()?;
+            let session = mgr.active_session_id().ok()?.to_string();
+            let described = mgr
+                .client
+                .send_command(
+                    "DOM.describeNode",
+                    Some(json!({ "backendNodeId": backend })),
+                    Some(&session),
+                )
+                .await
+                .ok()?;
+            let attrs: Vec<String> = described
+                .pointer("/node/attributes")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            super::sensitive::sensitive_by_attributes(&attrs).then_some("sensitive_input")
+        }
+        "click" => {
+            let name = match entry {
+                Some(e) => e.name,
+                None => selector
+                    .trim()
+                    .strip_prefix("text=")
+                    .unwrap_or(selector)
+                    .trim_matches('"')
+                    .to_string(),
+            };
+            is_purchase_name(&name).then_some("purchase")
+        }
+        _ => None,
+    }
+}
+
+/// Run the per-site gate and the managed action policy for one command.
+/// `None` lets it run; `Some` is the reply instead (a refusal, or a pending
+/// approval).
+async fn site_gate(cmd: &Value, action: &str, id: &str, state: &mut DaemonState) -> Option<Value> {
+    use super::site_policy::{self as sp, SiteGate, SitePolicy};
+    if site_gate_skips(action) || state.browser.is_none() {
+        return None;
+    }
+    let category = sp::category_of(action, cmd);
+    let file = state.policy.as_ref().and_then(|p| p.sites()).cloned();
+    // Nothing to check without a relay, a policy file `sites` block, or a
+    // categorised action: skip the round trips entirely.
+    let on_relay = state.browser.as_ref().is_some_and(|m| m.on_relay());
+    if !on_relay && file.is_none() {
+        return None;
+    }
+    let (on_relay, extension) = site_policy_layers(state).await;
+    let extension_holds_requests = extension.is_some();
+    let (user, managed) = extension.map(|e| (e.user, e.managed)).unwrap_or_default();
+    let policy = SitePolicy {
+        managed,
+        user,
+        file: file.unwrap_or_default(),
+        defaults: on_relay,
+        session_allow: state.site_session_allow.clone(),
+    };
+    let current_host = || {
+        state
+            .browser
+            .as_ref()
+            .and_then(|m| sp::host_of(&m.cached_active_url()))
+    };
+
+    let mut ask: Option<(String, &'static str, String, String)> = None;
+    if let Some(value) = policy.managed.action_policy.as_ref() {
+        if let Ok(managed) = ActionPolicy::from_value(value) {
+            match managed.check(action) {
+                PolicyResult::Allow => {}
+                PolicyResult::Deny(reason) => {
+                    return Some(error_response(
+                        id,
+                        &format!(
+                            "Action '{action}' denied by your organization's chrome-use policy: {reason}"
+                        ),
+                    ));
+                }
+                PolicyResult::RequiresConfirmation => {
+                    let host = sp::target_url(action, cmd)
+                        .and_then(|u| sp::host_of(&u))
+                        .or_else(current_host)
+                        .unwrap_or_default();
+                    ask = Some((
+                        host,
+                        "managed_action",
+                        format!("your organization asks for approval before '{action}'"),
+                        category.unwrap_or(action).to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    if ask.is_none() {
+        let category = category?;
+        if policy.is_inert() {
+            return None;
+        }
+        let host = match sp::target_url(action, cmd) {
+            Some(url) => sp::host_of(&url)?,
+            None => current_host()?,
+        };
+        let kind = if policy.ask().is_empty() {
+            None
+        } else {
+            site_gate_kind(action, category, cmd, state).await
+        };
+        match policy.decide(&host, category, kind) {
+            SiteGate::Allow => return None,
+            SiteGate::Deny(reason) => {
+                return Some(error_response(
+                    id,
+                    &format!("Action '{action}' refused: {reason}"),
+                ));
+            }
+            SiteGate::Ask { reason, detail } => {
+                ask = Some((host, reason, detail, category.to_string()));
+            }
+        }
+    }
+    let (host, reason, detail, category) = ask?;
+
+    let confirmation_id = format!("s_{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+    let mut user_approval = false;
+    if extension_holds_requests {
+        if let Some(mgr) = state.browser.as_ref() {
+            let request = json!({
+                "op": "request",
+                "id": confirmation_id,
+                "host": host,
+                "category": category,
+                "reason": reason,
+                "description": detail,
+                "action": action,
+                "session": state.session_id,
+            });
+            user_approval = mgr
+                .client
+                .send_command("ABExt.siteApproval", Some(request), None)
+                .await
+                .is_ok();
+        }
+    }
+    state.pending_confirmation = Some(PendingConfirmation {
+        action: action.to_string(),
+        cmd: cmd.clone(),
+        site: Some(SitePending {
+            id: confirmation_id.clone(),
+            host: host.clone(),
+            category: category.clone(),
+            reason: reason.to_string(),
+            user_approval,
+        }),
+    });
+    Some(json!({
+        "id": id,
+        "success": true,
+        "data": sp::confirmation_payload(
+            &confirmation_id,
+            action,
+            &host,
+            &category,
+            reason,
+            &detail,
+            if user_approval { "user" } else { "cli" },
+        ),
+    }))
+}
+
+/// Poll the extension for the person's choice on a pending request. `None`
+/// when they have not chosen within [`SITE_APPROVAL_WAIT`].
+async fn wait_for_site_decision(state: &DaemonState, request_id: &str) -> Option<String> {
+    let mgr = state.browser.as_ref()?;
+    let deadline = std::time::Instant::now() + SITE_APPROVAL_WAIT;
+    loop {
+        let reply = mgr
+            .client
+            .send_command(
+                "ABExt.siteApproval",
+                Some(json!({ "op": "status", "id": request_id })),
+                None,
+            )
+            .await
+            .ok()?;
+        match reply.get("decision").and_then(|v| v.as_str()) {
+            Some(d @ ("once" | "always" | "decline")) => return Some(d.to_string()),
+            _ if reply.get("known").and_then(|v| v.as_bool()) == Some(false) => {
+                // The extension restarted and lost the request: refuse
+                // rather than guess.
+                return Some("decline".to_string());
+            }
+            _ => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Tell the extension what the terminal prompt decided (so "always" lands in
+/// its approved-sites list and history), or that the request was withdrawn.
+/// Without an extension, "always" lasts as long as this daemon.
+async fn record_site_decision(state: &mut DaemonState, site: &SitePending, decision: &str) {
+    let mut stored = false;
+    if site.user_approval {
+        if let Some(mgr) = state.browser.as_ref() {
+            stored = mgr
+                .client
+                .send_command(
+                    "ABExt.siteApproval",
+                    Some(json!({ "op": "decide", "id": site.id, "decision": decision })),
+                    None,
+                )
+                .await
+                .is_ok();
+        }
+    }
+    if decision == "always" && !stored {
+        state.site_session_allow.push(site.host.clone());
+    }
+    state.site_policy_cache = None;
 }
 
 // ---------------------------------------------------------------------------
@@ -27982,6 +28435,57 @@ mod tests {
 
         assert_eq!(response["success"], false);
         assert!(response["error"].as_str().unwrap().contains("navigate"));
+        assert!(state.browser.is_none());
+    }
+
+    #[tokio::test]
+    async fn confirm_refuses_an_id_that_is_not_the_pending_one() {
+        let mut state = DaemonState::new();
+        state.pending_confirmation = Some(PendingConfirmation {
+            action: "click".into(),
+            cmd: json!({"id": "c1", "action": "click"}),
+            site: Some(SitePending {
+                id: "s_abc".into(),
+                host: "www.chase.com".into(),
+                category: "click".into(),
+                reason: "sensitive_site".into(),
+                user_approval: true,
+            }),
+        });
+        let err = handle_confirm(&json!({"confirmationId": "s_other"}), &mut state)
+            .await
+            .unwrap_err();
+        assert!(err.contains("s_abc"), "{err}");
+        // Still pending: a wrong id never consumes the request.
+        assert!(state.pending_confirmation.is_some());
+        let denied = handle_deny(&json!({"confirmationId": "s_abc"}), &mut state)
+            .await
+            .unwrap();
+        assert_eq!(denied["denied"], true);
+        assert!(state.pending_confirmation.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_terminal_decline_on_a_site_gate_does_not_run_the_action() {
+        let mut state = DaemonState::new();
+        state.pending_confirmation = Some(PendingConfirmation {
+            action: "navigate".into(),
+            cmd: json!({"id": "n1", "action": "navigate", "url": "https://www.chase.com"}),
+            site: Some(SitePending {
+                id: "s_n1".into(),
+                host: "www.chase.com".into(),
+                category: "navigation".into(),
+                reason: "sensitive_site".into(),
+                user_approval: false,
+            }),
+        });
+        let out = handle_confirm(
+            &json!({"confirmationId": "s_n1", "userDecision": "decline"}),
+            &mut state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["denied"], true);
         assert!(state.browser.is_none());
     }
 

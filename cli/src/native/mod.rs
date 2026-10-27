@@ -54,6 +54,7 @@ pub(crate) mod relay_targets;
 pub mod screenshot;
 pub mod semantic_locator;
 pub mod sensitive;
+pub mod site_policy;
 
 pub mod script;
 

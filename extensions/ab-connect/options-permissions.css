@@ -1,0 +1,17 @@
+/* Permissions & safety card on the options page (#781). */
+.perms .perm-checks { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; }
+.perms .perm-checks label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.perms .perm-list { list-style: none; margin: 6px 0; padding: 0; }
+.perms .perm-list li { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 13px; }
+.perms .perm-list li .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.perms .perm-list li .hint { font-size: 12px; }
+.perms .perm-history { max-height: 260px; overflow: auto; }
+.perms .perm-lock { font: 11px var(--font-mono); padding: 1px 7px; border-radius: 999px; background: var(--surface); color: var(--muted); margin-left: 6px; }
+.perms .perm-pending { margin: 8px 0; display: grid; gap: 8px; }
+.perms .approval-card { border: 1px solid var(--accent); border-radius: 12px; padding: 10px 14px; background: var(--raised); }
+.perms .approval-card h3 { margin: 0 0 4px; font-size: 15px; }
+.perms .approval-card p { margin: 2px 0; }
+.perms .approval-card .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.perms .approval-card button { font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px; background: var(--bg); color: var(--ink); }
+.perms .approval-card button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.perms .approval-card button:disabled { opacity: .5; cursor: default; }

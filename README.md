@@ -583,6 +583,10 @@ Don't take our word for it. Point your connected Chrome at the toughest public d
 
 Use independent detectors to evaluate fingerprints. [Botcheck](https://botcheck.leeguoo.com/) complements them with page-artifact and input-sequence checks; its pass does not replace Worker consistency or real-site acceptance.
 
+## Permissions & safety
+
+On your own Chrome, chrome-use checks every agent action against the site it lands on before running it. By default it asks you first on banking, brokerage, crypto exchange and government ID sites (a [maintained list](cli/src/native/sensitive_sites.json)), and before downloads, typing into password or payment fields, and purchases. You answer in the side panel, its notification or the options page: **Allow once**, **Always allow on this site**, or **Decline**. The options page keeps the approved and blocked sites and a permission history. The gated command exits with code 3 and the agent runs `chrome-use confirm <id>` to wait for your choice. Turn the defaults off on the options page, with `CHROME_USE_SENSITIVE_SITES=0`, or in the `sites` block of an `--action-policy` file. Organizations can pin allowed and blocked domains, the action policy and disabled agents through Chrome enterprise policy (`chrome.storage.managed`). The check runs in the CLI, so pages see nothing new. See [Permissions & Safety](https://chrome-use.leeguoo.com/en/permissions.html).
+
 ## More in the docs
 
 - [Site adapters](https://chrome-use.leeguoo.com/en/site-adapters.html): turn a website into a structured-data CLI (`chrome-use site`)

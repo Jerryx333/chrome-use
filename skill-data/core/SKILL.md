@@ -99,6 +99,9 @@ an authorized task is a step to try (`core/captcha`). On a login wall
 `auth login --bwu`. For a step only the human can do: `session handoff`,
 explain it, wait, then `session resume`. Full text, including QR
 `loginVerification`: `core/trust-boundaries`.
+`Confirmation required:` with a `Site:` line (exit 3) is a per-site
+permission: tell the user, who decides in the extension; `confirm <id>` then
+waits for that choice, and your own `confirm` never approves it.
 
 ## Load detail when the task needs it
 

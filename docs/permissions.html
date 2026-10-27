@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>权限与安全 · chrome-use</title>
+  <meta name="description" content="chrome-use 的按站点权限：敏感站点先问、下载/密码与支付字段/购买每次确认、已允许站点和权限记录，以及用 Chrome 企业策略锁定设置。" />
+
+  <!-- SEO / social -->
+  <meta name="theme-color" content="#fcfbf4" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="chrome-use 文档" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <!-- The one and only stylesheet -->
+  <!-- seo:fonts --><link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" onload="this.onload=null;this.rel='stylesheet'" /><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" /></noscript><!-- /seo:fonts -->
+
+  <link rel="stylesheet" href="/assets/docs/docs.css" />
+  <!-- seo:head -->
+  <link rel="canonical" href="https://chrome-use.leeguoo.com/permissions.html" />
+  <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/permissions.html" />
+  <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/permissions.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/permissions.html" />
+  <meta property="og:title" content="权限与安全 · chrome-use" />
+  <meta property="og:description" content="chrome-use 的按站点权限：敏感站点先问、下载/密码与支付字段/购买每次确认、已允许站点和权限记录，以及用 Chrome 企业策略锁定设置。" />
+  <meta property="og:url" content="https://chrome-use.leeguoo.com/permissions.html" />
+  <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="800" />
+  <meta property="og:image:alt" content="chrome-use：让 AI agent 用你已登录的 Chrome" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:locale:alternate" content="en_US" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="权限与安全 · chrome-use" />
+  <meta name="twitter:description" content="chrome-use 的按站点权限：敏感站点先问、下载/密码与支付字段/购买每次确认、已允许站点和权限记录，以及用 Chrome 企业策略锁定设置。" />
+  <meta name="twitter:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"chrome-use","item":"https://chrome-use.leeguoo.com/"},{"@type":"ListItem","position":2,"name":"账号与登录态","item":"https://chrome-use.leeguoo.com/real-chrome.html"},{"@type":"ListItem","position":3,"name":"权限与安全","item":"https://chrome-use.leeguoo.com/permissions.html"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"权限与安全","description":"chrome-use 的按站点权限：敏感站点先问、下载/密码与支付字段/购买每次确认、已允许站点和权限记录，以及用 Chrome 企业策略锁定设置。","inLanguage":"zh-Hans","url":"https://chrome-use.leeguoo.com/permissions.html","mainEntityOfPage":"https://chrome-use.leeguoo.com/permissions.html","image":"https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg","dateModified":"2026-10-27","author":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"publisher":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"isPartOf":{"@type":"WebSite","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"},"about":{"@type":"SoftwareApplication","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"}}</script>
+  <!-- /seo:head -->
+</head>
+
+<body data-page="permissions" data-lang="zh">
+
+  <!-- injected: sticky top bar -->
+  <div id="du-topbar" class="du-topbar"></div>
+
+  <div class="du-shell">
+
+    <!-- injected: left grouped sidebar nav -->
+    <nav id="du-sidebar" class="du-sidebar" aria-label="文档"><div class="du-nav-group"><div class="du-nav-label">开始</div><a class="du-nav-item" href="/"><span class="du-nav-ico">🧭</span><span class="du-nav-text">概览</span></a><a class="du-nav-item" href="/install.html"><span class="du-nav-ico">📦</span><span class="du-nav-text">安装</span></a><a class="du-nav-item" href="/compare.html"><span class="du-nav-ico">⚖️</span><span class="du-nav-text">和其他方案对比</span></a></div><div class="du-nav-group"><div class="du-nav-label">不开终端</div><a class="du-nav-item" href="/agent-panel.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">侧栏对话</span></a><a class="du-nav-item" href="/mobile.html"><span class="du-nav-ico">📱</span><span class="du-nav-text">手机遥控</span></a><a class="du-nav-item" href="/inspect.html"><span class="du-nav-ico">🎯</span><span class="du-nav-text">点选改代码</span></a></div><div class="du-nav-group"><div class="du-nav-label">让 agent 做事</div><a class="du-nav-item" href="/reading.html"><span class="du-nav-ico">📖</span><span class="du-nav-text">读网页、查资料</span></a><a class="du-nav-item" href="/extract.html"><span class="du-nav-ico">🧪</span><span class="du-nav-text">抓数据</span></a><a class="du-nav-item" href="/interacting.html"><span class="du-nav-ico">🖱️</span><span class="du-nav-text">填表与操作</span></a><a class="du-nav-item" href="/site-adapters.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">站点适配器</span></a><a class="du-nav-item" href="/testing.html"><span class="du-nav-ico">🧷</span><span class="du-nav-text">测试与探索</span></a><a class="du-nav-item" href="/media.html"><span class="du-nav-ico">🎬</span><span class="du-nav-text">截图·录像·视口</span></a><a class="du-nav-item" href="/canvas.html"><span class="du-nav-ico">🎨</span><span class="du-nav-text">Canvas / WebGL / 游戏</span></a><a class="du-nav-item" href="/electron.html"><span class="du-nav-ico">🖥️</span><span class="du-nav-text">Electron 桌面应用</span></a><a class="du-nav-item" href="/slack.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">Slack 自动化</span></a></div><div class="du-nav-group"><div class="du-nav-label">账号与登录态</div><a class="du-nav-item" href="/real-chrome.html"><span class="du-nav-ico">🌐</span><span class="du-nav-text">驱动真实 Chrome</span></a><a class="du-nav-item" href="/login-auth.html"><span class="du-nav-ico">🔐</span><span class="du-nav-text">登录与凭证</span></a><a class="du-nav-item" href="/sessions.html"><span class="du-nav-ico">💾</span><span class="du-nav-text">多个 agent 与会话</span></a><a class="du-nav-item" href="/choosebrowser.html"><span class="du-nav-ico">🧭</span><span class="du-nav-text">多 profile 路由：ChooseBrowser</span></a><a class="du-nav-item" href="/stealth.html"><span class="du-nav-ico">🥷</span><span class="du-nav-text">反检测与隐身</span></a><a class="du-nav-item active" aria-current="page" href="/permissions.html"><span class="du-nav-ico">🛡️</span><span class="du-nav-text">权限与安全</span></a></div><div class="du-nav-group"><div class="du-nav-label">接入方式</div><a class="du-nav-item" href="/mcp.html"><span class="du-nav-ico">🔌</span><span class="du-nav-text">MCP 服务器</span></a><a class="du-nav-item" href="/http-api.html"><span class="du-nav-ico">🔗</span><span class="du-nav-text">本地 HTTP API</span></a><a class="du-nav-item" href="/cloud.html"><span class="du-nav-ico">☁️</span><span class="du-nav-text">云端浏览器</span></a><a class="du-nav-item" href="/script.html"><span class="du-nav-ico">⚡</span><span class="du-nav-text">单次成型脚本</span></a></div><div class="du-nav-group"><div class="du-nav-label">底层命令</div><a class="du-nav-item" href="/core-loop.html"><span class="du-nav-ico">🔁</span><span class="du-nav-text">核心循环</span></a><a class="du-nav-item" href="/how-it-works.html"><span class="du-nav-ico">⚙️</span><span class="du-nav-text">它怎么工作</span></a><a class="du-nav-item" href="/finding.html"><span class="du-nav-ico">🔎</span><span class="du-nav-text">定位元素</span></a><a class="du-nav-item" href="/waiting.html"><span class="du-nav-ico">⏳</span><span class="du-nav-text">等待与断言</span></a><a class="du-nav-item" href="/network.html"><span class="du-nav-ico">🛰️</span><span class="du-nav-text">网络拦截与改写</span></a><a class="du-nav-item" href="/react.html"><span class="du-nav-ico">⚛️</span><span class="du-nav-text">React / Web Vitals</span></a><a class="du-nav-item" href="/commands.html"><span class="du-nav-ico">📚</span><span class="du-nav-text">命令参考</span></a></div><div class="du-nav-group"><div class="du-nav-label">参考</div><a class="du-nav-item" href="/troubleshooting.html"><span class="du-nav-ico">🩹</span><span class="du-nav-text">故障排查</span></a><a class="du-nav-item" href="/changelog.html"><span class="du-nav-ico">📝</span><span class="du-nav-text">更新日志</span></a><a class="du-nav-item" href="/extension-changelog.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">插件更新日志</span></a><a class="du-nav-item" href="/family.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">*-use 家族</span></a><a class="du-nav-item" href="/lineage.html"><span class="du-nav-ico">🌱</span><span class="du-nav-text">血统与上游</span></a></div></nav>
+
+    <!-- ============================ PAGE CONTENT ============================ -->
+    <main class="du-main">
+
+      <p class="du-eyebrow">账号与登录态 / Accounts &amp; Sign-in</p>
+
+      <div class="du-title-row">
+        <h1>权限与安全</h1>
+        <button class="du-copy-page" type="button" aria-label="复制页面">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5" y="5" width="9" height="9" rx="1.5"/><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5"/></svg>
+          <span class="du-copy-page-label">复制页面</span>
+        </button>
+      </div>
+
+      <p class="du-lede">agent 用的是你已登录的 Chrome，所以它能做的事和你一样多。chrome-use 在每个操作前按<strong>站点</strong>检查一次：敏感站点和高风险操作会先停下来等你决定。检查发生在 CLI 里，页面看不到任何痕迹。</p>
+
+      <h2 id="what-asks">什么时候会先问你</h2>
+      <p>通过扩展驱动你自己的 Chrome 时，下面这些默认会停下来等你确认：</p>
+      <table>
+        <tr><th>情况</th><th>默认</th><th>判断方式</th></tr>
+        <tr><td>敏感站点：银行、券商、加密货币交易所、政府证件站点</td><td>该站点上的每个操作（打开、点击、输入、上传、下载）都先问，直到你选“始终允许此站点”</td><td>仓库里维护的列表 <a href="https://github.com/leeguooooo/chrome-use/blob/main/cli/src/native/sensitive_sites.json"><code>cli/src/native/sensitive_sites.json</code></a>，一个域名包含它的子域名</td></tr>
+        <tr><td>下载</td><td>每次都问</td><td><code>download</code>、<code>download url</code></td></tr>
+        <tr><td>在密码或支付字段里输入</td><td>每次都问，已允许的站点也问</td><td>和遮蔽敏感值用的是同一套规则：<code>type=password</code>、<code>autocomplete</code> 的 <code>cc-*</code> / <code>*-password</code> / <code>one-time-code</code>，名字或 id 里有 card、cvv、password 等，无障碍名里有“密码”“卡号”等；<code>fill --from-env</code> 一律算</td></tr>
+        <tr><td>购买</td><td>每次都问，已允许的站点也问</td><td>点击的元素名称像购买按钮：Buy now、Place order、Pay、Complete purchase、立即购买、提交订单、去支付、購入する等</td></tr>
+        <tr><td>第一次在新站点上操作</td><td>默认关闭，可在选项页按类别打开</td><td>没有“始终允许”或屏蔽记录的站点</td></tr>
+      </table>
+      <p>这些判断是启发式的：没走 ref 或选择器的输入（例如先聚焦再 <code>keyboard type</code>）、名称不像购买的支付按钮，可能不会被识别。它是一道让人看一眼的闸，不是沙箱。</p>
+      <p><code>--launch</code> 和 <code>--cdp</code> 会话不带这些默认规则（那里通常没有人在看），只按你的策略文件执行。</p>
+
+      <h2 id="approve">怎么批准</h2>
+      <p>被拦下的命令不会执行，退出码为 3，并给出确认 ID：</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">agent 看到的输出</span>
+        </div>
+<pre><code>$ chrome-use click @e7
+Confirmation required:
+  click: www.chase.com is a banking or payments site; chrome-use asks before an agent acts there (click)
+  Site: www.chase.com
+  Ask the user to choose Allow once, Always allow on this site, or Decline
+  in the chrome-use side panel or its notification. Then:
+  Run: chrome-use confirm s_3f9a0c2b1d   (waits up to 40s for the choice)
+  Or:  chrome-use deny s_3f9a0c2b1d</code></pre>
+      </div>
+
+      <p>同时 Chrome 会弹一条通知，侧栏和选项页的“权限与安全”里会出现一张卡片，有三个选项：<strong>仅允许这一次</strong>、<strong>始终允许此站点</strong>、<strong>拒绝</strong>。agent 运行 <code>chrome-use confirm &lt;id&gt;</code> 后会等你最多 40 秒，你选了允许就执行原命令。</p>
+      <p>只有你能在扩展里批准：agent 自己运行 <code>confirm</code> 不会让操作通过。<code>chrome-use deny &lt;id&gt;</code> 会撤回请求。</p>
+      <p>在终端里用 <code>--confirm-interactive</code> 时，提示变成 <code>[y]es once / [a]lways on this site / [N]o</code>，选 always 会写进扩展的已允许站点列表。</p>
+      <p>没有扩展（<code>--launch</code>、<code>--cdp</code>）或扩展版本早于 0.5.93 时，<code>confirm &lt;id&gt;</code> 直接批准，与 <code>--confirm-actions</code> 一样。</p>
+
+      <h2 id="history">已允许站点与权限记录</h2>
+      <p>扩展选项页的“权限与安全”卡片里可以：</p>
+      <ul>
+        <li>开关敏感站点列表，勾选“每次都问”的操作（下载、密码和支付字段、购买）和“第一次在新站点上问”的类别；</li>
+        <li>查看、添加、移除已允许和已屏蔽的站点（屏蔽的站点上 agent 不能做任何操作）；</li>
+        <li>查看最近 200 条权限记录：每次选择、谁撤回了请求、列表改动。</li>
+      </ul>
+
+      <h2 id="turn-off">关闭或扩展默认规则</h2>
+      <ul>
+        <li>选项页：关掉“敏感站点先问我”，或取消勾选“以下操作每次都问我”里的某一项。</li>
+        <li>环境变量：<code>CHROME_USE_SENSITIVE_SITES=0</code> 关闭敏感站点列表（组织策略锁定时无效）。</li>
+        <li>策略文件（<code>--action-policy</code>）的 <code>sites</code> 段：</li>
+      </ul>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">policy.json</span>
+        </div>
+<pre><code>{
+  &quot;deny&quot;: [],
+  &quot;sites&quot;: {
+    &quot;allow&quot;: [&quot;intranet.example.com&quot;],
+    &quot;deny&quot;: [&quot;evil.example&quot;],
+    &quot;confirm&quot;: [&quot;payroll.example.com&quot;],
+    &quot;sensitiveSites&quot;: true,
+    &quot;firstVisit&quot;: [&quot;navigation&quot;, &quot;upload&quot;],
+    &quot;ask&quot;: [&quot;download&quot;, &quot;sensitive_input&quot;, &quot;purchase&quot;]
+  }
+}</code></pre>
+      </div>
+
+      <p><code>allow</code> 免确认，<code>deny</code> 直接拒绝，<code>confirm</code> 把站点加进先问列表；<code>sensitiveSites</code>、<code>firstVisit</code>、<code>ask</code> 的含义和选项页相同。策略文件里的 <code>sites</code> 对 <code>--launch</code>、<code>--cdp</code> 会话同样生效。想给内置列表补站点，欢迎直接提 PR 修改 <code>sensitive_sites.json</code>。</p>
+      <p>优先级从高到低：组织策略 → 你在扩展里的选择 → 策略文件 → 内置默认。屏蔽总是优先于允许；“每次都问”的操作即使在已允许站点上也会问。</p>
+
+      <h2 id="managed">组织管理（Chrome 企业策略）</h2>
+      <p>扩展读取 <code>chrome.storage.managed</code>（manifest 里声明了 <code>managed-schema.json</code>）。管理员设置的值覆盖用户设置，选项页上显示为“已托管”且不能修改。</p>
+      <table>
+        <tr><th>键</th><th>作用</th></tr>
+        <tr><td><code>allowedDomains</code></td><td>非空时，agent 只能在这些站点上操作</td></tr>
+        <tr><td><code>blockedDomains</code></td><td>agent 不能在这些站点上操作</td></tr>
+        <tr><td><code>confirmDomains</code></td><td>这些站点上每个操作都先问，用户的“始终允许”也不跳过</td></tr>
+        <tr><td><code>sensitiveSites</code> / <code>ask</code> / <code>firstVisit</code></td><td>锁定对应设置</td></tr>
+        <tr><td><code>actionPolicy</code></td><td>与 <code>--action-policy</code> 文件相同的格式，叠加在本地策略之上：<code>deny</code> 拒绝，<code>confirm</code> 需要用户批准</td></tr>
+        <tr><td><code>disabledAgents</code></td><td>侧栏不再提供这些 agent（<code>codex</code>、<code>claude</code>、<code>opencode</code>、<code>pi</code>）</td></tr>
+      </table>
+      <p>Windows / Linux 的 Chrome 策略 JSON（Linux 放在 <code>/etc/opt/chrome/policies/managed/</code>）：</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">chrome-use.json</span>
+        </div>
+<pre><code>{
+  &quot;3rdparty&quot;: {
+    &quot;extensions&quot;: {
+      &quot;ciiljdlhdpfckdcfkphgmfalanpdejep&quot;: {
+        &quot;allowedDomains&quot;: [&quot;example.com&quot;, &quot;corp.example.com&quot;],
+        &quot;blockedDomains&quot;: [&quot;mail.example.com&quot;],
+        &quot;confirmDomains&quot;: [&quot;payroll.example.com&quot;],
+        &quot;sensitiveSites&quot;: true,
+        &quot;ask&quot;: [&quot;download&quot;, &quot;sensitive_input&quot;, &quot;purchase&quot;],
+        &quot;actionPolicy&quot;: { &quot;deny&quot;: [&quot;upload&quot;, &quot;eval&quot;], &quot;confirm&quot;: [&quot;download_url&quot;] },
+        &quot;disabledAgents&quot;: [&quot;opencode&quot;]
+      }
+    }
+  }
+}</code></pre>
+      </div>
+
+      <p>macOS 的 .mobileconfig 片段（放进 <code>PayloadContent</code> 数组）：</p>
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">chrome-use.mobileconfig</span>
+        </div>
+<pre><code>&lt;dict&gt;
+  &lt;key&gt;PayloadType&lt;/key&gt;
+  &lt;string&gt;com.google.Chrome.extensions.ciiljdlhdpfckdcfkphgmfalanpdejep&lt;/string&gt;
+  &lt;key&gt;PayloadIdentifier&lt;/key&gt;
+  &lt;string&gt;com.example.chrome-use.policy&lt;/string&gt;
+  &lt;key&gt;PayloadUUID&lt;/key&gt;
+  &lt;string&gt;9A6E0C1E-0000-4000-8000-000000000781&lt;/string&gt;
+  &lt;key&gt;PayloadVersion&lt;/key&gt;
+  &lt;integer&gt;1&lt;/integer&gt;
+  &lt;key&gt;allowedDomains&lt;/key&gt;
+  &lt;array&gt;&lt;string&gt;example.com&lt;/string&gt;&lt;string&gt;corp.example.com&lt;/string&gt;&lt;/array&gt;
+  &lt;key&gt;blockedDomains&lt;/key&gt;
+  &lt;array&gt;&lt;string&gt;mail.example.com&lt;/string&gt;&lt;/array&gt;
+  &lt;key&gt;sensitiveSites&lt;/key&gt;
+  &lt;true/&gt;
+  &lt;key&gt;actionPolicy&lt;/key&gt;
+  &lt;dict&gt;
+    &lt;key&gt;deny&lt;/key&gt;
+    &lt;array&gt;&lt;string&gt;upload&lt;/string&gt;&lt;/array&gt;
+  &lt;/dict&gt;
+  &lt;key&gt;disabledAgents&lt;/key&gt;
+  &lt;array&gt;&lt;string&gt;opencode&lt;/string&gt;&lt;/array&gt;
+&lt;/dict&gt;</code></pre>
+      </div>
+
+      <p>扩展 ID 以你部署的版本为准：上面是自签名构建的 ID，Chrome 应用商店版本的 ID 不同。在 <code>chrome://policy</code> 里可以确认策略是否生效。</p>
+
+      <h2 id="stealth">隐身模式下的行为</h2>
+      <p>所有检查都在 CLI 守护进程里完成：站点来自命令里的 URL 或守护进程记录的当前页面地址，输入框是否敏感用 CDP 的 <code>DOM.describeNode</code> 读取属性，不在页面里执行任何脚本。批准界面在扩展自己的页面（侧栏、选项页、通知）里。页面看不到新的全局变量、DOM 节点、事件或请求，隐身模式不受影响。</p><!-- seo:footer --><nav class="du-static-footer" aria-label="更多"><a href="/">chrome-use</a> · <a href="/logged-in-browser.html">让 agent 用已登录 Chrome</a> · <a href="/debugger-banner-silence.html">静音调试提示条</a> · <a href="/privacy.html">隐私政策</a> · <a href="/mobile-privacy.html">手机 App 隐私政策</a> · <a href="https://github.com/leeguooooo/chrome-use">GitHub</a> · <a href="https://github.com/leeguooooo/chrome-use/releases">下载 / Releases</a> · <a href="https://github.com/leeguooooo/iphone-use">iphone-use（让 agent 操作 iPhone）</a> · <a href="https://blog.leeguoo.com">博客</a> · <a href="/en/permissions.html" hreflang="en">English</a></nav><!-- /seo:footer --></main>
+    <!-- ========================== /PAGE CONTENT =========================== -->
+
+    <!-- injected: right on-this-page TOC -->
+    <aside id="du-toc"></aside>
+
+  </div>
+
+  <!-- The one and only script. defer so #du-* hosts exist before it runs. -->
+  <script src="/assets/docs/docs.js" defer></script>
+</body>
+</html>

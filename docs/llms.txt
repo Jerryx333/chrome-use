@@ -34,5 +34,6 @@ chrome-use lets any AI agent (Claude Code, Cursor, Codex, or your own scripts) d
 - [Installation](https://chrome-use.leeguoo.com/en/install.html)
 - [Comparison](https://chrome-use.leeguoo.com/en/compare.html)
 - [Detector measurements and conditions](https://chrome-use.leeguoo.com/en/stealth.html)
+- [Per-site permissions, sensitive-site defaults and enterprise policy](https://chrome-use.leeguoo.com/en/permissions.html)
 - [MCP tools](https://chrome-use.leeguoo.com/en/mcp.html)
 - [Session ownership](https://chrome-use.leeguoo.com/en/sessions.html)

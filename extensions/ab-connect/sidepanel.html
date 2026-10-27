@@ -59,6 +59,7 @@
       <div id="working" class="working" role="status" aria-label="The agent is working" data-i18n-aria-label="sidepanel_agent_working" hidden><span></span><span></span><span></span></div>
     </div>
     <button id="latest" class="latest" type="button" data-i18n="sidepanel_jump_latest" hidden>↓ Latest</button>
+    <section id="siteApprovals" class="requests" aria-label="Site approvals" data-i18n-aria-label="sidepanel_site_approvals" hidden></section>
     <section id="requests" class="requests" aria-label="Agent requests" data-i18n-aria-label="sidepanel_agent_requests"></section>
     <section id="queuedMessages" class="queued-messages" aria-label="Queued messages" data-i18n-aria-label="sidepanel_queued_messages" hidden></section>
     <section id="pendingRecovery" class="requests recovery" hidden>
@@ -225,5 +226,6 @@
     </div>
   </main>
   <script type="module" src="sidepanel.js"></script>
+  <script type="module" src="site-approvals-entry.js"></script>
 </body>
 </html>
