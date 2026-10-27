@@ -1,8 +1,27 @@
 # Changelog
 
-## 1.5.272
+## 1.5.273
 
 <!-- release:start -->
+Works with extension ab-connect 0.5.93.
+
+### Features
+
+- **Hidden page text is left out.** `snapshot`, `get text` and `read` (active tab) drop text a person can't see: off-screen, transparent, clipped or zero-size, `font-size: 0`, or the same colour as its background. They say how much they dropped, and `--include-hidden` keeps it. Controls keep their accessible names, and gradient or fading-in text counts as visible. The check is an isolated-world read, so pages see nothing. In our injection drill (Haiku, private Chrome), hidden instructions went from 6/6 followed to 0/6 and hidden fake facts from 5/5 repeated to 0/5 (#789).
+- **MCP and side-panel output is marked untrusted.** `chrome-use mcp` and the side-panel agents wrap browser results as untrusted page content by default (opt-out flag); the CLI's default output is unchanged so scripts keep parsing it (#789).
+- **The side panel holds commands built from page text.** A shell command carrying a URL or snippet that came from a page, not from you, is flagged in red and never auto-approved, even with full access. Backends that never ask before running a command (Pi, and Claude or Codex in full access) are not covered (#789).
+- **Per-site permissions.** On your own Chrome, actions are checked against the site they land on. By default chrome-use asks first on banking, brokerage, crypto exchange and government-ID sites, before purchases, and before typing into payment-card fields. Password fields, downloads and first visits to a new site can be set to ask too, per category; they're off by default so agents can still sign in and download unattended. Answer in the side panel, its notification or the options page: *Allow once*, *Always allow on this site*, or *Decline*. The held command exits with code 3 and the agent waits for your choice with `chrome-use confirm <id>` (MCP: `chrome_use_confirm`). The options page lists allowed and blocked sites and a permission history. Requires extension 0.5.93 (#790).
+- **Managed policy.** Organizations can pin allowed, blocked and confirm-first domains, the asked categories, the action policy and disabled agents through Chrome enterprise policy (`chrome.storage.managed`); managed values show as locked (#790).
+
+All checks run in the CLI and extension pages; pages see nothing new.
+
+### Contributors
+
+- @leeguooooo
+<!-- release:end -->
+
+## 1.5.272
+
 Works with extension ab-connect 0.5.92.
 
 ### Bug Fixes
@@ -28,7 +47,6 @@ Works with extension ab-connect 0.5.92.
 ### Contributors
 
 - @leeguooooo
-<!-- release:end -->
 
 ## 1.5.271
 
