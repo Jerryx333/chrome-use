@@ -3414,6 +3414,28 @@ fn resolve_tab_ref_in(
     }
 }
 
+fn tab_id_at_position_in(pages: &[PageInfo], input: &str) -> Option<Result<u32, String>> {
+    let input = input.trim();
+    if input.is_empty() || !input.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let found = input
+        .parse::<usize>()
+        .ok()
+        .and_then(|index| pages.get(index))
+        .map(|page| page.tab_id);
+    Some(found.ok_or_else(|| {
+        let ids: Vec<String> = pages.iter().map(|p| format_tab_id(p.tab_id)).collect();
+        format!(
+            "No tab at position {input}: this session has {} tab(s) ({}), counted from 0 in \
+             `chrome-use tab` order. Prefer the stable id, e.g. `tab select {}`",
+            pages.len(),
+            ids.join(", "),
+            ids.first().map(String::as_str).unwrap_or("t1"),
+        )
+    }))
+}
+
 /// A tab reference as parsed from CLI/JSON input. Either a stable id like
 /// `t2` or a user-assigned label like `docs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3449,10 +3471,17 @@ impl TabRef {
             }
         }
         if input.chars().all(|c| c.is_ascii_digit()) {
+            // `t0` does not exist: ids start at t1.
+            let example = if input.trim_start_matches('0').is_empty() {
+                "1"
+            } else {
+                input
+            };
             return Err(format!(
                 "Expected a tab id like `t{}` or a label; positional integers are not accepted \
-                 (run `chrome-use tab` to list stable tab ids)",
-                input
+                 here (only `tab select <n>` takes a position; run `chrome-use tab` to list \
+                 stable tab ids)",
+                example
             ));
         }
         if !is_valid_label(input) {
@@ -8679,6 +8708,14 @@ impl BrowserManager {
         resolve_tab_ref_in(&self.pages, &self.lost_tab_refs, tab_ref)
     }
 
+    /// `tab select 0` (#781): a bare integer is a 0-based position in `tab
+    /// list` order, mapped to that row's stable id. `None` when `input` is not
+    /// a bare integer; positions shift as tabs open and close, so the caller
+    /// tells the agent which stable id it picked.
+    pub fn tab_id_at_position(&self, input: &str) -> Option<Result<u32, String>> {
+        tab_id_at_position_in(&self.pages, input)
+    }
+
     /// Returns true iff a tab already carries the given label, or a tab ref
     /// lost on a reconnect still holds it (#473).
     pub fn has_label(&self, label: &str) -> bool {
@@ -11942,6 +11979,38 @@ mod tests {
             err
         );
         assert!(err.contains("t2"));
+    }
+
+    #[test]
+    fn a_bare_zero_suggests_t1_not_t0() {
+        let err = TabRef::parse("0").unwrap_err();
+        assert!(err.contains("`t1`") && !err.contains("`t0`"), "{err}");
+    }
+
+    #[test]
+    fn a_position_maps_to_the_stable_id_in_list_order() {
+        let page = |tab_id: u32| PageInfo {
+            tab_id,
+            label: None,
+            target_id: format!("target-{tab_id}"),
+            session_id: format!("session-{tab_id}"),
+            url: "about:blank".to_string(),
+            title: String::new(),
+            target_type: "page".to_string(),
+        };
+        // Ids are not positions: t1 was closed, t2 and t5 remain.
+        let pages = vec![page(2), page(5)];
+        assert_eq!(tab_id_at_position_in(&pages, "0"), Some(Ok(2)));
+        assert_eq!(tab_id_at_position_in(&pages, "1"), Some(Ok(5)));
+        let err = tab_id_at_position_in(&pages, "2").unwrap().unwrap_err();
+        assert!(err.contains("2 tab(s) (t2, t5)"), "{err}");
+        // Not a position: left to the id / label parser.
+        assert_eq!(tab_id_at_position_in(&pages, "t1"), None);
+        assert_eq!(tab_id_at_position_in(&pages, "docs"), None);
+        assert_eq!(tab_id_at_position_in(&pages, ""), None);
+        assert!(tab_id_at_position_in(&pages, "99999999999999999999")
+            .unwrap()
+            .is_err());
     }
 
     #[test]

@@ -324,8 +324,35 @@ URL: https://example.com/login
 <pre><code><span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide         <span class="du-cmt"># read a URL</span>
 <span class="du-prompt">$</span> chrome-use read https://docs.example.com/guide <span class="du-flag">--outline</span>  <span class="du-cmt"># just the heading outline</span>
 <span class="du-prompt">$</span> chrome-use read                                        <span class="du-cmt"># read the active tab</span>
-<span class="du-prompt">$</span> chrome-use read https://news.ycombinator.com <span class="du-flag">--links</span>   <span class="du-cmt"># plus a "## Links" list: [text](absolute URL)</span></code></pre>
+<span class="du-prompt">$</span> chrome-use read https://news.ycombinator.com <span class="du-flag">--links</span>   <span class="du-cmt"># plus a "## Links" list: [text](absolute URL)</span>
+<span class="du-prompt">$</span> chrome-use read <span class="du-flag">--tab</span> <span class="du-str">t1</span>                                 <span class="du-cmt"># read t1 without a tab select first</span></code></pre>
       </div>
+
+      <p>
+        <strong>Tables stay tables.</strong> A <code>&lt;table&gt;</code> on the page comes out as a Markdown table, with the cell text unchanged:
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">read output</span>
+        </div>
+<pre><code>| Item | Qty | Unit |
+| --- | --- | --- |
+| Widget A | 12 | 3.25 |
+| Widget B | 5 | 7.10 |</code></pre>
+      </div>
+
+      <p>
+        Markdown cannot show a cell that spans rows (<code>rowspan</code>), so such a table comes out one row per line with
+        tab-separated cells. A cell spanning columns (<code>colspan</code>) is followed by empty cells so the columns still line up.
+        Single-column tables, <code>role="presentation"</code> tables and an outer table that holds other tables are page layout,
+        and read as ordinary text.
+      </p>
+      <p>
+        <code>--tab &lt;id|label&gt;</code> works on any page command (<code>read</code>, <code>extract</code>,
+        <code>snapshot</code>, <code>get text</code>, ...): the command runs in that tab, and the session stays on that tab afterwards.
+      </p>
 
       <p>
         Common flags: <code>--raw</code> (return the response body untouched), <code>--require-md</code>

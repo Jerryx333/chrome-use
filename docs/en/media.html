@@ -100,7 +100,7 @@
       <ol>
         <li><code>screenshot</code> captures the viewport, <code>--full</code> the whole page, or just one element or region.</li>
         <li>When you want to discuss a picture, <code>--annotate</code> numbers the elements, and the numbers match the elements the agent read.</li>
-        <li>Video: <code>record start</code> and <code>record stop</code> wrap the whole workflow, with short waits after key actions.</li>
+        <li>Video: <code>record start</code> and <code>record stop</code> wrap the whole workflow, with short waits after key actions. For something to post in an issue or a chat, it records a <code>.gif</code>.</li>
         <li>For responsive bugs, <code>viewport</code> sets width and height, then the agent compares page width with viewport width to find what breaks the layout.</li>
         <li>Plain alerts are accepted automatically. When a confirm or prompt dialog blocks the flow, <code>dialog</code> accepts or dismisses it.</li>
       </ol>
@@ -108,7 +108,7 @@
       <ul>
         <li>Your tabs stay as they are: the agent opens background tabs in a <code>✦ &lt;project&gt;</code> tab group in your Chrome and does not take focus. Click over whenever you want to watch.</li>
         <li>A screenshot without a path goes to a temp file and the path is printed; tell the agent where you want it instead. Screenshots are scaled to at most 1200px on the longest side by default (full-page shots cap only the width); ask if you need full resolution.</li>
-        <li>Recording needs ffmpeg installed and writes <code>.webm</code> or <code>.mp4</code>; there is no GIF export. When connected to your Chrome through the extension, it records the agent&#39;s own tabs.</li>
+        <li>Video (<code>.webm</code> or <code>.mp4</code>) needs ffmpeg installed; a <code>.gif</code> does not. A GIF runs at 5 frames a second and at most 800px wide, ready to paste into an issue. When connected to your Chrome through the extension, it records the agent&#39;s own tabs.</li>
         <li>Changing the viewport only affects that tab&#39;s layout. Your Chrome window keeps its size.</li>
         <li>At the end the agent runs <code>done</code>: tabs it opened along the way close, and pages you need to see or keep using stay open.</li>
       </ul>
@@ -232,6 +232,30 @@
 <span class="du-prompt">$</span> chrome-use record restart <span class="du-str">./take2.webm</span>    <span class="du-cmt"># stop current + reopen to a new file</span></code></pre>
       </div>
 
+      <h3>Recording a GIF</h3>
+      <p>
+        A path ending in <code>.gif</code> records a looping animated GIF, the kind you paste into an issue, a PR or a chat.
+        <code>record start --gif</code> with no path writes <code>./recording.gif</code>; <code>--gif</code> with a path that
+        does not end in <code>.gif</code> is refused.
+      </p>
+
+      <div class="du-code">
+        <div class="du-code-head">
+          <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="du-code-name">bash</span>
+        </div>
+<pre><code><span class="du-prompt">$</span> chrome-use record start <span class="du-str">./bug.gif</span>
+<span class="du-prompt">$</span> chrome-use click <span class="du-str">@e3</span>
+<span class="du-prompt">$</span> chrome-use record stop                     <span class="du-cmt"># prints the path and frame count</span></code></pre>
+      </div>
+
+      <p>
+        chrome-use encodes the GIF itself while recording, with no ffmpeg, and memory stays flat however long it runs.
+        It takes 5 frames a second, scales them to at most 800px wide and keeps the first frame's size throughout;
+        frames where nothing changed merge into one, so an idle page costs almost nothing.
+        Each frame has at most 256 colours: fine for UI, grainy for photos and video. Record a <code>.webm</code> when quality matters.
+      </p>
+
       <h3>Practical recording tips</h3>
       <table>
         <thead>
@@ -259,8 +283,8 @@
 
       <div class="du-callout note">
         <div class="du-callout-title">ℹ️ Output format and limits</div>
-        Recording pipes CDP frame captures through <strong>ffmpeg</strong>, so ffmpeg must be installed. The output format is chosen by the <strong>file extension</strong>:
-        <code>.webm</code> encodes with VP8 (<code>libvpx</code>), any other extension (e.g. <code>.mp4</code>) uses H.264 (<code>libx264</code>) — there's no GIF export.
+        Video recording pipes CDP frame captures through <strong>ffmpeg</strong>, so ffmpeg must be installed. The output format is chosen by the <strong>file extension</strong>:
+        <code>.gif</code> is encoded by chrome-use itself (no ffmpeg), <code>.webm</code> encodes with VP8 (<code>libvpx</code>), any other extension (e.g. <code>.mp4</code>) uses H.264 (<code>libx264</code>).
         Recording adds slight overhead to automation, long recordings take a lot of disk, and some headless environments may lack the codec.
         More recording recipes live in <code>references/video-recording.md</code> inside the skill package (a repo file — the doc site doesn't link to it).
       </div>

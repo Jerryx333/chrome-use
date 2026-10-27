@@ -118,6 +118,7 @@ readability, no markdown, no `llms.txt`, no boilerplate stripping).
 chrome-use read <url>                  # fetch + markdownify (llms.txt / outline aware) — no render needed
 chrome-use read                        # readability extract of the ACTIVE tab (clean main content)
 chrome-use read <url> --links          # ...plus the page's links as absolute URLs (bounded list)
+chrome-use read --tab t1               # read tab t1 without a `tab select` first (session stays on t1)
 chrome-use get text                    # WHOLE PAGE — all frames by default (see below)
 chrome-use get text @e1                # visible text of one element (or a CSS selector)
 chrome-use get text --main             # main content only — skip nav/header/sidebar
@@ -130,6 +131,11 @@ chrome-use get title                   # page title
 chrome-use get url                     # current URL
 chrome-use get count ".item"           # count matching elements
 ```
+
+**Tables stay tables.** `read` prints an HTML table as a Markdown table, cell
+text unchanged (`| Widget A | 12 | 3.25 |`), so you rarely need `extract` just to
+separate columns. A table with a cell spanning rows comes out one row per line
+with tab-separated cells; single-column and layout tables read as plain text.
 
 **Whole-page text is cross-frame by default.** `chrome-use get text` with no
 selector aggregates visible text across **every** frame — top document plus

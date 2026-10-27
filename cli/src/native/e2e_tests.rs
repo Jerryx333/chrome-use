@@ -3512,12 +3512,13 @@ async fn e2e_tab_new_with_duplicate_label_errors() {
     assert_success(&resp);
 }
 
-/// Positional integers passed as `tabId` on tab-switch / tab-close must be
-/// rejected by the daemon-layer parser, not silently coerced. The error
-/// should teach the user the correct form (`t<N>`).
+/// `tab select 0` (#781): a bare integer is a 0-based position in `tab list`
+/// order. It selects that row's tab and names its stable id; a position past
+/// the end is refused with the ids that exist. `tab close` and `--tab` still
+/// take only stable ids or labels.
 #[tokio::test]
 #[ignore]
-async fn e2e_tab_switch_rejects_bare_integer() {
+async fn e2e_tab_switch_accepts_a_position_and_names_the_stable_id() {
     let mut state = DaemonState::new();
 
     let resp = execute_command(
@@ -3526,24 +3527,172 @@ async fn e2e_tab_switch_rejects_bare_integer() {
     )
     .await;
     assert_success(&resp);
-
     let resp = execute_command(
-        &json!({ "id": "2", "action": "tab_switch", "tabId": "2" }),
+        &json!({ "id": "2", "action": "navigate", "url": "data:text/html,<h1>First</h1>" }),
         &mut state,
     )
     .await;
-    assert_eq!(
-        resp.get("success").and_then(|v| v.as_bool()),
-        Some(false),
-        "bare integer tabId on tab_switch should error: {}",
-        serde_json::to_string_pretty(&resp).unwrap_or_default()
-    );
-    let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "tab_new", "url": "data:text/html,<h1>Second</h1>" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "tab_switch", "tabId": "0" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let note = get_data(&resp)["tabNote"].as_str().unwrap_or("");
+    assert!(note.contains("selected t1"), "{resp}");
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "evaluate", "script": "document.querySelector('h1').textContent" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(get_data(&resp)["result"], "First");
+
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "tab_switch", "tabId": "1" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(get_data(&resp)["tabNote"]
+        .as_str()
+        .unwrap_or("")
+        .contains("selected t2"));
+
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "tab_switch", "tabId": "5" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "{resp}");
+    let err = resp["error"].as_str().unwrap_or("");
     assert!(
-        err.contains("t2") && err.contains("positional integers"),
-        "error should teach `t<N>` convention: {}",
-        err
+        err.contains("No tab at position 5") && err.contains("t1, t2"),
+        "{err}"
     );
+
+    // A stable id carries no note.
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "tab_switch", "tabId": "t1" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(get_data(&resp).get("tabNote").is_none(), "{resp}");
+
+    // `tab close` keeps refusing a position: closing the wrong tab is not
+    // something a shifted index should be able to do.
+    let resp = execute_command(
+        &json!({ "id": "9", "action": "tab_close", "tabId": "1" }),
+        &mut state,
+    )
+    .await;
+    assert_eq!(resp["success"], false, "{resp}");
+    assert!(
+        resp["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("positional integers"),
+        "{resp}"
+    );
+
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// `read`, `extract`, `snapshot` and `get text` take `--tab <id>` (#781): the
+/// command runs in that tab without a separate `tab select`, and its output
+/// comes from that tab, not the one the session was on.
+#[tokio::test]
+#[ignore]
+async fn e2e_read_commands_target_a_tab_with_tab_flag() {
+    let mut state = DaemonState::new();
+
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let price = include_str!("e2e_fixtures/price_table.html");
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(price));
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "tab_new", "url": "data:text/html,<h1>Order form</h1>" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    // The session is on t2; `read --tab t1` reads the quote.
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "read", "tabId": "t1" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let content = get_data(&resp)["content"].as_str().unwrap_or("");
+    assert!(
+        content.contains("| Item | Qty | Unit |\n| --- | --- | --- |\n| Widget A | 12 | 3.25 |"),
+        "{content}"
+    );
+
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "tab_switch", "tabId": "t2" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "6", "action": "extract", "tabId": "t1",
+                 "schema": { "rows": "tr", "fields": { "item": "td:nth-child(1)" } } }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let extracted = get_data(&resp)["extracted"].to_string();
+    assert!(extracted.contains("Widget C"), "{resp}");
+
+    let resp = execute_command(
+        &json!({ "id": "7", "action": "tab_switch", "tabId": "t2" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "8", "action": "snapshot", "tabId": "t1" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let snapshot = get_data(&resp)["snapshot"].as_str().unwrap_or("");
+    assert!(snapshot.contains("Widget B"), "{snapshot}");
+
+    let resp = execute_command(
+        &json!({ "id": "9", "action": "tab_switch", "tabId": "t2" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "10", "action": "gettext", "selector": "h1", "tabId": "t1" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert_eq!(get_data(&resp)["text"], "Supplier quote #Q-4471", "{resp}");
 
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
@@ -10273,6 +10422,69 @@ async fn e2e_recording_inherits_viewport() {
     assert_success(&resp);
 
     let _ = std::fs::remove_file(&rec_path);
+    let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
+    assert_success(&resp);
+}
+
+/// `record start <path>.gif` (#781) writes a looping animated GIF in process,
+/// no ffmpeg: frames no wider than 800 px, a frame per change.
+#[tokio::test]
+#[ignore]
+async fn e2e_recording_to_a_gif_writes_an_animated_gif() {
+    use image::AnimationDecoder;
+
+    let mut state = DaemonState::new();
+    let resp = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let resp = execute_command(
+        &json!({ "id": "2", "action": "viewport", "width": 1200, "height": 700 }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    let page = "<body style='margin:0'><h1 id=h>0</h1><script>let n=0;\
+        setInterval(()=>{document.getElementById('h').textContent=++n;\
+        document.body.style.background=n%2?'#fc0':'#0cf'},250)</script></body>";
+    let url = format!("data:text/html;base64,{}", STANDARD.encode(page));
+    let resp = execute_command(
+        &json!({ "id": "3", "action": "navigate", "url": url }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+
+    let path = std::env::temp_dir().join(format!("ab-e2e-rec-{}.gif", std::process::id()));
+    let resp = execute_command(
+        &json!({ "id": "4", "action": "recording_start", "path": path.to_string_lossy() }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+    let resp = execute_command(
+        &json!({ "id": "5", "action": "recording_stop" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&resp);
+    assert!(
+        get_data(&resp)["frames"].as_u64().unwrap_or(0) >= 3,
+        "{resp}"
+    );
+
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.starts_with(b"GIF89a"), "not a GIF");
+    let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(&bytes)).unwrap();
+    let frames = decoder.into_frames().collect_frames().unwrap();
+    assert!(frames.len() >= 2, "{} frame(s): not animated", frames.len());
+    let (width, height) = frames[0].buffer().dimensions();
+    assert!(width <= 800 && width >= 400, "{width}x{height}");
+    let _ = std::fs::remove_file(&path);
+
     let resp = execute_command(&json!({ "id": "99", "action": "close" }), &mut state).await;
     assert_success(&resp);
 }
