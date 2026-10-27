@@ -49,7 +49,7 @@ test('failures leave the rest alone', async () => {
 
 test('the worker runs it when the browser starts', () => {
   const background = readFileSync(new URL('./background.js', import.meta.url), 'utf8')
-  assert.match(background, /import \{ ungroupRestoredAgentGroups \} from '\.\/restored-groups\.js'/)
+  assert.match(background, /import \{[^}]*\bungroupRestoredAgentGroups\b[^}]*\} from '\.\/restored-groups\.js'/)
   const start = background.indexOf('chrome.runtime.onStartup.addListener(')
   assert.ok(start >= 0)
   assert.match(background.slice(start, start + 400), /ungroupRestoredGroupsAfterStartup\(\)/)
