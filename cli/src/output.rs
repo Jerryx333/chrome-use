@@ -3046,6 +3046,9 @@ The written value is read back from the control or editor model and compared
 exactly before success is reported. When a hidden Monaco module API can be
 matched to the exact editor, fill uses native input and direct model verification
 (engine: monaco-native); get value also reads it without using the clipboard.
+This includes completed exports retained by Monaco 0.52's minified AMD loader
+when its public globals are removed. Discovery reads a bounded module table;
+it does not invoke loaders, factories or accessors, or make requests.
 Model changes, focus loss or mismatched readback fail without a clipboard retry.
 When discovery finds no usable API before input, the existing fallback uses
 one trusted editor paste, reads the selected model back through the editor's

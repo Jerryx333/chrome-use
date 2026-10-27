@@ -1,4 +1,5 @@
 //! Clipboard-free access to a Monaco API retained in handler module scopes.
+//! AMD discovery reads completed exports from a retained loader, never require().
 //!
 //! Discovery reads CDP descriptors, never invokes scope getters, and is bounded.
 //! Only a public editor API matched to the exact DOM root may supply a model.
@@ -97,12 +98,13 @@ async fn access_in_group(
             .await?;
         check_exception(&properties)?;
         let descriptors = properties["result"].as_array().cloned().unwrap_or_default();
-        if !scope && has_api_export(&descriptors, "getEditors") {
+        let amd = has_amd_modules(&descriptors);
+        if !scope && (has_api_export(&descriptors, "getEditors") || amd) {
             let model = client
                 .send_command(
                     "Runtime.callFunctionOn",
                     Some(json!({
-                        "objectId":id,"objectGroup":group,"arguments":[{"objectId":input_id}],
+                        "objectId":id,"objectGroup":group,"arguments":[{"objectId":input_id},{"value":amd}],
                         "functionDeclaration":include_str!("monaco_model.js")
                     })),
                     Some(session),
@@ -142,15 +144,43 @@ async fn access_in_group(
                 .pointer("/preview/properties")
                 .and_then(Value::as_array)
                 .is_some_and(|properties| properties.iter().any(|p| p["name"] == "getEditors"));
+            // Monaco 0.52 AMD retains globalDefine in a Script scope even
+            // after window.define/require/monaco are removed. Its closure owns
+            // the loader manager under a minified binding. Recognize the
+            // manager by descriptor shape, not that binding's spelling.
+            let loader = scope && name == "globalDefine" && value["type"] == "function";
+            let manager = scope
+                && ["_defineFunc", "_requireFunc"].iter().all(|name| {
+                    value
+                        .pointer("/preview/properties")
+                        .and_then(Value::as_array)
+                        .is_some_and(|properties| {
+                            properties
+                                .iter()
+                                .any(|p| p["name"] == *name && p["type"] == "function")
+                        })
+                });
             let numeric = name.parse::<usize>().is_ok();
-            if namespace || numeric || matches!(name, "editor" | "monaco" | "api") {
+            if namespace
+                || loader
+                || manager
+                || numeric
+                || matches!(name, "editor" | "monaco" | "api")
+            {
                 // V8's synthetic scope mirrors are not namespace objects and
                 // cannot be called as one. Their descriptor values can be.
                 let is_scope = numeric
                     && object["description"]
                         .as_str()
                         .is_some_and(|s| s.starts_with("Scopes["));
-                enqueue(&mut queue, &mut seen, value, depth + 1, is_scope, namespace);
+                enqueue(
+                    &mut queue,
+                    &mut seen,
+                    value,
+                    depth + 1,
+                    is_scope,
+                    namespace || loader || manager,
+                );
             }
         }
     }
@@ -177,6 +207,20 @@ fn enqueue(
             }
         }
     }
+}
+
+// Only data descriptors qualify: discovery must not invoke loader getters or
+// execute a module factory. The page payload checks completion and module ID.
+fn has_amd_modules(descriptors: &[Value]) -> bool {
+    descriptors.iter().any(|p| {
+        p["name"] == "_modules2"
+            && p.pointer("/value/subtype").and_then(Value::as_str) == Some("array")
+    }) && ["_defineFunc", "_requireFunc"].iter().all(|name| {
+        descriptors.iter().any(|p| {
+            p["name"] == *name
+                && p.pointer("/value/type").and_then(Value::as_str) == Some("function")
+        })
+    })
 }
 
 fn has_api_export(descriptors: &[Value], name: &str) -> bool {
