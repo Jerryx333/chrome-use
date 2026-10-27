@@ -1124,6 +1124,17 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
     const params = request.params || {}; const method = request.method; const actions = element('div', undefined, 'actions');
     const bound = boundReplies(request);
     container.append(element('h3', method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion' ? t('panel_request_needs_input') : t('panel_request_review')));
+    // #781: the command carries a URL or snippet a web page showed the agent,
+    // not one the user typed. The service never approves it automatically.
+    const taint = request.pageTaint && Array.isArray(request.pageTaint.tokens) ? request.pageTaint : null;
+    if (taint) {
+      container.dataset.pageTaint = 'true';
+      const warning = element('div', undefined, 'request-taint');
+      warning.setAttribute('role', 'alert');
+      warning.append(element('strong', t(taint.remoteExec ? 'panel_taint_remote_exec' : 'panel_taint_title')), element('p', t('panel_taint_body')));
+      for (const token of taint.tokens.slice(0, 5)) warning.append(element('code', String(token).slice(0, 200)));
+      container.append(warning);
+    }
     if (params.truncated) { container.append(element('p', t('panel_request_truncated'))); }
     else if (method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion') {
       const codex = method === 'item/tool/requestUserInput';
@@ -1169,7 +1180,7 @@ export function createPanel({ document, runtime, storage, tabs, windows, permiss
       actions.append(allow(button(t('panel_allow_turn'), () => respond(key, { permissions: params.permissions || {}, scope: 'turn' }, 'accept'), 'primary')));
     } else { container.append(element('p', t('panel_request_unsupported'))); }
     const question = method === 'item/tool/requestUserInput' || params.tool_name === 'AskUserQuestion';
-    if (!question && !params.truncated && panelSupport?.fullAccess && actions.querySelectorAll('button').length) actions.append(allow(button(t('panel_allow_all'), () => setAccess(true))));
+    if (!question && !taint && !params.truncated && panelSupport?.fullAccess && actions.querySelectorAll('button').length) actions.append(allow(button(t('panel_allow_all'), () => setAccess(true))));
     container.append(actions, status); return { container, status, bound, revision: request.requestRevision, generation: request.generation };
   }
   function renderRequests() {

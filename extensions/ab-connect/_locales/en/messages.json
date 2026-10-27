@@ -3674,5 +3674,8 @@
   },
   "panel_open_initial_page": { "message": "Initial page" },
   "panel_open_final_page": { "message": "Final page" },
-  "panel_window_no_initial_page": { "message": "No initial webpage was recorded for this conversation." }
+  "panel_window_no_initial_page": { "message": "No initial webpage was recorded for this conversation." },
+  "panel_taint_title": { "message": "This command contains text from a web page" },
+  "panel_taint_remote_exec": { "message": "This command downloads and runs code a web page pointed to" },
+  "panel_taint_body": { "message": "The agent read these strings on a page, not in your messages. Pages can plant instructions for agents. Allow only if you meant this to run; it was not approved automatically." }
 }

@@ -3729,6 +3729,45 @@ pub async fn get_element_text(
         .unwrap_or_default())
 }
 
+/// [`get_element_text`] with text a person can't see left out (#781).
+pub async fn get_element_visible_text(
+    client: &CdpClient,
+    session_id: &str,
+    ref_map: &RefMap,
+    selector_or_ref: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<(String, super::visibility::HiddenStats), String> {
+    let (object_id, effective_session_id) = resolve_element_object_id(
+        client,
+        session_id,
+        ref_map,
+        selector_or_ref,
+        iframe_sessions,
+    )
+    .await?;
+    let reply = client
+        .send_command(
+            "Runtime.callFunctionOn",
+            Some(serde_json::json!({
+                "objectId": object_id,
+                "functionDeclaration": super::visibility::SCAN_FN,
+                "arguments": [{ "value": "text" }],
+                "returnByValue": true,
+                "awaitPromise": false,
+            })),
+            Some(&effective_session_id),
+        )
+        .await?;
+    if let Some(details) = reply.get("exceptionDetails") {
+        return Err(format!("hidden-text scan failed: {details}"));
+    }
+    let value = &reply["result"]["value"];
+    Ok((
+        value["text"].as_str().unwrap_or_default().to_string(),
+        super::visibility::HiddenStats::from_scan(value),
+    ))
+}
+
 /// Text content collected from a single frame of the page.
 #[derive(Debug, Clone)]
 pub struct FrameText {
@@ -3737,6 +3776,9 @@ pub struct FrameText {
     /// "top" | "inline" (same-process child frame) | "oopif" (out-of-process).
     pub kind: &'static str,
     pub text: String,
+    /// What the hidden-text filter left out of `text` (#781); empty when
+    /// the frame was read unfiltered.
+    pub hidden: super::visibility::HiddenStats,
 }
 
 // The expression we run in every frame to read its visible text. innerText
@@ -3758,6 +3800,68 @@ async fn eval_text_default(client: &CdpClient, session_id: &str) -> String {
         .and_then(|v| v.get("result").and_then(|r| r.get("value")).cloned())
         .and_then(|v| v.as_str().map(|s| s.to_string()))
         .unwrap_or_default()
+}
+
+/// A frame's text: plain `innerText`, or with text a person can't see cut
+/// out when `filter` is set (#781). `context` pins a same-process frame's
+/// isolated world.
+async fn eval_frame_text(
+    client: &CdpClient,
+    session_id: &str,
+    context: Option<i64>,
+    filter: bool,
+) -> (String, super::visibility::HiddenStats) {
+    let expression = if filter {
+        super::visibility::body_text_expression()
+    } else {
+        FRAME_INNERTEXT_JS.to_string()
+    };
+    let mut params = serde_json::json!({ "expression": expression, "returnByValue": true });
+    if let Some(ctx) = context {
+        params["contextId"] = serde_json::json!(ctx);
+    }
+    let value = client
+        .send_command("Runtime.evaluate", Some(params.clone()), Some(session_id))
+        .await
+        .ok()
+        .and_then(|v| v.get("result").and_then(|r| r.get("value")).cloned())
+        .unwrap_or(Value::Null);
+    match value {
+        Value::String(text) => (text, Default::default()),
+        Value::Object(_) => (
+            value["text"].as_str().unwrap_or_default().to_string(),
+            super::visibility::HiddenStats::from_scan(&value),
+        ),
+        _ if filter => {
+            // The filtered read failed outright: read the frame plain and
+            // say so, rather than return an empty frame.
+            params["expression"] = serde_json::json!(FRAME_INNERTEXT_JS);
+            let text = client
+                .send_command("Runtime.evaluate", Some(params), Some(session_id))
+                .await
+                .ok()
+                .and_then(|v| v["result"]["value"].as_str().map(String::from))
+                .unwrap_or_default();
+            (text, super::visibility::HiddenStats::failed())
+        }
+        _ => (String::new(), Default::default()),
+    }
+}
+
+async fn isolated_frame_context(
+    client: &CdpClient,
+    session_id: &str,
+    frame_id: &str,
+) -> Option<i64> {
+    client
+        .send_command(
+            "Page.createIsolatedWorld",
+            Some(serde_json::json!({ "frameId": frame_id, "worldName": "chrome_use_text" })),
+            Some(session_id),
+        )
+        .await
+        .ok()
+        .and_then(|v| v.get("executionContextId").and_then(|c| c.as_i64()))
 }
 
 // Same-process child frames share the top renderer but live in their own
@@ -3829,6 +3933,25 @@ pub async fn collect_all_frames_text(
     top_session: &str,
     iframe_sessions: &HashMap<String, String>,
 ) -> Result<Vec<FrameText>, String> {
+    collect_frames_text(client, top_session, iframe_sessions, false).await
+}
+
+/// [`collect_all_frames_text`] with text a person can't see left out of
+/// every frame (`get text`, #781).
+pub async fn collect_all_frames_visible_text(
+    client: &CdpClient,
+    top_session: &str,
+    iframe_sessions: &HashMap<String, String>,
+) -> Result<Vec<FrameText>, String> {
+    collect_frames_text(client, top_session, iframe_sessions, true).await
+}
+
+async fn collect_frames_text(
+    client: &CdpClient,
+    top_session: &str,
+    iframe_sessions: &HashMap<String, String>,
+    filter: bool,
+) -> Result<Vec<FrameText>, String> {
     let mut out: Vec<FrameText> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -3847,19 +3970,36 @@ pub async fn collect_all_frames_text(
         if !seen.insert(fid.clone()) {
             continue;
         }
-        let (kind, text) = if is_top {
-            ("top", eval_text_default(client, top_session).await)
-        } else {
+        let (kind, (text, hidden)) = if !filter {
+            let text = if is_top {
+                eval_text_default(client, top_session).await
+            } else {
+                eval_text_in_frame(client, top_session, &fid).await
+            };
             (
-                "inline",
-                eval_text_in_frame(client, top_session, &fid).await,
+                if is_top { "top" } else { "inline" },
+                (text, Default::default()),
             )
+        } else if is_top {
+            (
+                "top",
+                eval_frame_text(client, top_session, None, true).await,
+            )
+        } else {
+            match isolated_frame_context(client, top_session, &fid).await {
+                Some(ctx) => (
+                    "inline",
+                    eval_frame_text(client, top_session, Some(ctx), true).await,
+                ),
+                None => ("inline", (String::new(), Default::default())),
+            }
         };
         out.push(FrameText {
             frame_id: fid,
             url,
             kind,
             text,
+            hidden,
         });
     }
 
@@ -3880,12 +4020,17 @@ pub async fn collect_all_frames_text(
                     .map(|s| s.to_string())
             })
             .unwrap_or_default();
-        let text = eval_text_default(client, sid).await;
+        let (text, hidden) = if filter {
+            eval_frame_text(client, sid, None, true).await
+        } else {
+            (eval_text_default(client, sid).await, Default::default())
+        };
         out.push(FrameText {
             frame_id: fid.clone(),
             url,
             kind: "oopif",
             text,
+            hidden,
         });
     }
 
@@ -3909,6 +4054,58 @@ const MAIN_CONTENT_JS: &str = r#"(function(){
   if(best&&bestLen>200)return txt(best);
   return txt(document.body);
 })()"#;
+
+/// [`MAIN_CONTENT_JS`]'s choice of region, as an element, for the filtered
+/// read: the same `<main>`/`<article>` pick, then the hidden-text scan.
+fn main_content_visible_js() -> String {
+    format!(
+        r#"(function(){{
+  function txt(el){{try{{return (el.innerText||'').trim();}}catch(e){{return '';}}}}
+  var sels=['main','[role=main]','article','#main','#contents','#l-content'];
+  var best=null,bestLen=0;
+  for(var i=0;i<sels.length;i++){{
+    var els=document.querySelectorAll(sels[i]);
+    for(var j=0;j<els.length;j++){{var l=txt(els[j]).length;if(l>bestLen){{bestLen=l;best=els[j];}}}}
+  }}
+  var root=(best&&bestLen>200)?best:document.body;
+  if(!root)return {{text:''}};
+  try{{var r=({scan}).call(root,'text');r.text=(r.text||'').trim();return r;}}
+  catch(e){{return {{text:txt(root),scanError:String(e)}};}}
+}})()"#,
+        scan = super::visibility::SCAN_FN
+    )
+}
+
+/// `get text --main` with text a person can't see left out (#781).
+pub async fn get_main_content_visible_text(
+    client: &CdpClient,
+    session_id: &str,
+) -> Result<(String, super::visibility::HiddenStats), String> {
+    let res = client
+        .send_command(
+            "Runtime.evaluate",
+            Some(serde_json::json!({
+                "expression": main_content_visible_js(),
+                "returnByValue": true,
+            })),
+            Some(session_id),
+        )
+        .await?;
+    if res.get("exceptionDetails").is_some() {
+        // Never an empty page in place of a failed filter: read it plain.
+        let text = get_main_content_text(client, session_id).await?;
+        return Ok((text, super::visibility::HiddenStats::failed()));
+    }
+    let value = res
+        .get("result")
+        .and_then(|r| r.get("value"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    Ok((
+        value["text"].as_str().unwrap_or_default().to_string(),
+        super::visibility::HiddenStats::from_scan(&value),
+    ))
+}
 
 /// Extract the page's main-content text (readability-lite), preferring a
 /// semantic `<main>`/`<article>` region over the full body. Used by
