@@ -67,7 +67,7 @@
         There are many ways to give an AI agent a browser, and 2026 brought a new wave of tools that attach to the Chrome you already use. This page puts them side by side <span class="mark">on the facts</span>:
         our own measurements where we could run them, the other projects' official docs for everything else, and no numbers we couldn't measure.
       </p>
-      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">Checked against each project's README, docs and releases on 2026-10-27. The ego and browser-relay sections below were measured in 2026-07 and say so.</p>
+      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">Checked against each project's README, docs and releases on 2026-10-27. The ego section was re-measured on 2026-10-27 with current releases of both; the browser-relay comparison dates from 2026-07 and says so.</p>
 
       <h2>In one sentence</h2>
       <p>
@@ -274,106 +274,72 @@
       </table>
       </div>
 
-      <h2>chrome-use vs ego(lite): measured in 2026-07</h2>
-      <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ This section's data is from 2026-07</div>
-        The token and timing numbers below, and the marketing lines quoted, come from testing the ego(lite) release of 2026-07. ego is now on 0.6.x (Chromium 156) and its site has moved to its own task benchmark, so the conclusions may have changed; treat them as historical until we re-run them.
-      </div>
+      <h2>chrome-use vs ego(lite): measured in 2026-10</h2>
       <p>
-        ego(lite) is positioned close to us (both let agents use real sign-ins without fighting for your tabs). We ran the same tasks on both and checked its "faster, fewer tokens" claims: <strong>one half true, one backwards</strong>.
+        ego(lite) is positioned close to us: both let agents use real sign-ins without fighting for your tabs. On 2026-10-27 we re-ran the comparison on one machine (190, M4) with current releases:
+        chrome-use 1.5.269 (Chrome 155, headed <code>--launch</code>) and ego(lite) 0.6.1.13 (Chromium 156, ego-browser skill 2.1.0). Each number is the median of 5 interleaved rounds.
+        Both conclusions from the July run no longer hold; these are the new results.
       </p>
+      <p class="du-small" style="color:var(--ink-faint); font-size:.85rem;">ego installed and ran without an account, with no Chrome data imported. GitHub was measured logged out on both (July was logged in), so those rows aren't directly comparable with July.</p>
 
-      <h3>Tokens (the observation fed to the model — what actually costs money)</h3>
+      <h3>Tokens (bytes per snapshot the model reads)</h3>
       <div class="cmp-scroll">
       <table class="cmp-table">
-        <thead><tr><th>Page</th><th>chrome-use <code>snapshot -i</code></th><th>ego <code>snapshotText</code></th><th>Leaner</th></tr></thead>
+        <thead><tr><th>Page</th><th>chrome-use <code>snapshot -i</code></th><th>ego default <code>page.snapshot()</code> (viewport only)</th><th>ego <code>full_page</code></th><th>Verdict</th></tr></thead>
         <tbody>
-          <tr class="me"><th>example.com</th><td class="cmp-win">102 bytes</td><td>438 bytes</td><td>~4.3×</td></tr>
-          <tr class="me"><th>Hacker News</th><td class="cmp-win">12.6 KB</td><td>46.7 KB</td><td>~3.7×</td></tr>
-          <tr class="me"><th>GitHub repo page<br><span class="cmp-mut">(both logged in)</span></th><td class="cmp-win">26.6 KB</td><td>112 KB</td><td>~4.2×</td></tr>
+          <tr><th>Hacker News</th><td class="cmp-win">15.5 KB</td><td>37.7 KB</td><td>46.5 KB</td><td>Default vs default, chrome-use ~2.4× smaller (3.0× vs full page)</td></tr>
+          <tr><th>GitHub repo page (logged out)</th><td>40.3 KB</td><td class="cmp-win">18.8 KB</td><td>177 KB</td><td>ego's viewport default is ~2.1× smaller per call; seeing as much needs scrolling or <code>full_page</code>, where chrome-use is ~4.4× smaller</td></tr>
         </tbody>
       </table>
       </div>
-      <p class="cmp-mut" style="font-size:.82rem; margin-top:6px;">Both tools measured back-to-back in the same login state, each on its own defaults (re-run 2026-07): example.com / HN logged out, GitHub logged into the same account on both. Earlier figures (456 / 33.6K, etc.) were stale or captured in a mismatched login state; replaced with independently reproduced values.</p>
-      <div class="du-callout warn">
-        <div class="du-callout-title">⚠️ "fewer tokens" is backwards</div>
-        chrome-use's default <code>snapshot -i</code> lists interactive elements only — <strong>~3.7–4.3× leaner</strong> than ego's default full tree (independently reproduced, same login state). Tokens are what an agent actually pays for, so we save more.
-      </div>
+      <p>
+        ego's default snapshot now covers only the visible screen, while chrome-use's <code>snapshot -i</code> covers the whole page's interactive elements, so they measure different scopes. On short pages chrome-use is smaller; on long pages one ego call is smaller; over the whole page chrome-use is smaller.
+        July's "3.7–4.3× fewer tokens" no longer holds as written. (example.com itself changed, so that row was dropped.)
+      </p>
 
-      <h3>Performance (wall-clock)</h3>
+      <h3>Speed (wall-clock)</h3>
       <div class="cmp-scroll">
       <table class="cmp-table">
         <thead><tr><th>Scenario</th><th>chrome-use</th><th>ego</th></tr></thead>
         <tbody>
-          <tr><th>Navigate / single snapshot</th><td class="cmp-win">≈ equal</td><td>≈ equal (bound by page load + CDP)</td></tr>
-          <tr><th>6 micro-ops · one CLI process each</th><td>1.00s (0.17s/op spawn cost)</td><td>—</td></tr>
-          <tr class="me"><th>6 micro-ops · chrome-use <code>batch</code></th><td class="cmp-win">0.19s</td><td>—</td></tr>
-          <tr><th>6 micro-ops · ego persistent runtime</th><td>—</td><td class="cmp-win">≈0.00s</td></tr>
+          <tr><th>Process cost of a no-op command</th><td class="cmp-win">0.016 s</td><td>0.151 s (a new Node process each run)</td></tr>
+          <tr><th>6 small operations, one command each</th><td class="cmp-win">0.077 s</td><td>0.72 s</td></tr>
+          <tr><th>6 small operations in one call</th><td class="cmp-win"><code>batch</code> 0.017 s</td><td>22 ms in-script, 0.152 s with the process</td></tr>
+          <tr><th>Open + snapshot: Hacker News</th><td class="cmp-win">0.36 s</td><td>0.61 s</td></tr>
+          <tr><th>Open + snapshot: GitHub repo page</th><td>1.62 s</td><td class="cmp-win">0.89 s</td></tr>
         </tbody>
       </table>
       </div>
       <p>
-        Raw browser operations are equally fast. ego's edge is its <strong>persistent runtime</strong> — no per-command process spawn; chrome-use defaults to one-process-per-command (~0.15–0.17s each).
-        So a task with <strong>many tiny ops</strong> is where ego pulls ahead ("3×" most likely comes from that shape). But a typical task (open + snapshot + extract) measured ~3s on both, and chrome-use's <code>batch</code> (one process reusing the persistent daemon) does 6 ops in 0.19s ≈ ego, plus a WebSocket stream for real-time driving.
+        July's explanation was that ego's resident runtime saved per-command process startup. That's now reversed: a chrome-use command costs about 13–16 ms, while every ego call starts a Node process of about 0.15 s.
+        ego is faster on GitHub because chrome-use's <code>snapshot -i</code> waits for the page to settle by default, and GitHub stays busy until the ~1 s ceiling; with <code>--no-settle</code> the snapshot takes 0.09 s.
       </p>
 
-      <h3>Their site's claims vs our evidence</h3>
-      <p>Verbatim from <a href="https://lite.ego.app/">lite.ego.app</a>, each claim fact-checked with evidence. Method is in the workflow below — reproducible.</p>
+      <h3>What their site says now (2026-10-27)</h3>
       <div class="cmp-scroll">
       <table class="cmp-table">
-        <thead><tr><th>ego's claim (verbatim)</th><th>Our evidence</th><th>Verdict</th></tr></thead>
+        <thead><tr><th>ego's site, verbatim</th><th>Our take</th></tr></thead>
         <tbody>
-          <tr>
-            <td>"<strong>3.45x faster</strong>" · "Fastest browser for AI agents"</td>
-            <td>HN extract task ~3s on both; 6 micro-ops: chrome-use 1.00s per-process, <code>batch</code> 0.19s, ego persistent runtime ≈0s.</td>
-            <td><span class="cmp-mut">Half-true</span> — only for <strong>micro-op-heavy</strong> tasks (their persistent runtime skips process spawn); typical tasks equal, <code>batch</code>/stream closes it.</td>
-          </tr>
-          <tr class="me">
-            <td>"<strong>Same automation, fewer tokens</strong>"</td>
-            <td>Default snapshot size, same pages (independently reproduced, same login state): chrome-use <code>snapshot -i</code> <strong>102 B / 12.6K / 26.6K</strong> vs ego <code>snapshotText</code> 438 B / 46.7K / 112K.</td>
-            <td><span class="cmp-win">Backwards</span> — in the default workflow <strong>we're ~3.7–4.3× leaner</strong>.</td>
-          </tr>
-          <tr>
-            <td>"not a JS shim on stock Chrome … reach into <strong>cross-origin iframes, shadow DOM, third-party SDK widgets</strong> like Stripe, Salesforce, Intercom, React portals … <strong>JS shims usually give up</strong> … burning tokens for nothing"</td>
-            <td>chrome-use uses <strong>CDP</strong> (not a JS shim). reCAPTCHA demo, measured: <code>frames</code> lists all 5 cross-origin frames; <code>eval --frame 1</code> read the checkbox <code>role=checkbox</code> "I'm not a robot". The default <code>snapshot -i</code> previously didn't merge it — <strong>now fixed</strong> (<a href="https://github.com/leeguooooo/chrome-use/issues/92">#92</a> merges presentation-role / AX-stripped cross-origin iframes).</td>
-            <td><span class="cmp-win">Now closed</span> — we're <strong>not a JS shim and do reach</strong> OOPIF/SDK widgets, and the default snapshot now merges them too (#92 fixed). ego's dig is about generic JS shims — it doesn't apply to us.</td>
-          </tr>
-          <tr>
-            <td>"your AI agents will <strong>never get stuck on captchas, 2FA, and SSO redirects</strong>" (because you're logged into it)</td>
-            <td>chrome-use also drives your <strong>real, logged-in</strong> Chrome → SSO/2FA already done. Ordinary Yidun puzzles have <code>solve-slider</code>; agents can inspect and click readable ordered icons. Failed attempts fall back to <code>session handoff</code>.</td>
-            <td><span class="cmp-mut">Parity</span> — same logged-in advantage (we're zero-install on your existing Chrome).</td>
-          </tr>
-          <tr>
-            <td>"<strong>Zero cost, zero config</strong> (yes, free)"</td>
-            <td>chrome-use is also free &amp; open source: one <code>curl … | sh</code> + a one-time extension install.</td>
-            <td><span class="cmp-mut">Parity</span> — both free; they have you download a new browser, we use yours.</td>
-          </tr>
-          <tr>
-            <td>Handoff / take-over UI (the user can reclaim a Space from the agent anytime)</td>
-            <td>chrome-use ships <code>session handoff</code> / <code>resume</code> / <code>status</code> / <code>list</code>. <span class="cmp-mut">(Note: ego has this feature, but we couldn't verify the literal "Take over/Stop" labels, so we don't quote them.)</span></td>
-            <td><span class="cmp-mut">Parity</span> — matched.</td>
-          </tr>
-          <tr>
-            <td>"installs as a skill in <strong>every agent</strong> (Claude Code / Codex / Cursor / Kiro / Hermes / OpenClaw)"</td>
-            <td>chrome-use is a native CLI/skill usable by <strong>any agent that runs a shell</strong> (Claude Code / Cursor / Codex / Continue / Windsurf…).</td>
-            <td><span class="cmp-mut">Parity</span>.</td>
-          </tr>
+          <tr><td>"Fastest browser for AI agents to run web automation"; a task benchmark: 398 s per task on average (others 587–648 s), 93.5% success, $1.64 per task</td><td>The comparison set is chrome-devtools-cli, agent-browser, browser-harness and playwright-cli, not chrome-use; the site publishes no task list, model or method, so we can't reproduce it. July's "3.45x faster" is gone.</td></tr>
+          <tr><td>"The snapshots cost fewer tokens than HTML"</td><td>Compared with raw HTML, not with other tools. See the token table above for us.</td></tr>
+          <tr><td>Snapshots built inside their Chromium engine reach cross-origin iframes, shadow DOM and widgets like Stripe</td><td>chrome-use works over CDP and also reaches out-of-process iframes (up to three levels) and shadow DOM, merged into the default snapshot.</td></tr>
+          <tr><td>"Zero cost, zero config"</td><td>True: free, no account needed to install or use. The difference is that it's a new browser; chrome-use uses the Chrome you have.</td></tr>
+          <tr><td>"You can watch the agent in its Space and take over at any time"</td><td>Even: chrome-use has <code>session handoff / resume</code>, and side-panel chat lets you take a tab back anytime.</td></tr>
+          <tr><td>Install once and Claude Code, Codex, Cursor, Kiro and others can drive it</td><td>Even: chrome-use connects to any agent as a skill, CLI or MCP server.</td></tr>
         </tbody>
       </table>
       </div>
 
-
-      <h3>Where we're ahead: single-pass scripting (chrome-use script)</h3>
+      <h3>Single-pass scripting (chrome-use script)</h3>
       <p>
         ego's core pitch is “code base, not CLI base”: write one JS program that runs the whole task in one pass.
-        This one is <span class="cmp-win">shipped and ahead</span>: <code>chrome-use script</code> runs a real JS program
+        chrome-use has the same style: <code>chrome-use script</code> runs a real JS program
         (ego's exact idiom) driving the page via <code>cu.snapshot/eval/click/fill/find/waitFor/extract</code>, with control
         flow, returning structured results in one round-trip; a JSON op-list form is also available (dry-runnable, machine-generatable).
       </p>
       <p>
-        The decisive edge is where the engine lives: in the <strong>daemon, not the page</strong>, so it
-        <strong>survives hard navigations</strong> — the multi-page flows that are exactly where ego wins and a page-world
-        runtime breaks. Measured: crawl 3 HN pages collecting every ≥100-point story = <strong>one tool call</strong>
+        The JS engine lives in the <strong>daemon, not the page</strong>, so it
+        <strong>survives hard navigations</strong> and suits multi-page flows. Measured: crawl 3 HN pages collecting every ≥100-point story = <strong>one tool call</strong>
         (the old per-verb way needs 13+), on your <strong>already-logged-in real Chrome</strong> over the stealth transport,
         on macOS, Linux and Windows. Full usage and both forms on <a href="/en/script.html">Single-pass Scripting</a>.
       </p>
@@ -383,7 +349,7 @@
       <ul>
         <li><strong>Ownership + handoff</strong> — <span class="cmp-win">implemented</span> <code>session handoff/resume/status/list</code>: once handed off, every browser-driving command on that session is refused. It's an <strong>escape hatch</strong> for the rare step the agent truly can't do (e.g. an unsolvable captcha) — it <strong>does not change autonomous login</strong>; by default the agent logs in and drives itself, zero-impact.</li>
         <li><strong>Rich-editor write-probe discipline</strong> — <span class="cmp-win">ported</span> (see the end of <a href="/en/canvas.html">Canvas / WebGL</a>).</li>
-        <li><strong>Login inheritance / isolated contexts / reuse-by-name / token economy</strong> — <span class="cmp-win">already covered</span> (relay carries logins, per-session tab groups, <code>session list</code>, <code>--session-name</code>, leaner tokens).</li>
+        <li><strong>Login inheritance / isolated contexts / reuse-by-name / token economy</strong> — <span class="cmp-win">already covered</span> (relay carries logins, per-session tab groups, <code>session list</code>, <code>--session-name</code>; tokens are compared in the measured table above).</li>
         <li><strong>Locating</strong> — <span class="cmp-win">covered · parity</span>: <code>@ref</code> (backendNodeId-stable across calls) + CSS + XPath + coordinates + semantic <code>find role button --name</code> + <code>box</code> geometry + <code>-s</code> scoping, matching ego's <code>loc=</code> / <code>@N</code>.</li>
         <li><strong>Groups</strong> — <span class="cmp-win">covered · parity</span>: each <code>--session</code> maps to a colored Chrome tab group, group-scoped isolation (<a href="https://github.com/leeguooooo/chrome-use/issues/40">#40</a>), agents never cross tabs, a session owns only the tabs it created — equivalent to ego's Task Space, except it happens in your real Chrome instead of a separate browser.</li>
       </ul>
