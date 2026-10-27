@@ -18,6 +18,8 @@ allowed-tools: Bash(chrome-use:*), Bash(npx chrome-use:*)
 
 # chrome-use
 
+Docs: https://chrome-use.leeguoo.com/en/ · Source: https://github.com/leeguooooo/chrome-use
+
 This is the discovery entry point. Load the installed binary's usage guide
 before browser commands:
 
