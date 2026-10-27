@@ -1,6 +1,13 @@
 # Maintaining search metadata
 
-Run `python3 docs/_tools/seo.py` after adding or updating an HTML page. The script materializes canonical URLs, reciprocal language alternates and a small static navigation block; regenerates the sitemap from actual pages; and uses file history for last modification dates. CI runs `python3 docs/_tools/seo.py --check` to detect missing static metadata and sitemap URLs. Runtime navigation still enhances the same pages.
+Run `python3 docs/_tools/seo.py` after adding or updating an HTML page. CI runs `python3 docs/_tools/seo.py --check` and fails when the output is stale or a page breaks a rule. The script owns everything between `<!-- seo:NAME -->` markers, plus the contents of `<nav id="du-sidebar">`:
+
+- `seo:head`: canonical, reciprocal `zh-Hans`/`en` alternates, `x-default` pointing at the English page (Chinese readers are already matched by `zh-Hans`; other locales get English), Open Graph and Twitter tags (hand-written ones win; the default image is `/assets/landing/hero-og.jpg`), and BreadcrumbList + TechArticle JSON-LD on doc pages. Every JSON-LD block must parse.
+- `seo:fonts`: a non-blocking Google Fonts link. English pages never load Noto Sans SC.
+- The static sidebar, generated from `NAV` in `docs/assets/docs/docs.js` (docs.js rebuilds it at runtime), and `seo:footer`, a link row for pages outside NAV, GitHub, the blog, iphone-use and the other language. A new page must be added to NAV or to `EXTRA` in seo.py.
+- `sitemap.xml`: canonical URLs with alternates and `lastmod` from the last content commit. Commits whose subject starts with `docs(seo)` are ignored, so metadata-only passes do not bump every date. Pages with `<meta name="robots" content="noindex">` (404, `superpowers/`) are left out.
+
+Descriptions must stay within 160 characters (English) or 135 (Chinese); titles end with `· chrome-use`.
 
 Keep current product facts in `docs/llms.txt`, README and both overview pages. Detector measurements must name their conditions; they are not a guarantee of website acceptance. Do not compare a competitor's default new context with all configurations it supports.
 

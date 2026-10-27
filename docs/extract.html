@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>抓数据 · chrome-use 文档</title>
+  <title>抓数据 · chrome-use</title>
   <meta name="description" content="让 agent 把网页上的列表、表格、搜索结果整理成结构化数据：常用网站走站点适配器，其他页面按字段一次抽成 JSON，多页数据一次跑完。下文附 extract --schema、eval、snapshot --json 等底层命令。" />
 
   <meta name="theme-color" content="#fcfbf4" />
@@ -13,25 +13,42 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- seo:fonts --><link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" onload="this.onload=null;this.rel='stylesheet'" /><noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Permanent+Marker&family=Noto+Sans+SC:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" /></noscript><!-- /seo:fonts -->
 
   <link rel="stylesheet" href="/assets/docs/docs.css" />
-
+  <!-- seo:head -->
   <link rel="canonical" href="https://chrome-use.leeguoo.com/extract.html" />
   <link rel="alternate" hreflang="zh-Hans" href="https://chrome-use.leeguoo.com/extract.html" />
   <link rel="alternate" hreflang="en" href="https://chrome-use.leeguoo.com/en/extract.html" />
-  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/extract.html" />
+  <link rel="alternate" hreflang="x-default" href="https://chrome-use.leeguoo.com/en/extract.html" />
+  <meta property="og:title" content="抓数据 · chrome-use" />
+  <meta property="og:description" content="让 agent 把网页上的列表、表格、搜索结果整理成结构化数据：常用网站走站点适配器，其他页面按字段一次抽成 JSON，多页数据一次跑完。下文附 extract --schema、eval、snapshot --json 等底层命令。" />
+  <meta property="og:url" content="https://chrome-use.leeguoo.com/extract.html" />
+  <meta property="og:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="800" />
+  <meta property="og:image:alt" content="chrome-use：让 AI agent 用你已登录的 Chrome" />
+  <meta property="og:locale" content="zh_CN" />
+  <meta property="og:locale:alternate" content="en_US" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="抓数据 · chrome-use" />
+  <meta name="twitter:description" content="让 agent 把网页上的列表、表格、搜索结果整理成结构化数据：常用网站走站点适配器，其他页面按字段一次抽成 JSON，多页数据一次跑完。下文附 extract --schema、eval、snapshot --json 等底层命令。" />
+  <meta name="twitter:image" content="https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg" />
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"chrome-use","item":"https://chrome-use.leeguoo.com/"},{"@type":"ListItem","position":2,"name":"让 agent 做事","item":"https://chrome-use.leeguoo.com/reading.html"},{"@type":"ListItem","position":3,"name":"抓数据","item":"https://chrome-use.leeguoo.com/extract.html"}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"抓数据","description":"让 agent 把网页上的列表、表格、搜索结果整理成结构化数据：常用网站走站点适配器，其他页面按字段一次抽成 JSON，多页数据一次跑完。下文附 extract --schema、eval、snapshot --json 等底层命令。","inLanguage":"zh-Hans","url":"https://chrome-use.leeguoo.com/extract.html","mainEntityOfPage":"https://chrome-use.leeguoo.com/extract.html","image":"https://chrome-use.leeguoo.com/assets/landing/hero-og.jpg","dateModified":"2026-10-27","author":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"publisher":{"@id":"https://leeguoo.com/about#person","@type":"Person","name":"Guo Li (leeguoo)","url":"https://leeguoo.com/about"},"isPartOf":{"@type":"WebSite","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"},"about":{"@type":"SoftwareApplication","name":"chrome-use","url":"https://chrome-use.leeguoo.com/"}}</script>
+  <!-- /seo:head -->
 </head>
 
 <body data-page="extract" data-lang="zh">
 
-  <div id="du-topbar"></div>
+  <div id="du-topbar" class="du-topbar"></div>
 
   <div class="du-shell">
 
-    <nav id="du-sidebar"></nav>
+    <nav id="du-sidebar" class="du-sidebar" aria-label="文档"><div class="du-nav-group"><div class="du-nav-label">开始</div><a class="du-nav-item" href="/"><span class="du-nav-ico">🧭</span><span class="du-nav-text">概览</span></a><a class="du-nav-item" href="/install.html"><span class="du-nav-ico">📦</span><span class="du-nav-text">安装</span></a><a class="du-nav-item" href="/compare.html"><span class="du-nav-ico">⚖️</span><span class="du-nav-text">和其他方案对比</span></a></div><div class="du-nav-group"><div class="du-nav-label">不开终端</div><a class="du-nav-item" href="/agent-panel.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">侧栏对话</span></a><a class="du-nav-item" href="/mobile.html"><span class="du-nav-ico">📱</span><span class="du-nav-text">手机遥控</span></a><a class="du-nav-item" href="/inspect.html"><span class="du-nav-ico">🎯</span><span class="du-nav-text">点选改代码</span></a></div><div class="du-nav-group"><div class="du-nav-label">让 agent 做事</div><a class="du-nav-item" href="/reading.html"><span class="du-nav-ico">📖</span><span class="du-nav-text">读网页、查资料</span></a><a class="du-nav-item active" aria-current="page" href="/extract.html"><span class="du-nav-ico">🧪</span><span class="du-nav-text">抓数据</span></a><a class="du-nav-item" href="/interacting.html"><span class="du-nav-ico">🖱️</span><span class="du-nav-text">填表与操作</span></a><a class="du-nav-item" href="/site-adapters.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">站点适配器</span></a><a class="du-nav-item" href="/testing.html"><span class="du-nav-ico">🧷</span><span class="du-nav-text">测试与探索</span></a><a class="du-nav-item" href="/media.html"><span class="du-nav-ico">🎬</span><span class="du-nav-text">截图·录像·视口</span></a><a class="du-nav-item" href="/canvas.html"><span class="du-nav-ico">🎨</span><span class="du-nav-text">Canvas / WebGL / 游戏</span></a><a class="du-nav-item" href="/electron.html"><span class="du-nav-ico">🖥️</span><span class="du-nav-text">Electron 桌面应用</span></a><a class="du-nav-item" href="/slack.html"><span class="du-nav-ico">💬</span><span class="du-nav-text">Slack 自动化</span></a></div><div class="du-nav-group"><div class="du-nav-label">账号与登录态</div><a class="du-nav-item" href="/real-chrome.html"><span class="du-nav-ico">🌐</span><span class="du-nav-text">驱动真实 Chrome</span></a><a class="du-nav-item" href="/login-auth.html"><span class="du-nav-ico">🔐</span><span class="du-nav-text">登录与凭证</span></a><a class="du-nav-item" href="/sessions.html"><span class="du-nav-ico">💾</span><span class="du-nav-text">多个 agent 与会话</span></a><a class="du-nav-item" href="/choosebrowser.html"><span class="du-nav-ico">🧭</span><span class="du-nav-text">多 profile 路由：ChooseBrowser</span></a><a class="du-nav-item" href="/stealth.html"><span class="du-nav-ico">🥷</span><span class="du-nav-text">反检测与隐身</span></a></div><div class="du-nav-group"><div class="du-nav-label">接入方式</div><a class="du-nav-item" href="/mcp.html"><span class="du-nav-ico">🔌</span><span class="du-nav-text">MCP 服务器</span></a><a class="du-nav-item" href="/http-api.html"><span class="du-nav-ico">🔗</span><span class="du-nav-text">本地 HTTP API</span></a><a class="du-nav-item" href="/cloud.html"><span class="du-nav-ico">☁️</span><span class="du-nav-text">云端浏览器</span></a><a class="du-nav-item" href="/script.html"><span class="du-nav-ico">⚡</span><span class="du-nav-text">单次成型脚本</span></a></div><div class="du-nav-group"><div class="du-nav-label">底层命令</div><a class="du-nav-item" href="/core-loop.html"><span class="du-nav-ico">🔁</span><span class="du-nav-text">核心循环</span></a><a class="du-nav-item" href="/how-it-works.html"><span class="du-nav-ico">⚙️</span><span class="du-nav-text">它怎么工作</span></a><a class="du-nav-item" href="/finding.html"><span class="du-nav-ico">🔎</span><span class="du-nav-text">定位元素</span></a><a class="du-nav-item" href="/waiting.html"><span class="du-nav-ico">⏳</span><span class="du-nav-text">等待与断言</span></a><a class="du-nav-item" href="/network.html"><span class="du-nav-ico">🛰️</span><span class="du-nav-text">网络拦截与改写</span></a><a class="du-nav-item" href="/react.html"><span class="du-nav-ico">⚛️</span><span class="du-nav-text">React / Web Vitals</span></a><a class="du-nav-item" href="/commands.html"><span class="du-nav-ico">📚</span><span class="du-nav-text">命令参考</span></a></div><div class="du-nav-group"><div class="du-nav-label">参考</div><a class="du-nav-item" href="/troubleshooting.html"><span class="du-nav-ico">🩹</span><span class="du-nav-text">故障排查</span></a><a class="du-nav-item" href="/changelog.html"><span class="du-nav-ico">📝</span><span class="du-nav-text">更新日志</span></a><a class="du-nav-item" href="/extension-changelog.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">插件更新日志</span></a><a class="du-nav-item" href="/family.html"><span class="du-nav-ico">🧩</span><span class="du-nav-text">*-use 家族</span></a><a class="du-nav-item" href="/lineage.html"><span class="du-nav-ico">🌱</span><span class="du-nav-text">血统与上游</span></a></div></nav>
 
-    <main class="du-main"><nav aria-label="文档"><a href="/">chrome-use</a> · <a href="/install.html">安装</a> · <a href="/logged-in-browser.html">已登录浏览器指南</a> · <a href="/mcp.html">MCP</a> · <a href="/compare.html">选型</a></nav>
+    <main class="du-main">
 
       <span class="du-doodle" style="top:40px; right:8px; width:46px; height:46px;">
         <svg viewBox="0 0 60 60" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
@@ -302,9 +319,7 @@ EOF</code></pre>
           <div class="du-card-title"><span class="du-card-ico">🔁</span> script 循环</div>
           <p>多页累积、条件筛选、循环 → 把 extract 包进 script。</p>
         </a>
-      </div>
-
-    </main>
+      </div><!-- seo:footer --><nav class="du-static-footer" aria-label="更多"><a href="/">chrome-use</a> · <a href="/logged-in-browser.html">让 agent 用已登录 Chrome</a> · <a href="/debugger-banner-silence.html">静音调试提示条</a> · <a href="/privacy.html">隐私政策</a> · <a href="/mobile-privacy.html">手机 App 隐私政策</a> · <a href="https://github.com/leeguooooo/chrome-use">GitHub</a> · <a href="https://github.com/leeguooooo/chrome-use/releases">下载 / Releases</a> · <a href="https://github.com/leeguooooo/iphone-use">iphone-use（让 agent 操作 iPhone）</a> · <a href="https://blog.leeguoo.com">博客</a> · <a href="/en/extract.html" hreflang="en">English</a></nav><!-- /seo:footer --></main>
 
     <aside id="du-toc"></aside>
 
