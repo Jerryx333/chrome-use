@@ -1091,7 +1091,7 @@ chrome-use network route '*' --resource-type image,font --body '' # Stub images 
 
 ## Environment Variables
 
-Session-scoped internal DOM reads require an isolated execution context. If creation, recreation or node resolution cannot keep that context, the command returns `isolation_unavailable` rather than retrying in the page world. Wait for navigation to settle and observe again; some same-process frame operations may remain unsupported. User-requested evaluation, site adapters, deliberate editor-model access and explicitly supplied contexts keep their existing semantics. The existing `AGENT_BROWSER_MAIN_WORLD=1` compatibility override disables this default isolation requirement; it is not a stealth-preserving workaround. This policy is independent of the extension cursor setting.
+Session-scoped internal DOM reads require an isolated execution context. If creation, recreation or node resolution cannot keep that context, the command returns `isolation_unavailable` rather than retrying in the page world. Failed isolated-context setup is cached for one second; a later read retries setup without reloading the page or falling back to the main world. Wait for navigation to settle and observe again; some same-process frame operations may remain unsupported. User-requested evaluation, site adapters, deliberate editor-model access and explicitly supplied contexts keep their existing semantics. The existing `AGENT_BROWSER_MAIN_WORLD=1` compatibility override disables this default isolation requirement; it is not a stealth-preserving workaround. This policy is independent of the extension cursor setting.
 
 ```bash
 AGENT_BROWSER_SESSION="mysession"            # Explicit session name

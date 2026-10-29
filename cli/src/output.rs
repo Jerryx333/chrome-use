@@ -7157,7 +7157,9 @@ Environment:
   AGENT_BROWSER_MAIN_WORLD       Set to 1 to bypass default internal DOM isolation
                                  (compatibility override, reduces stealth). By default,
                                  unavailable isolation reports isolation_unavailable;
-                                 wait for navigation and observe again. Some frame
+                                 failed setup is cached for one second, then a later
+                                 read can retry without a reload or main-world fallback.
+                                 Wait for navigation and observe again. Some frame
                                  operations require a supported isolated frame target.
   AGENT_BROWSER_IGNORE_HTTPS_ERRORS Ignore HTTPS certificate errors
   AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore)
