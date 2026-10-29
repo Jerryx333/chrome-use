@@ -6280,6 +6280,10 @@ Global Options:
             r##"
 chrome-use site - Run a community site adapter over your logged-in session
 
+If the current tab URL cannot be read, site_domain_unverified stops domain
+navigation and adapter fallback. Check get url and snapshot before trying again;
+a URL-read timeout does not establish that the tab is on the wrong site.
+
 Usage:
   chrome-use site <name>/<command> [positional...] [--key value]
                                        [--until-done] [--timeout <secs|Ns|Nm>]
