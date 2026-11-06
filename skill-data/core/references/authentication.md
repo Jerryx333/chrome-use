@@ -209,7 +209,9 @@ expires, inspect the page and use `--totp` on its authenticator challenge.
   a phone check) and still on it after those 12 s fails with `the sign-in was
   not confirmed`, naming that page: the code it wants comes from the user. A
   check that moves on by itself to the signed-in page within that time is a
-  sign-in (`signedIn: true`). Pressing a key is never reported as a login.
+  sign-in (`signedIn: true`). A run that starts on a verification page with
+  no field to fill fails the same way instead of reporting `alreadySignedIn`.
+  Pressing a key is never reported as a login.
 - **The username guess stays beside the password.** When no field matches a
   username selector, the broad guess (`input[type=text]`) takes only a text
   box before the password field in that field's own form or dialog, and

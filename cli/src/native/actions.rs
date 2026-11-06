@@ -24863,9 +24863,18 @@ async fn handle_auth_login_bwu(cmd: &Value, state: &mut DaemonState) -> Result<V
                 let probed = unblocked!(
                     wait_for_auth_scope(&mgr.client, &session_id, &state.iframe_sessions, &current, pin, &any, &probe, quick, true).await
                 );
-                if matches!(&probed, Err(e) if e.starts_with("Wait timed out"))
-                    && page_shows_no_sign_in_form(&mgr.client, &session_id).await
-                {
+                let settled = if matches!(&probed, Err(e) if e.starts_with("Wait timed out")) {
+                    page_without_sign_in_form(&mgr.client, &session_id).await
+                } else {
+                    None
+                };
+                if let Some(now) = settled {
+                    // A phone or mail check shows no login field either; it
+                    // is not a sign-in. The URL is the one read with the
+                    // form, since the tab may have moved during the look.
+                    if verification_page(&now) {
+                        return Err(sign_in_pending_verification(&now));
+                    }
                     already_signed_in = true;
                     return Ok(());
                 }
@@ -25399,7 +25408,6 @@ fn verification_markers(url: &str) -> Vec<String> {
 }
 
 /// Whether `url` looks like a verification step rather than a signed-in page.
-#[cfg(test)]
 fn verification_page(url: &str) -> bool {
     !verification_markers(url).is_empty()
 }
@@ -25423,6 +25431,17 @@ fn verification_step(login_url: &str, url: &str) -> bool {
     verification_markers(url)
         .iter()
         .any(|m| !before.contains(m))
+}
+
+/// The failure for a run that starts on a verification page with nothing to
+/// fill: the password may have been taken, but the sign-in is not done.
+fn sign_in_pending_verification(url: &str) -> String {
+    format!(
+        "auth login --bwu: the sign-in was not confirmed: the tab is on {url}, which looks like \
+         a verification step (a code sent to the phone or mail, an identity check), and shows no \
+         field to fill. Nothing is reported as signed in. Read the page (`snapshot -i`); a code \
+         sent by SMS or mail has to come from the user or their messages."
+    )
 }
 
 /// The failure for a login whose form went away onto a verification page.
@@ -25602,12 +25621,13 @@ async fn confirm_sign_in(
     }
 }
 
-/// For the already-signed-in probe: the page has finished loading and shows
-/// no password field. Anything unreadable is `false`.
-async fn page_shows_no_sign_in_form(
+/// For the already-signed-in probe: the URL of a page that has finished
+/// loading and shows no password field, read together with the form. A form
+/// or anything unreadable is `None`.
+async fn page_without_sign_in_form(
     client: &super::cdp::client::CdpClient,
     session_id: &str,
-) -> bool {
+) -> Option<String> {
     let observer = sign_in_observer(&[]);
     match client
         .send_command(
@@ -25618,8 +25638,9 @@ async fn page_shows_no_sign_in_form(
         .await
     {
         Ok(v) => parse_sign_in_observation(v.get("result").and_then(|r| r.get("value")))
-            .is_some_and(|o| o.ready && !o.form),
-        Err(_) => false,
+            .filter(|o| o.ready && !o.form)
+            .map(|o| o.url),
+        Err(_) => None,
     }
 }
 
@@ -27689,6 +27710,11 @@ mod tests {
         ));
         assert_eq!(segment_words("verifyPhone"), ["verify", "phone"]);
         assert_eq!(segment_words("2FA-Setup"), ["2fa", "setup"]);
+        let e = sign_in_pending_verification("https://example.com/verifyPhone");
+        assert!(
+            e.contains("not confirmed") && e.contains("/verifyPhone"),
+            "{e}"
+        );
         let e = sign_in_needs_verification("https://example.com/2fa");
         assert!(e.contains("not confirmed") && e.contains("/2fa"), "{e}");
     }

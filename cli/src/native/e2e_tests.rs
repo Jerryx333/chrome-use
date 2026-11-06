@@ -8928,6 +8928,34 @@ async fn e2e_auth_login_bwu_does_not_confirm_a_verification_step() {
     );
 }
 
+/// A run that starts on a phone check with nothing to fill is not reported as
+/// already signed in.
+#[tokio::test]
+#[ignore]
+async fn e2e_auth_login_bwu_does_not_report_a_verification_page_as_signed_in() {
+    let (base_url, _server) = start_bwu_confirm_server().await;
+    let mut state = DaemonState::new();
+    let launch = execute_command(
+        &json!({ "id": "1", "action": "launch", "headless": true }),
+        &mut state,
+    )
+    .await;
+    assert_success(&launch);
+
+    let login = bwu_login_on(
+        &mut state,
+        &base_url,
+        "/fe/service/identity/verifyPhone?sid=e2e",
+    )
+    .await;
+    assert_eq!(login["success"], false, "{login}");
+    let e = login["error"].as_str().unwrap_or_default();
+    assert!(
+        e.contains("not confirmed") && e.contains("verifyPhone"),
+        "{e}"
+    );
+}
+
 /// A verification page that moves on by itself to the signed-in page within
 /// the confirmation window is a sign-in.
 #[tokio::test]
